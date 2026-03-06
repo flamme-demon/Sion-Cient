@@ -29,7 +29,7 @@ let currentRoom: Room | null = null;
 // Map of remote audio elements: trackSid -> HTMLAudioElement
 const audioElements = new Map<string, HTMLAudioElement>();
 
-function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
+function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
   if (audioElements.has(sid)) return;
@@ -41,7 +41,7 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   audioElements.set(sid, el);
 }
 
-function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
+function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
   const el = audioElements.get(sid);

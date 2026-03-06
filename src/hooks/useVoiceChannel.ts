@@ -143,7 +143,7 @@ export function useVoiceChannel() {
   );
 
   const leaveVoiceChannel = useCallback(
-    async (matrixRoomId: string) => {
+    async (_matrixRoomId: string) => {
       await cleanupActiveSession();
       await disconnect();
       disconnectVoice();

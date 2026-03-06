@@ -25,16 +25,26 @@ if [ "$1" = "--uninstall" ]; then
     exit 0
 fi
 
+# --- Build ---
+echo "Build du frontend..."
+(cd "$SCRIPT_DIR" && bun run build)
+
+echo "Compilation Rust + CEF (peut prendre plusieurs minutes)..."
+(cd "$SCRIPT_DIR/src-tauri" && cargo build --release)
+
+# Refresh CEF_DIR after build
+CEF_DIR=$(find "$RELEASE_DIR/build" -name "cef_linux_x86_64" -type d 2>/dev/null | head -1)
+
 # --- Checks ---
 if [ ! -f "$RELEASE_DIR/$APP_NAME" ]; then
     echo "Binaire non trouve: $RELEASE_DIR/$APP_NAME"
-    echo "Lancez 'bun run tauri build' d'abord."
+    echo "Le build a echoue."
     exit 1
 fi
 
 if [ -z "$CEF_DIR" ]; then
     echo "Binaires CEF non trouves dans $RELEASE_DIR/build/"
-    echo "Lancez 'bun run tauri build' d'abord."
+    echo "Le build a echoue."
     exit 1
 fi
 

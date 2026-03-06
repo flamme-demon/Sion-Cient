@@ -484,7 +484,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
     // Listen for key backup decryption key arriving via secret gossiping
     // This fires after cross-device verification when the other device sends the backup key
-    client.on(CryptoEvent.KeyBackupDecryptionKeyCached, async (version: string) => {
+    client.on(CryptoEvent.KeyBackupDecryptionKeyCached, async (_version: string) => {
       set({ isRestoringKeys: true });
       try {
         const restored = await matrixService.tryAutoRestoreKeyBackup();
@@ -564,7 +564,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               set({ verificationStep: "done", needsVerification: false });
 
               try {
-                const restored = await matrixService.tryAutoRestoreKeyBackup();
+                await matrixService.tryAutoRestoreKeyBackup();
               } catch (err) {
                 console.warn("[Sion] Post-incoming-verification: auto key restore failed:", err);
               }
@@ -917,7 +917,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
               // Auto-restore key backup now that we have the secrets
               try {
-                const restored = await matrixService.tryAutoRestoreKeyBackup();
+                await matrixService.tryAutoRestoreKeyBackup();
               } catch (err) {
                 console.warn("[Sion] Post-verification: auto key restore failed:", err);
               }

@@ -18,7 +18,7 @@ const cryptoCallbacks = {
     if (!keyId) return null;
     return [keyId, cachedSecretStorageKey] as [string, Uint8Array<ArrayBuffer>];
   },
-  cacheSecretStorageKey: (keyId: string, _keyInfo: unknown, key: Uint8Array) => {
+  cacheSecretStorageKey: (_keyId: string, _keyInfo: unknown, key: Uint8Array) => {
     cachedSecretStorageKey = key;
   },
 };
