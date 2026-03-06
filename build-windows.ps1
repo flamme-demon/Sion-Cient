@@ -198,7 +198,24 @@ if ($cefDir) {
 # --- 10. Bundle (MSI + NSIS) — re-utilise le cache cargo ---
 Write-Host "[10/10] Generation des installeurs (MSI + NSIS)..." -ForegroundColor Yellow
 
+# Inject CEF resources into tauri.conf.json for bundling
+$tauriConf = "src-tauri\tauri.conf.json"
+$confJson = Get-Content $tauriConf -Raw | ConvertFrom-Json
+$confJson.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
+    "cef-dist/*.dll" = "./"
+    "cef-dist/*.pak" = "./"
+    "cef-dist/*.dat" = "./"
+    "cef-dist/*.bin" = "./"
+    "cef-dist/*.json" = "./"
+    "cef-dist/locales/*" = "./locales/"
+} -Force
+$confJson | ConvertTo-Json -Depth 10 | Set-Content $tauriConf -Encoding UTF8
+
 bun run tauri build
+
+# Restore tauri.conf.json (remove resources so it works on all platforms)
+$confJson.bundle.PSObject.Properties.Remove("resources")
+$confJson | ConvertTo-Json -Depth 10 | Set-Content $tauriConf -Encoding UTF8
 
 # --- Result ---
 $releaseDir = "src-tauri\target\release"

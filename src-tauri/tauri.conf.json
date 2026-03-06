@@ -23,14 +23,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": {
-      "cef-dist/*.dll": "./",
-      "cef-dist/*.pak": "./",
-      "cef-dist/*.dat": "./",
-      "cef-dist/*.bin": "./",
-      "cef-dist/*.json": "./",
-      "cef-dist/locales/*": "./locales/"
-    }
+    ]
   }
 }
