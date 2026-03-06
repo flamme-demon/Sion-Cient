@@ -1,12 +1,17 @@
 # Sion Client — Build autonome pour Windows
 # Usage: Ouvrir PowerShell en administrateur, puis:
 #   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-#   .\build-windows.ps1
+#   .\build-scripts\build-windows.ps1
 #
 # Ce script installe les dependances manquantes et build l'application.
 # Les libs CEF sont incluses dans les installeurs MSI/NSIS.
 
 $ErrorActionPreference = "Stop"
+
+# Navigate to project root (parent of build-scripts/)
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectDir = Split-Path -Parent $ScriptDir
+Set-Location $ProjectDir
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan

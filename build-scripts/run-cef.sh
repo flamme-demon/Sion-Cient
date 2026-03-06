@@ -4,7 +4,7 @@
 
 set -e
 
-cd "$(dirname "$0")/src-tauri"
+cd "$(dirname "$0")/../src-tauri"
 
 # Vérifier que les bibliothèques CEF sont présentes
 if [ ! -f "target/debug/libcef.so" ]; then

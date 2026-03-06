@@ -1,6 +1,6 @@
 #!/bin/bash
 # Sion Client — Script d'installation Linux (Arch/Manjaro)
-# Usage: ./install-linux.sh [--uninstall]
+# Usage: ./build-scripts/install-linux.sh [--uninstall]
 
 set -e
 
@@ -11,7 +11,8 @@ DESKTOP_FILE="/usr/share/applications/sion-client.desktop"
 ICON_FILE="/usr/share/icons/hicolor/128x128/apps/sion-client.png"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RELEASE_DIR="$SCRIPT_DIR/src-tauri/target/release"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+RELEASE_DIR="$PROJECT_DIR/src-tauri/target/release"
 CEF_DIR=$(find "$RELEASE_DIR/build" -name "cef_linux_x86_64" -type d 2>/dev/null | head -1)
 
 # --- Uninstall ---
@@ -27,10 +28,10 @@ fi
 
 # --- Build ---
 echo "Build du frontend..."
-(cd "$SCRIPT_DIR" && bun run build)
+(cd "$PROJECT_DIR" && bun run build)
 
 echo "Compilation Rust + CEF (peut prendre plusieurs minutes)..."
-(cd "$SCRIPT_DIR/src-tauri" && cargo build --release)
+(cd "$PROJECT_DIR/src-tauri" && cargo build --release)
 
 # Refresh CEF_DIR after build
 CEF_DIR=$(find "$RELEASE_DIR/build" -name "cef_linux_x86_64" -type d 2>/dev/null | head -1)
@@ -80,7 +81,7 @@ sudo ln -sf "$INSTALL_DIR/launch.sh" "$BIN_LINK"
 
 # Icone
 sudo mkdir -p "$(dirname "$ICON_FILE")"
-sudo cp "$SCRIPT_DIR/src-tauri/icons/128x128.png" "$ICON_FILE"
+sudo cp "$PROJECT_DIR/src-tauri/icons/128x128.png" "$ICON_FILE"
 
 # Fichier .desktop
 sudo tee "$DESKTOP_FILE" > /dev/null << 'DESKTOP'

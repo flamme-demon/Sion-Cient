@@ -67,7 +67,7 @@ bun install
 bun run dev
 
 # Start desktop app (Linux, CEF runtime)
-./run-cef.sh
+./build-scripts/run-cef.sh
 
 # Start desktop app (Linux, WRY fallback — no WebRTC)
 bun run tauri dev
@@ -75,11 +75,19 @@ bun run tauri dev
 
 ## Build
 
-### Linux
+All build scripts are located in the `build-scripts/` directory.
+
+### Linux — Install
 
 ```bash
-# Build and install
-./install-linux.sh
+./build-scripts/install-linux.sh
+```
+
+### Linux — AppImage
+
+```bash
+./build-scripts/build-appimage.sh
+# Output: dist-appimage/Sion_Client-x86_64.AppImage
 ```
 
 ### Windows
@@ -87,7 +95,7 @@ bun run tauri dev
 ```powershell
 # Open PowerShell as Administrator
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\build-windows.ps1
+.\build-scripts\build-windows.ps1
 ```
 
 The build script automatically installs missing dependencies (VS Build Tools, CMake, Ninja, Rust, Bun), compiles the application, and produces:
