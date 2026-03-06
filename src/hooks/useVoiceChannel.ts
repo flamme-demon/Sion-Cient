@@ -1,0 +1,161 @@
+import { useCallback } from "react";
+import { useMatrix } from "./useMatrix";
+import { useLiveKit } from "./useLiveKit";
+import { useAppStore } from "../stores/useAppStore";
+import { useAuthStore } from "../stores/useAuthStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitTokenService";
+import { getMatrixClient } from "../services/matrixService";
+import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
+import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
+
+// Module-level tracking — survives component unmount/remount
+let activeRTCSession: MatrixRTCSession | null = null;
+let activeKeyProvider: MatrixKeyProvider | null = null;
+
+// Best-effort cleanup on page unload (reload, close tab)
+window.addEventListener("beforeunload", () => {
+  if (activeRTCSession) {
+    // Fire-and-forget: leaveRoomSession with a short timeout
+    // Even if this doesn't complete, the membership will expire via TTL (60s)
+    activeRTCSession.leaveRoomSession(2000).catch(() => {});
+    activeRTCSession = null;
+  }
+  if (activeKeyProvider) {
+    activeKeyProvider.disconnect();
+    activeKeyProvider = null;
+  }
+});
+
+async function cleanupActiveSession() {
+  if (activeRTCSession) {
+    try {
+      await activeRTCSession.leaveRoomSession();
+    } catch (err) {
+      console.warn("[Sion] Failed to leave MatrixRTC session:", err);
+    }
+    activeRTCSession = null;
+  }
+  if (activeKeyProvider) {
+    activeKeyProvider.disconnect();
+    activeKeyProvider = null;
+  }
+}
+
+export function useVoiceChannel() {
+  const { joinRoom } = useMatrix();
+  const { connect, disconnect, connected, participants } = useLiveKit();
+  const setConnectedVoice = useAppStore((s) => s.setConnectedVoice);
+  const disconnectVoice = useAppStore((s) => s.disconnectVoice);
+  const credentials = useAuthStore((s) => s.credentials);
+  const joinMuted = useSettingsStore((s) => s.joinMuted);
+
+  // Toujours true : on tente MatrixRTC en premier, puis les credentials manuels
+  const hasLiveKitConfig = true;
+
+  const leaveCurrentVoiceChannel = useCallback(async () => {
+    const currentChannel = useAppStore.getState().connectedVoiceChannel;
+    if (!currentChannel) return;
+
+    await cleanupActiveSession();
+    await disconnect();
+    disconnectVoice();
+  }, [disconnect, disconnectVoice]);
+
+  const joinVoiceChannel = useCallback(
+    async (matrixRoomId: string) => {
+      // Déconnecter le canal vocal actif avant d'en rejoindre un autre
+      const currentChannel = useAppStore.getState().connectedVoiceChannel;
+      if (currentChannel) {
+        if (currentChannel === matrixRoomId) {
+          return;
+        }
+        await leaveCurrentVoiceChannel();
+      }
+
+      // 1. Essayer MatrixRTC (foci_preferred dans org.matrix.msc3401.call)
+      const client = getMatrixClient();
+      if (client) {
+        const rtcResult = await getMatrixRTCToken(client, matrixRoomId);
+        if (rtcResult) {
+          // Always use MatrixRTC SDK to join — it manages call.member state events
+          // and the MembershipManager properly.
+          const matrixRoom = client.getRoom(matrixRoomId);
+          let keyProvider: MatrixKeyProvider | undefined;
+
+          if (matrixRoom) {
+            const session = client.matrixRTC.getRoomSession(matrixRoom);
+            const isEncrypted = matrixRoom.hasEncryptionStateEvent();
+
+            if (isEncrypted) {
+              keyProvider = new MatrixKeyProvider();
+              keyProvider.setRTCSession(session);
+            }
+
+            const fociPreferred = [{
+              type: "livekit" as const,
+              livekit_service_url: rtcResult.serviceUrl,
+              livekit_alias: rtcResult.livekitAlias,
+            }];
+
+            session.joinRoomSession(fociPreferred, undefined, {
+              // Short TTL: if app crashes/reloads, membership expires in 60s
+              // The MembershipManager will re-publish before expiry to keep it alive
+              membershipEventExpiryMs: 60_000,
+              ...(isEncrypted ? { manageMediaKeys: true } : {}),
+            });
+
+            activeRTCSession = session;
+            activeKeyProvider = keyProvider || null;
+          }
+
+          await joinRoom(matrixRoomId);
+          await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
+          setConnectedVoice(matrixRoomId);
+          if (joinMuted) {
+            useAppStore.getState().toggleMute();
+          }
+          return;
+        }
+      }
+
+      // 2. Fallback : credentials LiveKit manuels
+      if (!credentials?.livekitUrl || !credentials?.livekitApiKey || !credentials?.livekitApiSecret) {
+        console.warn("[Sion] Connexion vocale impossible : pas de MatrixRTC ni de credentials LiveKit configurés");
+        return;
+      }
+
+      const token = await generateLiveKitToken(
+        credentials.livekitApiKey,
+        credentials.livekitApiSecret,
+        matrixRoomId,
+        credentials.displayName || credentials.userId,
+      );
+
+      await joinRoom(matrixRoomId);
+      await connect(credentials.livekitUrl, token, matrixRoomId);
+      setConnectedVoice(matrixRoomId);
+      if (joinMuted) {
+        useAppStore.getState().toggleMute();
+      }
+    },
+    [joinRoom, connect, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],
+  );
+
+  const leaveVoiceChannel = useCallback(
+    async (matrixRoomId: string) => {
+      await cleanupActiveSession();
+      await disconnect();
+      disconnectVoice();
+    },
+    [disconnect, disconnectVoice],
+  );
+
+  return {
+    joinVoiceChannel,
+    leaveVoiceChannel,
+    connected,
+    participants,
+    hasLiveKitConfig,
+  };
+}
