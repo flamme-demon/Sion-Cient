@@ -33,8 +33,9 @@ lerna-debug.log*
 # Debug / Network traces
 *.har
 
-# Build archives
+# Build archives & output
 sion-build.zip
+dist-appimage/
 
 # Tauri CEF staged libs (generated at build time)
 src-tauri/cef-dist/*
