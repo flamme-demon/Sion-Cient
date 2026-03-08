@@ -118,6 +118,10 @@ body {
   to { transform: scale(4); opacity: 0; }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Matrix HTML message styling */
 .matrix-html h1, .matrix-html h2, .matrix-html h3,
 .matrix-html h4, .matrix-html h5, .matrix-html h6 {
@@ -140,6 +144,11 @@ body {
   font-size: 12px;
   font-family: var(--font-family-mono);
 }
+.matrix-html {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
 .matrix-html pre {
   background: var(--color-surface-container-lowest);
   border: 1px solid var(--color-outline-variant);
@@ -147,13 +156,16 @@ body {
   padding: 12px;
   margin: 6px 0;
   overflow-x: auto;
+  max-width: 100%;
   font-size: 12px;
   font-family: var(--font-family-mono);
 }
-.matrix-html pre code {
-  background: none;
-  padding: 0;
-  border-radius: 0;
+.matrix-html pre code,
+.md-code-block code {
+  background: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  font-size: inherit !important;
 }
 .matrix-html ul, .matrix-html ol {
   padding-left: 20px;

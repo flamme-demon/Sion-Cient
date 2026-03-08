@@ -1,6 +1,7 @@
 use rdev::{listen, EventType, Key};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -252,6 +253,60 @@ fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
 }
 
+/// Transcode a video URL to WebM (VP9+Opus) using system ffmpeg.
+/// Returns base64-encoded WebM data.
+#[tauri::command]
+async fn transcode_video(url: String) -> Result<String, String> {
+    use base64::Engine;
+
+    // Hash URL for temp file naming
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    let hash = hasher.finish();
+    let tmp_dir = std::env::temp_dir();
+    let input_path = tmp_dir.join(format!("sion_in_{:x}.mp4", hash));
+    let output_path = tmp_dir.join(format!("sion_out_{:x}.webm", hash));
+
+    // Return cached transcoded file if it exists
+    if output_path.exists() {
+        let webm_bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&webm_bytes);
+        return Ok(b64);
+    }
+
+    // Download video
+    let client = build_client().map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
+
+    // Transcode with ffmpeg (fast preset)
+    let output = std::process::Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(&input_path)
+        .args(["-c:v", "libvpx-vp9", "-crf", "35", "-b:v", "0",
+               "-deadline", "realtime", "-cpu-used", "8",
+               "-c:a", "libopus", "-b:a", "96k",
+               "-f", "webm"])
+        .arg(&output_path)
+        .output()
+        .map_err(|e| format!("ffmpeg not found: {}", e))?;
+
+    let _ = std::fs::remove_file(&input_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffmpeg error: {}", stderr));
+    }
+
+    let webm_bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&webm_bytes);
+    Ok(b64)
+}
+
 #[tauri::command]
 fn update_shortcuts(state: tauri::State<'_, SharedShortcuts>, payload: UpdateShortcutsPayload) {
     let mut shortcuts = state.lock().unwrap();
@@ -276,7 +331,7 @@ pub fn run() {
 
     tauri::Builder::<TauriRuntime>::default()
         .manage(shortcuts)
-        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview])
+        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video])
         .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

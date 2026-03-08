@@ -13,6 +13,7 @@ import {
 import type { ParticipantInfo } from "../types/livekit";
 import { useSettingsStore, type AudioQualityPreset } from "../stores/useSettingsStore";
 
+
 function getAudioPreset(quality: AudioQualityPreset): AudioPreset {
   switch (quality) {
     case "voiceHD": return AudioPresets.music;              // 48kbps mono
@@ -26,8 +27,56 @@ function isStereoPreset(quality: AudioQualityPreset): boolean {
 }
 
 let currentRoom: Room | null = null;
+let isCurrentlyDeafened = false;
 // Map of remote audio elements: trackSid -> HTMLAudioElement
 const audioElements = new Map<string, HTMLAudioElement>();
+
+// Screen share tracking
+export interface ScreenShareInfo {
+  track: RemoteTrack;
+  participantIdentity: string;
+  participantName: string;
+}
+
+let screenShareCallback: ((info: ScreenShareInfo | null) => void) | null = null;
+
+function handleScreenShareSubscribed(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
+  if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+    screenShareCallback?.({
+      track,
+      participantIdentity: participant.identity,
+      participantName: participant.name || participant.identity,
+    });
+  }
+}
+
+function handleScreenShareUnsubscribed(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
+  if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
+    screenShareCallback?.(null);
+  }
+}
+
+export function onScreenShareChange(cb: (info: ScreenShareInfo | null) => void): () => void {
+  screenShareCallback = cb;
+
+  // Check if there's already an active screen share
+  if (currentRoom) {
+    for (const [, participant] of currentRoom.remoteParticipants) {
+      for (const [, pub] of participant.trackPublications) {
+        if (pub.track && pub.track.kind === Track.Kind.Video && pub.source === Track.Source.ScreenShare && pub.isSubscribed) {
+          cb({
+            track: pub.track as RemoteTrack,
+            participantIdentity: participant.identity,
+            participantName: participant.name || participant.identity,
+          });
+          return () => { screenShareCallback = null; };
+        }
+      }
+    }
+  }
+
+  return () => { screenShareCallback = null; };
+}
 
 function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
@@ -37,6 +86,8 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   const el = track.attach();
   el.id = `sion-audio-${sid}`;
   el.style.display = "none";
+  // Respect current deafen state
+  el.muted = isCurrentlyDeafened;
   document.body.appendChild(el);
   audioElements.set(sid, el);
 }
@@ -97,6 +148,10 @@ export async function connectToRoom(
   room.on(RoomEvent.TrackSubscribed, attachAudioTrack);
   room.on(RoomEvent.TrackUnsubscribed, detachAudioTrack);
 
+  // Screen share tracks
+  room.on(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
+  room.on(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
+
   await room.connect(url, token);
   currentRoom = room;
 
@@ -131,6 +186,10 @@ export async function disconnectFromRoom() {
   if (currentRoom) {
     currentRoom.off(RoomEvent.TrackSubscribed, attachAudioTrack);
     currentRoom.off(RoomEvent.TrackUnsubscribed, detachAudioTrack);
+    currentRoom.off(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
+    currentRoom.off(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
+    screenShareCallback?.(null);
+    screenShareCallback = null;
     detachAllAudio();
     await currentRoom.disconnect();
     currentRoom = null;
@@ -140,6 +199,14 @@ export async function disconnectFromRoom() {
 export async function toggleMicrophone(enabled: boolean) {
   if (!currentRoom) return;
   await currentRoom.localParticipant.setMicrophoneEnabled(enabled);
+}
+
+export function setDeafened(deafened: boolean) {
+  isCurrentlyDeafened = deafened;
+  // Mute/unmute all existing audio elements
+  audioElements.forEach((el) => {
+    el.muted = deafened;
+  });
 }
 
 export async function updateAudioProcessing(options: {

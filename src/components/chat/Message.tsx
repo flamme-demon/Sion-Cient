@@ -29,28 +29,184 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Résout l'URL affichable d'un attachment — décrypte si E2EE. */
+/** Résout l'URL affichable d'un attachment — décrypte si E2EE, charge en blob pour vidéo/audio. */
 function useResolvedUrl(attachment: FileAttachment): string | null {
+  const needsBlob = attachment.mimeType.startsWith("video/") || attachment.mimeType.startsWith("audio/");
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(
-    attachment.encryptedFile ? null : (attachment.url || null),
+    (attachment.encryptedFile || needsBlob) ? null : (attachment.url || null),
   );
 
   useEffect(() => {
-    if (!attachment.encryptedFile) {
-      setResolvedUrl(attachment.url || null);
-      return;
-    }
     if (!attachment.url) return;
 
-    let objectUrl: string | null = null;
-    createDecryptedObjectUrl(attachment.url, attachment.encryptedFile, attachment.mimeType)
-      .then((url) => { objectUrl = url; setResolvedUrl(url); })
-      .catch((err) => console.error("[Sion] Décryption media échouée:", err));
+    // E2EE: decrypt to blob
+    if (attachment.encryptedFile) {
+      let objectUrl: string | null = null;
+      createDecryptedObjectUrl(attachment.url, attachment.encryptedFile, attachment.mimeType)
+        .then((url) => { objectUrl = url; setResolvedUrl(url); })
+        .catch((err) => console.error("[Sion] Décryption media échouée:", err));
+      return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    }
 
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [attachment.url, attachment.encryptedFile, attachment.mimeType]);
+    // Video/audio: fetch entire file as blob to avoid Range request issues
+    if (needsBlob) {
+      let objectUrl: string | null = null;
+      let cancelled = false;
+      fetch(attachment.url)
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.blob();
+        })
+        .then((blob) => {
+          if (cancelled) return;
+          const typed = blob.type ? blob : new Blob([blob], { type: attachment.mimeType });
+          objectUrl = URL.createObjectURL(typed);
+          setResolvedUrl(objectUrl);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.error("[Sion] Chargement media échoué:", err);
+          // Fallback to direct URL
+          setResolvedUrl(attachment.url || null);
+        });
+      return () => { cancelled = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    }
+
+    // Images and other files: use direct URL
+    setResolvedUrl(attachment.url || null);
+  }, [attachment.url, attachment.encryptedFile, attachment.mimeType, needsBlob]);
 
   return resolvedUrl;
+}
+
+function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachment: FileAttachment }) {
+  const [transcodedUrl, setTranscodedUrl] = useState<string | null>(null);
+  const [transcoding, setTranscoding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleError = async () => {
+    // Native playback failed — transcode to WebM via ffmpeg
+    if (transcoding || transcodedUrl || error) return;
+    if (!attachment.url) { setError("URL manquante"); return; }
+
+    setTranscoding(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const b64: string = await invoke("transcode_video", { url: attachment.url });
+      const raw = atob(b64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "video/webm" });
+      const blobUrl = URL.createObjectURL(blob);
+      setTranscodedUrl(blobUrl);
+    } catch (err) {
+      console.error("[Sion] Transcodage échoué:", err);
+      setError(String(err));
+    } finally {
+      setTranscoding(false);
+    }
+  };
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => { if (transcodedUrl) URL.revokeObjectURL(transcodedUrl); };
+  }, [transcodedUrl]);
+
+  if (error) {
+    const handleDownload = () => {
+      const a = document.createElement("a");
+      a.href = resolvedUrl;
+      a.download = attachment.name || "video.mp4";
+      a.click();
+    };
+    return (
+      <div style={{
+        marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
+        padding: '16px 20px', width: 520, maxWidth: '100%',
+        display: 'flex', alignItems: 'center', gap: 14,
+      }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: 12,
+          background: 'var(--color-primary-container)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {attachment.name}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
+            {formatFileSize(attachment.size)} — Lecture impossible
+          </div>
+        </div>
+        <button
+          onClick={handleDownload}
+          style={{
+            padding: '8px 16px', borderRadius: 20, border: 'none',
+            background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+            fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            whiteSpace: 'nowrap', flexShrink: 0,
+          }}
+        >
+          Télécharger
+        </button>
+      </div>
+    );
+  }
+
+  if (transcoding) {
+    return (
+      <div style={{
+        marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
+        padding: '16px 20px', width: 520, maxWidth: '100%',
+        display: 'flex', alignItems: 'center', gap: 14,
+      }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: 12,
+          background: 'var(--color-primary-container)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <div style={{
+            width: 20, height: 20, border: '2px solid var(--color-primary)',
+            borderTopColor: 'transparent', borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+          }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)' }}>
+            {attachment.name}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
+            Transcodage en cours…
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const videoSrc = transcodedUrl || resolvedUrl;
+
+  return (
+    <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
+      <video
+        key={videoSrc}
+        controls
+        playsInline
+        preload="auto"
+        src={videoSrc}
+        style={{ width: '100%', maxHeight: 400, display: 'block' }}
+        onError={transcodedUrl ? undefined : handleError}
+      />
+      <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
+        {attachment.name} — {formatFileSize(attachment.size)}
+      </div>
+    </div>
+  );
 }
 
 function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
@@ -97,6 +253,8 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
 
 function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   const isImage = attachment.mimeType.startsWith("image/");
+  const isAudio = attachment.mimeType.startsWith("audio/");
+  const isVideo = attachment.mimeType.startsWith("video/");
   const resolvedUrl = useResolvedUrl(attachment);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
@@ -121,6 +279,29 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
         )}
       </>
     );
+  }
+
+  if (isAudio && resolvedUrl) {
+    return (
+      <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, padding: '12px 16px', width: 480, maxWidth: '100%' }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {attachment.name}
+          <span style={{ color: 'var(--color-outline)', fontWeight: 400, marginLeft: 8 }}>{formatFileSize(attachment.size)}</span>
+        </div>
+        <audio controls preload="auto" src={resolvedUrl} style={{ width: '100%', height: 44 }} />
+      </div>
+    );
+  }
+
+  if (isVideo) {
+    if (!resolvedUrl) {
+      return (
+        <div style={{ marginTop: 6, padding: '8px 12px', borderRadius: 12, background: 'var(--color-surface-container-high)', color: 'var(--color-outline)', fontSize: 12 }}>
+          Chargement de la vidéo…
+        </div>
+      );
+    }
+    return <VideoPlayer resolvedUrl={resolvedUrl} attachment={attachment} />;
   }
 
   return (
@@ -252,6 +433,7 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
       flexDirection: isOwnMessage ? 'row-reverse' : 'row',
       alignItems: 'flex-end',
       gap: 8,
+      minWidth: 0,
       marginTop: showHeader ? (isFirst ? 0 : 20) : 4,
       borderRadius: 16,
       padding: highlighted ? '4px 8px' : undefined,
@@ -334,10 +516,17 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
           lineHeight: 1.55,
           wordBreak: 'break-word' as const,
           letterSpacing: '0.01em',
+          maxWidth: '100%',
+          boxSizing: 'border-box' as const,
+          overflow: 'hidden',
         }}>
           <MarkdownRenderer content={message.text} formattedBody={message.formattedBody} msgtype={message.msgtype} />
           {(() => {
-            const urlMatch = message.text?.match(/https?:\/\/\S+/);
+            // Strip code blocks and inline code before searching for URLs
+            const textWithoutCode = message.text
+              ?.replace(/```[\s\S]*?```/g, "")
+              .replace(/`[^`]*`/g, "");
+            const urlMatch = textWithoutCode?.match(/https?:\/\/\S+/);
             return urlMatch ? <LinkPreview url={urlMatch[0].replace(/[)>\].,;!?]+$/, "")} /> : null;
           })()}
           {message.edited && (
@@ -345,16 +534,15 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
               ({t("chat.edited")})
             </span>
           )}
+          {/* Pièces jointes — inside the bubble */}
+          {message.attachments && message.attachments.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 6, marginTop: 4 }}>
+              {message.attachments.map((att) => (
+                <AttachmentDisplay key={att.id} attachment={att} />
+              ))}
+            </div>
+          )}
         </div>
-
-        {/* Pièces jointes */}
-        {message.attachments && message.attachments.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 6, marginTop: 4 }}>
-            {message.attachments.map((att) => (
-              <AttachmentDisplay key={att.id} attachment={att} />
-            ))}
-          </div>
-        )}
 
         {/* Reactions display */}
         {message.reactions && message.reactions.length > 0 && (

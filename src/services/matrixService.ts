@@ -570,7 +570,9 @@ export function getRoomMembers(roomId: string): { userId: string; displayName: s
 export async function createChannel(name: string, isVoice: boolean): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const initialState: any[] = [];
+  const initialState: any[] = [
+    { type: "m.room.encryption", state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } },
+  ];
   if (isVoice) {
     initialState.push({ type: "m.room.type", state_key: "", content: { type: "m.voice_channel" } });
     initialState.push({ type: "m.room.topic", state_key: "", content: { topic: "voice" } });

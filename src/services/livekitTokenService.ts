@@ -93,7 +93,9 @@ export async function getMatrixRTCToken(
     }
   }
 
-  // 1c. Si toujours rien, chercher dans les autres rooms du serveur (même service LiveKit)
+  // 1c. Si toujours rien, chercher le service_url dans les autres rooms du serveur
+  //     On ne récupère QUE le service_url, pas le livekit_alias (qui est propre à chaque room)
+  let fallbackServiceUrl: string | null = null;
   if (!livekitFocus) {
     const allRooms = client.getRooms();
     for (const otherRoom of allRooms) {
@@ -103,23 +105,27 @@ export async function getMatrixRTCToken(
       const otherList: unknown[] = Array.isArray(otherEvents) ? otherEvents : otherEvents ? [otherEvents] : [];
       for (const evt of otherList) {
         const focus = extractFocus(evt);
-        if (focus) { livekitFocus = focus; break; }
+        if (focus?.livekit_service_url) {
+          fallbackServiceUrl = focus.livekit_service_url;
+          break;
+        }
       }
-      if (livekitFocus) break;
+      if (fallbackServiceUrl) break;
     }
   }
 
-  if (!livekitFocus?.livekit_service_url) {
+  const rawServiceUrl = livekitFocus?.livekit_service_url || fallbackServiceUrl;
+  if (!rawServiceUrl) {
     return null;
   }
 
   // Le livekit_service_url peut être "livekit:https://..." ou directement "https://..."
-  let serviceUrl = livekitFocus.livekit_service_url;
+  let serviceUrl = rawServiceUrl;
   if (serviceUrl.startsWith("livekit:")) {
     serviceUrl = serviceUrl.slice("livekit:".length);
   }
-  // Utiliser le livekit_alias comme nom de room LiveKit (généralement = roomId)
-  const livekitRoomAlias = livekitFocus.livekit_alias || roomId;
+  // livekit_alias uniquement depuis la room courante, fallback = roomId Matrix
+  const livekitRoomAlias = livekitFocus?.livekit_alias || roomId;
   // 2. Récupérer un OpenID token Matrix
   const userId = client.getUserId();
   if (!userId) return null;

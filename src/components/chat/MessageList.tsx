@@ -161,7 +161,7 @@ export function MessageList() {
   return (
     <div
       ref={containerRef}
-      className="flex-1 overflow-y-auto px-6 py-5 flex flex-col"
+      className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 flex flex-col min-w-0"
       onScroll={handleScroll}
     >
       {/* Top indicator */}
@@ -176,7 +176,7 @@ export function MessageList() {
         const showHeader = i === 0 || messages[i - 1].user !== msg.user;
         const eventId = msg.eventId || String(msg.id);
         return (
-          <div key={msg.id} data-event-id={eventId}>
+          <div key={msg.id} data-event-id={eventId} style={{ minWidth: 0 }}>
             <Message
               message={msg}
               showHeader={showHeader}

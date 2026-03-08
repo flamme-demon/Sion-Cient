@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ScreenIcon, PencilIcon } from "../icons";
+import { ScreenIcon, PencilIcon, HashIcon } from "../icons";
 import { ChannelIcon } from "../sidebar/ChannelIcon";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -21,6 +21,8 @@ export function ChatHeader() {
   const [editName, setEditName] = useState("");
   const [editTopic, setEditTopic] = useState("");
   const [saving, setSaving] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   const canEdit = activeChannel
     ? matrixService.getUserPowerLevel(activeChannel) >= matrixService.getStatePowerLevel(activeChannel)
@@ -29,7 +31,19 @@ export function ChatHeader() {
   const openEditModal = () => {
     setEditName(channel?.name || "");
     setEditTopic(channel?.topic || "");
+    setAvatarPreview(null);
     setShowEditModal(true);
+  };
+
+  const handleAvatarPick = async (file: File) => {
+    if (!activeChannel) return;
+    setAvatarPreview(URL.createObjectURL(file));
+    try {
+      await matrixService.setRoomAvatar(activeChannel, file);
+    } catch (err) {
+      console.error("[Sion] Failed to set avatar:", err);
+      setAvatarPreview(null);
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -197,28 +211,74 @@ export function ChatHeader() {
                 boxSizing: 'border-box',
               }}
             />
-            <label style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6, display: 'block' }}>
+            <label style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 8, display: 'block' }}>
               {t("channels.editAvatar")}
             </label>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (file && activeChannel) {
-                  try {
-                    await matrixService.setRoomAvatar(activeChannel, file);
-                  } catch (err) {
-                    console.error("[Sion] Failed to set avatar:", err);
-                  }
-                }
-              }}
-              style={{
-                marginBottom: 20,
-                fontSize: 13,
-                color: 'var(--color-on-surface-variant)',
-              }}
-            />
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
+              <button
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+                style={{
+                  position: 'relative',
+                  width: 64,
+                  height: 64,
+                  borderRadius: '50%',
+                  border: '2px dashed var(--color-outline-variant)',
+                  background: 'var(--color-surface-container-high)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                  padding: 0,
+                  transition: 'border-color 200ms, background 200ms',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-primary)';
+                  e.currentTarget.style.background = 'var(--color-surface-container-highest)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-outline-variant)';
+                  e.currentTarget.style.background = 'var(--color-surface-container-high)';
+                }}
+              >
+                {(avatarPreview || channel?.icon) ? (
+                  <img
+                    src={avatarPreview || channel?.icon}
+                    alt=""
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  />
+                ) : (
+                  <HashIcon style={{ width: 24, height: 24, color: 'var(--color-on-surface-variant)' }} />
+                )}
+                {/* Pencil badge */}
+                <div style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  right: 0,
+                  width: 22,
+                  height: 22,
+                  borderRadius: '50%',
+                  background: 'var(--color-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: '2px solid var(--color-surface-container)',
+                }}>
+                  <PencilIcon style={{ width: 12, height: 12, color: 'var(--color-on-primary)' }} />
+                </div>
+              </button>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleAvatarPick(file);
+                }}
+              />
+            </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
                 onClick={() => setShowEditModal(false)}

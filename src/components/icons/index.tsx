@@ -1,5 +1,6 @@
 interface IconProps {
   className?: string;
+  style?: React.CSSProperties;
 }
 
 interface MuteableIconProps extends IconProps {
@@ -47,9 +48,9 @@ export function SettingsIcon({ className }: IconProps) {
   );
 }
 
-export function HashIcon({ className }: IconProps) {
+export function HashIcon({ className, style }: IconProps) {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className={className}>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className={className} style={style}>
       <line x1="4" y1="9" x2="20" y2="9" />
       <line x1="4" y1="15" x2="20" y2="15" />
       <line x1="10" y1="3" x2="8" y2="21" />
@@ -194,9 +195,9 @@ export function LogoutIcon({ className }: IconProps) {
   );
 }
 
-export function PencilIcon({ className }: IconProps) {
+export function PencilIcon({ className, style }: IconProps) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>
       <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
     </svg>
   );

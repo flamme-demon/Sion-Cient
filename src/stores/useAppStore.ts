@@ -77,7 +77,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error("[Sion] Failed to toggle microphone:", err);
     }
   },
-  toggleDeafen: () => set((s) => ({ isDeafened: !s.isDeafened })),
+  toggleDeafen: () => {
+    const newDeafened = !get().isDeafened;
+    set({ isDeafened: newDeafened });
+    livekitService.setDeafened(newDeafened);
+    // Deafen also mutes the mic
+    if (newDeafened && !get().isMuted) {
+      get().toggleMute();
+    }
+  },
   toggleScreenShare: async () => {
     const newSharing = !get().isScreenSharing;
     set({ isScreenSharing: newSharing });

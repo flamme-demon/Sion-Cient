@@ -74,17 +74,22 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   const isActive = activeChannel === channel.id;
   const isConnectedChannel = connectedVoiceChannel === channel.id;
 
-  const handleClick = async () => {
+  const handleClick = () => {
     setActiveChannel(channel.id, channel.hasVoice);
     loadRoomHistory(channel.id);
-    if (channel.hasVoice) {
-      // Join voice if not already connected to this channel
-      if (connectedVoiceChannel !== channel.id && hasLiveKitConfig) {
-        try {
-          await joinVoiceChannel(channel.id);
-        } catch (err) {
-          console.error("[Sion] Failed to join voice channel:", err);
-        }
+    if (!channel.hasVoice) {
+      // Text-only channels join voice on single click (if applicable)
+      return;
+    }
+  };
+
+  const handleDoubleClick = async () => {
+    if (!channel.hasVoice) return;
+    if (connectedVoiceChannel !== channel.id && hasLiveKitConfig) {
+      try {
+        await joinVoiceChannel(channel.id);
+      } catch (err) {
+        console.error("[Sion] Failed to join voice channel:", err);
       }
     }
   };
@@ -108,6 +113,8 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   };
 
   // Enrich LiveKit participants with Matrix display names and avatars
+  // Filter by Matrix call.member events to avoid showing users from other channels
+  // (the SFU may share the same LiveKit room across multiple Matrix rooms)
   const voiceUsers = useMemo(() => {
     if (!isConnectedChannel || !liveKitConnected) {
       return channel.voiceUsers;
@@ -117,21 +124,33 @@ export function ChannelItem({ channel }: { channel: Channel }) {
     const localDisplayName = credentials?.displayName || null;
     const localAvatarUrl = credentials?.avatarUrl;
 
-    return liveKitParticipants.map((p) => {
-      const info = getParticipantInfo(p.identity, localUserId, localDisplayName, localAvatarUrl);
-      const isSelf = info.isLocal;
-      const muted = isSelf ? isMuted : p.isMuted;
-      const deafened = isSelf ? isDeafened : false;
-      return {
-        id: p.identity,
-        name: info.name,
-        avatarUrl: info.avatarUrl || undefined,
-        role: "user" as UserRole,
-        speaking: muted ? false : p.isSpeaking,
-        muted,
-        deafened,
-      };
-    });
+    // Build a set of user IDs that are actually in THIS room's MatrixRTC session
+    const matrixMemberIds = new Set(channel.voiceUsers.map((u) => u.id));
+    // Always include the local user (they may not yet appear in call.member events)
+    if (localUserId) matrixMemberIds.add(localUserId);
+
+    return liveKitParticipants
+      .filter((p) => {
+        // Extract the Matrix user ID from LiveKit identity (format: @user:server or @user:server:deviceId)
+        const userIdMatch = p.identity.match(/^(@[^:]+:[^:]+)/);
+        const userId = userIdMatch ? userIdMatch[1] : p.identity;
+        return matrixMemberIds.has(userId);
+      })
+      .map((p) => {
+        const info = getParticipantInfo(p.identity, localUserId, localDisplayName, localAvatarUrl);
+        const isSelf = info.isLocal;
+        const muted = isSelf ? isMuted : p.isMuted;
+        const deafened = isSelf ? isDeafened : false;
+        return {
+          id: p.identity,
+          name: info.name,
+          avatarUrl: info.avatarUrl || undefined,
+          role: "user" as UserRole,
+          speaking: muted ? false : p.isSpeaking,
+          muted,
+          deafened,
+        };
+      });
   }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened]);
 
   return (
@@ -139,6 +158,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
       {/* M3 Navigation Drawer item */}
       <button
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         style={{
           width: '100%',
           display: 'flex',

@@ -122,9 +122,33 @@ function extractVoiceUsers(room: any, client: MatrixClient | null): VoiceChannel
     // Determine if this user is active in the call:
     // - New per-device format (MSC4143): content has {application, device_id, ...} directly — empty {} means left
     // - Old format: content has memberships[] array — empty array means left
+    // In both cases, check expiration (expires_ts absolute or origin_server_ts + expires relative)
+    const now = Date.now();
     const memberships = content?.memberships;
-    const hasOldFormatActive = Array.isArray(memberships) && memberships.length > 0;
-    const hasNewFormatActive = !memberships && !!content?.application && !!content?.device_id;
+
+    let hasOldFormatActive = false;
+    if (Array.isArray(memberships) && memberships.length > 0) {
+      // Filter out expired memberships
+      const originTs: number = event.getTs?.() || 0;
+      hasOldFormatActive = memberships.some((m: any) => {
+        if (m.expires_ts) return m.expires_ts > now;
+        if (m.expires && originTs) return originTs + m.expires > now;
+        return true; // No expiry info — assume active
+      });
+    }
+
+    let hasNewFormatActive = false;
+    if (!memberships && !!content?.application && !!content?.device_id) {
+      const originTs: number = event.getTs?.() || 0;
+      if (content.expires_ts) {
+        hasNewFormatActive = content.expires_ts > now;
+      } else if (content.expires && originTs) {
+        hasNewFormatActive = originTs + content.expires > now;
+      } else {
+        hasNewFormatActive = true; // No expiry info — assume active
+      }
+    }
+
     if (!hasOldFormatActive && !hasNewFormatActive) continue;
 
     // state_key format: "_@user:server_deviceId_m.call" — use getSender() for userId
@@ -320,7 +344,7 @@ function extractMessagesFromRoom(room: any): ChatMessage[] {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const info: Record<string, any> = content.info || {};
-      const mimeType = info.mimetype || (msgtype === "m.image" ? "image/jpeg" : "application/octet-stream");
+      const mimeType = info.mimetype || (({ "m.image": "image/jpeg", "m.video": "video/mp4", "m.audio": "audio/mpeg" } as Record<string, string>)[msgtype] || "application/octet-stream");
       const attachment: FileAttachment = {
         id: evtId,
         name: content.body || "fichier",
@@ -688,7 +712,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         if (!httpUrl) return;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const info: Record<string, any> = content.info || {};
-        const mimeType = info.mimetype || (msgtype === "m.image" ? "image/jpeg" : "application/octet-stream");
+        const mimeType = info.mimetype || (({ "m.image": "image/jpeg", "m.video": "video/mp4", "m.audio": "audio/mpeg" } as Record<string, string>)[msgtype] || "application/octet-stream");
         const attachment: FileAttachment = {
           id: evtId,
           name: content.body || "fichier",
@@ -804,7 +828,6 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     const { roomLoadingHistory, roomHasMore } = get();
     const hasMoreVal = roomHasMore[roomId];
     if (roomLoadingHistory[roomId]) return;
-    // Only paginate if we explicitly know there's more (first call sets this)
     if (hasMoreVal !== true && hasMoreVal !== undefined) return;
 
     const client = matrixService.getMatrixClient();
@@ -815,32 +838,74 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: true } }));
 
     try {
-      // Load history in multiple rounds. Voice channels have tons of signaling events
-      // but few actual messages, so we need to load many events to find messages.
-      // We load up to 10 rounds (10 × 100 = 1000 events max) to build a decent history.
-      const MAX_ROUNDS = 10;
-      const EVENTS_PER_ROUND = 100;
-
-      for (let round = 0; round < MAX_ROUNDS; round++) {
-        const paginationToken = room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
-        if (!paginationToken) break; // No more history to load
-
-        await client.scrollback(room, EVENTS_PER_ROUND);
-        const msgs = extractMessagesFromRoom(room);
+      // Check if SDK timeline already has messages (from sync or previous scrollback)
+      let msgs = extractMessagesFromRoom(room);
+      if (msgs.length > 0) {
         const hasMore = !!room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
-
-        // Update state after each round so messages appear progressively
         set((s) => ({
           messages: { ...s.messages, [roomId]: msgs },
           roomHasMore: { ...s.roomHasMore, [roomId]: hasMore },
+          roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false },
         }));
-
-        if (!hasMore) break;
+        return;
       }
 
+      // Paginate backwards using scrollback (needed for encrypted rooms where raw API can't decrypt).
+      // Server caps at ~100 events per request. Voice channels can have thousands of signaling
+      // events before messages, so we may need many rounds (like Element which does ~80 requests).
+      // Use Promise.race for timeout protection on each round.
+      const MAX_ROUNDS = 200; // ~20K events max
+      const BATCH = 100;
+      const SCROLLBACK_TIMEOUT = 8000;
+
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        const paginationToken = room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
+        if (!paginationToken) break;
+
+        try {
+          await Promise.race([
+            client.scrollback(room, BATCH),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), SCROLLBACK_TIMEOUT)),
+          ]);
+        } catch {
+          break;
+        }
+
+        msgs = extractMessagesFromRoom(room);
+
+        // Update store periodically (every 10 rounds) to show progress
+        if (msgs.length > 0 || round % 10 === 9) {
+          const hasMore = !!room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
+          set((s) => ({
+            messages: msgs.length > 0 ? { ...s.messages, [roomId]: msgs } : s.messages,
+            roomHasMore: { ...s.roomHasMore, [roomId]: hasMore },
+          }));
+        }
+
+        // Found messages — do a few more rounds for additional context, then stop
+        if (msgs.length > 0) {
+          for (let extra = 0; extra < 3; extra++) {
+            const tk = room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
+            if (!tk) break;
+            try {
+              await Promise.race([
+                client.scrollback(room, BATCH),
+                new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), SCROLLBACK_TIMEOUT)),
+              ]);
+            } catch { break; }
+          }
+          msgs = extractMessagesFromRoom(room);
+          break;
+        }
+      }
+
+      const finalHasMore = !!room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
       set((s) => ({
+        messages: msgs.length > 0 ? { ...s.messages, [roomId]: msgs } : s.messages,
+        roomHasMore: { ...s.roomHasMore, [roomId]: finalHasMore },
         roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false },
       }));
+
     } catch (err) {
       console.error("[Sion] Failed to load room history:", err);
       set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false } }));

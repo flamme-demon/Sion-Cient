@@ -6,11 +6,13 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 
 - **Voice channels** with low-latency audio via LiveKit (WebRTC)
 - **Text channels** with Markdown, file attachments, reactions, replies, message editing
+- **Video/audio playback** in chat with automatic ffmpeg transcoding for H.264 compatibility
+- **Screen sharing** in voice channels with dedicated viewer
 - **Link previews** with OG metadata extraction (YouTube oEmbed, GitHub, etc.)
 - **End-to-end encryption** (E2EE) for both text and voice via Matrix Rust Crypto + LiveKit E2EE
-- **Screen sharing** in voice channels
 - **Cross-device verification** (emoji comparison, recovery key)
 - **Global keyboard shortcuts** for mute/deafen (via rdev)
+- **User context menus** (profile, invite, kick, ban, power levels)
 - **Admin panel** for Continuwuity server management
 - **Internationalization** (French default, English available)
 - **Dark theme** with Material Design 3 inspired UI
@@ -40,13 +42,19 @@ src/
 └── components/
     ├── layout/         # Sidebar, MainArea, SettingsPanel, AdminPanel
     ├── sidebar/        # ServerHeader, ChannelList, UserControls, UserAvatar
-    ├── chat/           # MessageList, Message, ChatInput, LinkPreview, MarkdownRenderer
+    ├── chat/           # MessageList, Message, ChatInput, LinkPreview, MarkdownRenderer, ScreenShareView
     ├── admin/          # AdminStats, AdminActions, FederationInfo
     └── icons/          # SVG icon components
 src-tauri/
-├── src/lib.rs          # Tauri commands (shortcuts, link preview, open URL)
+├── src/lib.rs          # Tauri commands (shortcuts, link preview, open URL, video transcoding)
 ├── Cargo.toml          # Rust dependencies (tauri-cef, reqwest, scraper)
 └── icons/              # App icons
+build-scripts/
+├── run-cef.sh          # Launch desktop app with CEF runtime (Linux)
+├── fetch-cef-codecs.sh # Download standard CEF build with H.264 codecs
+├── build-windows.ps1   # Full Windows build (installs deps, compiles, bundles)
+├── build-appimage.sh   # Build Linux AppImage
+└── install-linux.sh    # Install on Linux
 ```
 
 ## Prerequisites
@@ -54,6 +62,7 @@ src-tauri/
 - [Bun](https://bun.sh/) >= 1.3
 - [Rust](https://rustup.rs/) (stable)
 - CMake + Ninja (for CEF compilation)
+- [ffmpeg](https://ffmpeg.org/) (for video transcoding in chat)
 - A Matrix homeserver (tested with [Continuwuity](https://github.com/continuwuation/continuwuity))
 - A LiveKit server for voice/video
 
@@ -116,6 +125,7 @@ The client connects to a Matrix homeserver at login. Voice channels use MatrixRT
 - Speaking indicator from `participant.isSpeaking` (LiveKit SDK)
 - User list = Matrix presence + LiveKit participants combined
 - Link previews fetched server-side via Tauri command (reqwest + scraper / oEmbed)
+- Video transcoding: MP4 (H.264) auto-transcoded to WebM (VP9) via system ffmpeg when native codec is unavailable
 
 ## License
 

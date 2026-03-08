@@ -32,5 +32,25 @@ if [ ! -f "target/debug/libcef.so" ]; then
     echo "✅ Bibliothèques CEF copiées"
 fi
 
+# Lancer le serveur Vite en arrière-plan
+cd "$(dirname "$0")/.."
+bun run dev &
+VITE_PID=$!
+
+# Attendre que Vite soit prêt
+echo "⏳ Démarrage du serveur Vite..."
+while ! curl -s http://localhost:5173 > /dev/null 2>&1; do
+    sleep 0.3
+done
+echo "✅ Serveur Vite prêt"
+
+# Arrêter Vite proprement à la fermeture
+cleanup() {
+    kill "$VITE_PID" 2>/dev/null
+    wait "$VITE_PID" 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
 # Lancer l'application
-exec cargo run "$@"
+cd src-tauri
+cargo run "$@"

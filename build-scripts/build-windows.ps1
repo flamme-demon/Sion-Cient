@@ -13,6 +13,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 Set-Location $ProjectDir
 
+# Absolute paths used throughout the script
+$tauriDir = "$ProjectDir\src-tauri"
+$releaseDir = "$tauriDir\target\release"
+$tauriConf = "$tauriDir\tauri.conf.json"
+$cefDist = "$tauriDir\cef-dist"
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Sion Client - Build Windows" -ForegroundColor Cyan
@@ -33,7 +39,6 @@ $cefFiles = @(
 )
 
 function Find-CefDir {
-    $releaseDir = "src-tauri\target\release"
     $cefDir = Get-ChildItem -Path "$releaseDir\build" -Recurse -Directory -Filter "cef_win*" -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $cefDir) {
         $cefDir = Get-ChildItem -Path "$releaseDir\build" -Recurse -Directory -Filter "cef_windows*" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -42,16 +47,15 @@ function Find-CefDir {
 }
 
 function Stage-CefLibs($cefDir) {
-    $destDir = "src-tauri\cef-dist"
     # Clean previous staging
-    if (Test-Path $destDir) { Remove-Item -Recurse -Force $destDir }
-    New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+    if (Test-Path $cefDist) { Remove-Item -Recurse -Force $cefDist }
+    New-Item -ItemType Directory -Force -Path $cefDist | Out-Null
 
     $count = 0
     foreach ($f in $cefFiles) {
         $src = Join-Path $cefDir.FullName $f
         if (Test-Path $src) {
-            Copy-Item $src "$destDir\"
+            Copy-Item $src "$cefDist\"
             $count++
         }
     }
@@ -59,17 +63,16 @@ function Stage-CefLibs($cefDir) {
     # Locales subdirectory
     $localesDir = Join-Path $cefDir.FullName "locales"
     if (Test-Path $localesDir) {
-        New-Item -ItemType Directory -Force -Path "$destDir\locales" | Out-Null
-        Copy-Item "$localesDir\*" "$destDir\locales\" -Force
+        New-Item -ItemType Directory -Force -Path "$cefDist\locales" | Out-Null
+        Copy-Item "$localesDir\*" "$cefDist\locales\" -Force
     }
 
     Write-Host "  $count fichiers CEF copies dans cef-dist/" -ForegroundColor Green
 }
 
 # --- Check path length ---
-$currentPath = (Get-Location).Path
-if ($currentPath.Length -gt 30) {
-    Write-Host "  ATTENTION: Le chemin actuel est long ($($currentPath.Length) caracteres)." -ForegroundColor Yellow
+if ($ProjectDir.Length -gt 30) {
+    Write-Host "  ATTENTION: Le chemin actuel est long ($($ProjectDir.Length) caracteres)." -ForegroundColor Yellow
     Write-Host "  CEF necessite des chemins courts sur Windows." -ForegroundColor Yellow
     Write-Host "  Recommande: extraire a C:\sion-build\" -ForegroundColor Yellow
     Write-Host ""
@@ -174,10 +177,12 @@ if (-not (Test-Command "bun")) {
 # --- 6. Install dependencies ---
 Write-Host "[6/10] Installation des dependances..." -ForegroundColor Yellow
 Write-Host "  bun install..." -ForegroundColor Gray
+Set-Location $ProjectDir
 bun install
 
 # --- 7. Build frontend ---
 Write-Host "[7/10] Build du frontend..." -ForegroundColor Yellow
+Set-Location $ProjectDir
 bun run build
 
 # --- 8. Build Rust (compilation seule, pas de bundling) ---
@@ -185,9 +190,13 @@ Write-Host "[8/10] Compilation Rust + CEF..." -ForegroundColor Yellow
 Write-Host "  Cela peut prendre plusieurs minutes a la premiere compilation..." -ForegroundColor Gray
 Write-Host ""
 
-Push-Location src-tauri
+Set-Location $tauriDir
 cargo build --release
-Pop-Location
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERREUR: Compilation Rust echouee (code $LASTEXITCODE)." -ForegroundColor Red
+    exit 1
+}
+Set-Location $ProjectDir
 
 # --- 9. Stage CEF libs for bundler ---
 Write-Host "[9/10] Staging des libs CEF pour le bundler..." -ForegroundColor Yellow
@@ -203,8 +212,10 @@ if ($cefDir) {
 # --- 10. Bundle (MSI + NSIS) — re-utilise le cache cargo ---
 Write-Host "[10/10] Generation des installeurs (MSI + NSIS)..." -ForegroundColor Yellow
 
+# Backup tauri.conf.json
+Copy-Item $tauriConf "$tauriConf.bak"
+
 # Inject CEF resources into tauri.conf.json for bundling
-$tauriConf = "src-tauri\tauri.conf.json"
 $confJson = Get-Content $tauriConf -Raw | ConvertFrom-Json
 $confJson.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
     "cef-dist/*.dll" = "./"
@@ -214,16 +225,18 @@ $confJson.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @
     "cef-dist/*.json" = "./"
     "cef-dist/locales/*" = "./locales/"
 } -Force
-$confJson | ConvertTo-Json -Depth 10 | Set-Content $tauriConf -Encoding UTF8
+[System.IO.File]::WriteAllText($tauriConf, ($confJson | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
+Set-Location $ProjectDir
 bun run tauri build
 
-# Restore tauri.conf.json (remove resources so it works on all platforms)
-$confJson.bundle.PSObject.Properties.Remove("resources")
-$confJson | ConvertTo-Json -Depth 10 | Set-Content $tauriConf -Encoding UTF8
+# Restore tauri.conf.json from backup (guaranteed clean)
+Set-Location $ProjectDir
+if (Test-Path "$tauriConf.bak") {
+    Move-Item -Force "$tauriConf.bak" $tauriConf
+}
 
 # --- Result ---
-$releaseDir = "src-tauri\target\release"
 $exePath = "$releaseDir\sion-client.exe"
 
 Write-Host ""
@@ -266,8 +279,8 @@ if (Test-Path $exePath) {
         if (Test-Path $localesDir) {
             Copy-Item -Recurse -Force $localesDir "$standaloneDir\locales"
         }
-        if (Test-Path "src-tauri\icons\icon.ico") {
-            Copy-Item "src-tauri\icons\icon.ico" "$standaloneDir\sion-client.ico"
+        if (Test-Path "$tauriDir\icons\icon.ico") {
+            Copy-Item "$tauriDir\icons\icon.ico" "$standaloneDir\sion-client.ico"
         }
 
         # Create ZIP

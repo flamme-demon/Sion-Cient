@@ -1,3 +1,4 @@
+import { useState, useCallback, type ReactNode } from "react";
 import DOMPurify from "dompurify";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -24,6 +25,66 @@ function sanitizeHtml(html: string): string {
   });
 }
 
+function extractText(node: ReactNode): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (!node) return "";
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (typeof node === "object" && "props" in node) return extractText((node as { props: { children?: ReactNode } }).props.children);
+  return "";
+}
+
+function CodeBlock({ children }: { children: ReactNode }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    const text = extractText(children);
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [children]);
+
+  return (
+    <pre className="md-code-block" style={{
+      position: 'relative',
+      background: 'var(--color-surface-container-lowest)',
+      border: '1px solid var(--color-outline-variant)',
+      borderRadius: 16,
+      padding: 16,
+      margin: '8px 0',
+      overflowX: 'auto' as const,
+      maxWidth: '100%',
+      fontSize: 12,
+      fontFamily: 'var(--font-family-mono)',
+    }}>
+      <button
+        onClick={handleCopy}
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          padding: '4px 8px',
+          borderRadius: 8,
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: 11,
+          fontFamily: 'inherit',
+          background: copied ? 'var(--color-primary-container)' : 'var(--color-surface-container-high)',
+          color: copied ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
+          opacity: copied ? 1 : 0.7,
+          transition: 'all 150ms',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+        onMouseLeave={(e) => { if (!copied) e.currentTarget.style.opacity = '0.7'; }}
+      >
+        {copied ? "✓" : "⎘"}
+      </button>
+      {children}
+    </pre>
+  );
+}
+
 const components: Components = {
   p: ({ children }) => <p style={{ margin: '2px 0' }}>{children}</p>,
   a: ({ href, children }) => (
@@ -32,7 +93,7 @@ const components: Components = {
     </a>
   ),
   code: ({ className, children }) => {
-    const isBlock = className?.startsWith("language-");
+    const isBlock = Boolean(className);
     if (isBlock) {
       return <code className={className} style={{ fontFamily: 'var(--font-family-mono)' }}>{children}</code>;
     }
@@ -48,20 +109,7 @@ const components: Components = {
       </code>
     );
   },
-  pre: ({ children }) => (
-    <pre style={{
-      background: 'var(--color-surface-container-lowest)',
-      border: '1px solid var(--color-outline-variant)',
-      borderRadius: 16,
-      padding: 16,
-      margin: '8px 0',
-      overflowX: 'auto' as const,
-      fontSize: 12,
-      fontFamily: 'var(--font-family-mono)',
-    }}>
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   ul: ({ children }) => <ul style={{ paddingLeft: 20, margin: '4px 0' }}>{children}</ul>,
   ol: ({ children }) => <ol style={{ paddingLeft: 20, margin: '4px 0' }}>{children}</ol>,
   blockquote: ({ children }) => (
