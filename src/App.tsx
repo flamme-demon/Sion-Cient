@@ -3,6 +3,7 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { MainArea } from "./components/layout/MainArea";
 import { AdminPanel } from "./components/layout/AdminPanel";
 import { SettingsPanel } from "./components/layout/SettingsPanel";
+import { MobileVoiceBar } from "./components/mobile/MobileVoiceBar";
 import { LoginPage } from "./pages/LoginPage";
 import { RecoveryKeyModal } from "./components/RecoveryKeyModal";
 import { useAppStore } from "./stores/useAppStore";
@@ -11,6 +12,7 @@ import { useMatrixStore } from "./stores/useMatrixStore";
 import { useAdminStore } from "./stores/useAdminStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
+import { useIsMobile } from "./hooks/useIsMobile";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "./services/matrixService";
 
@@ -18,6 +20,8 @@ export default function App() {
   const { t } = useTranslation();
   const showAdmin = useAppStore((s) => s.showAdmin);
   const showSettings = useAppStore((s) => s.showSettings);
+  const mobileView = useAppStore((s) => s.mobileView);
+  const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const credentials = useAuthStore((s) => s.credentials);
   const isLoading = useAuthStore((s) => s.isLoading);
   const restoreSession = useAuthStore((s) => s.restoreSession);
@@ -27,6 +31,7 @@ export default function App() {
   const adminInitialized = useAdminStore((s) => s.initialized);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [mutedSpeakWarning, setMutedSpeakWarning] = useState(false);
+  const isMobile = useIsMobile();
 
   useKeyboardShortcuts();
   useMutedSpeakDetection(useCallback(() => {
@@ -59,14 +64,8 @@ export default function App() {
   // Show loading spinner while checking session
   if (!sessionChecked || (isLoading && !credentials)) {
     return (
-      <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface)', color: 'var(--color-on-surface-variant)' }}>
-        <div style={{
-          width: 32, height: 32,
-          border: '3px solid var(--color-surface-container-high)',
-          borderTopColor: 'var(--color-primary)',
-          borderRadius: '50%',
-          animation: 'spin 0.7s linear infinite',
-        }} />
+      <div className="app-loading">
+        <div className="app-spinner" />
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
@@ -84,20 +83,26 @@ export default function App() {
   // Authenticated — show main app
   return (
     <Suspense fallback={
-      <div style={{ display: 'flex', height: '100vh', width: '100vw', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface)', color: 'var(--color-on-surface-variant)' }}>
-        Loading...
-      </div>
+      <div className="app-loading">Loading...</div>
     }>
-      <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', background: 'var(--color-surface)' }}>
-        <Sidebar />
-        <MainArea />
+      <div className="app-root">
+        {/* Mobile: show sidebar OR chat based on mobileView */}
+        {/* Desktop: always show sidebar */}
+        {(!isMobile || mobileView === "sidebar") && <Sidebar />}
+        {(!isMobile || mobileView === "chat") && <MainArea />}
+
+        {/* Panels: overlay on mobile, side panel on desktop */}
         {showAdmin && <AdminPanel />}
         {showSettings && <SettingsPanel />}
         <RecoveryKeyModal />
+
+        {/* Mobile voice bar with PTT */}
+        {isMobile && connectedVoice && <MobileVoiceBar />}
+
         {mutedSpeakWarning && (
           <div style={{
             position: 'fixed',
-            bottom: 80,
+            bottom: isMobile && connectedVoice ? 140 : 80,
             left: '50%',
             transform: 'translateX(-50%)',
             background: 'var(--color-error-container)',

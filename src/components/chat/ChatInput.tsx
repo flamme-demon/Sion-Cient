@@ -6,8 +6,11 @@ import { FilePreview } from "./FilePreview";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
+// Match VOICE_BAR_HEIGHT from MobileVoiceBar (avoid circular import)
+const VOICE_BAR_HEIGHT = 120;
 
 export function ChatInput() {
   const { t } = useTranslation();
@@ -49,19 +52,24 @@ export function ChatInput() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const savedInput = useRef("");
 
+  const isMobile = useIsMobile();
   const channelName = channels.find((c) => c.id === activeChannel)?.name || "general";
 
-  // Close emoji picker on outside click
+  // Close emoji picker on outside click/touch
   useEffect(() => {
     if (!showEmojiPicker) return;
-    const handleClick = (e: MouseEvent) => {
+    const handleClick = (e: MouseEvent | TouchEvent) => {
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
         setShowEmojiPicker(false);
         setEmojiPickerSearch("");
       }
     };
     window.addEventListener("mousedown", handleClick);
-    return () => window.removeEventListener("mousedown", handleClick);
+    window.addEventListener("touchstart", handleClick);
+    return () => {
+      window.removeEventListener("mousedown", handleClick);
+      window.removeEventListener("touchstart", handleClick);
+    };
   }, [showEmojiPicker]);
 
   // Pre-fill input when editing a message
@@ -487,12 +495,13 @@ export function ChatInput() {
               {showEmojiPicker && (
                 <div
                   style={{
-                    position: 'absolute',
-                    bottom: '100%',
-                    left: 0,
-                    marginBottom: 4,
-                    width: 352,
-                    height: 400,
+                    position: isMobile ? 'fixed' : 'absolute',
+                    bottom: isMobile ? `${VOICE_BAR_HEIGHT + 60}px` : '100%',
+                    left: isMobile ? 0 : 0,
+                    right: isMobile ? 0 : undefined,
+                    marginBottom: isMobile ? 0 : 4,
+                    width: isMobile ? 'auto' : 352,
+                    height: isMobile ? '45dvh' : 400,
                     background: 'var(--color-surface-container)',
                     borderRadius: 16,
                     boxShadow: '0 -4px 24px rgba(0,0,0,0.3)',
@@ -508,7 +517,7 @@ export function ChatInput() {
                       value={emojiPickerSearch}
                       onChange={(e) => setEmojiPickerSearch(e.target.value)}
                       placeholder="Rechercher..."
-                      autoFocus
+                      autoFocus={!isMobile}
                       style={{
                         width: '100%',
                         padding: '8px 12px',

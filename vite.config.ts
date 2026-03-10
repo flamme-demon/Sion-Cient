@@ -16,10 +16,12 @@ export default defineConfig({
     watch: {
       ignored: ["**/src-tauri/**"],
     },
-    headers: {
-      "Cross-Origin-Opener-Policy": "same-origin",
-      "Cross-Origin-Embedder-Policy": "require-corp",
-    },
+    headers: process.env.TAURI_ENV_PLATFORM === "android"
+      ? {}
+      : {
+          "Cross-Origin-Opener-Policy": "same-origin",
+          "Cross-Origin-Embedder-Policy": "require-corp",
+        },
   },
   envPrefix: ["VITE_", "TAURI_"],
   optimizeDeps: {

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { BaseKeyProvider } from "livekit-client";
 import { useLiveKitStore } from "../stores/useLiveKitStore";
 import * as livekitService from "../services/livekitService";
@@ -6,13 +6,25 @@ import * as livekitService from "../services/livekitService";
 export function useLiveKit() {
   const { connected, roomName, participants } = useLiveKitStore();
   const { connect: storeConnect, disconnect: storeDisconnect, setParticipants } = useLiveKitStore();
+  const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingUpdate = useRef<typeof participants | null>(null);
 
   const connect = useCallback(async (url: string, token: string, room: string, e2eeKeyProvider?: BaseKeyProvider) => {
     const lkRoom = await livekitService.connectToRoom(url, token, e2eeKeyProvider);
     storeConnect(room);
 
     livekitService.onParticipantChange((updatedParticipants) => {
-      setParticipants(updatedParticipants);
+      // Throttle store updates to max ~4 per second to avoid choking React renders
+      pendingUpdate.current = updatedParticipants;
+      if (!throttleRef.current) {
+        throttleRef.current = setTimeout(() => {
+          throttleRef.current = null;
+          if (pendingUpdate.current) {
+            setParticipants(pendingUpdate.current);
+            pendingUpdate.current = null;
+          }
+        }, 250);
+      }
     });
 
     return lkRoom;

@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -15,34 +15,36 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 
-# Tauri avec runtime CEF (branche feat/cef)
-tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", features = ["cef"] }
-# Désactiver le sandbox CEF pour le développement
-tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef", default-features = false }
+tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
-rdev = { git = "https://github.com/rustdesk-org/rdev" }
 open = "5"
 reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }
 scraper = "0.22"
 base64 = "0.22"
 
+# Desktop-only dependencies
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf", default-features = false, optional = true }
+rdev = { git = "https://github.com/rustdesk-org/rdev" }
+
 [features]
 default = ["cef"]
-cef = ["tauri/cef"]
+cef = ["tauri/cef", "tauri-runtime-cef"]
 
-# Rediriger toutes les dépendances tauri vers la branche feat/cef
+# Patches CEF — nécessaire pour le build desktop
+# Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive le CEF
 [patch.crates-io]
-tauri = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-build = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-macros = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-runtime = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-utils = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
-tauri-plugin = { git = "https://github.com/tauri-apps/tauri", branch = "feat/cef" }
+tauri = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }

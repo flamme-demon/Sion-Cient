@@ -1,10 +1,19 @@
+#[cfg(not(target_os = "android"))]
 use rdev::{listen, EventType, Key};
-use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "android"))]
+use serde::Deserialize;
+use serde::Serialize;
+#[cfg(not(target_os = "android"))]
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+#[cfg(not(target_os = "android"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "android"))]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_os = "android"))]
+use std::time::Instant;
+#[cfg(not(target_os = "android"))]
 use tauri::Emitter;
 
 #[cfg(feature = "cef")]
@@ -12,13 +21,16 @@ type TauriRuntime = tauri::Cef;
 #[cfg(not(feature = "cef"))]
 type TauriRuntime = tauri::Wry;
 
+#[cfg(not(target_os = "android"))]
 struct ShortcutState {
     mute_keys: Vec<Key>,
     deafen_keys: Vec<Key>,
 }
 
+#[cfg(not(target_os = "android"))]
 type SharedShortcuts = Arc<Mutex<ShortcutState>>;
 
+#[cfg(not(target_os = "android"))]
 fn parse_key(s: &str) -> Option<Key> {
     match s.trim() {
         "Ctrl" => Some(Key::ControlLeft),
@@ -71,6 +83,7 @@ fn parse_key(s: &str) -> Option<Key> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn parse_shortcut(shortcut: &str) -> Vec<Key> {
     if shortcut.is_empty() {
         return vec![];
@@ -78,6 +91,7 @@ fn parse_shortcut(shortcut: &str) -> Vec<Key> {
     shortcut.split('+').filter_map(parse_key).collect()
 }
 
+#[cfg(not(target_os = "android"))]
 fn keys_match(required: &[Key], pressed: &HashSet<Key>) -> bool {
     if required.is_empty() {
         return false;
@@ -91,6 +105,7 @@ fn keys_match(required: &[Key], pressed: &HashSet<Key>) -> bool {
     })
 }
 
+#[cfg(not(target_os = "android"))]
 #[derive(Deserialize)]
 struct UpdateShortcutsPayload {
     mute: String,
@@ -307,6 +322,7 @@ async fn transcode_video(url: String) -> Result<String, String> {
     Ok(b64)
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn update_shortcuts(state: tauri::State<'_, SharedShortcuts>, payload: UpdateShortcutsPayload) {
     let mut shortcuts = state.lock().unwrap();
@@ -322,16 +338,27 @@ fn update_shortcuts(state: tauri::State<'_, SharedShortcuts>, payload: UpdateSho
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg_attr(feature = "cef", tauri::cef_entry_point)]
 pub fn run() {
+    #[cfg(not(target_os = "android"))]
     let shortcuts: SharedShortcuts = Arc::new(Mutex::new(ShortcutState {
         mute_keys: vec![],
         deafen_keys: vec![],
     }));
 
+    #[cfg(not(target_os = "android"))]
     let shortcuts_clone = shortcuts.clone();
 
-    tauri::Builder::<TauriRuntime>::default()
+    let builder = tauri::Builder::<TauriRuntime>::default();
+
+    #[cfg(not(target_os = "android"))]
+    let builder = builder
         .manage(shortcuts)
-        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video])
+        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video]);
+
+    #[cfg(target_os = "android")]
+    let builder = builder
+        .invoke_handler(tauri::generate_handler![open_url, fetch_link_preview, transcode_video]);
+
+    builder
         .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -341,73 +368,65 @@ pub fn run() {
                 )?;
             }
 
-            let _window = tauri::WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::App(Default::default()),
-            )
-            .title("Sion Client")
-            .inner_size(1200.0, 800.0)
-            .min_inner_size(900.0, 600.0)
-            .resizable(true)
-            .build()?;
+            // Global shortcut listener using rdev — desktop only
+            #[cfg(not(target_os = "android"))]
+            {
+                let handle = app.handle().clone();
+                let sc = shortcuts_clone;
 
-            // Global shortcut listener using rdev (X11 Record / XWayland)
-            let handle = app.handle().clone();
-            let sc = shortcuts_clone;
+                thread::spawn(move || {
+                    let pressed_keys: Arc<Mutex<HashSet<Key>>> = Arc::new(Mutex::new(HashSet::new()));
+                    let last_mute = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
+                    let last_deafen = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
 
-            thread::spawn(move || {
-                let pressed_keys: Arc<Mutex<HashSet<Key>>> = Arc::new(Mutex::new(HashSet::new()));
-                let last_mute = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
-                let last_deafen = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
+                    let pk = pressed_keys.clone();
+                    let lm = last_mute.clone();
+                    let ld = last_deafen.clone();
 
-                let pk = pressed_keys.clone();
-                let lm = last_mute.clone();
-                let ld = last_deafen.clone();
+                    log::info!("[Sion] Starting rdev global input listener...");
 
-                log::info!("[Sion] Starting rdev global input listener...");
+                    if let Err(e) = listen(move |event| {
+                        match event.event_type {
+                            EventType::KeyPress(key) => {
+                                let mut keys = pk.lock().unwrap();
+                                keys.insert(key);
 
-                if let Err(e) = listen(move |event| {
-                    match event.event_type {
-                        EventType::KeyPress(key) => {
-                            let mut keys = pk.lock().unwrap();
-                            keys.insert(key);
+                                let sc_lock = sc.lock().unwrap();
+                                let mute_keys = sc_lock.mute_keys.clone();
+                                let deafen_keys = sc_lock.deafen_keys.clone();
+                                drop(sc_lock);
 
-                            let sc_lock = sc.lock().unwrap();
-                            let mute_keys = sc_lock.mute_keys.clone();
-                            let deafen_keys = sc_lock.deafen_keys.clone();
-                            drop(sc_lock);
+                                let now = Instant::now();
+                                let debounce = Duration::from_millis(200);
 
-                            let now = Instant::now();
-                            let debounce = Duration::from_millis(200);
-
-                            if keys_match(&mute_keys, &keys) {
-                                let mut lm = lm.lock().unwrap();
-                                if now.duration_since(*lm) > debounce {
-                                    *lm = now;
-                                    log::info!("[Sion] Global shortcut: mute");
-                                    let _ = handle.emit("global-shortcut", "mute");
+                                if keys_match(&mute_keys, &keys) {
+                                    let mut lm = lm.lock().unwrap();
+                                    if now.duration_since(*lm) > debounce {
+                                        *lm = now;
+                                        log::info!("[Sion] Global shortcut: mute");
+                                        let _ = handle.emit("global-shortcut", "mute");
+                                    }
+                                }
+                                if keys_match(&deafen_keys, &keys) {
+                                    let mut ld = ld.lock().unwrap();
+                                    if now.duration_since(*ld) > debounce {
+                                        *ld = now;
+                                        log::info!("[Sion] Global shortcut: deafen");
+                                        let _ = handle.emit("global-shortcut", "deafen");
+                                    }
                                 }
                             }
-                            if keys_match(&deafen_keys, &keys) {
-                                let mut ld = ld.lock().unwrap();
-                                if now.duration_since(*ld) > debounce {
-                                    *ld = now;
-                                    log::info!("[Sion] Global shortcut: deafen");
-                                    let _ = handle.emit("global-shortcut", "deafen");
-                                }
+                            EventType::KeyRelease(key) => {
+                                let mut keys = pk.lock().unwrap();
+                                keys.remove(&key);
                             }
+                            _ => {}
                         }
-                        EventType::KeyRelease(key) => {
-                            let mut keys = pk.lock().unwrap();
-                            keys.remove(&key);
-                        }
-                        _ => {}
+                    }) {
+                        log::error!("[Sion] rdev listen failed: {:?}", e);
                     }
-                }) {
-                    log::error!("[Sion] rdev listen failed: {:?}", e);
-                }
-            });
+                });
+            }
 
             Ok(())
         })

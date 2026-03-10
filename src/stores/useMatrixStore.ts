@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { MatrixClient } from "matrix-js-sdk";
-import { ClientEvent, MatrixEventEvent, RoomEvent, RoomMemberEvent, RoomStateEvent, EventTimeline, HttpApiEvent } from "matrix-js-sdk";
+import { ClientEvent, MatrixEvent, MatrixEventEvent, RoomEvent, RoomMemberEvent, RoomStateEvent, HttpApiEvent } from "matrix-js-sdk";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api";
 import type { VerificationRequest, ShowSasCallbacks } from "matrix-js-sdk/lib/crypto-api/verification";
 import { VerificationPhase, VerifierEvent, VerificationRequestEvent } from "matrix-js-sdk/lib/crypto-api/verification";
@@ -8,6 +8,7 @@ import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser } from "../
 import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
+import { getCachedRoom, setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
@@ -29,6 +30,7 @@ interface MatrixState {
   messages: Record<string, ChatMessage[]>;
   roomHasMore: Record<string, boolean>;
   roomLoadingHistory: Record<string, boolean>;
+  roomPaginationFrom: Record<string, string>;
   connectionStatus: "disconnected" | "connecting" | "connected" | "error";
   currentUserId: string | null;
   needsVerification: boolean;
@@ -264,11 +266,9 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractMessagesFromRoom(room: any): ChatMessage[] {
-  const client = matrixService.getMatrixClient();
-  const timeline = room.getLiveTimeline().getEvents();
+function extractMessagesFromEvents(events: any[], room: any, client: any): ChatMessage[] {
   const msgs: ChatMessage[] = [];
-  for (const evt of timeline) {
+  for (const evt of events) {
     const type = evt.getType?.();
 
     // Show failed-to-decrypt messages as placeholders.
@@ -360,7 +360,7 @@ function extractMessagesFromRoom(room: any): ChatMessage[] {
     }
   }
   // Parse reactions (m.annotation) and attach to messages
-  for (const evt of timeline) {
+  for (const evt of events) {
     if (evt.getType?.() !== "m.reaction") continue;
     const rel = evt.getContent?.()?.["m.relates_to"];
     if (rel?.rel_type !== "m.annotation" || !rel?.event_id || !rel?.key) continue;
@@ -382,11 +382,19 @@ function extractMessagesFromRoom(room: any): ChatMessage[] {
   return msgs;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractMessagesFromRoom(room: any): ChatMessage[] {
+  const client = matrixService.getMatrixClient();
+  const timeline = room.getLiveTimeline().getEvents();
+  return extractMessagesFromEvents(timeline, room, client);
+}
+
 export const useMatrixStore = create<MatrixState>((set, get) => ({
   channels: [],
   messages: {},
   roomHasMore: {},
   roomLoadingHistory: {},
+  roomPaginationFrom: {},
   connectionStatus: "disconnected",
   currentUserId: null,
   needsVerification: false,
@@ -446,10 +454,13 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
         set({ channels, connectionStatus: "connected", messages });
 
-        // Auto-select first channel
+        // Auto-select first channel (but don't switch to chat view on mobile)
         const currentActive = useAppStore.getState().activeChannel;
         if ((!currentActive || currentActive === "") && channels.length > 0) {
+          const prevMobileView = useAppStore.getState().mobileView;
           useAppStore.getState().setActiveChannel(channels[0].id, channels[0].hasVoice);
+          // Restore sidebar view — auto-select shouldn't navigate away on mobile
+          useAppStore.getState().setMobileView(prevMobileView);
         }
 
         // Check device verification status — only show banner if crypto is ready but NOT verified
@@ -757,6 +768,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           },
         };
       });
+
+      // Append new event ID to cache
+      if (evtId) {
+        appendCachedEventIds(room.roomId, [evtId], null);
+      }
     });
 
     // Listen for MatrixRTC call member state changes (voice users joining/leaving)
@@ -801,11 +817,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     });
 
     // Listen for decrypted events (after key restore / cross-device verification)
+    // Just re-extract messages from the timeline — no need to re-scrollback,
+    // the events are already loaded, they just need to be re-parsed after decryption.
     let decryptReloadTimer: ReturnType<typeof setTimeout> | null = null;
-    client.on(MatrixEventEvent.Decrypted, (event) => {
-      const roomId = event.getRoomId?.();
-      if (!roomId) return;
-      // Debounce: many events decrypt at once, reload once after a short delay
+    client.on(MatrixEventEvent.Decrypted, () => {
       if (decryptReloadTimer) clearTimeout(decryptReloadTimer);
       decryptReloadTimer = setTimeout(() => {
         decryptReloadTimer = null;
@@ -818,14 +833,21 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           }
         }
         set((s) => ({ messages: { ...s.messages, ...messages } }));
-      }, 500);
+      }, 1000);
     });
+
+    // Clear old cache — v1 stored raw event IDs (thousands of signaling events).
+    // v2 stores only message IDs. Clear once so v2 cache rebuilds cleanly.
+    if (!localStorage.getItem("sion-cache-v4")) {
+      clearCache();
+      localStorage.setItem("sion-cache-v4", "1");
+    }
 
     matrixService.startSync();
   },
 
   loadRoomHistory: async (roomId) => {
-    const { roomLoadingHistory, roomHasMore } = get();
+    const { roomLoadingHistory, roomHasMore, roomPaginationFrom } = get();
     const hasMoreVal = roomHasMore[roomId];
     if (roomLoadingHistory[roomId]) return;
     if (hasMoreVal !== true && hasMoreVal !== undefined) return;
@@ -835,76 +857,131 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     const room = client.getRoom(roomId);
     if (!room) return;
 
+    const isFirstLoad = hasMoreVal === undefined;
+
     set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: true } }));
 
     try {
-      // Check if SDK timeline already has messages (from sync or previous scrollback)
-      let msgs = extractMessagesFromRoom(room);
-      if (msgs.length > 0) {
-        const hasMore = !!room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
+      // 1. Show sync messages immediately (first load only)
+      const syncMsgs = extractMessagesFromRoom(room);
+      if (isFirstLoad && syncMsgs.length > 0) {
         set((s) => ({
-          messages: { ...s.messages, [roomId]: msgs },
-          roomHasMore: { ...s.roomHasMore, [roomId]: hasMore },
-          roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false },
+          messages: { ...s.messages, [roomId]: syncMsgs },
         }));
-        return;
       }
 
-      // Paginate backwards using scrollback (needed for encrypted rooms where raw API can't decrypt).
-      // Server caps at ~100 events per request. Voice channels can have thousands of signaling
-      // events before messages, so we may need many rounds (like Element which does ~80 requests).
-      // Use Promise.race for timeout protection on each round.
-      const MAX_ROUNDS = 200; // ~20K events max
-      const BATCH = 100;
-      const SCROLLBACK_TIMEOUT = 8000;
+      // 2. Load history via filtered /messages API — skips signaling events server-side.
+      const baseUrl = client.getHomeserverUrl();
+      const accessToken = client.getAccessToken();
+      const filterStr = JSON.stringify({ not_types: ["org.matrix.msc3401.call.member"] });
 
-      for (let round = 0; round < MAX_ROUNDS; round++) {
-        const paginationToken = room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
-        if (!paginationToken) break;
+      // Continue from where we left off (scroll-up pagination)
+      let from = isFirstLoad ? "" : (roomPaginationFrom[roomId] || "");
+      const allRawEvents: Record<string, unknown>[] = [];
+      const MAX_PAGES = 5; // 5 pages per load = 500 events
+      const t0 = performance.now();
+      let serverHasMore = true;
 
-        try {
-          await Promise.race([
-            client.scrollback(room, BATCH),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), SCROLLBACK_TIMEOUT)),
-          ]);
-        } catch {
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const params = new URLSearchParams({ dir: "b", limit: "100", filter: filterStr });
+        if (from) params.set("from", from);
+
+        const res = await fetch(
+          `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages?${params}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } },
+        );
+        const data = await res.json();
+        const chunk = data.chunk || [];
+        allRawEvents.push(...chunk);
+
+        if (!data.end || chunk.length === 0) {
+          serverHasMore = false;
           break;
         }
+        from = data.end;
+      }
 
-        msgs = extractMessagesFromRoom(room);
-
-        // Update store periodically (every 10 rounds) to show progress
-        if (msgs.length > 0 || round % 10 === 9) {
-          const hasMore = !!room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
-          set((s) => ({
-            messages: msgs.length > 0 ? { ...s.messages, [roomId]: msgs } : s.messages,
-            roomHasMore: { ...s.roomHasMore, [roomId]: hasMore },
-          }));
+      // 3. Create MatrixEvent objects and decrypt.
+      // Reverse: API returns newest-first (dir=b), we want oldest-first.
+      allRawEvents.reverse();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const matrixEvents: any[] = [];
+      for (const raw of allRawEvents) {
+        const evt = new MatrixEvent(raw);
+        if (evt.isEncrypted()) {
+          try {
+            await client.decryptEventIfNeeded(evt);
+          } catch { /* will show as encrypted placeholder */ }
         }
+        matrixEvents.push(evt);
+      }
 
-        // Found messages — do a few more rounds for additional context, then stop
-        if (msgs.length > 0) {
-          for (let extra = 0; extra < 3; extra++) {
-            const tk = room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
-            if (!tk) break;
-            try {
-              await Promise.race([
-                client.scrollback(room, BATCH),
-                new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), SCROLLBACK_TIMEOUT)),
-              ]);
-            } catch { break; }
-          }
-          msgs = extractMessagesFromRoom(room);
-          break;
+      // 4. Extract messages from decrypted events
+      const historyMsgs = extractMessagesFromEvents(matrixEvents, room, client);
+
+      // 5. Merge: existing messages + new history + sync
+      // On first load: history + sync. On scroll-up: existing + new history.
+      const existingMsgs = isFirstLoad ? [] : (get().messages[roomId] || []);
+      const seenIds = new Set<string>();
+      const merged: ChatMessage[] = [];
+
+      // Add new history (older messages from this API call)
+      for (const msg of historyMsgs) {
+        if (msg.eventId) seenIds.add(msg.eventId);
+        merged.push(msg);
+      }
+      // Add existing messages (from previous loads)
+      for (const msg of existingMsgs) {
+        if (msg.eventId && seenIds.has(msg.eventId)) continue;
+        seenIds.add(msg.eventId || "");
+        merged.push(msg);
+      }
+      // Add sync messages (first load only)
+      if (isFirstLoad) {
+        for (const msg of syncMsgs) {
+          if (msg.eventId && seenIds.has(msg.eventId)) continue;
+          merged.push(msg);
         }
       }
 
-      const finalHasMore = !!room.getLiveTimeline().getPaginationToken(EventTimeline.BACKWARDS);
+      // 6. Load pinned messages that aren't in loaded messages
+      const pinnedIds = matrixService.getPinnedEventIds(roomId);
+      const loadedIds = new Set(merged.map((m) => m.eventId).filter(Boolean));
+      const missingPinnedIds = pinnedIds.filter((id) => !loadedIds.has(id));
+
+      if (missingPinnedIds.length > 0) {
+        for (const eventId of missingPinnedIds) {
+          try {
+            const res = await fetch(
+              `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent(eventId)}`,
+              { headers: { Authorization: `Bearer ${accessToken}` } },
+            );
+            if (!res.ok) continue;
+            const raw = await res.json();
+            const evt = new MatrixEvent(raw);
+            if (evt.isEncrypted()) {
+              try { await client.decryptEventIfNeeded(evt); } catch { /* skip */ }
+            }
+            const pinnedMsgs = extractMessagesFromEvents([evt], room, client);
+            if (pinnedMsgs.length > 0) {
+              merged.push(pinnedMsgs[0]);
+            }
+          } catch { /* skip unavailable pinned messages */ }
+        }
+      }
+
       set((s) => ({
-        messages: msgs.length > 0 ? { ...s.messages, [roomId]: msgs } : s.messages,
-        roomHasMore: { ...s.roomHasMore, [roomId]: finalHasMore },
+        messages: merged.length > 0 ? { ...s.messages, [roomId]: merged } : s.messages,
+        roomHasMore: { ...s.roomHasMore, [roomId]: serverHasMore },
+        roomPaginationFrom: { ...s.roomPaginationFrom, [roomId]: from },
         roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false },
       }));
+
+      // 7. Cache message IDs for next launch (only if meaningful count)
+      if (merged.length > 5) {
+        const messageIds = merged.map((m) => m.eventId).filter(Boolean) as string[];
+        setCachedRoom(roomId, messageIds, from || null);
+      }
 
     } catch (err) {
       console.error("[Sion] Failed to load room history:", err);

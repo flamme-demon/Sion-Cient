@@ -26,7 +26,9 @@
   },
   "voice": {
     "connected": "Connected",
-    "disconnect": "Disconnect"
+    "disconnect": "Disconnect",
+    "pushToTalk": "Push to talk",
+    "speaking": "Speaking..."
   },
   "controls": {
     "mute": "Mute",

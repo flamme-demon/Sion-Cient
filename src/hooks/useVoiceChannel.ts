@@ -102,6 +102,7 @@ export function useVoiceChannel() {
               // Short TTL: if app crashes/reloads, membership expires in 60s
               // The MembershipManager will re-publish before expiry to keep it alive
               membershipEventExpiryMs: 60_000,
+              useExperimentalToDeviceTransport: true,
               ...(isEncrypted ? { manageMediaKeys: true } : {}),
             });
 
@@ -112,8 +113,11 @@ export function useVoiceChannel() {
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
           setConnectedVoice(matrixRoomId);
-          if (joinMuted) {
-            useAppStore.getState().toggleMute();
+          const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+          if (joinMuted || isMobileDevice) {
+            if (!useAppStore.getState().isMuted) {
+              useAppStore.getState().toggleMute();
+            }
           }
           return;
         }
@@ -135,8 +139,11 @@ export function useVoiceChannel() {
       await joinRoom(matrixRoomId);
       await connect(credentials.livekitUrl, token, matrixRoomId);
       setConnectedVoice(matrixRoomId);
-      if (joinMuted) {
-        useAppStore.getState().toggleMute();
+      const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (joinMuted || isMobileDevice) {
+        if (!useAppStore.getState().isMuted) {
+          useAppStore.getState().toggleMute();
+        }
       }
     },
     [joinRoom, connect, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],

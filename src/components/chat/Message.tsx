@@ -48,8 +48,14 @@ function useResolvedUrl(attachment: FileAttachment): string | null {
       return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
     }
 
-    // Video/audio: fetch entire file as blob to avoid Range request issues
+    // Video/audio: on mobile use direct URL to avoid memory issues,
+    // on desktop fetch as blob to avoid Range request issues
     if (needsBlob) {
+      const isMobileUA = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobileUA) {
+        setResolvedUrl(attachment.url || null);
+        return;
+      }
       let objectUrl: string | null = null;
       let cancelled = false;
       fetch(attachment.url)
@@ -241,7 +247,7 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
       <button
         onClick={onClose}
         style={{
-          position: 'absolute', top: 16, right: 16,
+          position: 'absolute', top: 'max(env(safe-area-inset-top, 0px), 16px)', right: 16,
           background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%',
           width: 36, height: 36, cursor: 'pointer',
           color: '#fff', fontSize: 18, lineHeight: '36px', textAlign: 'center',

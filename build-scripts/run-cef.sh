@@ -53,4 +53,4 @@ trap cleanup EXIT INT TERM
 
 # Lancer l'application
 cd src-tauri
-cargo run "$@"
+cargo run -j4 --features cef "$@"

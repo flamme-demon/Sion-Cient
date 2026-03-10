@@ -1,12 +1,16 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useState } from "react";
-import { SettingsIcon } from "../icons";
+import { SettingsIcon, ArrowLeftIcon } from "../icons";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useAppStore } from "../../stores/useAppStore";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
 
 export function SettingsPanel() {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  const toggleSettings = useAppStore((s) => s.toggleSettings);
   const [recordingMute, setRecordingMute] = useState(false);
   const [recordingDeafen, setRecordingDeafen] = useState(false);
 
@@ -57,9 +61,9 @@ export function SettingsPanel() {
   }, [recordingMute, recordingDeafen, setMuteShortcut, setDeafenShortcut]);
 
   const toggleStyle = (active: boolean): React.CSSProperties => ({
-    width: 40,
-    height: 22,
-    borderRadius: 11,
+    width: 44,
+    height: 24,
+    borderRadius: 12,
     border: 'none',
     cursor: 'pointer',
     position: 'relative',
@@ -71,217 +75,201 @@ export function SettingsPanel() {
   const toggleDotStyle = (active: boolean): React.CSSProperties => ({
     position: 'absolute',
     top: 3,
-    left: active ? 21 : 3,
-    width: 16,
-    height: 16,
+    left: active ? 23 : 3,
+    width: 18,
+    height: 18,
     borderRadius: '50%',
     background: active ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
     transition: 'left 200ms',
   });
 
   const shortcutBtnStyle = (recording: boolean): React.CSSProperties => ({
-    padding: '6px 12px',
+    padding: '8px 14px',
     borderRadius: 8,
     border: recording ? '1px solid var(--color-primary)' : '1px solid var(--color-outline-variant)',
     background: recording ? 'var(--color-primary-container)' : 'var(--color-surface-container)',
     color: recording ? 'var(--color-on-primary-container)' : 'var(--color-on-surface)',
-    fontSize: 11,
+    fontSize: 12,
     cursor: 'pointer',
     minWidth: 80,
     textAlign: 'center',
     fontFamily: 'inherit',
   });
 
-  return (
-    <div style={{
-      width: 280,
-      minWidth: 280,
-      background: 'var(--color-surface-container-low)',
-      display: 'flex',
-      flexDirection: 'column',
-      overflowY: 'auto',
-    }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '20px 20px 16px 20px',
-      }}>
-        <SettingsIcon />
-        <span style={{ fontWeight: 600, fontSize: 15, color: 'var(--color-on-surface)' }}>{t("settings.title")}</span>
+  const content = (
+    <div style={{ display: 'flex', flexDirection: 'column', padding: isMobile ? '0 16px 24px' : '0 16px 16px', gap: 16 }}>
+      {/* Voice Settings */}
+      <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {t("settings.voiceSettings")}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.mutedSpeakAlert")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.mutedSpeakAlertDesc")}</div>
+          </div>
+          <button onClick={() => setMutedSpeakAlert(!mutedSpeakAlert)} style={toggleStyle(mutedSpeakAlert)}>
+            <div style={toggleDotStyle(mutedSpeakAlert)} />
+          </button>
+        </div>
+
+        {/* Mic threshold slider */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.micThreshold")}</div>
+            <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', fontVariantNumeric: 'tabular-nums' }}>
+              {Math.round(micThreshold * 1000)}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={100}
+            value={Math.round(micThreshold * 1000)}
+            onChange={(e) => setMicThreshold(Number(e.target.value) / 1000)}
+            style={{
+              width: '100%',
+              accentColor: 'var(--color-primary)',
+              cursor: 'pointer',
+              height: 20,
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
+            <span>{t("settings.sensitive")}</span>
+            <span>{t("settings.aggressive")}</span>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.joinMuted")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.joinMutedDesc")}</div>
+          </div>
+          <button onClick={() => setJoinMuted(!joinMuted)} style={toggleStyle(joinMuted)}>
+            <div style={toggleDotStyle(joinMuted)} />
+          </button>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', padding: '0 16px 16px', gap: 16 }}>
-        {/* Voice Settings */}
-        <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {t("settings.voiceSettings")}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.mutedSpeakAlert")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.mutedSpeakAlertDesc")}</div>
-            </div>
-            <button onClick={() => setMutedSpeakAlert(!mutedSpeakAlert)} style={toggleStyle(mutedSpeakAlert)}>
-              <div style={toggleDotStyle(mutedSpeakAlert)} />
-            </button>
-          </div>
-
-          {/* Mic threshold slider */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.micThreshold")}</div>
-              <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', fontVariantNumeric: 'tabular-nums' }}>
-                {Math.round(micThreshold * 1000)}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={100}
-              value={Math.round(micThreshold * 1000)}
-              onChange={(e) => setMicThreshold(Number(e.target.value) / 1000)}
-              style={{
-                width: '100%',
-                accentColor: 'var(--color-primary)',
-                cursor: 'pointer',
-              }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
-              <span>{t("settings.sensitive")}</span>
-              <span>{t("settings.aggressive")}</span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.joinMuted")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.joinMutedDesc")}</div>
-            </div>
-            <button onClick={() => setJoinMuted(!joinMuted)} style={toggleStyle(joinMuted)}>
-              <div style={toggleDotStyle(joinMuted)} />
-            </button>
-          </div>
+      {/* Audio Processing */}
+      <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {t("settings.audioProcessing")}
         </div>
 
-        {/* Audio Processing */}
-        <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {t("settings.audioProcessing")}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.noiseSuppression")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.noiseSuppressionDesc")}</div>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.noiseSuppression")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.noiseSuppressionDesc")}</div>
-            </div>
-            <button onClick={() => { setNoiseSuppression(!noiseSuppression); livekitService.updateAudioProcessing({ noiseSuppression: !noiseSuppression }); }} style={toggleStyle(noiseSuppression)}>
-              <div style={toggleDotStyle(noiseSuppression)} />
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.echoCancellation")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.echoCancellationDesc")}</div>
-            </div>
-            <button onClick={() => { setEchoCancellation(!echoCancellation); livekitService.updateAudioProcessing({ echoCancellation: !echoCancellation }); }} style={toggleStyle(echoCancellation)}>
-              <div style={toggleDotStyle(echoCancellation)} />
-            </button>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.autoGainControl")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.autoGainControlDesc")}</div>
-            </div>
-            <button onClick={() => { setAutoGainControl(!autoGainControl); livekitService.updateAudioProcessing({ autoGainControl: !autoGainControl }); }} style={toggleStyle(autoGainControl)}>
-              <div style={toggleDotStyle(autoGainControl)} />
-            </button>
-          </div>
-
-          {/* Audio quality dropdown */}
-          <div>
-            <div style={{ marginBottom: 6 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.audioQuality")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.audioQualityDesc")}</div>
-            </div>
-            <select
-              value={audioQuality}
-              onChange={(e) => {
-                const v = e.target.value as import("../../stores/useSettingsStore").AudioQualityPreset;
-                setAudioQuality(v);
-                livekitService.updateAudioQuality(v);
-              }}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                borderRadius: 12,
-                border: '1px solid var(--color-outline-variant)',
-                background: 'var(--color-surface-container-high)',
-                color: 'var(--color-on-surface)',
-                fontSize: 13,
-                fontFamily: 'inherit',
-                cursor: 'pointer',
-                outline: 'none',
-                appearance: 'none',
-                WebkitAppearance: 'none',
-                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`,
-                backgroundRepeat: 'no-repeat',
-                backgroundPosition: 'right 12px center',
-                paddingRight: 32,
-              }}
-            >
-              <option value="voice">{t("settings.audioQualityVoice")}</option>
-              <option value="voiceHD">{t("settings.audioQualityVoiceHD")}</option>
-              <option value="musicStereo">{t("settings.audioQualityMusicStereo")}</option>
-            </select>
-          </div>
+          <button onClick={() => { setNoiseSuppression(!noiseSuppression); livekitService.updateAudioProcessing({ noiseSuppression: !noiseSuppression }); }} style={toggleStyle(noiseSuppression)}>
+            <div style={toggleDotStyle(noiseSuppression)} />
+          </button>
         </div>
 
-        {/* Notifications */}
-        <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {t("settings.notifications")}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.echoCancellation")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.echoCancellationDesc")}</div>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.notifyDM")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.notifyDMDesc")}</div>
-            </div>
-            <button onClick={() => setNotifyDM(!notifyDM)} style={toggleStyle(notifyDM)}>
-              <div style={toggleDotStyle(notifyDM)} />
-            </button>
-          </div>
+          <button onClick={() => { setEchoCancellation(!echoCancellation); livekitService.updateAudioProcessing({ echoCancellation: !echoCancellation }); }} style={toggleStyle(echoCancellation)}>
+            <div style={toggleDotStyle(echoCancellation)} />
+          </button>
         </div>
 
-        {/* Chat */}
-        <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {t("settings.chat")}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.autoGainControl")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.autoGainControlDesc")}</div>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ marginRight: 12 }}>
-              <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.linkPreviews")}</div>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.linkPreviewsDesc")}</div>
-            </div>
-            <button onClick={() => setLinkPreviews(!linkPreviews)} style={toggleStyle(linkPreviews)}>
-              <div style={toggleDotStyle(linkPreviews)} />
-            </button>
-          </div>
+          <button onClick={() => { setAutoGainControl(!autoGainControl); livekitService.updateAudioProcessing({ autoGainControl: !autoGainControl }); }} style={toggleStyle(autoGainControl)}>
+            <div style={toggleDotStyle(autoGainControl)} />
+          </button>
         </div>
 
-        {/* Keyboard Shortcuts */}
+        {/* Audio quality dropdown */}
+        <div>
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.audioQuality")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.audioQualityDesc")}</div>
+          </div>
+          <select
+            value={audioQuality}
+            onChange={(e) => {
+              const v = e.target.value as import("../../stores/useSettingsStore").AudioQualityPreset;
+              setAudioQuality(v);
+              livekitService.updateAudioQuality(v);
+            }}
+            style={{
+              width: '100%',
+              padding: '10px 14px',
+              borderRadius: 12,
+              border: '1px solid var(--color-outline-variant)',
+              background: 'var(--color-surface-container-high)',
+              color: 'var(--color-on-surface)',
+              fontSize: 14,
+              fontFamily: 'inherit',
+              cursor: 'pointer',
+              outline: 'none',
+              appearance: 'none',
+              WebkitAppearance: 'none',
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 12px center',
+              paddingRight: 32,
+            }}
+          >
+            <option value="voice">{t("settings.audioQualityVoice")}</option>
+            <option value="voiceHD">{t("settings.audioQualityVoiceHD")}</option>
+            <option value="musicStereo">{t("settings.audioQualityMusicStereo")}</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Notifications */}
+      <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {t("settings.notifications")}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.notifyDM")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.notifyDMDesc")}</div>
+          </div>
+          <button onClick={() => setNotifyDM(!notifyDM)} style={toggleStyle(notifyDM)}>
+            <div style={toggleDotStyle(notifyDM)} />
+          </button>
+        </div>
+      </div>
+
+      {/* Chat */}
+      <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {t("settings.chat")}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.linkPreviews")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.linkPreviewsDesc")}</div>
+          </div>
+          <button onClick={() => setLinkPreviews(!linkPreviews)} style={toggleStyle(linkPreviews)}>
+            <div style={toggleDotStyle(linkPreviews)} />
+          </button>
+        </div>
+      </div>
+
+      {/* Keyboard Shortcuts — hidden on mobile (no physical keyboard) */}
+      {!isMobile && (
         <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
           <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             {t("settings.shortcuts")}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.muteShortcut")}</div>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.muteShortcut")}</div>
             <button
               onClick={() => { setRecordingMute(true); setRecordingDeafen(false); }}
               style={shortcutBtnStyle(recordingMute)}
@@ -291,7 +279,7 @@ export function SettingsPanel() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.deafenShortcut")}</div>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.deafenShortcut")}</div>
             <button
               onClick={() => { setRecordingDeafen(true); setRecordingMute(false); }}
               style={shortcutBtnStyle(recordingDeafen)}
@@ -300,7 +288,53 @@ export function SettingsPanel() {
             </button>
           </div>
         </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{
+      ...(isMobile ? {
+        position: 'fixed' as const,
+        inset: 0,
+        zIndex: 100,
+      } : {
+        width: 280,
+        minWidth: 280,
+      }),
+      background: 'var(--color-surface-container-low)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflowY: 'auto',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: isMobile ? '16px 16px 12px 16px' : '20px 20px 16px 20px',
+      }}>
+        {isMobile && (
+          <button
+            onClick={toggleSettings}
+            style={{
+              padding: 8,
+              borderRadius: 12,
+              border: 'none',
+              cursor: 'pointer',
+              background: 'transparent',
+              color: 'var(--color-on-surface)',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >
+            <ArrowLeftIcon />
+          </button>
+        )}
+        <SettingsIcon />
+        <span style={{ fontWeight: 600, fontSize: isMobile ? 16 : 15, color: 'var(--color-on-surface)' }}>{t("settings.title")}</span>
       </div>
+
+      {content}
     </div>
   );
 }

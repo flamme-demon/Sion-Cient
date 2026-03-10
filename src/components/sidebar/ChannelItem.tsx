@@ -7,6 +7,7 @@ import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useVoiceChannel } from "../../hooks/useVoiceChannel";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import { getMatrixClient } from "../../services/matrixService";
 import * as matrixService from "../../services/matrixService";
 import type { Channel, UserRole } from "../../types/matrix";
@@ -68,18 +69,23 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   const setSidebarView = useSettingsStore((s) => s.setSidebarView);
   const { joinVoiceChannel, hasLiveKitConfig } = useVoiceChannel();
 
+  const isMobile = useIsMobile();
   const [userContextMenu, setUserContextMenu] = useState<{ userId: string; userName: string; x: number; y: number } | null>(null);
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
 
   const isActive = activeChannel === channel.id;
   const isConnectedChannel = connectedVoiceChannel === channel.id;
 
-  const handleClick = () => {
+  const handleClick = async () => {
     setActiveChannel(channel.id, channel.hasVoice);
     loadRoomHistory(channel.id);
-    if (!channel.hasVoice) {
-      // Text-only channels join voice on single click (if applicable)
-      return;
+    // On mobile: single tap on voice channel joins it directly
+    if (isMobile && channel.hasVoice && connectedVoiceChannel !== channel.id && hasLiveKitConfig) {
+      try {
+        await joinVoiceChannel(channel.id);
+      } catch (err) {
+        console.error("[Sion] Failed to join voice channel:", err);
+      }
     }
   };
 

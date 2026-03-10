@@ -38,7 +38,7 @@ src/
 ├── stores/             # Zustand stores (app, matrix, livekit, settings, admin)
 ├── services/           # Matrix, LiveKit, admin API services
 ├── hooks/              # React hooks (useMatrix, useLiveKit, useVoiceChannel)
-├── utils/              # Emoji data, media decryption
+├── utils/              # Emoji data, media decryption, message cache (IndexedDB)
 └── components/
     ├── layout/         # Sidebar, MainArea, SettingsPanel, AdminPanel
     ├── sidebar/        # ServerHeader, ChannelList, UserControls, UserAvatar
@@ -126,6 +126,8 @@ The client connects to a Matrix homeserver at login. Voice channels use MatrixRT
 - User list = Matrix presence + LiveKit participants combined
 - Link previews fetched server-side via Tauri command (reqwest + scraper / oEmbed)
 - Video transcoding: MP4 (H.264) auto-transcoded to WebM (VP9) via system ffmpeg when native codec is unavailable
+- Message history loaded via filtered `/messages` API — skips signaling events server-side for fast loading
+- MatrixRTC encryption keys distributed via to-device messages (MSC4143) — no timeline pollution
 
 ## License
 

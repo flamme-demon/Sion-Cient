@@ -1,10 +1,93 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { ScreenIcon, PencilIcon, HashIcon } from "../icons";
+import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon } from "../icons";
 import { ChannelIcon } from "../sidebar/ChannelIcon";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
+import { getCurrentRoom } from "../../services/livekitService";
+
+function buildWavePath(amplitude: number, phase: number): string {
+  if (amplitude < 0.01) return "M0,10 L400,10";
+  // Boost small values: sqrt gives more visible movement at low levels
+  const boosted = Math.sqrt(Math.min(amplitude, 1));
+  const a = boosted * 9; // max deflection ±9 from center (in 20px height)
+  const points: string[] = [`M0,10`];
+  for (let i = 0; i < 8; i++) {
+    const x1 = i * 50 + 25;
+    const x2 = (i + 1) * 50;
+    const dir = Math.sin(phase + i * 0.8);
+    const cy = 10 + dir * a;
+    points.push(`Q${x1},${cy} ${x2},10`);
+  }
+  return points.join(" ");
+}
+
+function VoiceWaveBar() {
+  const pathRef = useRef<SVGPathElement>(null);
+  const rafRef = useRef<number>(0);
+  const phaseRef = useRef(0);
+  const smoothLevel = useRef(0);
+
+  useEffect(() => {
+    let running = true;
+    const tick = () => {
+      if (!running) return;
+      const room = getCurrentRoom();
+      let level = 0;
+      if (room) {
+        // Check isSpeaking flags + audioLevel
+        const local = room.localParticipant;
+        if (local.isSpeaking) {
+          level = Math.max(level, local.audioLevel ?? 0, 0.5);
+        } else if ((local.audioLevel ?? 0) > 0.01) {
+          level = Math.max(level, local.audioLevel ?? 0);
+        }
+        room.remoteParticipants.forEach((p) => {
+          if (p.isSpeaking) {
+            level = Math.max(level, p.audioLevel ?? 0, 0.5);
+          } else if ((p.audioLevel ?? 0) > 0.01) {
+            level = Math.max(level, p.audioLevel ?? 0);
+          }
+        });
+      }
+      // Smooth: fast attack, slow release
+      if (level > smoothLevel.current) {
+        smoothLevel.current = level;
+      } else {
+        smoothLevel.current *= 0.92;
+      }
+      phaseRef.current += 0.06 + smoothLevel.current * 0.15;
+      const path = buildWavePath(smoothLevel.current, phaseRef.current);
+      if (pathRef.current) {
+        pathRef.current.setAttribute("d", path);
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { running = false; cancelAnimationFrame(rafRef.current); };
+  }, []);
+
+  return (
+    <div style={{ height: 20, overflow: 'hidden', background: 'transparent' }}>
+      <svg
+        viewBox="0 0 400 20"
+        preserveAspectRatio="none"
+        style={{ width: '100%', height: '100%', display: 'block' }}
+      >
+        <path
+          ref={pathRef}
+          d="M0,10 L400,10"
+          fill="none"
+          stroke="var(--color-green)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    </div>
+  );
+}
 
 export function ChatHeader() {
   const { t } = useTranslation();
@@ -12,7 +95,9 @@ export function ChatHeader() {
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const isScreenSharing = useAppStore((s) => s.isScreenSharing);
   const toggleScreenShare = useAppStore((s) => s.toggleScreenShare);
+  const setMobileView = useAppStore((s) => s.setMobileView);
   const channels = useMatrixStore((s) => s.channels);
+  const isMobile = useIsMobile();
 
   const channel = channels.find((c) => c.id === activeChannel);
   const channelName = channel?.name || "general";
@@ -68,18 +153,36 @@ export function ChatHeader() {
     <>
       {/* M3 Top App Bar */}
       <div style={{
-        height: 64,
-        minHeight: 64,
+        height: isMobile ? 56 : 64,
+        minHeight: isMobile ? 56 : 64,
         background: 'var(--color-surface-container)',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 24px',
+        padding: isMobile ? '0 12px' : '0 24px',
         justifyContent: 'space-between',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, minWidth: 0 }}>
+          {isMobile && (
+            <button
+              onClick={() => setMobileView("sidebar")}
+              style={{
+                padding: 8,
+                borderRadius: 12,
+                border: 'none',
+                cursor: 'pointer',
+                background: 'transparent',
+                color: 'var(--color-on-surface)',
+                display: 'flex',
+                alignItems: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <ArrowLeftIcon />
+            </button>
+          )}
           <ChannelIcon icon={channel?.icon} />
-          <span style={{ fontWeight: 600, fontSize: 16, color: 'var(--color-on-surface)' }}>{channelName}</span>
-          {canEdit && (
+          <span style={{ fontWeight: 600, fontSize: isMobile ? 15 : 16, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{channelName}</span>
+          {canEdit && !isMobile && (
             <button
               onClick={openEditModal}
               style={{
@@ -100,9 +203,11 @@ export function ChatHeader() {
               <PencilIcon />
             </button>
           )}
-          <span style={{ color: 'var(--color-outline)', fontSize: 12, marginLeft: 4 }}>{channel?.topic || t("channels.discussion")}</span>
+          {!isMobile && (
+            <span style={{ color: 'var(--color-outline)', fontSize: 12, marginLeft: 4 }}>{channel?.topic || t("channels.discussion")}</span>
+          )}
         </div>
-        {connectedVoice && (
+        {connectedVoice && !isMobile && (
           <button
             onClick={toggleScreenShare}
             style={{
@@ -127,6 +232,8 @@ export function ChatHeader() {
           </button>
         )}
       </div>
+
+      {isMobile && connectedVoice && <VoiceWaveBar />}
 
       {isScreenSharing && (
         <div style={{
@@ -161,7 +268,7 @@ export function ChatHeader() {
             style={{
               background: 'var(--color-surface-container)',
               borderRadius: 24,
-              padding: '28px 28px 20px 28px',
+              padding: isMobile ? '24px 20px 16px 20px' : '28px 28px 20px 28px',
               maxWidth: 400,
               width: '90%',
               boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
@@ -232,14 +339,6 @@ export function ChatHeader() {
                   overflow: 'hidden',
                   padding: 0,
                   transition: 'border-color 200ms, background 200ms',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-primary)';
-                  e.currentTarget.style.background = 'var(--color-surface-container-highest)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-outline-variant)';
-                  e.currentTarget.style.background = 'var(--color-surface-container-high)';
                 }}
               >
                 {(avatarPreview || channel?.icon) ? (

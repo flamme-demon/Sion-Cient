@@ -10,6 +10,8 @@ export interface PendingFile {
   mimeType: string;
 }
 
+type MobileView = "sidebar" | "chat";
+
 interface AppState {
   activeChannel: string;
   connectedVoiceChannel: string | null;
@@ -23,6 +25,8 @@ interface AppState {
   isDraggingOver: boolean;
   editingMessage: { eventId: string; text: string } | null;
   replyingTo: { eventId: string; senderId: string; user: string; text: string } | null;
+  mobileView: MobileView;
+  isSpeaking: boolean;
 
   setActiveChannel: (id: string, hasVoice: boolean) => void;
   setConnectedVoice: (id: string | null) => void;
@@ -43,6 +47,8 @@ interface AppState {
   clearReplyingTo: () => void;
   scrollToMessageId: string | null;
   setScrollToMessageId: (id: string | null) => void;
+  setMobileView: (view: MobileView) => void;
+  setIsSpeaking: (v: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -58,10 +64,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   isDraggingOver: false,
   editingMessage: null,
   replyingTo: null,
+  mobileView: "sidebar" as MobileView,
+  isSpeaking: false,
 
   setActiveChannel: (id, hasVoice) =>
     set((s) => ({
       activeChannel: id,
+      mobileView: "chat" as MobileView,
       // Only clear voice if switching to a text channel; voice connection is managed by LiveKit
       connectedVoiceChannel: hasVoice ? s.connectedVoiceChannel : s.connectedVoiceChannel,
     })),
@@ -100,8 +109,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings, showAdmin: s.showSettings ? s.showAdmin : false })),
   toggleAccountPanel: () => set((s) => ({ showAccountPanel: !s.showAccountPanel })),
   addPendingFile: (file) => {
+    // Limit file size to 100MB to prevent WebView crashes on mobile
+    const MAX_FILE_SIZE = 100 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      console.warn("[Sion] File too large:", file.name, file.size);
+      return;
+    }
     const id = crypto.randomUUID();
-    const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+    // Only create blob preview for small images (<5MB) to avoid mobile memory issues
+    const previewUrl = file.type.startsWith("image/") && file.size < 5 * 1024 * 1024
+      ? URL.createObjectURL(file) : undefined;
     set((s) => ({
       pendingFiles: [...s.pendingFiles, { id, file, previewUrl, name: file.name, size: file.size, mimeType: file.type }],
     }));
@@ -122,4 +139,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearReplyingTo: () => set({ replyingTo: null }),
   scrollToMessageId: null,
   setScrollToMessageId: (id) => set({ scrollToMessageId: id }),
+  setMobileView: (view) => set({ mobileView: view }),
+  setIsSpeaking: (v) => set({ isSpeaking: v }),
 }));
