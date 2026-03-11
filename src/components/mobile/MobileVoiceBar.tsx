@@ -26,7 +26,7 @@ export function MobileVoiceBar() {
   const { leaveVoiceChannel } = useVoiceChannel();
 
   const [pttActive, setPttActive] = useState(false);
-  const pttTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const pttTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const activeVoice = channels.find((c) => c.id === connectedVoice);
 

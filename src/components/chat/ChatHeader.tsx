@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon } from "../icons";
 import { ChannelIcon } from "../sidebar/ChannelIcon";

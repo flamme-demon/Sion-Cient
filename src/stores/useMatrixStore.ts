@@ -8,7 +8,7 @@ import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser } from "../
 import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
-import { getCachedRoom, setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
+import { setCachedRoom, clearCache } from "../utils/messageCache";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
@@ -879,7 +879,6 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       let from = isFirstLoad ? "" : (roomPaginationFrom[roomId] || "");
       const allRawEvents: Record<string, unknown>[] = [];
       const MAX_PAGES = 5; // 5 pages per load = 500 events
-      const t0 = performance.now();
       let serverHasMore = true;
 
       for (let page = 0; page < MAX_PAGES; page++) {
