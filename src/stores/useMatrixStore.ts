@@ -8,7 +8,7 @@ import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser } from "../
 import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
-import { setCachedRoom, clearCache } from "../utils/messageCache";
+import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
