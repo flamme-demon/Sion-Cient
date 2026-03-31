@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import { SettingsIcon, ArrowLeftIcon } from "../icons";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
+import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
+import { invoke } from "@tauri-apps/api/core";
 
 export function SettingsPanel() {
   const { t } = useTranslation();
@@ -41,6 +43,11 @@ export function SettingsPanel() {
   const audioOutputDevice = useSettingsStore((s) => s.audioOutputDevice);
   const setAudioInputDevice = useSettingsStore((s) => s.setAudioInputDevice);
   const setAudioOutputDevice = useSettingsStore((s) => s.setAudioOutputDevice);
+  const defaultChannel = useSettingsStore((s) => s.defaultChannel);
+  const autoJoinVoice = useSettingsStore((s) => s.autoJoinVoice);
+  const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
+  const setAutoJoinVoice = useSettingsStore((s) => s.setAutoJoinVoice);
+  const channels = useMatrixStore((s) => s.channels);
 
   // Audio devices enumeration
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
@@ -48,17 +55,51 @@ export function SettingsPanel() {
 
   useEffect(() => {
     async function loadDevices() {
+      // Try web API first
       try {
-        // Request permission first (needed to get device labels)
-        await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop()));
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setAudioInputs(devices.filter((d) => d.kind === "audioinput"));
-        setAudioOutputs(devices.filter((d) => d.kind === "audiooutput"));
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
       } catch {
-        // Permission denied or no devices
+        // Permission denied
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasRealIds = devices.some((d) => d.deviceId !== "" && d.deviceId !== "default");
+
+      if (hasRealIds) {
+        const filterDefault = (list: MediaDeviceInfo[]) => {
+          if (list.length > 1) return list.filter((d) => d.deviceId !== "default");
+          return list;
+        };
+        setAudioInputs(filterDefault(devices.filter((d) => d.kind === "audioinput")));
+        setAudioOutputs(filterDefault(devices.filter((d) => d.kind === "audiooutput")));
+        return;
+      }
+
+      // Fallback: use Tauri native enumeration (cpal)
+      try {
+        const nativeDevices = await invoke<{ id: string; name: string; kind: string }[]>("list_audio_devices");
+        const toMediaDevice = (d: { id: string; name: string; kind: string }): MediaDeviceInfo => ({
+          deviceId: d.id,
+          groupId: "",
+          kind: (d.kind === "input" ? "audioinput" : "audiooutput") as MediaDeviceKind,
+          label: d.name,
+          toJSON() { return this; },
+        });
+        setAudioInputs(nativeDevices.filter((d) => d.kind === "input").map(toMediaDevice));
+        setAudioOutputs(nativeDevices.filter((d) => d.kind === "output").map(toMediaDevice));
+      } catch (err) {
+        console.warn("[Sion] Native device enumeration failed:", err);
+        setAudioInputs([]);
+        setAudioOutputs([]);
       }
     }
+
     loadDevices();
+
+    // Update list when devices are plugged/unplugged
+    navigator.mediaDevices.addEventListener("devicechange", loadDevices);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", loadDevices);
   }, []);
 
   // Shortcut recording
@@ -121,6 +162,44 @@ export function SettingsPanel() {
 
   const content = (
     <div style={{ display: 'flex', flexDirection: 'column', padding: isMobile ? '0 16px 24px' : '0 16px 16px', gap: 16 }}>
+      {/* Default Channel */}
+      <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {t("settings.defaultChannels")}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.defaultChannel")}</div>
+          <select
+            value={defaultChannel}
+            onChange={(e) => setDefaultChannel(e.target.value)}
+            style={{
+              width: '100%', padding: '8px 12px', borderRadius: 12,
+              border: '2px solid var(--color-outline-variant)',
+              background: 'var(--color-surface-container-high)',
+              color: 'var(--color-on-surface)', fontSize: 12, fontFamily: 'inherit', outline: 'none',
+            }}
+          >
+            <option value="">{t("settings.noDefault")}</option>
+            {channels.filter((c) => !c.isDM).map((c) => (
+              <option key={c.id} value={c.id}>{c.hasVoice ? `🔊 ${c.name}` : `💬 ${c.name}`}</option>
+            ))}
+          </select>
+        </div>
+
+        {channels.find((c) => c.id === defaultChannel)?.hasVoice && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ marginRight: 12 }}>
+              <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.autoJoinVoice")}</div>
+              <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.autoJoinVoiceDesc")}</div>
+            </div>
+            <button onClick={() => setAutoJoinVoice(!autoJoinVoice)} style={toggleStyle(autoJoinVoice)}>
+              <div style={toggleDotStyle(autoJoinVoice)} />
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Voice Settings */}
       <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
         <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>

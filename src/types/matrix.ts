@@ -69,7 +69,7 @@ export interface ChatMessage {
   /** Reply reference */
   replyTo?: { eventId: string; senderId?: string; user?: string; text?: string };
   /** Reactions on this message */
-  reactions?: { emoji: string; count: number; userIds: string[] }[];
+  reactions?: { emoji: string; count: number; userIds: string[]; eventIds: Record<string, string> }[];
 }
 
 export interface ServerData {

@@ -4,7 +4,10 @@
 
 set -e
 
-cd "$(dirname "$0")/../src-tauri"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_DIR/src-tauri"
 
 # Vérifier que les bibliothèques CEF sont présentes
 if [ ! -f "target/debug/libcef.so" ]; then
@@ -33,7 +36,7 @@ if [ ! -f "target/debug/libcef.so" ]; then
 fi
 
 # Lancer le serveur Vite en arrière-plan
-cd "$(dirname "$0")/.."
+cd "$PROJECT_DIR"
 bun run dev &
 VITE_PID=$!
 
@@ -52,5 +55,5 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Lancer l'application
-cd src-tauri
+cd "$PROJECT_DIR/src-tauri"
 cargo run -j4 --features cef "$@"

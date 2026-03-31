@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.3.0"
+version = "0.5.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -22,7 +22,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 
-tauri = { version = "2", features = [] }
+tauri = { version = "2", default-features = false, features = [] }
 tauri-plugin-log = "2"
 open = "5"
 reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }
@@ -33,6 +33,7 @@ base64 = "0.22"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf", default-features = false, optional = true }
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
+cpal = "0.15"
 
 [features]
 default = ["cef"]

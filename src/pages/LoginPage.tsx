@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../stores/useAuthStore";
 import { EyeIcon, EyeOffIcon } from "../components/icons";
@@ -7,25 +7,85 @@ type AuthMode = "login" | "register";
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const { login, register, isLoading, error, clearError } = useAuthStore();
+  const { login, register, isLoading, error, clearError, fetchRegistrationFlows, registrationFlows, isLoadingFlows } = useAuthStore();
 
   const [mode, setMode] = useState<AuthMode>("login");
   const [homeserver, setHomeserver] = useState(
     () => localStorage.getItem("sion_last_homeserver") || "https://",
   );
-  const [username, setUsername] = useState(
-    () => localStorage.getItem("sion_last_username") || "",
-  );
+  const [username, setUsername] = useState(() => {
+    const saved = localStorage.getItem("sion_last_username") || "";
+    // Strip Matrix format (@user:server) to show just the username
+    if (saved.startsWith("@") && saved.includes(":")) return saved.slice(1, saved.indexOf(":"));
+    return saved;
+  });
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [regToken, setRegToken] = useState("");
+  const [captchaResponse, setCaptchaResponse] = useState("");
+  const captchaRef = useRef<HTMLDivElement>(null);
+
+  // Detect required stages from flows
+  const requiredStages = registrationFlows?.flows?.[0]?.stages || [];
+  const needsToken = requiredStages.includes("m.login.registration_token");
+  const needsCaptcha = requiredStages.includes("m.login.recaptcha");
+  const isDisabled = registrationFlows?.disabled === true;
+  const captchaSiteKey = (registrationFlows?.params as Record<string, Record<string, string>>)?.["m.login.recaptcha"]?.public_key;
+
+  // Fetch flows when switching to register mode or changing homeserver
+  const fetchFlowsDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const fetchFlows = useCallback(() => {
+    if (mode !== "register") return;
+    const hs = homeserver.trim();
+    if (!hs || hs === "https://" || !hs.startsWith("http")) return;
+
+    clearTimeout(fetchFlowsDebounceRef.current);
+    fetchFlowsDebounceRef.current = setTimeout(() => {
+      fetchRegistrationFlows(hs);
+    }, 500);
+  }, [mode, homeserver, fetchRegistrationFlows]);
+
+  useEffect(() => {
+    fetchFlows();
+    return () => clearTimeout(fetchFlowsDebounceRef.current);
+  }, [fetchFlows]);
+
+  // Load reCAPTCHA script when needed
+  useEffect(() => {
+    if (!needsCaptcha || !captchaSiteKey) return;
+    if (document.getElementById("recaptcha-script")) return;
+
+    const script = document.createElement("script");
+    script.id = "recaptcha-script";
+    script.src = "https://www.google.com/recaptcha/api.js";
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+
+    script.onload = () => {
+      if (captchaRef.current && (window as unknown as Record<string, unknown>).grecaptcha) {
+        const grecaptcha = (window as unknown as Record<string, { render: (el: HTMLElement, opts: Record<string, unknown>) => void }>).grecaptcha;
+        grecaptcha.render(captchaRef.current, {
+          sitekey: captchaSiteKey,
+          callback: (response: string) => setCaptchaResponse(response),
+          theme: "dark",
+        });
+      }
+    };
+  }, [needsCaptcha, captchaSiteKey]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     clearError();
     try {
       if (mode === "register") {
-        await register(homeserver, username, password, displayName || undefined);
+        await register(
+          homeserver, username, password,
+          displayName || undefined,
+          needsToken ? regToken : undefined,
+          needsCaptcha ? captchaResponse : undefined,
+        );
       } else {
         await login(homeserver, username, password);
       }
@@ -225,7 +285,7 @@ export function LoginPage() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="@user:server.com"
+              placeholder="flamme"
               required
               autoComplete="off"
               name="sion-identity"
@@ -254,19 +314,57 @@ export function LoginPage() {
           </div>
 
           {mode === "register" && (
-            <div style={styles.fieldGroup}>
-              <label style={styles.label}>{t("auth.displayName")}</label>
-              <input
-                style={styles.input}
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder={t("auth.displayName")}
-              />
-            </div>
+            <>
+              <div style={styles.fieldGroup}>
+                <label style={styles.label}>{t("auth.displayName")}</label>
+                <input
+                  style={styles.input}
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder={t("auth.displayName")}
+                />
+              </div>
+
+              {isLoadingFlows && (
+                <div style={{ ...styles.fieldGroup, color: "var(--color-on-surface-variant)", fontSize: 13 }}>
+                  {t("auth.detectingFlows")}
+                </div>
+              )}
+
+              {isDisabled && (
+                <div style={styles.errorBox}>
+                  {t("auth.errorRegistrationDisabled")}
+                </div>
+              )}
+
+              {needsToken && (
+                <div style={styles.fieldGroup}>
+                  <label style={styles.label}>{t("auth.registrationToken")}</label>
+                  <input
+                    style={styles.input}
+                    type="text"
+                    value={regToken}
+                    onChange={(e) => setRegToken(e.target.value)}
+                    placeholder={t("auth.registrationTokenPlaceholder")}
+                    required
+                  />
+                </div>
+              )}
+
+              {needsCaptcha && captchaSiteKey && (
+                <div style={{ ...styles.fieldGroup, display: "flex", justifyContent: "center" }}>
+                  <div ref={captchaRef} />
+                </div>
+              )}
+            </>
           )}
 
-          <button type="submit" style={styles.submitBtn} disabled={isLoading}>
+          <button
+            type="submit"
+            style={styles.submitBtn}
+            disabled={isLoading || (mode === "register" && isDisabled) || (mode === "register" && isLoadingFlows)}
+          >
             {isLoading && <span style={styles.spinner} />}
             {isLoading
               ? mode === "register"

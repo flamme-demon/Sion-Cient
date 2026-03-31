@@ -73,6 +73,21 @@ interface MatrixState {
 let activeVerificationRequest: VerificationRequest | null = null;
 let activeSasCallbacks: ShowSasCallbacks | null = null;
 
+// Strip Matrix reply fallback from body text (lines starting with "> " until first blank line)
+function stripReplyFallback(body: string): string {
+  const lines = body.split("\n");
+  let i = 0;
+  while (i < lines.length && lines[i].startsWith("> ")) i++;
+  // Skip the blank line after the fallback
+  if (i > 0 && i < lines.length && lines[i].trim() === "") i++;
+  return lines.slice(i).join("\n");
+}
+
+// Strip <mx-reply>...</mx-reply> from formatted HTML
+function stripMxReply(html: string): string {
+  return html.replace(/<mx-reply>[\s\S]*?<\/mx-reply>/gi, "");
+}
+
 // Get display name from user ID, fallback to user ID without @ prefix
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getDisplayName(sender: string, room: any, client: MatrixClient | null): string {
@@ -342,8 +357,10 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
         };
       }
 
-      const formattedBody = content.format === "org.matrix.custom.html" ? content.formatted_body : undefined;
-      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: content.body, formattedBody, msgtype, avatarUrl, replyTo });
+      const rawBody = replyTo ? stripReplyFallback(content.body) : content.body;
+      const rawFormatted = content.format === "org.matrix.custom.html" ? content.formatted_body : undefined;
+      const formattedBody = rawFormatted && replyTo ? stripMxReply(rawFormatted) : rawFormatted;
+      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: rawBody, formattedBody, msgtype, avatarUrl, replyTo });
       continue;
     }
 
@@ -380,14 +397,16 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
     if (!target) continue;
     if (!target.reactions) target.reactions = [];
     const senderId = evt.getSender?.() || "";
+    const reactionEvtId = evt.getId?.() || "";
     const existing = target.reactions.find((r) => r.emoji === rel.key);
     if (existing) {
       if (!existing.userIds.includes(senderId)) {
         existing.userIds.push(senderId);
         existing.count++;
       }
+      existing.eventIds[senderId] = reactionEvtId;
     } else {
-      target.reactions.push({ emoji: rel.key, count: 1, userIds: [senderId] });
+      target.reactions.push({ emoji: rel.key, count: 1, userIds: [senderId], eventIds: { [senderId]: reactionEvtId } });
     }
   }
 
@@ -476,13 +495,21 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           });
         }
 
-        // Auto-select first channel (but don't switch to chat view on mobile)
+        // Auto-select default channel (or first channel as fallback)
         const currentActive = useAppStore.getState().activeChannel;
         if ((!currentActive || currentActive === "") && channels.length > 0) {
+          const { defaultChannel, autoJoinVoice } = useSettingsStore.getState();
+          const defaultCh = channels.find((c) => c.id === defaultChannel)
+            || channels.find((c) => !c.hasVoice)
+            || channels[0];
           const prevMobileView = useAppStore.getState().mobileView;
-          useAppStore.getState().setActiveChannel(channels[0].id, channels[0].hasVoice);
-          // Restore sidebar view — auto-select shouldn't navigate away on mobile
+          useAppStore.getState().setActiveChannel(defaultCh.id, defaultCh.hasVoice);
           useAppStore.getState().setMobileView(prevMobileView);
+
+          // Auto-join voice if the default channel is a voice channel and option is enabled
+          if (autoJoinVoice && defaultCh.hasVoice) {
+            useAppStore.getState().setConnectedVoice(defaultCh.id);
+          }
         }
 
         // Check device verification status — only show banner if crypto is ready but NOT verified
@@ -665,6 +692,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         const rel = event.getContent?.()?.["m.relates_to"];
         if (rel?.rel_type === "m.annotation" && rel?.event_id && rel?.key) {
           const senderId = event.getSender?.() || "";
+          let reactionEvtId = event.getId?.() || "";
+          // Skip local/pending event IDs (start with ~ or contain :m)
+          // They're not valid for server-side operations like redact
+          if (reactionEvtId.startsWith("~")) reactionEvtId = "";
           set((s) => {
             const existing = s.messages[room.roomId] || [];
             const idx = existing.findIndex((m) => m.id === rel.event_id);
@@ -674,18 +705,85 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
             const reactions = [...(msg.reactions || [])];
             const rIdx = reactions.findIndex((r) => r.emoji === rel.key);
             if (rIdx >= 0) {
-              const r = { ...reactions[rIdx], userIds: [...reactions[rIdx].userIds] };
+              const r = { ...reactions[rIdx], userIds: [...reactions[rIdx].userIds], eventIds: { ...reactions[rIdx].eventIds } };
               if (!r.userIds.includes(senderId)) {
                 r.userIds.push(senderId);
                 r.count++;
               }
+              if (reactionEvtId) r.eventIds[senderId] = reactionEvtId;
               reactions[rIdx] = r;
             } else {
-              reactions.push({ emoji: rel.key as string, count: 1, userIds: [senderId] });
+              const eventIds: Record<string, string> = {};
+              if (reactionEvtId) eventIds[senderId] = reactionEvtId;
+              reactions.push({ emoji: rel.key as string, count: 1, userIds: [senderId], eventIds });
             }
             msg.reactions = reactions;
             updated[idx] = msg;
             return { messages: { ...s.messages, [room.roomId]: updated } };
+          });
+
+          // If we got a local ID, wait for the event to be sent and update with the real ID
+          if (!reactionEvtId && senderId === client.getUserId()) {
+            const origId = event.getId?.() || "";
+            const onSent = () => {
+              const realId = event.getId?.() || "";
+              if (realId && realId !== origId && !realId.startsWith("~")) {
+                set((s) => {
+                  const msgs = s.messages[room.roomId] || [];
+                  const mIdx = msgs.findIndex((m) => m.id === rel.event_id);
+                  if (mIdx === -1) return s;
+                  const updMsgs = [...msgs];
+                  const m = { ...updMsgs[mIdx] };
+                  const rxns = [...(m.reactions || [])];
+                  const ri = rxns.findIndex((r) => r.emoji === rel.key);
+                  if (ri >= 0) {
+                    rxns[ri] = { ...rxns[ri], eventIds: { ...rxns[ri].eventIds, [senderId]: realId } };
+                  }
+                  m.reactions = rxns;
+                  updMsgs[mIdx] = m;
+                  return { messages: { ...s.messages, [room.roomId]: updMsgs } };
+                });
+              }
+            };
+            // The SDK fires "Event.localEchoUpdated" when the event gets its server ID
+            event.once("Event.localEchoUpdated" as any, onSent);
+            // Fallback: check after a delay
+            setTimeout(() => {
+              event.off("Event.localEchoUpdated" as any, onSent);
+              onSent();
+            }, 3000);
+          }
+        }
+        return;
+      }
+
+      // Handle redaction of reactions in real-time
+      if (event.getType?.() === "m.room.redaction") {
+        const redactedId = event.getAssociatedId?.() || (event.getContent?.() as Record<string, string>)?.redacts;
+        if (redactedId) {
+          set((s) => {
+            const existing = s.messages[room.roomId] || [];
+            let changed = false;
+            const updated = existing.map((msg) => {
+              if (!msg.reactions) return msg;
+              const newReactions = msg.reactions.map((r) => {
+                // Find if this redacted event is one of our tracked reaction events
+                const userEntry = Object.entries(r.eventIds).find(([, evtId]) => evtId === redactedId);
+                if (!userEntry) return r;
+                changed = true;
+                const newEventIds = { ...r.eventIds };
+                delete newEventIds[userEntry[0]];
+                return {
+                  ...r,
+                  count: r.count - 1,
+                  userIds: r.userIds.filter((id) => id !== userEntry[0]),
+                  eventIds: newEventIds,
+                };
+              }).filter((r) => r.count > 0);
+              if (!changed) return msg;
+              return { ...msg, reactions: newReactions.length > 0 ? newReactions : undefined };
+            });
+            return changed ? { messages: { ...s.messages, [room.roomId]: updated } } : s;
           });
         }
         return;
@@ -753,8 +851,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
             text: replyMsg?.text,
           };
         }
-        const formattedBody = content.format === "org.matrix.custom.html" ? content.formatted_body : undefined;
-        msg = { id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: content.body, formattedBody, msgtype, avatarUrl, replyTo };
+        const rawBody = replyTo ? stripReplyFallback(content.body) : content.body;
+        const rawFormatted = content.format === "org.matrix.custom.html" ? content.formatted_body : undefined;
+        const formattedBody = rawFormatted && replyTo ? stripMxReply(rawFormatted) : rawFormatted;
+        msg = { id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: rawBody, formattedBody, msgtype, avatarUrl, replyTo };
       } else if (msgtype === "m.image" || msgtype === "m.file" || msgtype === "m.video" || msgtype === "m.audio") {
         const mxcUrl: string = content.url || content.file?.url || "";
         const httpUrl = mxcUrl ? matrixService.mxcToHttp(mxcUrl) : null;
@@ -888,22 +988,38 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     });
 
     // Listen for decrypted events (after key restore / cross-device verification)
-    // Just re-extract messages from the timeline — no need to re-scrollback,
-    // the events are already loaded, they just need to be re-parsed after decryption.
+    // When events are decrypted, update only the affected messages in place
+    // instead of replacing the entire room message list (which would lose history
+    // loaded via loadRoomHistory).
     let decryptReloadTimer: ReturnType<typeof setTimeout> | null = null;
     client.on(MatrixEventEvent.Decrypted, () => {
       if (decryptReloadTimer) clearTimeout(decryptReloadTimer);
       decryptReloadTimer = setTimeout(() => {
         decryptReloadTimer = null;
         const rooms = getJoinedRooms(client);
-        const messages: Record<string, ChatMessage[]> = {};
-        for (const room of rooms) {
-          const msgs = extractMessagesFromRoom(room);
-          if (msgs.length > 0) {
-            messages[room.roomId] = msgs;
+        set((s) => {
+          const updated = { ...s.messages };
+          for (const room of rooms) {
+            const freshMsgs = extractMessagesFromRoom(room);
+            const existing = updated[room.roomId];
+            if (!existing || existing.length === 0) {
+              // No history loaded yet — use fresh messages
+              if (freshMsgs.length > 0) updated[room.roomId] = freshMsgs;
+              continue;
+            }
+            // Merge: update decrypted content for existing messages, keep history
+            const freshById = new Map(freshMsgs.map((m) => [m.eventId, m]));
+            updated[room.roomId] = existing.map((msg) => {
+              const fresh = freshById.get(msg.eventId);
+              // If fresh version has actual text and existing doesn't, it was just decrypted
+              if (fresh && fresh.text && (!msg.text || msg.text !== fresh.text)) {
+                return fresh;
+              }
+              return msg;
+            });
           }
-        }
-        set((s) => ({ messages: { ...s.messages, ...messages } }));
+          return { messages: updated };
+        });
       }, 1000);
     });
 

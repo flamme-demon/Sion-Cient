@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { AuthCredentials } from "../types/auth";
 import * as matrixService from "../services/matrixService";
+import type { RegistrationFlowInfo } from "../services/matrixService";
 import { useAdminStore } from "./useAdminStore";
 
 const STORAGE_KEY = "sion_auth_credentials";
@@ -17,9 +18,12 @@ interface AuthState {
   error: string | null;
   isRegistering: boolean;
   recoveryKey: string | null; // Temporary, NOT persisted
+  registrationFlows: RegistrationFlowInfo | null;
+  isLoadingFlows: boolean;
 
   login: (homeserver: string, username: string, password: string) => Promise<void>;
-  register: (homeserver: string, username: string, password: string, displayName?: string) => Promise<void>;
+  register: (homeserver: string, username: string, password: string, displayName?: string, token?: string, captchaResponse?: string) => Promise<void>;
+  fetchRegistrationFlows: (homeserver: string) => Promise<void>;
   restoreSession: () => Promise<void>;
   logout: () => void;
   setLiveKitConfig: (url: string, apiKey: string, apiSecret: string) => void;
@@ -52,6 +56,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   error: null,
   isRegistering: false,
   recoveryKey: null,
+  registrationFlows: null,
+  isLoadingFlows: false,
 
   login: async (homeserver, username, password) => {
     set({ isLoading: true, error: null });
@@ -94,10 +100,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  register: async (homeserver, username, password, displayName) => {
+  register: async (homeserver, username, password, displayName, token, captchaResponse) => {
     set({ isLoading: true, error: null, isRegistering: true });
     try {
-      await matrixService.registerUser(homeserver, username, password, displayName);
+      await matrixService.registerUser(homeserver, username, password, displayName, token, captchaResponse);
       set({ isRegistering: false });
       // Auto-login after registration
       await get().login(homeserver, username, password);
@@ -105,6 +111,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const message = err instanceof Error ? err.message : "Une erreur est survenue";
       set({ error: message, isLoading: false, isRegistering: false });
       throw err;
+    }
+  },
+
+  fetchRegistrationFlows: async (homeserver) => {
+    set({ isLoadingFlows: true, registrationFlows: null });
+    try {
+      const flows = await matrixService.getRegistrationFlows(homeserver);
+      set({ registrationFlows: flows, isLoadingFlows: false });
+    } catch {
+      set({ registrationFlows: null, isLoadingFlows: false });
     }
   },
 

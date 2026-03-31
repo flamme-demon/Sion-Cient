@@ -403,9 +403,16 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
     setShowReactionPicker(false);
     setReactionPickerSearch("");
     try {
-      await matrixService.sendReaction(activeChannel, eventId, emoji);
+      // Check if we already reacted with this emoji — if so, remove it
+      const reaction = message.reactions?.find((r) => r.emoji === emoji);
+      const ownReactionEvtId = currentUserId && reaction?.eventIds?.[currentUserId];
+      if (ownReactionEvtId && ownReactionEvtId.startsWith("$")) {
+        await matrixService.redactMessage(activeChannel, ownReactionEvtId);
+      } else {
+        await matrixService.sendReaction(activeChannel, eventId, emoji);
+      }
     } catch (err) {
-      console.error("[Sion] Failed to send reaction:", err);
+      console.error("[Sion] Failed to toggle reaction:", err);
     }
   };
 
@@ -483,33 +490,6 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
           </div>
         )}
 
-        {/* Reply quote */}
-        {message.replyTo && (
-          <div style={{
-            borderLeft: '3px solid var(--color-primary)',
-            background: 'var(--color-surface-container)',
-            borderRadius: '4px 12px 12px 4px',
-            padding: '6px 12px',
-            marginBottom: 4,
-            fontSize: 11,
-            color: 'var(--color-on-surface-variant)',
-            maxWidth: '100%',
-            overflow: 'hidden',
-          }}>
-            {message.replyTo.user && (
-              <span style={{ fontWeight: 600, color: 'var(--color-primary)', marginRight: 6 }}>{message.replyTo.user}</span>
-            )}
-            <span style={{
-              display: 'inline',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
-              {message.replyTo.text?.slice(0, 100) || "..."}
-            </span>
-          </div>
-        )}
-
         {/* M3 Bubble — surface-container-high pour les autres, primary-container pour soi */}
         <div style={{
           background: isOwnMessage ? 'var(--color-primary-container)' : 'var(--color-surface-container-high)',
@@ -517,7 +497,7 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
           borderRadius: isOwnMessage
             ? (showHeader ? '20px 20px 4px 20px' : '20px 4px 4px 20px')
             : (showHeader ? '20px 20px 20px 4px' : '4px 20px 20px 4px'),
-          padding: '10px 16px',
+          padding: message.replyTo ? '8px 8px 10px 8px' : '10px 16px',
           fontSize: 14,
           lineHeight: 1.55,
           wordBreak: 'break-word' as const,
@@ -526,6 +506,56 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
           boxSizing: 'border-box' as const,
           overflow: 'hidden',
         }}>
+          {/* Reply quote — Telegram-style, inside bubble */}
+          {message.replyTo && (
+            <div
+              onClick={() => {
+                if (message.replyTo?.eventId) {
+                  useAppStore.getState().setScrollToMessageId(message.replyTo.eventId);
+                }
+              }}
+              style={{
+                display: 'flex',
+                borderRadius: 10,
+                padding: '5px 10px',
+                marginBottom: 6,
+                cursor: message.replyTo.eventId ? 'pointer' : 'default',
+                background: isOwnMessage ? 'rgba(0,0,0,0.1)' : 'var(--color-surface-container)',
+                overflow: 'hidden',
+                transition: 'background 150ms',
+              }}
+              onMouseEnter={(e) => { if (message.replyTo?.eventId) e.currentTarget.style.background = isOwnMessage ? 'rgba(0,0,0,0.15)' : 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = isOwnMessage ? 'rgba(0,0,0,0.1)' : 'var(--color-surface-container)'; }}
+            >
+              <div style={{
+                width: 3,
+                minHeight: '100%',
+                borderRadius: 2,
+                background: 'var(--color-primary)',
+                marginRight: 8,
+                flexShrink: 0,
+              }} />
+              <div style={{ overflow: 'hidden', minWidth: 0 }}>
+                {message.replyTo.user && (
+                  <div style={{ fontWeight: 600, fontSize: 11, color: 'var(--color-primary)', lineHeight: 1.3 }}>
+                    {message.replyTo.user}
+                  </div>
+                )}
+                <div style={{
+                  fontSize: 12,
+                  color: isOwnMessage ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  opacity: 0.8,
+                  lineHeight: 1.3,
+                }}>
+                  {message.replyTo.text?.slice(0, 150) || "..."}
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={message.replyTo ? { padding: '0 8px' } : undefined}>
           <MarkdownRenderer content={message.text} formattedBody={message.formattedBody} msgtype={message.msgtype} />
           {(() => {
             // Strip code blocks and inline code before searching for URLs
@@ -548,6 +578,7 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
               ))}
             </div>
           )}
+          </div>
         </div>
 
         {/* Reactions display */}

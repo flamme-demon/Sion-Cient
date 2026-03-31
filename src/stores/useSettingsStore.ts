@@ -21,6 +21,8 @@ interface SettingsState {
   linkPreviews: boolean;
   audioInputDevice: string;
   audioOutputDevice: string;
+  defaultChannel: string;
+  autoJoinVoice: boolean;
 
   setMutedSpeakAlert: (v: boolean) => void;
   setJoinMuted: (v: boolean) => void;
@@ -37,6 +39,8 @@ interface SettingsState {
   setLinkPreviews: (v: boolean) => void;
   setAudioInputDevice: (v: string) => void;
   setAudioOutputDevice: (v: string) => void;
+  setDefaultChannel: (v: string) => void;
+  setAutoJoinVoice: (v: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -57,6 +61,8 @@ export const useSettingsStore = create<SettingsState>()(
       linkPreviews: true,
       audioInputDevice: "",
       audioOutputDevice: "",
+      defaultChannel: "",
+      autoJoinVoice: false,
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
       setJoinMuted: (v) => set({ joinMuted: v }),
@@ -73,6 +79,8 @@ export const useSettingsStore = create<SettingsState>()(
       setLinkPreviews: (v) => set({ linkPreviews: v }),
       setAudioInputDevice: (v) => set({ audioInputDevice: v }),
       setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
+      setDefaultChannel: (v) => set({ defaultChannel: v }),
+      setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
     }),
     { name: "sion-settings" },
   ),

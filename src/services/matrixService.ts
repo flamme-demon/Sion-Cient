@@ -42,18 +42,125 @@ export interface MatrixConfig {
   deviceId?: string;
 }
 
+export interface RegistrationFlow {
+  stages: string[];
+}
+
+export interface RegistrationFlowInfo {
+  flows: RegistrationFlow[];
+  params: Record<string, unknown>;
+  session: string;
+  disabled?: boolean;
+}
+
+/** Detect registration flows supported by the homeserver */
+export async function getRegistrationFlows(homeserver: string): Promise<RegistrationFlowInfo> {
+  try {
+    const resp = await fetch(`${homeserver}/_matrix/client/v3/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "user" }),
+    });
+
+    if (resp.status === 403) {
+      return { flows: [], params: {}, session: "", disabled: true };
+    }
+
+    const data = await resp.json();
+
+    // 401 = UIA response with flows (expected)
+    if (resp.status === 401 || data.flows) {
+      return {
+        flows: data.flows || [],
+        params: data.params || {},
+        session: data.session || "",
+      };
+    }
+
+    // 200 = registration succeeded without auth (very open server)
+    if (resp.ok) {
+      return { flows: [{ stages: ["m.login.dummy"] }], params: {}, session: "" };
+    }
+
+    return { flows: [], params: {}, session: "", disabled: true };
+  } catch {
+    return { flows: [], params: {}, session: "", disabled: true };
+  }
+}
+
+/** Register a user, handling UIA flows (dummy, token, recaptcha) */
 export async function registerUser(
   homeserver: string,
   username: string,
   password: string,
   _displayName?: string,
+  token?: string,
+  captchaResponse?: string,
 ): Promise<void> {
   const client = sdk.createClient({ baseUrl: homeserver });
+
+  // Step 1: initiate registration to get session
+  let session = "";
+  try {
+    await client.registerRequest({
+      username,
+      password,
+      initial_device_display_name: getDeviceDisplayName(),
+    });
+    // If this succeeds directly, we're done (very open server)
+    return;
+  } catch (err: unknown) {
+    const e = err as { data?: { session?: string; flows?: RegistrationFlow[] } };
+    if (e.data?.session) {
+      session = e.data.session;
+    } else {
+      throw err;
+    }
+  }
+
+  // Step 2: determine which stages to complete
+  const stages: { type: string; [key: string]: unknown }[] = [];
+
+  if (token) {
+    // Complete token stage
+    await client.registerRequest({
+      username,
+      password,
+      initial_device_display_name: getDeviceDisplayName(),
+      auth: { type: "m.login.registration_token", token, session },
+    }).catch((err: unknown) => {
+      const e = err as { data?: { session?: string; completed?: string[] }; httpStatus?: number };
+      if (e.httpStatus === 401 && e.data?.session) {
+        session = e.data.session;
+      } else {
+        throw err;
+      }
+    });
+  }
+
+  if (captchaResponse) {
+    // Complete recaptcha stage
+    await client.registerRequest({
+      username,
+      password,
+      initial_device_display_name: getDeviceDisplayName(),
+      auth: { type: "m.login.recaptcha", response: captchaResponse, session },
+    }).catch((err: unknown) => {
+      const e = err as { data?: { session?: string; completed?: string[] }; httpStatus?: number };
+      if (e.httpStatus === 401 && e.data?.session) {
+        session = e.data.session;
+      } else {
+        throw err;
+      }
+    });
+  }
+
+  // Final: complete with dummy if needed (or finalize)
   await client.registerRequest({
     username,
     password,
     initial_device_display_name: getDeviceDisplayName(),
-    auth: { type: "m.login.dummy" },
+    auth: { type: "m.login.dummy", session },
   });
 }
 
@@ -449,7 +556,18 @@ export async function uploadFile(file: File): Promise<string> {
 
 export async function redactMessage(roomId: string, eventId: string) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
-  return matrixClient.redactEvent(roomId, eventId);
+  // Use REST API directly to avoid SDK pendingEventOrdering bug
+  const baseUrl = matrixClient.getHomeserverUrl();
+  const token = matrixClient.getAccessToken();
+  const txnId = `m${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const res = await fetch(
+    `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(eventId)}/${encodeURIComponent(txnId)}`,
+    { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Redact failed: ${res.status}`);
+  }
 }
 
 export async function sendFileMessage(roomId: string, file: File) {

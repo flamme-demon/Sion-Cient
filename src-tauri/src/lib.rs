@@ -112,6 +112,88 @@ struct UpdateShortcutsPayload {
     deafen: String,
 }
 
+#[derive(Serialize, Clone)]
+struct AudioDevice {
+    id: String,
+    name: String,
+    kind: String, // "input" or "output"
+}
+
+#[cfg(not(target_os = "android"))]
+fn is_virtual_alsa_device(name: &str) -> bool {
+    let virtual_prefixes = [
+        "default", "sysdefault", "pipewire", "pulse", "dmix", "dsnoop",
+        "hw:", "plughw:", "null", "lavrate", "samplerate", "speexrate",
+        "jack", "oss", "surround", "upmix", "vdownmix",
+    ];
+    let lower = name.to_lowercase();
+    virtual_prefixes.iter().any(|p| lower.starts_with(p))
+}
+
+#[cfg(not(target_os = "android"))]
+fn prettify_alsa_name(name: &str) -> String {
+    // "front:CARD=C920,DEV=0" → extract card name "C920"
+    // "hdmi:CARD=HDMI,DEV=1" → "HDMI (DEV 1)"
+    if let Some(card_start) = name.find("CARD=") {
+        let after_card = &name[card_start + 5..];
+        let card_name = after_card.split(',').next().unwrap_or(after_card);
+
+        let dev_num = name.find("DEV=").map(|i| &name[i + 4..]).and_then(|s| s.split(',').next());
+
+        let prefix = name.split(':').next().unwrap_or("");
+        let kind_label = match prefix {
+            "hdmi" => "HDMI",
+            "front" => "",
+            _ => prefix,
+        };
+
+        let mut label = card_name.to_string();
+        if !kind_label.is_empty() && kind_label != card_name {
+            label = format!("{} {}", card_name, kind_label);
+        }
+        if let Some(dev) = dev_num {
+            if dev != "0" {
+                label = format!("{} ({})", label, dev);
+            }
+        }
+        label
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn list_audio_devices() -> Vec<AudioDevice> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    let mut devices = Vec::new();
+    let host = cpal::default_host();
+
+    for device in host.devices().into_iter().flatten() {
+        let raw_name = device.name().unwrap_or_default();
+
+        // Skip virtual/system ALSA devices
+        if is_virtual_alsa_device(&raw_name) {
+            continue;
+        }
+
+        let label = prettify_alsa_name(&raw_name);
+
+        let is_input = device.supported_input_configs().map(|mut c| c.next().is_some()).unwrap_or(false);
+        let is_output = device.supported_output_configs().map(|mut c| c.next().is_some()).unwrap_or(false);
+
+        if is_input {
+            devices.push(AudioDevice { id: raw_name.clone(), name: label.clone(), kind: "input".into() });
+        }
+        if is_output {
+            devices.push(AudioDevice { id: raw_name, name: label, kind: "output".into() });
+        }
+    }
+
+    devices
+}
+
 #[derive(Serialize, Default)]
 struct LinkPreview {
     title: Option<String>,
@@ -352,7 +434,7 @@ pub fn run() {
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .manage(shortcuts)
-        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video, list_audio_devices]);
 
     #[cfg(target_os = "android")]
     let builder = builder
