@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as livekitService from "../services/livekitService";
+import { playMute, playUnmute, playDeafen, playUndeafen } from "../services/soundService";
 
 export interface PendingFile {
   id: string;
@@ -79,7 +80,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleMute: async () => {
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });
-    // Connect to LiveKit microphone
+    newMuted ? playMute() : playUnmute();
     try {
       await livekitService.toggleMicrophone(!newMuted);
     } catch (err) {
@@ -89,6 +90,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleDeafen: () => {
     const newDeafened = !get().isDeafened;
     set({ isDeafened: newDeafened });
+    newDeafened ? playDeafen() : playUndeafen();
     livekitService.setDeafened(newDeafened);
     // Deafen also mutes the mic
     if (newDeafened && !get().isMuted) {

@@ -1,11 +1,14 @@
 import { useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon } from "../icons";
+import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon, UserAddIcon } from "../icons";
 import { ChannelIcon } from "../sidebar/ChannelIcon";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useAdminStore } from "../../stores/useAdminStore";
+import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
+import { getMatrixClient } from "../../services/matrixService";
 import { getCurrentRoom } from "../../services/livekitService";
 
 function buildWavePath(amplitude: number, phase: number): string {
@@ -108,15 +111,37 @@ export function ChatHeader() {
   const [saving, setSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [editJoinRule, setEditJoinRule] = useState<"public" | "invite">("public");
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteLoading, setInviteLoading] = useState<string | null>(null);
+  const [serverUsers, setServerUsers] = useState<string[]>([]);
+  const isAdmin = useAdminStore((s) => s.isAdmin);
+  const knownUserIds = usePendingUsersStore((s) => s._knownUserIds);
 
   const canEdit = activeChannel
     ? matrixService.getUserPowerLevel(activeChannel) >= matrixService.getStatePowerLevel(activeChannel)
     : false;
 
+  const isInviteOnly = (() => {
+    if (!activeChannel) return false;
+    const client = getMatrixClient();
+    const room = client?.getRoom(activeChannel);
+    const jr = room?.currentState.getStateEvents("m.room.join_rules", "")?.getContent?.()?.join_rule;
+    return jr === "invite";
+  })();
+
   const openEditModal = () => {
     setEditName(channel?.name || "");
     setEditTopic(channel?.topic || "");
     setAvatarPreview(null);
+    // Lire le join_rule actuel
+    if (activeChannel) {
+      const client = getMatrixClient();
+      const room = client?.getRoom(activeChannel);
+      const jrEvent = room?.currentState.getStateEvents("m.room.join_rules", "");
+      const jr = jrEvent?.getContent?.()?.join_rule;
+      setEditJoinRule(jr === "invite" ? "invite" : "public");
+    }
     setShowEditModal(true);
   };
 
@@ -140,6 +165,13 @@ export function ChatHeader() {
       }
       if (editTopic !== (channel?.topic || "")) {
         await matrixService.setRoomTopic(activeChannel, editTopic);
+      }
+      // Sauvegarder le join rule
+      const client = getMatrixClient();
+      const room = client?.getRoom(activeChannel);
+      const currentJr = room?.currentState.getStateEvents("m.room.join_rules", "")?.getContent?.()?.join_rule;
+      if (editJoinRule !== currentJr) {
+        await matrixService.setRoomJoinRule(activeChannel, editJoinRule);
       }
       setShowEditModal(false);
     } catch (err) {
@@ -201,6 +233,34 @@ export function ChatHeader() {
               title={t("channels.settings")}
             >
               <PencilIcon />
+            </button>
+          )}
+          {isAdmin && !isMobile && isInviteOnly && (
+            <button
+              onClick={() => {
+                const client = getMatrixClient();
+                const myId = client?.getUserId() || "";
+                // Utiliser les users connus du store (inclut les suspendus)
+                const ids = [...knownUserIds].filter((id) => id !== myId).sort();
+                setServerUsers(ids);
+                setShowInviteModal(true);
+              }}
+              style={{
+                padding: 6,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                background: 'transparent',
+                color: 'var(--color-on-surface-variant)',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'background 200ms',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              title={t("channels.inviteUser")}
+            >
+              <UserAddIcon />
             </button>
           )}
           {!isMobile && (
@@ -318,6 +378,47 @@ export function ChatHeader() {
                 boxSizing: 'border-box',
               }}
             />
+            <label style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6, display: 'block' }}>
+              {t("channels.accessLabel")}
+            </label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <button
+                onClick={() => setEditJoinRule("public")}
+                style={{
+                  flex: 1,
+                  padding: '10px 16px',
+                  borderRadius: 20,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                  background: editJoinRule === "public" ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                  color: editJoinRule === "public" ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
+                  transition: 'all 200ms',
+                }}
+              >
+                {t("channels.accessPublic")}
+              </button>
+              <button
+                onClick={() => setEditJoinRule("invite")}
+                style={{
+                  flex: 1,
+                  padding: '10px 16px',
+                  borderRadius: 20,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                  background: editJoinRule === "invite" ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                  color: editJoinRule === "invite" ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
+                  transition: 'all 200ms',
+                }}
+              >
+                {t("channels.accessInvite")}
+              </button>
+            </div>
             <label style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 8, display: 'block' }}>
               {t("channels.editAvatar")}
             </label>
@@ -412,6 +513,122 @@ export function ChatHeader() {
                 }}
               >
                 {t("channels.save")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showInviteModal && activeChannel && (
+        <div
+          onClick={() => setShowInviteModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--color-surface-container)',
+              borderRadius: 24,
+              padding: '28px 28px 20px 28px',
+              maxWidth: 400,
+              width: '90%',
+              maxHeight: '60vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--color-on-surface)', marginBottom: 16 }}>
+              {t("channels.inviteUser")}
+            </div>
+            <div style={{ overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {serverUsers.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: 'var(--color-outline)', fontSize: 13 }}>
+                  {t("admin.activeUsers.none")}
+                </div>
+              ) : serverUsers.map((userId) => {
+                const name = userId.match(/^@([^:]+):/)?.[1] || userId;
+                // Vérifier si déjà membre
+                const client = getMatrixClient();
+                const room = client?.getRoom(activeChannel);
+                const alreadyMember = room?.getJoinedMembers().some((m) => m.userId === userId);
+                return (
+                  <div
+                    key={userId}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderRadius: 12,
+                      background: 'var(--color-surface-container-high)',
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {name}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (alreadyMember || inviteLoading === userId) return;
+                        setInviteLoading(userId);
+                        try {
+                          await matrixService.inviteUser(activeChannel, userId);
+                          // Refresh la liste pour montrer le statut
+                          setServerUsers((prev) => [...prev]);
+                        } catch (err) {
+                          console.error("[Sion] Failed to invite:", err);
+                        } finally {
+                          setInviteLoading(null);
+                        }
+                      }}
+                      disabled={!!alreadyMember || inviteLoading === userId}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: 16,
+                        border: 'none',
+                        cursor: alreadyMember ? 'default' : inviteLoading === userId ? 'not-allowed' : 'pointer',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        fontFamily: 'inherit',
+                        flexShrink: 0,
+                        marginLeft: 8,
+                        background: alreadyMember ? 'transparent' : 'var(--color-primary-container)',
+                        color: alreadyMember ? 'var(--color-outline)' : 'var(--color-on-primary-container)',
+                        opacity: inviteLoading === userId ? 0.5 : 1,
+                      }}
+                    >
+                      {alreadyMember ? t("channels.alreadyMember") : t("channels.invite")}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                onClick={() => setShowInviteModal(false)}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: 20,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                  background: 'var(--color-surface-container-high)',
+                  color: 'var(--color-on-surface)',
+                }}
+              >
+                {t("auth.cancel")}
               </button>
             </div>
           </div>

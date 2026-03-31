@@ -1,8 +1,8 @@
 import { useTranslation } from "react-i18next";
 import { SettingsIcon, ArrowLeftIcon } from "../icons";
 import { AdminStats } from "../admin/AdminStats";
+import { PendingUsers } from "../admin/PendingUsers";
 import { AdminActions } from "../admin/AdminActions";
-import { FederationInfo } from "../admin/FederationInfo";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useAppStore } from "../../stores/useAppStore";
 
@@ -47,9 +47,9 @@ export function AdminPanel() {
           <span style={{ fontWeight: 600, fontSize: 16, color: 'var(--color-on-surface)' }}>{t("admin.title")}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', padding: '0 12px', gap: 8 }}>
-          <AdminStats />
           <AdminActions />
-          <FederationInfo />
+          <PendingUsers />
+          <AdminStats />
         </div>
       </div>
     );
@@ -75,9 +75,9 @@ export function AdminPanel() {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', padding: '0 12px', gap: 8 }}>
-        <AdminStats />
         <AdminActions />
-        <FederationInfo />
+        <PendingUsers />
+        <AdminStats />
       </div>
     </div>
   );

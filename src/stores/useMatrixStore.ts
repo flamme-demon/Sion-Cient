@@ -9,6 +9,7 @@ import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
+import { playMessageReceived } from "../services/soundService";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
@@ -249,6 +250,17 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
         }
       }
     } catch { /* ignore */ }
+
+    // Fallback: si la room a 2 membres, pas de room.type, et pas de nom explicite → c'est un DM
+    if (!isDM && room.getJoinedMemberCount() <= 2 && !roomType && !customType) {
+      const myUserId = client.getUserId();
+      const members = room.getJoinedMembers();
+      const otherMember = members.find((m: any) => m.userId !== myUserId);
+      if (otherMember && members.length === 2) {
+        isDM = true;
+        dmUserId = otherMember.userId;
+      }
+    }
   }
 
   return {
@@ -453,6 +465,16 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         }
 
         set({ channels, connectionStatus: "connected", messages });
+
+        // Auto-accept pending invites (received while offline)
+        const invitedRooms = client.getRooms().filter((r) =>
+          r.getMyMembership() === "invite"
+        );
+        for (const room of invitedRooms) {
+          client.joinRoom(room.roomId).catch((err) => {
+            console.error("[Sion] Failed to auto-join pending invite:", err);
+          });
+        }
 
         // Auto-select first channel (but don't switch to chat view on mobile)
         const currentActive = useAppStore.getState().activeChannel;
@@ -669,7 +691,23 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         return;
       }
 
-      if (event.getType?.() !== "m.room.message") return;
+      const evtType = event.getType?.();
+
+      // Son de notification pour les messages reçus (chiffrés ou non)
+      if (evtType === "m.room.message" || evtType === "m.room.encrypted") {
+        const eventSender = event.getSender?.();
+        if (eventSender && eventSender !== client.getUserId()) {
+          // Pas de son pour l'admin room (bot conduit)
+          if (!eventSender.includes("conduit")) {
+            const activeChannel = useAppStore.getState().activeChannel;
+            if (activeChannel === room.roomId || room.getJoinedMemberCount() === 2) {
+              playMessageReceived();
+            }
+          }
+        }
+      }
+
+      if (evtType !== "m.room.message") return;
       const content = event.getContent?.();
       if (!content?.msgtype) return;
 
@@ -807,6 +845,39 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         if (s.channels.some((c) => c.id === channel.id)) return s;
         return { channels: [...s.channels, channel] };
       });
+    });
+
+    // Auto-accept invites (DM and server rooms)
+    client.on(RoomMemberEvent.Membership, async (event, member) => {
+      if (
+        member.userId === client.getUserId() &&
+        member.membership === "invite"
+      ) {
+        const roomId = event.getRoomId();
+        if (!roomId) return;
+        try {
+          await client.joinRoom(roomId);
+
+          // Si c'est un DM (is_direct dans l'invite), mettre à jour m.direct
+          const inviteContent = event.getContent?.();
+          if (inviteContent?.is_direct) {
+            const sender = event.getSender();
+            if (sender) {
+              try {
+                const directEvent = client.getAccountData("m.direct" as any);
+                const directContent = (directEvent?.getContent() || {}) as Record<string, string[]>;
+                const existing = directContent[sender] || [];
+                if (!existing.includes(roomId)) {
+                  directContent[sender] = [...existing, roomId];
+                  await client.setAccountData("m.direct" as any, directContent);
+                }
+              } catch { /* ignore */ }
+            }
+          }
+        } catch (err) {
+          console.error("[Sion] Failed to auto-join invite:", err);
+        }
+      }
     });
 
     // Listen for membership changes

@@ -17,11 +17,17 @@
     "channelName": "Channel name",
     "typeText": "Text",
     "typeVoice": "Voice",
+    "accessPublic": "Public",
+    "accessInvite": "Invite only",
     "creating": "Creating...",
     "settings": "Channel settings",
     "editName": "Name",
     "editTopic": "Topic",
     "editAvatar": "Avatar",
+    "accessLabel": "Access",
+    "inviteUser": "Invite a user",
+    "invite": "Invite",
+    "alreadyMember": "Member",
     "save": "Save"
   },
   "voice": {
@@ -56,7 +62,18 @@
   "contextMenu": {
     "sendDM": "Send a DM",
     "latency": "Latency",
-    "noLatencyData": "No latency data"
+    "noLatencyData": "No latency data",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "kickVoice": "Kick",
+    "kickRoom": "Kick from channel",
+    "ban": "Ban from channel",
+    "changeRole": "Role in this channel",
+    "roleAdmin": "Admin",
+    "roleModerator": "Moderator",
+    "roleUser": "Member",
+    "suspend": "Suspend account",
+    "unsuspend": "Unsuspend account"
   },
   "auth": {
     "login": "Log in",
@@ -119,6 +136,9 @@
   "settings": {
     "title": "Settings",
     "voiceSettings": "Voice Settings",
+    "audioInput": "Microphone",
+    "audioOutput": "Speaker",
+    "defaultDevice": "Default",
     "mutedSpeakAlert": "Muted speak detection",
     "mutedSpeakAlertDesc": "Alert when you speak while muted",
     "micThreshold": "Detection threshold",
@@ -172,7 +192,9 @@
     "sessionDeleted": "Session deleted",
     "errorDeleteSession": "Failed to delete session",
     "noOtherSessions": "No other active sessions",
-    "loadingSessions": "Loading..."
+    "loadingSessions": "Loading...",
+    "purgeCache": "Purge cache",
+    "purgeCacheConfirm": "Clear cache and reload the app? Encryption keys will be preserved."
   },
   "admin": {
     "title": "Admin Continuwuity",
@@ -180,8 +202,7 @@
     "users": {
       "title": "Users",
       "connected": "Connected users",
-      "registered": "Registered",
-      "banned": "Banned"
+      "registered": "Registered"
     },
     "rooms": {
       "title": "Rooms",
@@ -193,8 +214,7 @@
       "title": "Server",
       "version": "Version",
       "uptime": "Uptime",
-      "ram": "RAM",
-      "livekitRooms": "LiveKit rooms"
+      "ram": "Memory"
     },
     "actions": {
       "title": "Quick Actions",
@@ -204,13 +224,35 @@
       "federation": "Federation",
       "configureLivekit": "Configure LiveKit",
       "purgeCache": "Purge cache",
-      "roomNamePrompt": "Room name:"
+      "purgeCacheConfirm": "Clear cache and reload the app? Encryption keys will be preserved.",
+      "roomNamePrompt": "Room name:",
+      "manageRooms": "Manage rooms",
+      "deleteRoom": "Delete",
+      "confirmDelete": "This action is irreversible!",
+      "confirmYes": "Confirm",
+      "sectionChannels": "Channels",
+      "sectionDMs": "Direct messages",
+      "noRooms": "No rooms found",
+      "makeAdmin": "Promote",
+      "removeAdmin": "Demote"
     },
     "federation": {
       "title": "Matrix Federation",
       "servers": "Federated servers",
       "events": "Events/s",
       "homeserver": "Homeserver"
+    },
+    "pending": {
+      "title": "Pending registrations",
+      "none": "No pending registrations",
+      "refresh": "Refresh",
+      "approve": "Approve",
+      "reject": "Reject"
+    },
+    "activeUsers": {
+      "title": "Active users",
+      "none": "No users",
+      "suspend": "Suspend"
     }
   }
 }

@@ -4,6 +4,7 @@ import { ServerIcon, LogoutIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useAdminStore } from "../../stores/useAdminStore";
+import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 
 export function ServerHeader() {
@@ -11,6 +12,7 @@ export function ServerHeader() {
   const toggleAdmin = useAppStore((s) => s.toggleAdmin);
   const showAdmin = useAppStore((s) => s.showAdmin);
   const isAdmin = useAdminStore((s) => s.isAdmin);
+  const pendingCount = usePendingUsersStore((s) => s.pendingCount);
   const homeserverUrl = useAuthStore((s) => s.credentials?.homeserverUrl || "");
   const logout = useAuthStore((s) => s.logout);
   const resetMatrix = useMatrixStore((s) => s.reset);
@@ -69,10 +71,32 @@ export function ServerHeader() {
               transition: 'background 200ms',
               background: showAdmin ? 'var(--color-secondary-container)' : 'transparent',
               color: showAdmin ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)',
+              position: 'relative',
             }}
             title={t("admin.title")}
           >
             <ServerIcon />
+            {pendingCount > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: 2,
+                right: 2,
+                minWidth: 16,
+                height: 16,
+                borderRadius: 8,
+                background: 'var(--color-error)',
+                color: 'var(--color-on-error)',
+                fontSize: 10,
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 4px',
+                lineHeight: 1,
+              }}>
+                {pendingCount}
+              </span>
+            )}
           </button>
         )}
         <button

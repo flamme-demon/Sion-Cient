@@ -17,11 +17,17 @@
     "channelName": "Nom du canal",
     "typeText": "Texte",
     "typeVoice": "Vocal",
+    "accessPublic": "Public",
+    "accessInvite": "Sur invitation",
     "creating": "Création...",
     "settings": "Paramètres du canal",
     "editName": "Nom",
     "editTopic": "Sujet",
     "editAvatar": "Avatar",
+    "accessLabel": "Accès",
+    "inviteUser": "Inviter un utilisateur",
+    "invite": "Inviter",
+    "alreadyMember": "Membre",
     "save": "Enregistrer"
   },
   "voice": {
@@ -56,7 +62,18 @@
   "contextMenu": {
     "sendDM": "Envoyer un MP",
     "latency": "Latence",
-    "noLatencyData": "Aucune donnée de latence"
+    "noLatencyData": "Aucune donnée de latence",
+    "mute": "Couper le son",
+    "unmute": "Rétablir le son",
+    "kickVoice": "Kick",
+    "kickRoom": "Expulser du salon",
+    "ban": "Bannir du salon",
+    "changeRole": "Rôle dans ce salon",
+    "roleAdmin": "Admin",
+    "roleModerator": "Modérateur",
+    "roleUser": "Membre",
+    "suspend": "Suspendre le compte",
+    "unsuspend": "Réactiver le compte"
   },
   "auth": {
     "login": "Se connecter",
@@ -119,6 +136,9 @@
   "settings": {
     "title": "Paramètres",
     "voiceSettings": "Paramètres vocaux",
+    "audioInput": "Microphone",
+    "audioOutput": "Haut-parleur",
+    "defaultDevice": "Par défaut",
     "mutedSpeakAlert": "Détection parler muté",
     "mutedSpeakAlertDesc": "Alerte quand vous parlez en étant muté",
     "micThreshold": "Seuil de détection",
@@ -172,7 +192,9 @@
     "sessionDeleted": "Session supprimée",
     "errorDeleteSession": "Erreur lors de la suppression",
     "noOtherSessions": "Aucune autre session active",
-    "loadingSessions": "Chargement..."
+    "loadingSessions": "Chargement...",
+    "purgeCache": "Purger le cache",
+    "purgeCacheConfirm": "Vider le cache et recharger l'application ? Les clés de chiffrement seront conservées."
   },
   "admin": {
     "title": "Admin Continuwuity",
@@ -180,8 +202,7 @@
     "users": {
       "title": "Utilisateurs",
       "connected": "Utilisateurs connectés",
-      "registered": "Enregistrés",
-      "banned": "Bannis"
+      "registered": "Enregistrés"
     },
     "rooms": {
       "title": "Salons",
@@ -193,8 +214,7 @@
       "title": "Serveur",
       "version": "Version",
       "uptime": "Uptime",
-      "ram": "RAM",
-      "livekitRooms": "LiveKit rooms"
+      "ram": "Mémoire"
     },
     "actions": {
       "title": "Actions rapides",
@@ -204,13 +224,35 @@
       "federation": "Fédération",
       "configureLivekit": "Configurer LiveKit",
       "purgeCache": "Purger le cache",
-      "roomNamePrompt": "Nom du salon :"
+      "purgeCacheConfirm": "Vider le cache et recharger l'application ? Les clés de chiffrement seront conservées.",
+      "roomNamePrompt": "Nom du salon :",
+      "manageRooms": "Gérer les salons",
+      "deleteRoom": "Supprimer",
+      "confirmDelete": "Cette action est irréversible !",
+      "confirmYes": "Confirmer",
+      "sectionChannels": "Canaux",
+      "sectionDMs": "Messages privés",
+      "noRooms": "Aucun salon trouvé",
+      "makeAdmin": "Promouvoir",
+      "removeAdmin": "Rétrograder"
     },
     "federation": {
       "title": "Fédération Matrix",
       "servers": "Serveurs fédérés",
       "events": "Événements/s",
       "homeserver": "Homeserver"
+    },
+    "pending": {
+      "title": "Inscriptions en attente",
+      "none": "Aucune inscription en attente",
+      "refresh": "Actualiser",
+      "approve": "Approuver",
+      "reject": "Rejeter"
+    },
+    "activeUsers": {
+      "title": "Utilisateurs actifs",
+      "none": "Aucun utilisateur",
+      "suspend": "Suspendre"
     }
   }
 }

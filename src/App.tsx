@@ -10,6 +10,7 @@ import { useAppStore } from "./stores/useAppStore";
 import { useAuthStore } from "./stores/useAuthStore";
 import { useMatrixStore } from "./stores/useMatrixStore";
 import { useAdminStore } from "./stores/useAdminStore";
+import { usePendingUsersStore } from "./stores/usePendingUsersStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
 import { useIsMobile } from "./hooks/useIsMobile";
@@ -29,6 +30,11 @@ export default function App() {
   const connectionStatus = useMatrixStore((s) => s.connectionStatus);
   const fetchAdminData = useAdminStore((s) => s.fetchAdminData);
   const adminInitialized = useAdminStore((s) => s.initialized);
+  const isAdmin = useAdminStore((s) => s.isAdmin);
+  const startAdminCheck = useAdminStore((s) => s.startAdminCheck);
+  const stopAdminCheck = useAdminStore((s) => s.stopAdminCheck);
+  const startPendingListener = usePendingUsersStore((s) => s.startListening);
+  const stopPendingListener = usePendingUsersStore((s) => s.stopListening);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [mutedSpeakWarning, setMutedSpeakWarning] = useState(false);
   const isMobile = useIsMobile();
@@ -60,6 +66,22 @@ export default function App() {
       fetchAdminData(credentials.homeserverUrl, credentials.accessToken);
     }
   }, [credentials, adminInitialized, fetchAdminData]);
+
+  // Poll admin status changes (promotion/rétrogradation par un autre admin)
+  useEffect(() => {
+    if (adminInitialized && connectionStatus === "connected") {
+      startAdminCheck();
+      return () => stopAdminCheck();
+    }
+  }, [adminInitialized, connectionStatus, startAdminCheck, stopAdminCheck]);
+
+  // Start pending users listener when admin is confirmed
+  useEffect(() => {
+    if (isAdmin && connectionStatus === "connected") {
+      startPendingListener();
+      return () => stopPendingListener();
+    }
+  }, [isAdmin, connectionStatus, startPendingListener, stopPendingListener]);
 
   // Show loading spinner while checking session
   if (!sessionChecked || (isLoading && !credentials)) {

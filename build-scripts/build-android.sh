@@ -3,10 +3,15 @@
 set -euo pipefail
 
 CARGO_TOML="src-tauri/Cargo.toml"
+CARGO_LOCK="src-tauri/Cargo.lock"
 BACKUP="src-tauri/Cargo.toml.desktop"
 
 # Force rustup toolchain (Arch Linux a un rustc système sans target Android)
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$HOME/.cargo/bin:$PATH"
+
+# S'assurer que Cargo.toml est propre (version git, pas modifiée par un build desktop)
+echo "[Sion] Restauration Cargo.toml depuis git..."
+git checkout "$CARGO_TOML" "$CARGO_LOCK" 2>/dev/null || true
 
 echo "[Sion] Sauvegarde Cargo.toml desktop..."
 cp "$CARGO_TOML" "$BACKUP"

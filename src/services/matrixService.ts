@@ -567,11 +567,12 @@ export function getRoomMembers(roomId: string): { userId: string; displayName: s
   }));
 }
 
-export async function createChannel(name: string, isVoice: boolean): Promise<string> {
+export async function createChannel(name: string, isVoice: boolean, isPublic = true): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const initialState: any[] = [
     { type: "m.room.encryption", state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } },
+    { type: "m.room.join_rules", state_key: "", content: { join_rule: isPublic ? "public" : "invite" } },
   ];
   if (isVoice) {
     initialState.push({ type: "m.room.type", state_key: "", content: { type: "m.voice_channel" } });
@@ -580,9 +581,53 @@ export async function createChannel(name: string, isVoice: boolean): Promise<str
   const { room_id } = await matrixClient.createRoom({
     name,
     visibility: "private" as never,
+    preset: (isPublic ? "public_chat" : "private_chat") as never,
     initial_state: initialState,
+    power_level_content_override: {
+      events: {
+        "org.matrix.msc3401.call.member": 0,
+      },
+    } as never,
   });
   return room_id;
+}
+
+export async function setRoomJoinRule(roomId: string, joinRule: "public" | "invite"): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  await matrixClient.sendStateEvent(roomId, "m.room.join_rules" as any, { join_rule: joinRule }, "");
+}
+
+export async function inviteUser(roomId: string, userId: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  await matrixClient.invite(roomId, userId);
+}
+
+export async function kickUser(roomId: string, userId: string, reason?: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  await matrixClient.kick(roomId, userId, reason);
+}
+
+export async function banUser(roomId: string, userId: string, reason?: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  await matrixClient.ban(roomId, userId, reason);
+}
+
+export async function unbanUser(roomId: string, userId: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  await matrixClient.unban(roomId, userId);
+}
+
+export async function setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  await matrixClient.setPowerLevel(roomId, userId, level);
+}
+
+export function getMemberPowerLevel(roomId: string, userId: string): number {
+  if (!matrixClient) return 0;
+  const room = matrixClient.getRoom(roomId);
+  if (!room) return 0;
+  const member = room.getMember(userId);
+  return member?.powerLevel ?? 0;
 }
 
 export async function setRoomName(roomId: string, name: string): Promise<void> {

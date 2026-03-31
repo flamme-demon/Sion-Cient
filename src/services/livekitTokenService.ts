@@ -114,7 +114,30 @@ export async function getMatrixRTCToken(
     }
   }
 
-  const rawServiceUrl = livekitFocus?.livekit_service_url || fallbackServiceUrl;
+  let rawServiceUrl = livekitFocus?.livekit_service_url || fallbackServiceUrl;
+
+  // 1d. Fallback : lire le livekit_service_url depuis /.well-known/matrix/client
+  if (!rawServiceUrl) {
+    try {
+      const homeserverUrl = client.getHomeserverUrl().replace(/\/$/, "");
+      const wkResponse = await fetch(`${homeserverUrl}/.well-known/matrix/client`);
+      if (wkResponse.ok) {
+        const wkData = await wkResponse.json();
+        const foci = wkData?.["org.matrix.msc4143.rtc_foci"];
+        if (Array.isArray(foci)) {
+          const lkFocus = foci.find((f: { type: string; livekit_service_url?: string }) =>
+            f.type === "livekit" && f.livekit_service_url
+          );
+          if (lkFocus) {
+            rawServiceUrl = lkFocus.livekit_service_url;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[Sion] Impossible de lire le well-known pour LiveKit:", err);
+    }
+  }
+
   if (!rawServiceUrl) {
     return null;
   }
@@ -160,12 +183,16 @@ export async function getMatrixRTCToken(
       if (!response.ok) continue;
 
       const data = JSON.parse(responseText) as { url?: string; jwt?: string };
-      if (!data.url || !data.jwt) {
+      if (!data.jwt) {
         console.error("[Sion] Réponse invalide du service LiveKit:", data);
         continue;
       }
 
-      return { url: data.url, token: data.jwt, serviceUrl, livekitAlias: livekitRoomAlias };
+      // Construire l'URL WSS publique depuis le serviceUrl (well-known)
+      // au lieu d'utiliser data.url qui peut être une URL interne (ws://127.0.0.1:7880)
+      const publicWssUrl = serviceUrl.replace(/^https?:\/\//, "wss://");
+
+      return { url: publicWssUrl, token: data.jwt, serviceUrl, livekitAlias: livekitRoomAlias };
     } catch (err) {
       console.error(`[Sion] Erreur lors de l'appel à ${path}:`, err);
     }

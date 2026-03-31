@@ -19,6 +19,8 @@ interface SettingsState {
   autoGainControl: boolean;
   audioQuality: AudioQualityPreset;
   linkPreviews: boolean;
+  audioInputDevice: string;
+  audioOutputDevice: string;
 
   setMutedSpeakAlert: (v: boolean) => void;
   setJoinMuted: (v: boolean) => void;
@@ -33,6 +35,8 @@ interface SettingsState {
   setAutoGainControl: (v: boolean) => void;
   setAudioQuality: (v: AudioQualityPreset) => void;
   setLinkPreviews: (v: boolean) => void;
+  setAudioInputDevice: (v: string) => void;
+  setAudioOutputDevice: (v: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -51,6 +55,8 @@ export const useSettingsStore = create<SettingsState>()(
       autoGainControl: true,
       audioQuality: "voiceHD",
       linkPreviews: true,
+      audioInputDevice: "",
+      audioOutputDevice: "",
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
       setJoinMuted: (v) => set({ joinMuted: v }),
@@ -65,6 +71,8 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoGainControl: (v) => set({ autoGainControl: v }),
       setAudioQuality: (v) => set({ audioQuality: v }),
       setLinkPreviews: (v) => set({ linkPreviews: v }),
+      setAudioInputDevice: (v) => set({ audioInputDevice: v }),
+      setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
     }),
     { name: "sion-settings" },
   ),

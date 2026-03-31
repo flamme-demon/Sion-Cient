@@ -113,7 +113,7 @@ export async function connectToRoom(
   token: string,
   e2eeKeyProvider?: BaseKeyProvider,
 ): Promise<Room> {
-  const { noiseSuppression, echoCancellation, autoGainControl, audioQuality } = useSettingsStore.getState();
+  const { noiseSuppression, echoCancellation, autoGainControl, audioQuality, audioInputDevice, audioOutputDevice } = useSettingsStore.getState();
   const audioPreset = getAudioPreset(audioQuality);
   const stereo = isStereoPreset(audioQuality);
 
@@ -123,6 +123,10 @@ export async function connectToRoom(
       echoCancellation,
       autoGainControl,
       channelCount: stereo ? 2 : 1,
+      ...(audioInputDevice ? { deviceId: audioInputDevice } : {}),
+    },
+    audioOutput: {
+      ...(audioOutputDevice ? { deviceId: audioOutputDevice } : {}),
     },
     publishDefaults: {
       dtx: false,
@@ -182,6 +186,19 @@ export function getCurrentRoom(): Room | null {
   return currentRoom;
 }
 
+export function muteRemoteParticipant(participantIdentity: string, mute: boolean): boolean {
+  if (!currentRoom) return false;
+  const participant = currentRoom.remoteParticipants.get(participantIdentity);
+  if (!participant) return false;
+  // Mute/unmute all audio tracks of the participant (local perception only)
+  for (const pub of participant.audioTrackPublications.values()) {
+    if (pub.track) {
+      pub.track.mediaStreamTrack.enabled = !mute;
+    }
+  }
+  return true;
+}
+
 export async function disconnectFromRoom() {
   if (currentRoom) {
     currentRoom.off(RoomEvent.TrackSubscribed, attachAudioTrack);
@@ -199,6 +216,16 @@ export async function disconnectFromRoom() {
 export async function toggleMicrophone(enabled: boolean) {
   if (!currentRoom) return;
   await currentRoom.localParticipant.setMicrophoneEnabled(enabled);
+}
+
+export async function switchAudioInput(deviceId: string) {
+  if (!currentRoom) return;
+  await currentRoom.switchActiveDevice("audioinput", deviceId);
+}
+
+export async function switchAudioOutput(deviceId: string) {
+  if (!currentRoom) return;
+  await currentRoom.switchActiveDevice("audiooutput", deviceId);
 }
 
 export function setDeafened(deafened: boolean) {

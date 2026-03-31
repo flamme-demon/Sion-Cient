@@ -115,6 +115,8 @@ export function useVoiceChannel() {
           setConnectedVoice(matrixRoomId);
           const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
           if (joinMuted || isMobileDevice) {
+            // Attendre que le track audio soit publié avant de muter
+            await new Promise((r) => setTimeout(r, 500));
             if (!useAppStore.getState().isMuted) {
               useAppStore.getState().toggleMute();
             }

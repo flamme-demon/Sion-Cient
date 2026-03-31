@@ -37,6 +37,29 @@ export function SettingsPanel() {
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
+  const audioInputDevice = useSettingsStore((s) => s.audioInputDevice);
+  const audioOutputDevice = useSettingsStore((s) => s.audioOutputDevice);
+  const setAudioInputDevice = useSettingsStore((s) => s.setAudioInputDevice);
+  const setAudioOutputDevice = useSettingsStore((s) => s.setAudioOutputDevice);
+
+  // Audio devices enumeration
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+
+  useEffect(() => {
+    async function loadDevices() {
+      try {
+        // Request permission first (needed to get device labels)
+        await navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop()));
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        setAudioInputs(devices.filter((d) => d.kind === "audioinput"));
+        setAudioOutputs(devices.filter((d) => d.kind === "audiooutput"));
+      } catch {
+        // Permission denied or no devices
+      }
+    }
+    loadDevices();
+  }, []);
 
   // Shortcut recording
   useEffect(() => {
@@ -103,6 +126,65 @@ export function SettingsPanel() {
         <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           {t("settings.voiceSettings")}
         </div>
+
+        {/* Audio device selectors */}
+        {audioInputs.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioInput")}</div>
+            <select
+              value={audioInputDevice}
+              onChange={(e) => {
+                setAudioInputDevice(e.target.value);
+                livekitService.switchAudioInput(e.target.value);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                borderRadius: 12,
+                border: '2px solid var(--color-outline-variant)',
+                background: 'var(--color-surface-container-high)',
+                color: 'var(--color-on-surface)',
+                fontSize: 12,
+                fontFamily: 'inherit',
+                outline: 'none',
+              }}
+            >
+              <option value="">{t("settings.defaultDevice")}</option>
+              {audioInputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {audioOutputs.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioOutput")}</div>
+            <select
+              value={audioOutputDevice}
+              onChange={(e) => {
+                setAudioOutputDevice(e.target.value);
+                livekitService.switchAudioOutput(e.target.value);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                borderRadius: 12,
+                border: '2px solid var(--color-outline-variant)',
+                background: 'var(--color-surface-container-high)',
+                color: 'var(--color-on-surface)',
+                fontSize: 12,
+                fontFamily: 'inherit',
+                outline: 'none',
+              }}
+            >
+              <option value="">{t("settings.defaultDevice")}</option>
+              {audioOutputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <div style={{ marginRight: 12 }}>
@@ -289,6 +371,43 @@ export function SettingsPanel() {
           </div>
         </div>
       )}
+
+      {/* Purger le cache */}
+      <div style={{ padding: '16px 0 8px 0' }}>
+        <button
+          onClick={() => {
+            if (window.confirm(t("settings.purgeCacheConfirm"))) {
+              const creds = localStorage.getItem("sion_auth_credentials");
+              const deviceId = localStorage.getItem("sion_device_id");
+              localStorage.clear();
+              if (creds) localStorage.setItem("sion_auth_credentials", creds);
+              if (deviceId) localStorage.setItem("sion_device_id", deviceId);
+              indexedDB.databases().then((dbs) => {
+                for (const db of dbs) {
+                  if (db.name) indexedDB.deleteDatabase(db.name);
+                }
+              }).finally(() => {
+                window.location.reload();
+              });
+            }
+          }}
+          style={{
+            width: '100%',
+            padding: '10px 16px',
+            borderRadius: 20,
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 500,
+            fontFamily: 'inherit',
+            background: 'var(--color-error-container)',
+            color: 'var(--color-error)',
+            transition: 'all 200ms',
+          }}
+        >
+          {t("settings.purgeCache")}
+        </button>
+      </div>
     </div>
   );
 

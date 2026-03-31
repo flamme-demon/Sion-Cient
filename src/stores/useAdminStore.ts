@@ -21,6 +21,8 @@ interface AdminState {
   initialized: boolean;
 
   fetchAdminData: (homeserverUrl: string, accessToken: string) => Promise<void>;
+  startAdminCheck: () => void;
+  stopAdminCheck: () => void;
   reset: () => void;
 }
 
@@ -30,6 +32,10 @@ const initialData: AdminData = {
   serverName: null,
   serverVersion: null,
 };
+
+let adminCheckInterval: ReturnType<typeof setInterval> | null = null;
+let savedHomeserverUrl = "";
+let savedAccessToken = "";
 
 export const useAdminStore = create<AdminState>((set, get) => ({
   data: { ...initialData },
@@ -41,6 +47,8 @@ export const useAdminStore = create<AdminState>((set, get) => ({
     if (get().isLoading) return;
     set({ isLoading: true });
 
+    savedHomeserverUrl = homeserverUrl;
+    savedAccessToken = accessToken;
     initAdminService({ homeserverUrl, accessToken });
 
     const data: AdminData = { ...initialData };
@@ -89,7 +97,42 @@ export const useAdminStore = create<AdminState>((set, get) => ({
     set({ data, isAdmin, isLoading: false, initialized: true });
   },
 
+  startAdminCheck: () => {
+    if (adminCheckInterval) return;
+    // Vérifie le statut admin toutes les 15s (appel léger à getRoomsList)
+    adminCheckInterval = setInterval(async () => {
+      if (!savedHomeserverUrl || !savedAccessToken) return;
+      const wasAdmin = get().isAdmin;
+      try {
+        await getRoomsList();
+        if (!wasAdmin) {
+          // Devenu admin — refresh complet
+          set({ isAdmin: true, initialized: false });
+          get().fetchAdminData(savedHomeserverUrl, savedAccessToken);
+        }
+      } catch (err) {
+        if (err instanceof AdminApiError && (err.status === 403 || err.status === 401)) {
+          if (wasAdmin) {
+            // N'est plus admin
+            set({ isAdmin: false });
+          }
+        }
+      }
+    }, 15000);
+  },
+
+  stopAdminCheck: () => {
+    if (adminCheckInterval) {
+      clearInterval(adminCheckInterval);
+      adminCheckInterval = null;
+    }
+  },
+
   reset: () => {
+    if (adminCheckInterval) {
+      clearInterval(adminCheckInterval);
+      adminCheckInterval = null;
+    }
     set({
       data: { ...initialData },
       isAdmin: null,
