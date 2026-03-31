@@ -746,11 +746,17 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               }
             };
             // The SDK fires "Event.localEchoUpdated" when the event gets its server ID
-            event.once("Event.localEchoUpdated" as any, onSent);
+            let onSentCalled = false;
+            const guardedOnSent = () => {
+              if (onSentCalled) return;
+              onSentCalled = true;
+              onSent();
+            };
+            event.once("Event.localEchoUpdated" as any, guardedOnSent);
             // Fallback: check after a delay
             setTimeout(() => {
-              event.off("Event.localEchoUpdated" as any, onSent);
-              onSent();
+              event.off("Event.localEchoUpdated" as any, guardedOnSent);
+              guardedOnSent();
             }, 3000);
           }
         }

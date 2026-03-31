@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.5.0"
+version = "0.5.1"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -26,6 +26,7 @@ tauri = { version = "2", default-features = false, features = [] }
 tauri-plugin-log = "2"
 open = "5"
 reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }
+urlencoding = "2"
 scraper = "0.22"
 base64 = "0.22"
 

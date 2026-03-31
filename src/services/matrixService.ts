@@ -472,7 +472,7 @@ export async function setAvatar(file: File): Promise<string> {
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setPassword(
-    { type: "m.login.password", user: matrixClient.getUserId()!, password: oldPassword },
+    { type: "m.login.password", user: matrixClient.getUserId() ?? undefined, password: oldPassword },
     newPassword,
   );
 }
@@ -878,10 +878,11 @@ export async function bootstrapAll(password?: string): Promise<string> {
         const { getCachedLoginPassword } = await import("../stores/useAuthStore");
         const cachedPassword = getCachedLoginPassword() || password;
         if (cachedPassword) {
-          const userId = matrixClient!.getUserId();
+          const userId = matrixClient?.getUserId();
+          if (!userId) throw new Error("No user ID available for cross-signing auth");
           await makeRequest({
             type: "m.login.password",
-            identifier: { type: "m.id.user", user: userId! },
+            identifier: { type: "m.id.user", user: userId },
             password: cachedPassword,
           });
         } else {

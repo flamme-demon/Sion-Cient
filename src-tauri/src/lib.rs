@@ -239,12 +239,13 @@ fn build_client() -> Result<reqwest::Client, reqwest::Error> {
 /// Try oEmbed for sites that block scraping (YouTube, etc.)
 async fn try_oembed(client: &reqwest::Client, url: &str) -> Option<LinkPreview> {
     // Known oEmbed endpoints
+    let encoded_url = urlencoding::encode(url);
     let oembed_url = if url.contains("youtube.com/") || url.contains("youtu.be/") {
-        format!("https://www.youtube.com/oembed?url={}&format=json", url)
+        format!("https://www.youtube.com/oembed?url={}&format=json", encoded_url)
     } else if url.contains("vimeo.com/") {
-        format!("https://vimeo.com/api/oembed.json?url={}", url)
+        format!("https://vimeo.com/api/oembed.json?url={}", encoded_url)
     } else if url.contains("twitter.com/") || url.contains("x.com/") {
-        format!("https://publish.twitter.com/oembed?url={}", url)
+        format!("https://publish.twitter.com/oembed?url={}", encoded_url)
     } else {
         return None;
     };

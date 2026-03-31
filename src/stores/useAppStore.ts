@@ -68,12 +68,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   mobileView: "sidebar" as MobileView,
   isSpeaking: false,
 
-  setActiveChannel: (id, hasVoice) =>
-    set((s) => ({
+  setActiveChannel: (id, _hasVoice) =>
+    set(() => ({
       activeChannel: id,
       mobileView: "chat" as MobileView,
-      // Only clear voice if switching to a text channel; voice connection is managed by LiveKit
-      connectedVoiceChannel: hasVoice ? s.connectedVoiceChannel : s.connectedVoiceChannel,
     })),
   setConnectedVoice: (id: string | null) => set({ connectedVoiceChannel: id }),
   disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false }),
