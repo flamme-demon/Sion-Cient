@@ -324,7 +324,7 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
     const time = new Date(evt.getTs?.() || Date.now()).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
     // Messages texte
-    if (msgtype === "m.text" || msgtype === "m.notice" || msgtype === "m.emote") {
+    if (msgtype === "m.text" || msgtype === "m.notice" || msgtype === "m.emote" || msgtype === "m.poke") {
       if (!content.body) continue;
 
       // Handle edit events (m.replace)
@@ -497,6 +497,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
         // Auto-select default channel (or first channel as fallback)
         const currentActive = useAppStore.getState().activeChannel;
+        const connectedVoice = useAppStore.getState().connectedVoiceChannel;
         if ((!currentActive || currentActive === "") && channels.length > 0) {
           const { defaultChannel, autoJoinVoice } = useSettingsStore.getState();
           const defaultCh = channels.find((c) => c.id === defaultChannel)
@@ -507,10 +508,13 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           useAppStore.getState().setMobileView(prevMobileView);
 
           // Auto-join voice if the default channel is a voice channel and option is enabled
-          if (autoJoinVoice && defaultCh.hasVoice) {
-            useAppStore.getState().setConnectedVoice(defaultCh.id);
+          if (autoJoinVoice && defaultCh.hasVoice && !connectedVoice) {
+            useAppStore.getState().setConnectingVoice(defaultCh.id);
+            useAppStore.getState().setPendingAutoJoinVoice(defaultCh.id);
           }
         }
+        // Note: auto-join voice only happens on initial channel selection (above).
+        // We do NOT retry on subsequent syncs to avoid reconnect loops (e.g. HMR in dev).
 
         // Check device verification status — only show banner if crypto is ready but NOT verified
         const crypto = client.getCrypto();
@@ -841,7 +845,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
       let msg: ChatMessage | null = null;
 
-      if (msgtype === "m.text" || msgtype === "m.notice" || msgtype === "m.emote") {
+      if (msgtype === "m.text" || msgtype === "m.notice" || msgtype === "m.emote" || msgtype === "m.poke") {
         if (!content.body) return;
         // Parse reply reference in real-time
         let replyTo: ChatMessage["replyTo"];
@@ -884,9 +888,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       if (!msg) return;
       const finalMsg = msg;
 
-      // DM notification
+      // Notifications (Tauri native)
       const currentUserId = client.getUserId();
-      if (senderId !== currentUserId && !document.hasFocus()) {
+      if (senderId !== currentUserId) {
+        const isPoke = msgtype === "m.poke";
         const isDM = room.getDMInviter?.() || (() => {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -896,9 +901,93 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
             return Object.values(directContent).some((rooms) => rooms.includes(room.roomId));
           } catch { return false; }
         })();
-        if (isDM && useSettingsStore.getState().notifyDM && typeof Notification !== "undefined" && Notification.permission === "granted") {
-          const avatarHttpUrl = avatarUrl || undefined;
-          new Notification(sender, { body: finalMsg.text || "📎", icon: avatarHttpUrl });
+
+        const { notificationMode } = useSettingsStore.getState();
+        const connectedVoice = useAppStore.getState().connectedVoiceChannel;
+        const isActiveChannel = connectedVoice === room.roomId;
+        const isMention = currentUserId && content.body?.includes(currentUserId.slice(0, currentUserId.indexOf(":")));
+        const isReplyToMe = content["m.relates_to"]?.["m.in_reply_to"] && (() => {
+          const replyEvtId = content["m.relates_to"]["m.in_reply_to"].event_id;
+          const msgs = get().messages[room.roomId] || [];
+          const repliedMsg = msgs.find((m) => m.eventId === replyEvtId);
+          return repliedMsg?.senderId === currentUserId;
+        })();
+
+        // Poke: always notify
+        // all: active channel + DM + mentions + replies
+        // mentions: DM + @mentions + replies to me
+        // minimal: DM only
+        let shouldNotify = false;
+        if (isPoke) {
+          shouldNotify = true;
+        } else if (notificationMode === "all") {
+          shouldNotify = (isActiveChannel || isDM || isMention || isReplyToMe) && !document.hasFocus();
+        } else if (notificationMode === "mentions") {
+          shouldNotify = isDM || isMention || isReplyToMe;
+        } else if (notificationMode === "minimal") {
+          shouldNotify = isDM;
+        }
+
+        if (shouldNotify && !document.hasFocus()) {
+          const title = isPoke ? `👉 ${sender}` : sender;
+          const body = isPoke ? "Poke!" : (finalMsg.text || "📎");
+          const notifRoomId = room.roomId;
+          const notifEventId = evtId;
+
+          import("@tauri-apps/plugin-notification").then(async ({ sendNotification, isPermissionGranted, requestPermission, registerActionTypes, onAction }) => {
+            let granted = await isPermissionGranted();
+            if (!granted) granted = (await requestPermission()) === "granted";
+            if (!granted) return;
+
+            // Register action type with reply input (once)
+            if (!(window as unknown as Record<string, boolean>).__sionNotifActionsRegistered) {
+              (window as unknown as Record<string, boolean>).__sionNotifActionsRegistered = true;
+              await registerActionTypes([{
+                id: "msg-reply",
+                actions: [
+                  { id: "reply", title: "Répondre", input: true, inputButtonTitle: "Envoyer", inputPlaceholder: "Votre réponse..." },
+                  { id: "open", title: "Ouvrir", foreground: true },
+                ],
+              }]).catch(() => {});
+
+              onAction((notification) => {
+                const extra = notification.extra as Record<string, string> | undefined;
+                if (!extra) return;
+                const actionId = (notification as unknown as Record<string, string>).actionId;
+                if (actionId === "open" || !actionId) {
+                  // Navigate to the room/message
+                  useAppStore.getState().setActiveChannel(extra.roomId, false);
+                  if (extra.eventId) useAppStore.getState().setScrollToMessageId(extra.eventId);
+                }
+                if (actionId === "reply") {
+                  const inputValue = (notification as unknown as Record<string, string>).inputValue;
+                  if (inputValue && extra.roomId) {
+                    import("../services/matrixService").then((ms) => {
+                      ms.sendReply(extra.roomId, extra.eventId, inputValue).catch(console.error);
+                    });
+                  }
+                }
+              }).catch(() => {});
+            }
+
+            sendNotification({
+              title,
+              body,
+              icon: "icons/128x128.png",
+              actionTypeId: "msg-reply",
+              extra: { roomId: notifRoomId, eventId: notifEventId },
+            });
+          }).catch(() => {
+            // Fallback web notification with click handler
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              const n = new Notification(title, { body, icon: "/icons/128x128.png" });
+              n.onclick = () => {
+                window.focus();
+                useAppStore.getState().setActiveChannel(notifRoomId, false);
+                if (notifEventId) useAppStore.getState().setScrollToMessageId(notifEventId);
+              };
+            }
+          });
         }
       }
 

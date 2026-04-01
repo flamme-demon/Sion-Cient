@@ -72,6 +72,8 @@ export function useVoiceChannel() {
         }
         await leaveCurrentVoiceChannel();
       }
+      useAppStore.getState().setConnectingVoice(matrixRoomId);
+      try {
 
       // 1. Essayer MatrixRTC (foci_preferred dans org.matrix.msc3401.call)
       const client = getMatrixClient();
@@ -113,6 +115,7 @@ export function useVoiceChannel() {
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
           setConnectedVoice(matrixRoomId);
+          useAppStore.getState().setConnectingVoice(null);
           const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
           if (joinMuted || isMobileDevice) {
             // Attendre que le track audio soit publié avant de muter
@@ -128,6 +131,7 @@ export function useVoiceChannel() {
       // 2. Fallback : credentials LiveKit manuels
       if (!credentials?.livekitUrl || !credentials?.livekitApiKey || !credentials?.livekitApiSecret) {
         console.warn("[Sion] Connexion vocale impossible : pas de MatrixRTC ni de credentials LiveKit configurés");
+        useAppStore.getState().setConnectingVoice(null);
         return;
       }
 
@@ -141,11 +145,16 @@ export function useVoiceChannel() {
       await joinRoom(matrixRoomId);
       await connect(credentials.livekitUrl, token, matrixRoomId);
       setConnectedVoice(matrixRoomId);
+      useAppStore.getState().setConnectingVoice(null);
       const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (joinMuted || isMobileDevice) {
         if (!useAppStore.getState().isMuted) {
           useAppStore.getState().toggleMute();
         }
+      }
+      } catch (err) {
+        useAppStore.getState().setConnectingVoice(null);
+        throw err;
       }
     },
     [joinRoom, connect, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],

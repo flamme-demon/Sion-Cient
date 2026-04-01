@@ -620,6 +620,15 @@ export async function sendFileMessage(roomId: string, file: File) {
   return matrixClient.sendMessage(roomId, content as never);
 }
 
+export async function sendPoke(roomId: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.room.message" as any, {
+    msgtype: "m.poke",
+    body: "👉 Poke!",
+  });
+}
+
 export async function sendImageUrl(roomId: string, imageUrl: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // Download the image and upload to Matrix media server

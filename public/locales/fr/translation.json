@@ -1,4 +1,7 @@
 {
+  "app": {
+    "pressBackAgain": "Appuyez encore pour quitter"
+  },
   "server": {
     "online": "En ligne",
     "name": "Mon Serveur"
@@ -34,7 +37,8 @@
     "connected": "Connecté",
     "disconnect": "Déconnecter",
     "pushToTalk": "Appuyer pour parler",
-    "speaking": "Parle..."
+    "speaking": "Parle...",
+    "connecting": "Connexion..."
   },
   "controls": {
     "mute": "Mute",
@@ -99,6 +103,12 @@
     "errorServerUnreachable": "Serveur inaccessible",
     "errorRegistrationDisabled": "L'inscription est désactivée sur ce serveur",
     "errorUsernameExists": "Ce nom d'utilisateur est déjà pris",
+    "errorInvalidUsername": "Nom d'utilisateur invalide (lettres, chiffres, -, _, . uniquement)",
+    "errorWeakPassword": "Mot de passe trop faible",
+    "errorExclusive": "Ce nom d'utilisateur est réservé",
+    "errorForbidden": "Action non autorisée",
+    "errorInvalidToken": "Token d'inscription invalide ou expiré",
+    "errorRateLimited": "Trop de tentatives, réessayez plus tard",
     "errorGeneric": "Une erreur est survenue",
     "registrationToken": "Token d'inscription",
     "registrationTokenPlaceholder": "Entrez le token fourni par l'administrateur",
@@ -146,6 +156,11 @@
   },
   "settings": {
     "title": "Paramètres",
+    "tabGeneral": "Général",
+    "tabAudio": "Audio",
+    "tabChat": "Chat",
+    "tabShortcuts": "Raccourcis",
+    "tabAdvanced": "Avancé",
     "defaultChannels": "Canal par défaut",
     "defaultChannel": "Canal au démarrage",
     "noDefault": "Aucun (premier canal)",
@@ -155,6 +170,10 @@
     "audioInput": "Microphone",
     "audioOutput": "Haut-parleur",
     "defaultDevice": "Par défaut",
+    "micTestStart": "Tester le micro",
+    "micTestStop": "Arrêter le test",
+    "speakerTestStart": "Tester le haut-parleur",
+    "speakerTesting": "Lecture en cours...",
     "mutedSpeakAlert": "Détection parler muté",
     "mutedSpeakAlertDesc": "Alerte quand vous parlez en étant muté",
     "micThreshold": "Seuil de détection",
@@ -188,6 +207,12 @@
     "notifications": "Notifications",
     "notifyDM": "Notifications MP",
     "notifyDMDesc": "Recevoir une notification pour les messages privés",
+    "notificationMode": "Notifications",
+    "notificationAll": "Tout",
+    "notifyAll": "Canal actif, MP, @mentions et réponses à vos messages",
+    "notifyMentions": "MP, @mentions et réponses à vos messages",
+    "notifyMinimal": "Messages privés uniquement",
+    "notifyPokeAlways": "Les Poke notifient toujours.",
     "account": "Compte",
     "displayName": "Nom d'affichage",
     "changeAvatar": "Changer l'avatar",

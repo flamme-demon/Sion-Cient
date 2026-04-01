@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 export type ChannelSortMode = "created" | "name" | "activity";
 export type SidebarView = "channels" | "dm";
 export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
+export type NotificationMode = "all" | "mentions" | "minimal";
 
 interface SettingsState {
   mutedSpeakAlert: boolean;
@@ -12,6 +13,7 @@ interface SettingsState {
   muteShortcut: string;
   deafenShortcut: string;
   notifyDM: boolean;
+  notificationMode: NotificationMode;
   channelSort: ChannelSortMode;
   sidebarView: SidebarView;
   noiseSuppression: boolean;
@@ -43,6 +45,7 @@ interface SettingsState {
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
   setEnableGifs: (v: boolean) => void;
+  setNotificationMode: (v: NotificationMode) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -66,6 +69,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultChannel: "",
       autoJoinVoice: false,
       enableGifs: false,
+      notificationMode: "mentions" as NotificationMode,
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
       setJoinMuted: (v) => set({ joinMuted: v }),
@@ -85,6 +89,7 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
+      setNotificationMode: (v) => set({ notificationMode: v }),
     }),
     { name: "sion-settings" },
   ),

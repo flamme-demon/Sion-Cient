@@ -1,9 +1,11 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useAppStore } from "../../stores/useAppStore";
 import { useSettingsStore, type ChannelSortMode } from "../../stores/useSettingsStore";
 import { SortIcon } from "../icons";
 import { ChannelItem } from "./ChannelItem";
+import { MatrixRain } from "./MatrixRain";
 
 const SORT_OPTIONS: ChannelSortMode[] = ["created", "name", "activity"];
 
@@ -16,6 +18,7 @@ const SORT_KEYS: Record<ChannelSortMode, string> = {
 export function ChannelList() {
   const { t } = useTranslation();
   const channels = useMatrixStore((s) => s.channels);
+  const connectingVoice = useAppStore((s) => s.connectingVoiceChannel);
   const channelSort = useSettingsStore((s) => s.channelSort);
   const setChannelSort = useSettingsStore((s) => s.setChannelSort);
   const sidebarView = useSettingsStore((s) => s.sidebarView);
@@ -140,11 +143,31 @@ export function ChannelList() {
           )}
         </div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {sortedChannels.map((ch) => (
-          <ChannelItem key={ch.id} channel={ch} />
-        ))}
-      </div>
+      {connectingVoice ? (
+        <div style={{
+          flex: 1, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          position: 'relative', overflow: 'hidden', borderRadius: 12,
+          minHeight: 200,
+        }}>
+          <MatrixRain width={236} height={200} />
+          <div style={{
+            position: 'absolute', bottom: 16,
+            fontSize: 12, fontWeight: 600, color: '#0f0',
+            textShadow: '0 0 8px rgba(0,255,70,0.6)',
+            letterSpacing: '0.1em',
+            animation: 'pulse 1.5s ease-in-out infinite',
+          }}>
+            {t("voice.connecting")}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {sortedChannels.map((ch) => (
+            <ChannelItem key={ch.id} channel={ch} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

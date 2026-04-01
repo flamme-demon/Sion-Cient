@@ -28,9 +28,12 @@ interface AppState {
   replyingTo: { eventId: string; senderId: string; user: string; text: string } | null;
   mobileView: MobileView;
   isSpeaking: boolean;
+  pendingAutoJoinVoice: string | null;
+  connectingVoiceChannel: string | null;
 
   setActiveChannel: (id: string, hasVoice: boolean) => void;
   setConnectedVoice: (id: string | null) => void;
+  setConnectingVoice: (id: string | null) => void;
   disconnectVoice: () => void;
   toggleMute: () => void;
   toggleDeafen: () => void;
@@ -50,6 +53,7 @@ interface AppState {
   setScrollToMessageId: (id: string | null) => void;
   setMobileView: (view: MobileView) => void;
   setIsSpeaking: (v: boolean) => void;
+  setPendingAutoJoinVoice: (roomId: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -67,6 +71,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   replyingTo: null,
   mobileView: "sidebar" as MobileView,
   isSpeaking: false,
+  pendingAutoJoinVoice: null,
+  connectingVoiceChannel: null,
 
   setActiveChannel: (id, _hasVoice) =>
     set(() => ({
@@ -141,4 +147,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setScrollToMessageId: (id) => set({ scrollToMessageId: id }),
   setMobileView: (view) => set({ mobileView: view }),
   setIsSpeaking: (v) => set({ isSpeaking: v }),
+  setPendingAutoJoinVoice: (roomId) => set({ pendingAutoJoinVoice: roomId }),
+  setConnectingVoice: (id) => set({ connectingVoiceChannel: id }),
 }));

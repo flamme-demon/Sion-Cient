@@ -169,6 +169,8 @@ export function AccountPopover() {
         left: 0,
         right: 0,
         marginBottom: 8,
+        maxHeight: 'calc(100dvh - 80px - env(safe-area-inset-top, 0px))',
+        overflowY: 'auto',
         background: 'var(--color-surface-container)',
         borderRadius: 16,
         padding: 16,

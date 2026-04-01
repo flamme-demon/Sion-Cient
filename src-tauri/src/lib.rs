@@ -351,6 +351,11 @@ fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
 }
 
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle<TauriRuntime>) {
+    app.exit(0);
+}
+
 /// Clean up old Sion transcode temp files (older than 24 hours).
 fn cleanup_old_transcodes() {
     let tmp_dir = std::env::temp_dir();
@@ -453,21 +458,17 @@ pub fn run() {
 
     let builder = tauri::Builder::<TauriRuntime>::default();
 
-    #[cfg(feature = "cef")]
-    let builder = builder.command_line_args([
-        ("--disable-features".to_string(), Some("PasswordManager,AutofillServerCommunication".to_string())),
-    ]);
-
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .manage(shortcuts)
-        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video, list_audio_devices]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, open_url, fetch_link_preview, transcode_video, list_audio_devices, exit_app]);
 
     #[cfg(target_os = "android")]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![open_url, fetch_link_preview, transcode_video]);
+        .invoke_handler(tauri::generate_handler![open_url, fetch_link_preview, transcode_video, exit_app]);
 
     builder
+            .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -475,6 +476,26 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+
+            // Disable Chromium password manager via CEF preferences
+            #[cfg(feature = "cef")]
+            {
+                use cef::{request_context_get_global_context, value_create, CefString, ImplPreferenceManager, ImplValue};
+
+                if let Some(ctx) = request_context_get_global_context() {
+                    if let Some(mut value) = value_create() {
+                        value.set_bool(0);
+                        let name = CefString::from("credentials_enable_service");
+                        let mut error = CefString::default();
+                        let result = ImplPreferenceManager::set_preference(&ctx, Some(&name), Some(&mut value), Some(&mut error));
+                        if result != 0 {
+                            log::info!("[Sion] Disabled Chromium password manager");
+                        } else {
+                            log::warn!("[Sion] Failed to disable password manager: {:?}", error.to_string());
+                        }
+                    }
+                }
             }
 
             // Global shortcut listener using rdev — desktop only

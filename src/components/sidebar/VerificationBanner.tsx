@@ -312,12 +312,13 @@ export function VerificationBanner() {
               )}
 
               <input
-                type="password"
+                type="text"
                 value={recoveryKey}
                 onChange={(e) => setRecoveryKey(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="EsT9 M5a5 ..."
                 autoComplete="off"
+                name="sion-recovery"
                 style={{
                   width: "100%", padding: "10px 12px",
                   border: "none", outline: "none",
@@ -326,6 +327,7 @@ export function VerificationBanner() {
                   color: "var(--color-on-surface)",
                   background: "var(--color-surface-container-high)",
                   boxSizing: "border-box",
+                  WebkitTextSecurity: "disc" as never,
                 }}
               />
 

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import i18n from "../i18n";
 import type { AuthCredentials } from "../types/auth";
 import * as matrixService from "../services/matrixService";
 import type { RegistrationFlowInfo } from "../services/matrixService";
@@ -97,8 +98,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       saveCredentials(credentials);
       set({ credentials, isLoading: false });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Une erreur est survenue";
-      set({ error: message, isLoading: false });
+      set({ error: mapMatrixError(err), isLoading: false });
       throw err;
     }
   },
@@ -116,8 +116,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ isSuspended: true });
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Une erreur est survenue";
-      set({ error: message, isLoading: false, isRegistering: false });
+      set({ error: mapMatrixError(err), isLoading: false, isRegistering: false });
       throw err;
     }
   },
@@ -178,8 +177,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (suspended) set({ isSuspended: true });
     } catch (err) {
       clearCredentials();
-      const message = err instanceof Error ? err.message : "Session expirée";
-      set({ error: message, isLoading: false, credentials: null });
+      set({ error: mapMatrixError(err), isLoading: false, credentials: null });
     }
   },
 
@@ -216,6 +214,42 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   clearError: () => set({ error: null }),
 }));
+
+/** Map Matrix error codes to i18n keys */
+function mapMatrixError(err: unknown): string {
+  const e = err as { errcode?: string; data?: { errcode?: string }; message?: string };
+  const code = e.errcode || e.data?.errcode;
+  const t = i18n.t.bind(i18n);
+
+  switch (code) {
+    case "M_USER_IN_USE":
+      return t("auth.errorUsernameExists");
+    case "M_INVALID_USERNAME":
+      return t("auth.errorInvalidUsername");
+    case "M_WEAK_PASSWORD":
+      return t("auth.errorWeakPassword");
+    case "M_EXCLUSIVE":
+      return t("auth.errorExclusive");
+    case "M_FORBIDDEN":
+      return t("auth.errorForbidden");
+    case "M_INVALID_TOKEN":
+    case "M_UNAUTHORIZED":
+      return t("auth.errorInvalidToken");
+    case "M_LIMIT_EXCEEDED":
+      return t("auth.errorRateLimited");
+    case "M_UNKNOWN":
+      // Check if it's a connection error
+      if (e.message && /fetch|network|ECONNREFUSED/i.test(e.message)) {
+        return t("auth.errorServerUnreachable");
+      }
+      return t("auth.errorGeneric");
+    default:
+      if (err instanceof Error && /fetch|network|ECONNREFUSED/i.test(err.message)) {
+        return t("auth.errorServerUnreachable");
+      }
+      return err instanceof Error ? err.message : t("auth.errorGeneric");
+  }
+}
 
 function getLiveKitFromExisting(credentials: AuthCredentials | null) {
   if (!credentials) return {};

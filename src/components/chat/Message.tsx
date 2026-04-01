@@ -390,6 +390,17 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
     }
   };
 
+  const handlePoke = async () => {
+    if (!message.senderId || isOwnMessage) return;
+    setShowUserPopover(false);
+    try {
+      const roomId = await matrixService.createOrGetDMRoom(message.senderId);
+      await matrixService.sendPoke(roomId);
+    } catch (err) {
+      console.error("[Sion] Failed to poke:", err);
+    }
+  };
+
   const handleKickRoom = async () => {
     if (!activeChannel || !message.senderId || popoverLoading) return;
     setPopoverLoading(true);
@@ -556,6 +567,13 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
                     onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
                   >
                     <MessageBubbleIcon /> Message
+                  </button>
+                  {/* Poke */}
+                  <button onClick={handlePoke} style={btnStyle}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    👉 Poke
                   </button>
 
                   {/* Moderation */}

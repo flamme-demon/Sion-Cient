@@ -273,7 +273,7 @@ export function LoginPage() {
               type="url"
               value={homeserver}
               onChange={(e) => setHomeserver(e.target.value)}
-              placeholder="https://matrix.example.com"
+              placeholder="https://zion.matrix.org"
               required
             />
           </div>
@@ -285,7 +285,7 @@ export function LoginPage() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="flamme"
+              placeholder="neo"
               required
               autoComplete="off"
               name="sion-identity"
@@ -322,7 +322,7 @@ export function LoginPage() {
                   type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder={t("auth.displayName")}
+                  placeholder="Trinity"
                 />
               </div>
 

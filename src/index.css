@@ -231,6 +231,28 @@ body {
   font-size: 12px;
 }
 
+/* Mic threshold slider — transparent track, visible thumb only */
+.mic-threshold-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.mic-threshold-slider::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 8px;
+}
+.mic-threshold-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 4px;
+  height: 20px;
+  border-radius: 2px;
+  background: var(--color-primary);
+  border: none;
+  margin-top: -6px;
+  box-shadow: 0 0 4px rgba(0,0,0,0.4);
+}
+
 /* Mobile responsive */
 @media (max-width: 767px) {
   body {

@@ -1,4 +1,7 @@
 {
+  "app": {
+    "pressBackAgain": "Press back again to exit"
+  },
   "server": {
     "online": "Online",
     "name": "My Server"
@@ -34,7 +37,8 @@
     "connected": "Connected",
     "disconnect": "Disconnect",
     "pushToTalk": "Push to talk",
-    "speaking": "Speaking..."
+    "speaking": "Speaking...",
+    "connecting": "Connecting..."
   },
   "controls": {
     "mute": "Mute",
@@ -99,6 +103,12 @@
     "errorServerUnreachable": "Server unreachable",
     "errorRegistrationDisabled": "Registration is disabled on this server",
     "errorUsernameExists": "This username is already taken",
+    "errorInvalidUsername": "Invalid username (only letters, numbers, -, _, . allowed)",
+    "errorWeakPassword": "Password is too weak",
+    "errorExclusive": "This username is reserved",
+    "errorForbidden": "Action not allowed",
+    "errorInvalidToken": "Invalid or expired registration token",
+    "errorRateLimited": "Too many attempts, please try again later",
     "errorGeneric": "An error occurred",
     "registrationToken": "Registration token",
     "registrationTokenPlaceholder": "Enter the token provided by the administrator",
@@ -146,6 +156,11 @@
   },
   "settings": {
     "title": "Settings",
+    "tabGeneral": "General",
+    "tabAudio": "Audio",
+    "tabChat": "Chat",
+    "tabShortcuts": "Shortcuts",
+    "tabAdvanced": "Advanced",
     "defaultChannels": "Default Channel",
     "defaultChannel": "Channel on startup",
     "noDefault": "None (first channel)",
@@ -155,6 +170,10 @@
     "audioInput": "Microphone",
     "audioOutput": "Speaker",
     "defaultDevice": "Default",
+    "micTestStart": "Test microphone",
+    "micTestStop": "Stop test",
+    "speakerTestStart": "Test speaker",
+    "speakerTesting": "Playing...",
     "mutedSpeakAlert": "Muted speak detection",
     "mutedSpeakAlertDesc": "Alert when you speak while muted",
     "micThreshold": "Detection threshold",
@@ -188,6 +207,12 @@
     "notifications": "Notifications",
     "notifyDM": "DM Notifications",
     "notifyDMDesc": "Receive notifications for direct messages",
+    "notificationMode": "Notifications",
+    "notificationAll": "All",
+    "notifyAll": "Active channel, DMs, @mentions and replies to your messages",
+    "notifyMentions": "DMs, @mentions and replies to your messages",
+    "notifyMinimal": "Direct messages only",
+    "notifyPokeAlways": "Pokes always notify.",
     "account": "Account",
     "displayName": "Display Name",
     "changeAvatar": "Change avatar",
