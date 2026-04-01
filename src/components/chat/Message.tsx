@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { CrownIcon, ShieldIcon, FileIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon } from "../icons";
+import { CrownIcon, ShieldIcon, FileIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
+import { useAdminStore } from "../../stores/useAdminStore";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { LinkPreview } from "./LinkPreview";
@@ -352,19 +353,75 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
   const [reactionPickerSearch, setReactionPickerSearch] = useState("");
   const [reactionPickerGroup, setReactionPickerGroup] = useState(0);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
+  const [showUserPopover, setShowUserPopover] = useState(false);
+  const userPopoverRef = useRef<HTMLDivElement>(null);
 
-  // Close reaction picker on outside click
+  // Close reaction picker / user popover on outside click
   useEffect(() => {
-    if (!showReactionPicker) return;
+    if (!showReactionPicker && !showUserPopover) return;
     const handleClick = (e: MouseEvent) => {
-      if (reactionPickerRef.current && !reactionPickerRef.current.contains(e.target as Node)) {
+      if (showReactionPicker && reactionPickerRef.current && !reactionPickerRef.current.contains(e.target as Node)) {
         setShowReactionPicker(false);
         setReactionPickerSearch("");
+      }
+      if (showUserPopover && userPopoverRef.current && !userPopoverRef.current.contains(e.target as Node)) {
+        setShowUserPopover(false);
       }
     };
     window.addEventListener("mousedown", handleClick);
     return () => window.removeEventListener("mousedown", handleClick);
-  }, [showReactionPicker]);
+  }, [showReactionPicker, showUserPopover]);
+
+  const isAdmin = useAdminStore((s) => s.isAdmin);
+  const myPowerLevel = activeChannel ? matrixService.getUserPowerLevel(activeChannel) : 0;
+  const targetPowerLevel = activeChannel && message.senderId ? matrixService.getMemberPowerLevel(activeChannel, message.senderId) : 0;
+  const canModerateUser = myPowerLevel >= 50 && myPowerLevel > targetPowerLevel;
+  const canChangeRole = myPowerLevel >= 100 && myPowerLevel > targetPowerLevel;
+  const [popoverLoading, setPopoverLoading] = useState(false);
+
+  const handleOpenDM = async () => {
+    if (!message.senderId || isOwnMessage) return;
+    setShowUserPopover(false);
+    try {
+      const roomId = await matrixService.createOrGetDMRoom(message.senderId);
+      useAppStore.getState().setActiveChannel(roomId, false);
+    } catch (err) {
+      console.error("[Sion] Failed to open DM:", err);
+    }
+  };
+
+  const handleKickRoom = async () => {
+    if (!activeChannel || !message.senderId || popoverLoading) return;
+    setPopoverLoading(true);
+    try {
+      await matrixService.kickUser(activeChannel, message.senderId);
+      setShowUserPopover(false);
+    } catch (err) {
+      console.error("[Sion] Failed to kick:", err);
+    } finally { setPopoverLoading(false); }
+  };
+
+  const handleBan = async () => {
+    if (!activeChannel || !message.senderId || popoverLoading) return;
+    setPopoverLoading(true);
+    try {
+      await matrixService.banUser(activeChannel, message.senderId);
+      setShowUserPopover(false);
+    } catch (err) {
+      console.error("[Sion] Failed to ban:", err);
+    } finally { setPopoverLoading(false); }
+  };
+
+  const handleSetRole = async (level: number) => {
+    if (!activeChannel || !message.senderId || popoverLoading) return;
+    setPopoverLoading(true);
+    try {
+      await matrixService.setUserPowerLevel(activeChannel, message.senderId, level);
+      setShowUserPopover(false);
+    } catch (err) {
+      console.error("[Sion] Failed to set role:", err);
+    } finally { setPopoverLoading(false); }
+  };
 
   const canModerate = activeChannel
     ? matrixService.getUserPowerLevel(activeChannel) >= matrixService.getStatePowerLevel(activeChannel)
@@ -455,8 +512,86 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
     }}>
       {/* Avatar */}
       {showHeader ? (
-        <div style={{ flexShrink: 0 }}>
+        <div
+          style={{ flexShrink: 0, cursor: isOwnMessage ? 'default' : 'pointer', position: 'relative' }}
+          onClick={() => { if (!isOwnMessage) setShowUserPopover((v) => !v); }}
+        >
           <UserAvatar name={message.user} speaking={false} size="md" avatarUrl={message.avatarUrl} />
+          {/* User popover */}
+          {showUserPopover && !isOwnMessage && (
+            <div ref={userPopoverRef} style={{
+              position: 'absolute',
+              top: 0,
+              left: 44,
+              zIndex: 200,
+              background: 'var(--color-surface-container)',
+              borderRadius: 16,
+              padding: 12,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+              minWidth: 180,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                <UserAvatar name={message.user} speaking={false} size="md" avatarUrl={message.avatarUrl} />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--color-on-surface)' }}>{message.user}</div>
+                  <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>{message.senderId}</div>
+                </div>
+              </div>
+              {(() => {
+                const btnStyle: React.CSSProperties = {
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  padding: '8px 12px', borderRadius: 10, border: 'none',
+                  background: 'transparent', color: 'var(--color-on-surface)',
+                  cursor: 'pointer', fontSize: 12, fontFamily: 'inherit',
+                  transition: 'background 150ms',
+                };
+                const targetRole = targetPowerLevel >= 100 ? 'admin' : targetPowerLevel >= 50 ? 'moderator' : 'user';
+                return (<>
+                  {/* DM */}
+                  <button onClick={handleOpenDM} style={{ ...btnStyle, background: 'var(--color-primary)', color: 'var(--color-on-primary)', fontWeight: 500 }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.85'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+                  >
+                    <MessageBubbleIcon /> Message
+                  </button>
+
+                  {/* Moderation */}
+                  {canModerateUser && (<>
+                    <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 0' }} />
+                    <button onClick={handleKickRoom} disabled={popoverLoading} style={{ ...btnStyle, opacity: popoverLoading ? 0.5 : 1 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    >{t("contextMenu.kickRoom")}</button>
+                    <button onClick={handleBan} disabled={popoverLoading} style={{ ...btnStyle, color: 'var(--color-error)', opacity: popoverLoading ? 0.5 : 1 }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-error-container)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    >{t("contextMenu.ban")}</button>
+                  </>)}
+
+                  {/* Role change */}
+                  {canChangeRole && (<>
+                    <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 0' }} />
+                    <div style={{ padding: '4px 12px 2px', fontSize: 10, color: 'var(--color-outline)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {t("contextMenu.changeRole")}
+                    </div>
+                    {([['user', 0], ['moderator', 50]] as const).map(([role, level]) => (
+                      <button key={role} onClick={() => handleSetRole(level)} disabled={popoverLoading || targetRole === role}
+                        style={{ ...btnStyle, fontWeight: targetRole === role ? 600 : 400, color: targetRole === role ? 'var(--color-primary)' : 'var(--color-on-surface)', cursor: targetRole === role ? 'default' : 'pointer' }}
+                        onMouseEnter={(e) => { if (targetRole !== role) e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        {role === 'moderator' ? t("contextMenu.roleModerator") : t("contextMenu.roleUser")}
+                        {targetRole === role && ' ✓'}
+                      </button>
+                    ))}
+                  </>)}
+                </>);
+              })()}
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ width: 36, flexShrink: 0 }} />
@@ -480,7 +615,10 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
             flexDirection: isOwnMessage ? 'row-reverse' : 'row',
             padding: isOwnMessage ? '0 4px 0 0' : '0 0 0 4px',
           }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span
+              style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: isOwnMessage ? 'default' : 'pointer' }}
+              onClick={() => { if (!isOwnMessage) setShowUserPopover((v) => !v); }}
+            >
               {roleIcon(message.role)}
               <span style={{ fontWeight: 600, color: roleColor(message.role), fontSize: 12, letterSpacing: '0.01em' }}>
                 {message.user}

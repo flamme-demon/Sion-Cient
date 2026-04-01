@@ -53,6 +53,28 @@ export interface RegistrationFlowInfo {
   disabled?: boolean;
 }
 
+/** Check if the current user account is suspended */
+export async function checkSuspended(): Promise<boolean> {
+  if (!matrixClient) return false;
+  const userId = matrixClient.getUserId();
+  if (!userId) return false;
+  try {
+    const baseUrl = matrixClient.getHomeserverUrl();
+    const token = matrixClient.getAccessToken();
+    const res = await fetch(
+      `${baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/displayname`,
+      { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ displayname: userId.slice(1, userId.indexOf(":")) }) },
+    );
+    if (res.status === 403) {
+      const data = await res.json().catch(() => ({}));
+      return data.errcode === "M_USER_SUSPENDED";
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /** Detect registration flows supported by the homeserver */
 export async function getRegistrationFlows(homeserver: string): Promise<RegistrationFlowInfo> {
   try {
@@ -214,6 +236,7 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
       userId: config.userId,
       deviceId,
       cryptoCallbacks,
+      disableVoip: true,
     });
   } else if (config.password) {
     const tempClient = sdk.createClient({ baseUrl: config.homeserverUrl });
@@ -228,6 +251,7 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
       userId: loginResponse.user_id,
       deviceId: loginResponse.device_id,
       cryptoCallbacks,
+      disableVoip: true,
     });
   } else {
     throw new Error("Either accessToken or password must be provided");
@@ -594,6 +618,25 @@ export async function sendFileMessage(roomId: string, file: File) {
   };
 
   return matrixClient.sendMessage(roomId, content as never);
+}
+
+export async function sendImageUrl(roomId: string, imageUrl: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  // Download the image and upload to Matrix media server
+  const resp = await fetch(imageUrl);
+  if (!resp.ok) throw new Error("Failed to fetch image");
+  const blob = await resp.blob();
+  const file = new File([blob], "gif.gif", { type: "image/gif" });
+  const uploadResp = await matrixClient.uploadContent(file, { type: "image/gif" });
+  const mxcUrl = uploadResp.content_uri || "";
+  if (!mxcUrl) throw new Error("Upload failed");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.room.message" as any, {
+    msgtype: "m.image",
+    body: "GIF",
+    url: mxcUrl,
+    info: { mimetype: "image/gif", size: blob.size },
+  });
 }
 
 export async function createOrGetDMRoom(userId: string): Promise<string> {

@@ -351,11 +351,31 @@ fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
 }
 
+/// Clean up old Sion transcode temp files (older than 24 hours).
+fn cleanup_old_transcodes() {
+    let tmp_dir = std::env::temp_dir();
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(24 * 3600);
+    if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if (name_str.starts_with("sion_in_") || name_str.starts_with("sion_out_"))
+                && entry.metadata().and_then(|m| m.modified()).map(|t| t < cutoff).unwrap_or(false)
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 /// Transcode a video URL to WebM (VP9+Opus) using system ffmpeg.
 /// Returns base64-encoded WebM data.
 #[tauri::command]
 async fn transcode_video(url: String) -> Result<String, String> {
     use base64::Engine;
+
+    // Clean up old temp files on each transcode call
+    cleanup_old_transcodes();
 
     // Hash URL for temp file naming
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -396,6 +416,7 @@ async fn transcode_video(url: String) -> Result<String, String> {
     let _ = std::fs::remove_file(&input_path);
 
     if !output.status.success() {
+        let _ = std::fs::remove_file(&output_path);
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("ffmpeg error: {}", stderr));
     }
@@ -431,6 +452,11 @@ pub fn run() {
     let shortcuts_clone = shortcuts.clone();
 
     let builder = tauri::Builder::<TauriRuntime>::default();
+
+    #[cfg(feature = "cef")]
+    let builder = builder.command_line_args([
+        ("--disable-features".to_string(), Some("PasswordManager,AutofillServerCommunication".to_string())),
+    ]);
 
     #[cfg(not(target_os = "android"))]
     let builder = builder

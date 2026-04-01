@@ -6,9 +6,13 @@ import { FilePreview } from "./FilePreview";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
+
+const TENOR_API_KEY = "LIVDSRZULELA";
+const TENOR_BASE = "https://g.tenor.com/v1";
 // Match VOICE_BAR_HEIGHT from MobileVoiceBar (avoid circular import)
 const VOICE_BAR_HEIGHT = 120;
 
@@ -41,11 +45,19 @@ export function ChatInput() {
   const [emojiResults, setEmojiResults] = useState<{ shortcode: string; emoji: string }[]>([]);
   const [emojiIndex, setEmojiIndex] = useState(0);
 
-  // Emoji picker panel
+  // Emoji/GIF picker panel
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [pickerTab, setPickerTab] = useState<"emoji" | "gif">("emoji");
   const [emojiPickerSearch, setEmojiPickerSearch] = useState("");
   const [emojiPickerGroup, setEmojiPickerGroup] = useState(0);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const enableGifs = useSettingsStore((s) => s.enableGifs);
+
+  // GIF state
+  const [gifSearch, setGifSearch] = useState("");
+  const [gifResults, setGifResults] = useState<{ id: string; url: string; preview: string; width: number; height: number }[]>([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const gifDebounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Message history (session-only)
   const messageHistory = useRef<string[]>([]);
@@ -56,6 +68,48 @@ export function ChatInput() {
   const channelName = channels.find((c) => c.id === activeChannel)?.name || "general";
 
   // Close emoji picker on outside click/touch
+  // Fetch GIFs from Tenor (only when enabled and tab is active)
+  useEffect(() => {
+    if (!showEmojiPicker || pickerTab !== "gif" || !enableGifs) return;
+    clearTimeout(gifDebounceRef.current);
+    gifDebounceRef.current = setTimeout(async () => {
+      setGifLoading(true);
+      try {
+        const endpoint = gifSearch.trim() ? "search" : "trending";
+        const params = new URLSearchParams({ key: TENOR_API_KEY, limit: "30", media_filter: "minimal" });
+        if (gifSearch.trim()) params.set("q", gifSearch.trim());
+        const res = await fetch(`${TENOR_BASE}/${endpoint}?${params}`);
+        const data = await res.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setGifResults((data.results || []).map((r: any) => {
+          const media = r.media?.[0] || {};
+          return {
+            id: r.id,
+            url: media.gif?.url || media.mediumgif?.url || "",
+            preview: media.tinygif?.url || media.nanogif?.url || "",
+            width: media.tinygif?.dims?.[0] || 200,
+            height: media.tinygif?.dims?.[1] || 150,
+          };
+        }));
+      } catch {
+        setGifResults([]);
+      } finally {
+        setGifLoading(false);
+      }
+    }, gifSearch.trim() ? 400 : 0);
+    return () => clearTimeout(gifDebounceRef.current);
+  }, [showEmojiPicker, pickerTab, gifSearch, enableGifs]);
+
+  const sendGif = async (gifUrl: string) => {
+    if (!activeChannel || !gifUrl) return;
+    setShowEmojiPicker(false);
+    try {
+      await matrixService.sendImageUrl(activeChannel, gifUrl);
+    } catch (err) {
+      console.error("[Sion] Failed to send GIF:", err);
+    }
+  };
+
   useEffect(() => {
     if (!showEmojiPicker) return;
     const handleClick = (e: MouseEvent | TouchEvent) => {
@@ -80,6 +134,13 @@ export function ChatInput() {
       textareaRef.current?.focus();
     }
   }, [editingMessage]);
+
+  // Focus textarea when replying to a message
+  useEffect(() => {
+    if (replyingTo) {
+      textareaRef.current?.focus();
+    }
+  }, [replyingTo]);
 
   const autoGrow = useCallback(() => {
     const el = textareaRef.current;
@@ -491,7 +552,7 @@ export function ChatInput() {
                 <EmojiIcon />
               </button>
 
-              {/* Emoji picker panel */}
+              {/* Emoji/GIF picker panel */}
               {showEmojiPicker && (
                 <div
                   style={{
@@ -511,95 +572,128 @@ export function ChatInput() {
                     zIndex: 200,
                   }}
                 >
-                  {/* Search */}
-                  <div style={{ padding: '10px 10px 6px 10px' }}>
-                    <input
-                      value={emojiPickerSearch}
-                      onChange={(e) => setEmojiPickerSearch(e.target.value)}
-                      placeholder="Rechercher..."
-                      autoFocus={!isMobile}
+                  {/* Tab bar: Emoji | GIF */}
+                  <div style={{ display: 'flex', borderBottom: '1px solid var(--color-outline-variant)' }}>
+                    <button
+                      onMouseDown={(e) => { e.preventDefault(); setPickerTab("emoji"); }}
                       style={{
-                        width: '100%',
-                        padding: '8px 12px',
-                        borderRadius: 12,
-                        border: '1px solid var(--color-outline-variant)',
-                        background: 'var(--color-surface-container-high)',
-                        color: 'var(--color-on-surface)',
-                        fontSize: 13,
-                        fontFamily: 'inherit',
-                        outline: 'none',
-                        boxSizing: 'border-box',
+                        flex: 1, padding: '10px 0', border: 'none', background: 'transparent',
+                        fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                        color: pickerTab === "emoji" ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
+                        borderBottom: pickerTab === "emoji" ? '2px solid var(--color-primary)' : '2px solid transparent',
                       }}
-                    />
+                    >Emoji</button>
+                    <button
+                      onMouseDown={(e) => { e.preventDefault(); setPickerTab("gif"); }}
+                      style={{
+                        flex: 1, padding: '10px 0', border: 'none', background: 'transparent',
+                        fontSize: 13, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                        color: pickerTab === "gif" ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
+                        borderBottom: pickerTab === "gif" ? '2px solid var(--color-primary)' : '2px solid transparent',
+                      }}
+                    >GIF</button>
                   </div>
 
-                  {/* Category tabs (hidden during search) */}
-                  {emojiPickerSearch.length < 2 && (
-                    <div style={{
-                      display: 'flex',
-                      gap: 0,
-                      padding: '0 6px',
-                      borderBottom: '1px solid var(--color-outline-variant)',
-                    }}>
-                      {EMOJI_GROUPS.map((g) => (
-                        <button
-                          key={g.id}
-                          onMouseDown={(e) => { e.preventDefault(); setEmojiPickerGroup(g.id); }}
-                          title={g.label}
-                          style={{
-                            flex: 1,
-                            padding: '6px 0',
-                            border: 'none',
-                            background: 'transparent',
-                            fontSize: 16,
-                            cursor: 'pointer',
-                            borderBottom: emojiPickerGroup === g.id ? '2px solid var(--color-primary)' : '2px solid transparent',
-                            opacity: emojiPickerGroup === g.id ? 1 : 0.5,
-                            transition: 'all 150ms',
+                  {/* === EMOJI TAB === */}
+                  {pickerTab === "emoji" && (<>
+                    <div style={{ padding: '10px 10px 6px 10px' }}>
+                      <input
+                        value={emojiPickerSearch}
+                        onChange={(e) => setEmojiPickerSearch(e.target.value)}
+                        placeholder={t("chat.searchEmoji")}
+                        autoFocus={!isMobile}
+                        style={{
+                          width: '100%', padding: '8px 12px', borderRadius: 12,
+                          border: '1px solid var(--color-outline-variant)',
+                          background: 'var(--color-surface-container-high)',
+                          color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit',
+                          outline: 'none', boxSizing: 'border-box',
+                        }}
+                      />
+                    </div>
+
+                    {emojiPickerSearch.length < 2 && (
+                      <div style={{ display: 'flex', gap: 0, padding: '0 6px', borderBottom: '1px solid var(--color-outline-variant)' }}>
+                        {EMOJI_GROUPS.map((g) => (
+                          <button key={g.id} onMouseDown={(e) => { e.preventDefault(); setEmojiPickerGroup(g.id); }} title={g.label}
+                            style={{ flex: 1, padding: '6px 0', border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer',
+                              borderBottom: emojiPickerGroup === g.id ? '2px solid var(--color-primary)' : '2px solid transparent',
+                              opacity: emojiPickerGroup === g.id ? 1 : 0.5, transition: 'all 150ms',
+                            }}
+                          >{g.icon}</button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px 8px', display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start' }}>
+                      {filteredPickerEmojis.map((entry) => (
+                        <button key={entry.shortcode} onMouseDown={(e) => { e.preventDefault(); pickEmoji(entry.emoji); }} title={`:${entry.shortcode}:`}
+                          style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
+                            border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', transition: 'background 100ms', padding: 0,
                           }}
-                        >
-                          {g.icon}
-                        </button>
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >{entry.emoji}</button>
                       ))}
                     </div>
-                  )}
+                  </>)}
 
-                  {/* Emoji grid */}
-                  <div style={{
-                    flex: 1,
-                    overflowY: 'auto',
-                    padding: '4px 8px 8px 8px',
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 2,
-                    alignContent: 'flex-start',
-                  }}>
-                    {filteredPickerEmojis.map((entry) => (
-                      <button
-                        key={entry.shortcode}
-                        onMouseDown={(e) => { e.preventDefault(); pickEmoji(entry.emoji); }}
-                        title={`:${entry.shortcode}:`}
-                        style={{
-                          width: 36,
-                          height: 36,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 22,
-                          border: 'none',
-                          borderRadius: 8,
-                          background: 'transparent',
-                          cursor: 'pointer',
-                          transition: 'background 100ms',
-                          padding: 0,
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                      >
-                        {entry.emoji}
-                      </button>
-                    ))}
-                  </div>
+                  {/* === GIF TAB === */}
+                  {pickerTab === "gif" && (<>
+                    {!enableGifs ? (
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: 32, marginBottom: 8 }}>🚫</div>
+                          <div style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', lineHeight: 1.5 }}>
+                            {t("chat.gifDisabled")}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (<>
+                      <div style={{ padding: '10px 10px 6px 10px' }}>
+                        <input
+                          value={gifSearch}
+                          onChange={(e) => setGifSearch(e.target.value)}
+                          placeholder={t("chat.searchGif")}
+                          autoFocus={!isMobile}
+                          style={{
+                            width: '100%', padding: '8px 12px', borderRadius: 12,
+                            border: '1px solid var(--color-outline-variant)',
+                            background: 'var(--color-surface-container-high)',
+                            color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit',
+                            outline: 'none', boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px 8px', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 4, alignContent: 'flex-start', gridAutoRows: 100 }}>
+                        {gifLoading && (
+                          <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: 20, color: 'var(--color-on-surface-variant)', fontSize: 13 }}>
+                            {t("chat.loading")}
+                          </div>
+                        )}
+                        {!gifLoading && gifResults.map((gif) => (
+                          <button
+                            key={gif.id}
+                            onMouseDown={(e) => { e.preventDefault(); sendGif(gif.url); }}
+                            style={{
+                              border: 'none', padding: 0, borderRadius: 8, overflow: 'hidden',
+                              cursor: 'pointer', background: 'var(--color-surface-container-high)',
+                              transition: 'opacity 150ms', width: '100%', height: '100%',
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+                          >
+                            <img src={gif.preview} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', borderRadius: 8 }} />
+                          </button>
+                        ))}
+                      </div>
+
+                      <div style={{ padding: '4px 10px 6px', fontSize: 9, color: 'var(--color-outline)', textAlign: 'right' }}>
+                        Powered by Tenor
+                      </div>
+                    </>)}
+                  </>)}
                 </div>
               )}
             </div>

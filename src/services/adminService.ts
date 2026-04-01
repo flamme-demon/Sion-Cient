@@ -74,16 +74,28 @@ export async function banRoom(roomId: string, ban: boolean) {
   );
 }
 
-// GET /_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/{userId}
-export async function checkUserSuspended(userId: string) {
+// Check if user is suspended — tries MSC4323 endpoint, falls back gracefully
+let suspendEndpointSupported: boolean | null = null;
+
+export async function checkUserSuspended(userId: string): Promise<{ suspended: boolean }> {
   if (!config) throw new Error("Admin service not initialized");
-  return fetchJson<{ suspended: boolean }>(
-    `${config.homeserverUrl}/_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/${encodeURIComponent(userId)}`,
-    { auth: true }
-  );
+  // If we already know the endpoint isn't supported, skip
+  if (suspendEndpointSupported === false) return { suspended: false };
+
+  try {
+    const result = await fetchJson<{ suspended: boolean }>(
+      `${config.homeserverUrl}/_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/${encodeURIComponent(userId)}`,
+      { auth: true }
+    );
+    suspendEndpointSupported = true;
+    return result;
+  } catch {
+    // Mark as unsupported to stop spamming 404s
+    if (suspendEndpointSupported === null) suspendEndpointSupported = false;
+    return { suspended: false };
+  }
 }
 
-// PUT /_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/{userId}
 export async function suspendUser(userId: string, suspend: boolean) {
   if (!config) throw new Error("Admin service not initialized");
   return fetchJson<unknown>(

@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.5.1"
+version = "0.6.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -22,23 +22,25 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 
-tauri = { version = "2", default-features = false, features = [] }
+tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 open = "5"
 reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }
 urlencoding = "2"
 scraper = "0.22"
 base64 = "0.22"
+tauri-plugin-notification = "2.3.3"
 
 # Desktop-only dependencies
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf", default-features = false, optional = true }
+cef = { version = "=144.1.0", default-features = false, optional = true }
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
 cpal = "0.15"
 
 [features]
 default = ["cef"]
-cef = ["tauri/cef", "tauri-runtime-cef"]
+cef = ["tauri/cef", "tauri-runtime-cef", "dep:cef"]
 
 # Patches CEF — nécessaire pour le build desktop
 # Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive le CEF

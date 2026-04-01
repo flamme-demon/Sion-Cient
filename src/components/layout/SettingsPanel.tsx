@@ -47,6 +47,8 @@ export function SettingsPanel() {
   const autoJoinVoice = useSettingsStore((s) => s.autoJoinVoice);
   const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
   const setAutoJoinVoice = useSettingsStore((s) => s.setAutoJoinVoice);
+  const enableGifs = useSettingsStore((s) => s.enableGifs);
+  const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
   const channels = useMatrixStore((s) => s.channels);
 
   // Audio devices enumeration
@@ -411,13 +413,23 @@ export function SettingsPanel() {
           {t("settings.chat")}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <div style={{ marginRight: 12 }}>
             <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.linkPreviews")}</div>
             <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.linkPreviewsDesc")}</div>
           </div>
           <button onClick={() => setLinkPreviews(!linkPreviews)} style={toggleStyle(linkPreviews)}>
             <div style={toggleDotStyle(linkPreviews)} />
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ marginRight: 12 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.enableGifs")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.enableGifsDesc")}</div>
+          </div>
+          <button onClick={() => setEnableGifs(!enableGifs)} style={toggleStyle(enableGifs)}>
+            <div style={toggleDotStyle(enableGifs)} />
           </button>
         </div>
       </div>

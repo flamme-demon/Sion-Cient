@@ -57,7 +57,12 @@
     "reply": "Reply",
     "react": "React",
     "pinMessage": "Pin",
-    "replyingTo": "Replying to"
+    "replyingTo": "Replying to",
+    "sendDM": "Send a direct message",
+    "searchEmoji": "Search emoji...",
+    "searchGif": "Search GIF...",
+    "gifDisabled": "GIFs are disabled. Enable them in settings to send GIFs.",
+    "loading": "Loading..."
   },
   "contextMenu": {
     "sendDM": "Send a DM",
@@ -98,6 +103,9 @@
     "registrationToken": "Registration token",
     "registrationTokenPlaceholder": "Enter the token provided by the administrator",
     "detectingFlows": "Detecting registration mode...",
+    "pendingApprovalTitle": "Registration pending",
+    "pendingApprovalDesc": "Your account has been created. An administrator must approve your access before you can use the application.",
+    "checkApproval": "Check my access",
     "encryption": "Encryption (E2EE)",
     "encryptionHint": "Recovery key to decrypt existing messages",
     "recoveryKey": "Recovery Key",
@@ -175,6 +183,8 @@
     "chat": "Chat",
     "linkPreviews": "Link previews",
     "linkPreviewsDesc": "Show a preview of shared links",
+    "enableGifs": "GIFs (Tenor)",
+    "enableGifsDesc": "Enable GIF search and sending via Tenor",
     "notifications": "Notifications",
     "notifyDM": "DM Notifications",
     "notifyDMDesc": "Receive notifications for direct messages",

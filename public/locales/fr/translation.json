@@ -57,7 +57,12 @@
     "reply": "Répondre",
     "react": "Réagir",
     "pinMessage": "Épingler",
-    "replyingTo": "Réponse à"
+    "replyingTo": "Réponse à",
+    "sendDM": "Envoyer un message privé",
+    "searchEmoji": "Rechercher un emoji...",
+    "searchGif": "Rechercher un GIF...",
+    "gifDisabled": "Les GIFs sont désactivés. Activez-les dans les paramètres pour pouvoir en envoyer.",
+    "loading": "Chargement..."
   },
   "contextMenu": {
     "sendDM": "Envoyer un MP",
@@ -98,6 +103,9 @@
     "registrationToken": "Token d'inscription",
     "registrationTokenPlaceholder": "Entrez le token fourni par l'administrateur",
     "detectingFlows": "Détection du mode d'inscription...",
+    "pendingApprovalTitle": "Inscription en attente",
+    "pendingApprovalDesc": "Votre compte a bien été créé. Un administrateur doit valider votre accès avant que vous puissiez utiliser l'application.",
+    "checkApproval": "Vérifier mon accès",
     "encryption": "Chiffrement (E2EE)",
     "encryptionHint": "Clé de récupération pour déchiffrer les messages existants",
     "recoveryKey": "Clé de récupération",
@@ -175,6 +183,8 @@
     "chat": "Chat",
     "linkPreviews": "Prévisualisation des liens",
     "linkPreviewsDesc": "Afficher un aperçu des liens partagés",
+    "enableGifs": "GIFs (Tenor)",
+    "enableGifsDesc": "Activer la recherche et l'envoi de GIFs via Tenor",
     "notifications": "Notifications",
     "notifyDM": "Notifications MP",
     "notifyDMDesc": "Recevoir une notification pour les messages privés",

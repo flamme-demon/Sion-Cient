@@ -25,6 +25,7 @@ export default function App() {
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const credentials = useAuthStore((s) => s.credentials);
   const isLoading = useAuthStore((s) => s.isLoading);
+  const isSuspended = useAuthStore((s) => s.isSuspended);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const initSync = useMatrixStore((s) => s.initSync);
   const connectionStatus = useMatrixStore((s) => s.connectionStatus);
@@ -99,6 +100,58 @@ export default function App() {
       <Suspense fallback={null}>
         <LoginPage />
       </Suspense>
+    );
+  }
+
+  // Account suspended — show pending approval screen
+  if (isSuspended) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        minHeight: '100dvh', width: '100%', background: 'var(--color-surface)',
+        fontFamily: 'inherit', padding: 16,
+      }}>
+        <div style={{
+          width: '100%', maxWidth: 420, background: 'var(--color-surface-container-low)',
+          borderRadius: 28, padding: '48px 24px 32px', boxShadow: '0 2px 16px rgba(0,0,0,0.18)',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>⏳</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--color-on-surface)', marginBottom: 8 }}>
+            {t("auth.pendingApprovalTitle")}
+          </div>
+          <div style={{ fontSize: 14, color: 'var(--color-on-surface-variant)', lineHeight: 1.6, marginBottom: 24 }}>
+            {t("auth.pendingApprovalDesc")}
+          </div>
+          <button
+            onClick={async () => {
+              const suspended = await matrixService.checkSuspended();
+              if (!suspended) {
+                useAuthStore.getState().checkSuspendedStatus();
+              }
+            }}
+            style={{
+              width: '100%', padding: '14px 0', border: 'none', cursor: 'pointer',
+              borderRadius: 28, fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
+              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+              marginBottom: 12, transition: 'opacity 200ms',
+            }}
+          >
+            {t("auth.checkApproval")}
+          </button>
+          <button
+            onClick={() => useAuthStore.getState().logout()}
+            style={{
+              width: '100%', padding: '12px 0', border: 'none', cursor: 'pointer',
+              borderRadius: 28, fontSize: 14, fontWeight: 500, fontFamily: 'inherit',
+              background: 'var(--color-surface-container)', color: 'var(--color-on-surface-variant)',
+              transition: 'opacity 200ms',
+            }}
+          >
+            {t("auth.logout")}
+          </button>
+        </div>
+      </div>
     );
   }
 

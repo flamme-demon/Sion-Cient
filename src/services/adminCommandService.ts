@@ -10,53 +10,37 @@ export function findAdminRoom(): string | null {
   const serverName = client.getDomain() || "";
   const botId = `@conduit:${serverName}`;
 
-  // 1. Chercher par membre bot
+  // Single pass: score each room and pick the best match
+  let bestRoom: string | null = null;
+  let bestScore = 0;
+
   for (const room of client.getRooms()) {
     const members = room.getJoinedMembers();
-    if (members.some((m) => m.userId === botId)) {
-      return room.roomId;
-    }
-  }
-
-  // 2. Chercher par nom de room
-  for (const room of client.getRooms()) {
     const name = (room.name || "").toLowerCase();
-    if (name.includes("admin") && (name.includes("conduit") || name.includes("continuwuity"))) {
-      return room.roomId;
+    const alias = room.getCanonicalAlias() || "";
+    const hasBot = members.some((m) => m.userId === botId);
+    const hasConduitMember = members.some((m) => m.userId.includes("conduit"));
+
+    let score = 0;
+
+    // Priority 1: exact bot member match
+    if (hasBot) score += 10;
+    // Priority 2: admin room name
+    if (name.includes("admin") && (name.includes("conduit") || name.includes("continuwuity"))) score += 8;
+    // Priority 3: admin alias
+    if (alias.includes("#admins:") || alias.includes("#conduit:")) score += 6;
+    // Priority 4: DM with bot (2 members only)
+    if (hasBot && members.length === 2) score += 4;
+    // Priority 5: any conduit-related member
+    if (hasConduitMember && score === 0) score += 1;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestRoom = room.roomId;
     }
   }
 
-  // 3. Chercher par alias
-  for (const room of client.getRooms()) {
-    const canonical = room.getCanonicalAlias() || "";
-    if (canonical.includes("#admins:") || canonical.includes("#conduit:")) {
-      return room.roomId;
-    }
-  }
-
-  // 4. Chercher une room avec un seul autre membre qui est le bot (DM avec le bot)
-  for (const room of client.getRooms()) {
-    const members = room.getJoinedMembers();
-    if (members.length === 2 && members.some((m) => m.userId === botId)) {
-      return room.roomId;
-    }
-  }
-
-  // 5. Dernière chance : chercher tout userId contenant "conduit" dans les membres
-  for (const room of client.getRooms()) {
-    const members = room.getJoinedMembers();
-    if (members.some((m) => m.userId.includes("conduit"))) {
-      return room.roomId;
-    }
-  }
-
-  console.warn("[Sion] Admin room not found. Rooms:", client.getRooms().map((r) => ({
-    id: r.roomId,
-    name: r.name,
-    members: r.getJoinedMembers().map((m) => m.userId),
-  })));
-
-  return null;
+  return bestRoom;
 }
 
 /**

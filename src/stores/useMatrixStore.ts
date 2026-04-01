@@ -993,38 +993,45 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       set({ channels });
     });
 
-    // Listen for decrypted events (after key restore / cross-device verification)
-    // When events are decrypted, update only the affected messages in place
-    // instead of replacing the entire room message list (which would lose history
-    // loaded via loadRoomHistory).
+    // Listen for decrypted events — update individual messages in place.
+    // We track which event IDs were decrypted and only update those,
+    // to avoid re-extracting entire room timelines (which loses history).
     let decryptReloadTimer: ReturnType<typeof setTimeout> | null = null;
-    client.on(MatrixEventEvent.Decrypted, () => {
+    const pendingDecryptedEvents = new Set<string>();
+
+    client.on(MatrixEventEvent.Decrypted, (event) => {
+      const evtId = event.getId?.();
+      if (evtId) pendingDecryptedEvents.add(evtId);
+
       if (decryptReloadTimer) clearTimeout(decryptReloadTimer);
       decryptReloadTimer = setTimeout(() => {
         decryptReloadTimer = null;
-        const rooms = getJoinedRooms(client);
+        if (pendingDecryptedEvents.size === 0) return;
+        const decryptedIds = new Set(pendingDecryptedEvents);
+        pendingDecryptedEvents.clear();
+
         set((s) => {
+          let changed = false;
           const updated = { ...s.messages };
-          for (const room of rooms) {
+          for (const [roomId, msgs] of Object.entries(updated)) {
+            const room = client.getRoom(roomId);
+            if (!room) continue;
+            const needsUpdate = msgs.some((m) => m.eventId && decryptedIds.has(m.eventId));
+            if (!needsUpdate) continue;
+
             const freshMsgs = extractMessagesFromRoom(room);
-            const existing = updated[room.roomId];
-            if (!existing || existing.length === 0) {
-              // No history loaded yet — use fresh messages
-              if (freshMsgs.length > 0) updated[room.roomId] = freshMsgs;
-              continue;
-            }
-            // Merge: update decrypted content for existing messages, keep history
             const freshById = new Map(freshMsgs.map((m) => [m.eventId, m]));
-            updated[room.roomId] = existing.map((msg) => {
+            updated[roomId] = msgs.map((msg) => {
+              if (!msg.eventId || !decryptedIds.has(msg.eventId)) return msg;
               const fresh = freshById.get(msg.eventId);
-              // If fresh version has actual text and existing doesn't, it was just decrypted
-              if (fresh && fresh.text && (!msg.text || msg.text !== fresh.text)) {
+              if (fresh && fresh.text) {
+                changed = true;
                 return fresh;
               }
               return msg;
             });
           }
-          return { messages: updated };
+          return changed ? { messages: updated } : s;
         });
       }, 1000);
     });

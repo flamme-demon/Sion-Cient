@@ -20,9 +20,11 @@ interface AuthState {
   recoveryKey: string | null; // Temporary, NOT persisted
   registrationFlows: RegistrationFlowInfo | null;
   isLoadingFlows: boolean;
+  isSuspended: boolean;
 
   login: (homeserver: string, username: string, password: string) => Promise<void>;
   register: (homeserver: string, username: string, password: string, displayName?: string, token?: string, captchaResponse?: string) => Promise<void>;
+  checkSuspendedStatus: () => Promise<void>;
   fetchRegistrationFlows: (homeserver: string) => Promise<void>;
   restoreSession: () => Promise<void>;
   logout: () => void;
@@ -58,6 +60,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   recoveryKey: null,
   registrationFlows: null,
   isLoadingFlows: false,
+  isSuspended: false,
 
   login: async (homeserver, username, password) => {
     set({ isLoading: true, error: null });
@@ -107,11 +110,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ isRegistering: false });
       // Auto-login after registration
       await get().login(homeserver, username, password);
+      // Check if account was suspended on register
+      const suspended = await matrixService.checkSuspended();
+      if (suspended) {
+        set({ isSuspended: true });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Une erreur est survenue";
       set({ error: message, isLoading: false, isRegistering: false });
       throw err;
     }
+  },
+
+  checkSuspendedStatus: async () => {
+    const suspended = await matrixService.checkSuspended();
+    set({ isSuspended: suspended });
   },
 
   fetchRegistrationFlows: async (homeserver) => {
@@ -160,6 +173,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         saveCredentials(saved);
       }
       set({ credentials: saved, isLoading: false });
+      // Check if account is suspended
+      const suspended = await matrixService.checkSuspended();
+      if (suspended) set({ isSuspended: true });
     } catch (err) {
       clearCredentials();
       const message = err instanceof Error ? err.message : "Session expirée";
