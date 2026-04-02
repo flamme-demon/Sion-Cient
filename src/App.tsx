@@ -16,6 +16,7 @@ import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
 import { useVoiceChannel } from "./hooks/useVoiceChannel";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { MatrixRain } from "./components/sidebar/MatrixRain";
+import { updateVoiceService } from "./services/androidVoiceService";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "./services/matrixService";
 
@@ -48,9 +49,34 @@ export default function App() {
   const [backToast, setBackToast] = useState(false);
   const isMobile = useIsMobile();
 
-  const { joinVoiceChannel } = useVoiceChannel();
+  const { joinVoiceChannel, leaveVoiceChannel } = useVoiceChannel();
   const joinVoiceRef = useRef(joinVoiceChannel);
   joinVoiceRef.current = joinVoiceChannel;
+  const leaveVoiceRef = useRef(leaveVoiceChannel);
+  leaveVoiceRef.current = leaveVoiceChannel;
+
+  // Listen for Android foreground service notification actions
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__SION_VOICE_ACTION__ = (action: string) => {
+      if (action === "mute") useAppStore.getState().toggleMute();
+      if (action === "deafen") useAppStore.getState().toggleDeafen();
+      if (action === "disconnect") {
+        const voiceId = useAppStore.getState().connectedVoiceChannel;
+        if (voiceId) leaveVoiceRef.current(voiceId);
+      }
+    };
+    return () => { delete (window as unknown as Record<string, unknown>).__SION_VOICE_ACTION__; };
+  }, []);
+
+  // Sync mute/deafen state to Android foreground service notification
+  const isMuted = useAppStore((s) => s.isMuted);
+  const isDeafened = useAppStore((s) => s.isDeafened);
+  const channels = useMatrixStore((s) => s.channels);
+  useEffect(() => {
+    if (!connectedVoice) return;
+    const channelName = channels.find(c => c.id === connectedVoice)?.name || "Voice";
+    updateVoiceService(channelName, isMuted, isDeafened);
+  }, [connectedVoice, isMuted, isDeafened, channels]);
 
   useKeyboardShortcuts();
   useMutedSpeakDetection(useCallback(() => {
@@ -100,7 +126,15 @@ export default function App() {
           if (quitTimer) clearTimeout(quitTimer);
           wantsToQuit = false;
           setBackToast(false);
-          import("@tauri-apps/api/core").then(({ invoke }) => invoke("exit_app"));
+          // Disconnect voice cleanly before exiting
+          const voiceChannel = useAppStore.getState().connectedVoiceChannel;
+          if (voiceChannel) {
+            leaveVoiceRef.current(voiceChannel).finally(() => {
+              import("@tauri-apps/api/core").then(({ invoke }) => invoke("exit_app"));
+            });
+          } else {
+            import("@tauri-apps/api/core").then(({ invoke }) => invoke("exit_app"));
+          }
           return;
         }
 

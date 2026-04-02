@@ -5,6 +5,8 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import * as matrixService from "../../services/matrixService";
 import { UserAvatar } from "./UserAvatar";
+import { ArrowLeftIcon } from "../icons";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 export function AccountPopover() {
   const { t } = useTranslation();
@@ -36,6 +38,7 @@ export function AccountPopover() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
+  const isMobile = useIsMobile();
   const nameChanged = displayName !== (credentials?.displayName || "");
 
   // Reset state when opening
@@ -163,7 +166,17 @@ export function AccountPopover() {
   return (
     <div
       ref={popoverRef}
-      style={{
+      style={isMobile ? {
+        position: 'fixed',
+        inset: 0,
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        overflowY: 'auto',
+        background: 'var(--color-surface-container-low)',
+        zIndex: 200,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      } : {
         position: 'absolute',
         bottom: '100%',
         left: 0,
@@ -182,9 +195,22 @@ export function AccountPopover() {
       }}
     >
       {/* Header */}
-      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        {t("settings.account")}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: isMobile ? '16px 16px 0' : 0,
+      }}>
+        {isMobile && (
+          <button onClick={toggleAccountPanel} style={{ padding: 8, borderRadius: 12, border: 'none', cursor: 'pointer', background: 'transparent', color: 'var(--color-on-surface)', display: 'flex', alignItems: 'center' }}>
+            <ArrowLeftIcon />
+          </button>
+        )}
+        <div style={{ fontWeight: 600, fontSize: isMobile ? 16 : 12, color: 'var(--color-on-surface)', textTransform: isMobile ? 'none' as const : 'uppercase' as const, letterSpacing: isMobile ? undefined : '0.05em' }}>
+          {t("settings.account")}
+        </div>
       </div>
+      {isMobile && <div style={{ padding: '0 16px' }}><div style={{ height: 1, background: 'var(--color-outline-variant)' }} /></div>}
+      {/* Content wrapper for mobile padding */}
+      <div style={{ padding: isMobile ? '0 16px 16px' : 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
 
       {/* Avatar + Display Name */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -597,6 +623,7 @@ export function AccountPopover() {
           )}
         </div>
       )}
+      </div>{/* end content wrapper */}
     </div>
   );
 }

@@ -3,10 +3,12 @@ import { useMatrix } from "./useMatrix";
 import { useLiveKit } from "./useLiveKit";
 import { useAppStore } from "../stores/useAppStore";
 import { useAuthStore } from "../stores/useAuthStore";
+import { useMatrixStore } from "../stores/useMatrixStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitTokenService";
 import { getMatrixClient } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
+import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 
 // Module-level tracking — survives component unmount/remount
@@ -116,6 +118,9 @@ export function useVoiceChannel() {
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
           setConnectedVoice(matrixRoomId);
           useAppStore.getState().setConnectingVoice(null);
+          // Start Android foreground service
+          const channelName = useMatrixStore.getState().channels.find(c => c.id === matrixRoomId)?.name || "Voice";
+          startVoiceService(channelName, false, false);
           const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
           if (joinMuted || isMobileDevice) {
             // Attendre que le track audio soit publié avant de muter
@@ -146,6 +151,9 @@ export function useVoiceChannel() {
       await connect(credentials.livekitUrl, token, matrixRoomId);
       setConnectedVoice(matrixRoomId);
       useAppStore.getState().setConnectingVoice(null);
+      // Start Android foreground service
+      const channelName2 = useMatrixStore.getState().channels.find(c => c.id === matrixRoomId)?.name || "Voice";
+      startVoiceService(channelName2, false, false);
       const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (joinMuted || isMobileDevice) {
         if (!useAppStore.getState().isMuted) {
@@ -162,6 +170,7 @@ export function useVoiceChannel() {
 
   const leaveVoiceChannel = useCallback(
     async (_matrixRoomId: string) => {
+      stopVoiceService();
       await cleanupActiveSession();
       await disconnect();
       disconnectVoice();

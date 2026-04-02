@@ -38,6 +38,9 @@ cef = { version = "=144.1.0", default-features = false, optional = true }
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
 cpal = "0.15"
 
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [features]
 default = ["cef"]
 cef = ["tauri/cef", "tauri-runtime-cef", "dep:cef"]
