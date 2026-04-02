@@ -17,12 +17,19 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
 
-    // Inject JS interface for voice service control
-    // Delayed to ensure WebView is ready
-    window.decorView.postDelayed({
-      val webView = findWebView()
-      webView?.addJavascriptInterface(VoiceServiceBridge(this), "__SION__")
-    }, 2000)
+    // Inject JS interface for voice service control once WebView is ready
+    val activity = this
+    window.decorView.post(object : Runnable {
+      override fun run() {
+        val webView = findWebView()
+        if (webView != null) {
+          webView.addJavascriptInterface(VoiceServiceBridge(activity), "__SION__")
+        } else {
+          // WebView not ready yet, retry
+          window.decorView.postDelayed(this, 200)
+        }
+      }
+    })
 
     // Listen for voice actions from the foreground service notification
     voiceActionReceiver = object : BroadcastReceiver() {

@@ -1,26 +1,46 @@
 /**
  * Android foreground service integration for voice calls.
- * Calls Rust commands that invoke the Kotlin VoiceCallService via JNI.
+ * Uses JavascriptInterface (__SION__) injected by MainActivity.
  */
-import { invoke } from "@tauri-apps/api/core";
 
 const isAndroid = /Android/i.test(navigator.userAgent);
 
+interface SionBridge {
+  startVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean): void;
+  stopVoiceService(): void;
+  updateVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean): void;
+}
+
+function getBridge(): SionBridge | null {
+  return (window as unknown as Record<string, SionBridge>).__SION__ ?? null;
+}
+
 export function startVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean) {
   if (!isAndroid) return;
-  invoke("start_voice_service", { channelName, isMuted, isDeafened }).catch((err) =>
-    console.warn("[Sion] Failed to start voice service:", err)
-  );
+  const bridge = getBridge();
+  if (bridge) {
+    try { bridge.startVoiceService(channelName, isMuted, isDeafened); } catch (e) {
+      console.warn("[Sion] Voice service start error:", e);
+    }
+  }
 }
 
 export function stopVoiceService() {
   if (!isAndroid) return;
-  invoke("stop_voice_service").catch((err) =>
-    console.warn("[Sion] Failed to stop voice service:", err)
-  );
+  const bridge = getBridge();
+  if (bridge) {
+    try { bridge.stopVoiceService(); } catch (e) {
+      console.warn("[Sion] Voice service stop error:", e);
+    }
+  }
 }
 
 export function updateVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean) {
   if (!isAndroid) return;
-  startVoiceService(channelName, isMuted, isDeafened);
+  const bridge = getBridge();
+  if (bridge) {
+    try { bridge.updateVoiceService(channelName, isMuted, isDeafened); } catch (e) {
+      console.warn("[Sion] Voice service update error:", e);
+    }
+  }
 }

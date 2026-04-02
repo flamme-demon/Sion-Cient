@@ -356,52 +356,17 @@ fn exit_app(app: tauri::AppHandle<TauriRuntime>) {
     app.exit(0);
 }
 
-#[cfg(target_os = "android")]
 #[tauri::command]
-fn start_voice_service(app: tauri::AppHandle<TauriRuntime>, channel_name: String, is_muted: bool, is_deafened: bool) {
-    use tauri::Runtime;
-    app.runtime_handle().run_on_android_context(move |env, activity, _webview| {
-        use jni::objects::{JValue, JObject};
-        // Get the VoiceCallService companion class and call start()
-        let context = activity.as_ref();
-        let channel_str = env.new_string(&channel_name).unwrap();
-        let cls = env.find_class("com/sion/client/VoiceCallService").unwrap();
-        let companion = env.get_static_field(&cls, "Companion", "Lcom/sion/client/VoiceCallService$Companion;").unwrap().l().unwrap();
-        let _ = env.call_method(
-            &companion, "start", "(Landroid/content/Context;Ljava/lang/String;ZZ)V",
-            &[
-                JValue::Object(&JObject::from(context)),
-                JValue::Object(&channel_str.into()),
-                JValue::Bool(is_muted as u8),
-                JValue::Bool(is_deafened as u8),
-            ],
-        );
-    });
+fn start_voice_service(_channel_name: String, _is_muted: bool, _is_deafened: bool) {
+    // On Android, the JS calls window.__SION__.startVoiceService() directly via JavascriptInterface
+    // This command is a no-op stub so invoke() doesn't error on desktop
 }
 
-#[cfg(target_os = "android")]
 #[tauri::command]
-fn stop_voice_service(app: tauri::AppHandle<TauriRuntime>) {
-    use tauri::Runtime;
-    app.runtime_handle().run_on_android_context(move |env, activity, _webview| {
-        use jni::objects::{JValue, JObject};
-        let context = activity.as_ref();
-        let cls = env.find_class("com/sion/client/VoiceCallService").unwrap();
-        let companion = env.get_static_field(&cls, "Companion", "Lcom/sion/client/VoiceCallService$Companion;").unwrap().l().unwrap();
-        let _ = env.call_method(
-            &companion, "stop", "(Landroid/content/Context;)V",
-            &[JValue::Object(&JObject::from(context))],
-        );
-    });
+fn stop_voice_service() {
+    // On Android, the JS calls window.__SION__.stopVoiceService() directly via JavascriptInterface
+    // This command is a no-op stub so invoke() doesn't error on desktop
 }
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-fn start_voice_service(_channel_name: String, _is_muted: bool, _is_deafened: bool) {}
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command]
-fn stop_voice_service() {}
 
 /// Clean up old Sion transcode temp files (older than 24 hours).
 fn cleanup_old_transcodes() {
