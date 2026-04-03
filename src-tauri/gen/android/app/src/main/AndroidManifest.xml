@@ -9,7 +9,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Camera/mic are optional — app works without them -->
@@ -47,12 +46,7 @@
 
         <service
             android:name=".NtfyListenerService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse" />
-
-        <property
-            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-            android:value="Push notification listener for Matrix messaging" />
+            android:exported="false" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

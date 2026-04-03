@@ -38,11 +38,29 @@ class VoiceServiceBridge(private val context: Context) {
 
     @JavascriptInterface
     fun startPushListener(topicUrl: String) {
+        // Save topic URL for polling
+        context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+            .edit().putString("topic_url", topicUrl).apply()
+
+        // Start periodic polling via WorkManager (survives app kill)
+        val workRequest = androidx.work.PeriodicWorkRequestBuilder<PushPollWorker>(
+            15, java.util.concurrent.TimeUnit.MINUTES  // minimum interval
+        ).build()
+
+        androidx.work.WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            "sion_push_poll",
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            workRequest
+        )
+        android.util.Log.i("SionPush", "Push poll worker scheduled for topic: $topicUrl")
+
+        // Also start the SSE service for real-time when app is alive
         NtfyListenerService.start(context, topicUrl)
     }
 
     @JavascriptInterface
     fun stopPushListener() {
+        androidx.work.WorkManager.getInstance(context).cancelUniqueWork("sion_push_poll")
         NtfyListenerService.stop(context)
     }
 

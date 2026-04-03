@@ -34,14 +34,13 @@ class NtfyListenerService : Service() {
             private set
 
         fun start(context: Context, topicUrl: String) {
+            // Save topic URL so service can recover after restart
+            context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+                .edit().putString("topic_url", topicUrl).apply()
             val intent = Intent(context, NtfyListenerService::class.java).apply {
                 putExtra(EXTRA_TOPIC_URL, topicUrl)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            context.startService(intent)
         }
 
         fun stop(context: Context) {
@@ -66,31 +65,19 @@ class NtfyListenerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Save topic URL so we can restore after crash/restart
+        android.util.Log.i("SionPush", "onStartCommand called")
+
         val topicUrl = intent?.getStringExtra(EXTRA_TOPIC_URL)
             ?: getSharedPreferences("sion_push", Context.MODE_PRIVATE).getString("topic_url", null)
             ?: run {
+                android.util.Log.w("SionPush", "No topic URL, stopping")
                 stopSelf()
                 return START_NOT_STICKY
             }
         getSharedPreferences("sion_push", Context.MODE_PRIVATE)
             .edit().putString("topic_url", topicUrl).apply()
 
-        // Show a minimal foreground notification
-        val notification = NotificationCompat.Builder(this, FOREGROUND_CHANNEL_ID)
-            .setContentTitle("Sion")
-            .setContentText("Écoute des messages...")
-            .setSmallIcon(R.drawable.ic_voice_notification)
-            .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        android.util.Log.i("SionPush", "Topic: $topicUrl")
 
         // Start SSE listener in background thread
         // Use local ntfy URL to avoid NAT hairpinning issues
@@ -163,6 +150,8 @@ class NtfyListenerService : Service() {
             val message = ntfyMsg.optString("message", "")
             if (message.isEmpty()) return
 
+            android.util.Log.i("SionPush", "Real push received: ${message.take(100)}")
+
             // Parse Matrix push payload inside the message
             val pushPayload = org.json.JSONObject(message)
             val notification = pushPayload.optJSONObject("notification") ?: return
@@ -170,8 +159,10 @@ class NtfyListenerService : Service() {
             val eventId = notification.optString("event_id", "")
             val unread = notification.optJSONObject("counts")?.optInt("unread", 0) ?: 0
 
-            // Don't show notification if app is in foreground
-            if (isAppInForeground()) return
+            val foreground = isAppInForeground()
+            android.util.Log.i("SionPush", "roomId=$roomId unread=$unread foreground=$foreground")
+
+            if (foreground) return
 
             showMessageNotification(roomId, eventId, unread)
         } catch (_: Exception) {
@@ -204,10 +195,14 @@ class NtfyListenerService : Service() {
 
         // Load room name from shared preferences if available
         val prefs = getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
-        val roomName = prefs.getString(roomId, null) ?: "Nouveau message"
+        val roomName = prefs.getString(roomId, null)
 
-        val title = if (unread > 1) "$roomName ($unread)" else roomName
-        val body = "Nouveau message"
+        val title = "Sion"
+        val body = if (roomName != null) {
+            if (unread > 1) "$roomName — $unread nouveaux messages" else "$roomName — Nouveau message"
+        } else {
+            if (unread > 1) "$unread nouveaux messages" else "Nouveau message"
+        }
 
         notificationCounter++
         val notifId = 3000 + (roomId.hashCode() and 0xFFFF)

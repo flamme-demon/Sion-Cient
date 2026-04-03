@@ -1,5 +1,6 @@
 package com.sion.client
 
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -98,6 +99,49 @@ class MainActivity : TauriActivity() {
 
   override fun onResume() {
     super.onResume()
+    // Clear push notifications when app comes to foreground
+    val manager = getSystemService(NotificationManager::class.java)
+    // Only cancel message notifications (3000+), not voice call or listener
+    for (notification in manager.activeNotifications) {
+      if (notification.id >= 3000) {
+        manager.cancel(notification.id)
+      }
+    }
+    // Handle notification tap — navigate to room
+    handleNotificationIntent(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    handleNotificationIntent(intent)
+  }
+
+  private fun handleNotificationIntent(intent: Intent?) {
+    val roomId = intent?.getStringExtra("open_room_id") ?: return
+    intent.removeExtra("open_room_id")
+
+    // Clear all message notifications
+    val manager = getSystemService(NotificationManager::class.java)
+    manager.cancelAll()
+
+    // Poll until JS is ready (cold start can take several seconds)
+    val webView = cachedWebView ?: return
+    var attempts = 0
+    val poller = object : Runnable {
+      override fun run() {
+        attempts++
+        webView.evaluateJavascript(
+          "typeof window.__SION_OPEN_ROOM__ === 'function' ? 'ready' : 'no'"
+        ) { result ->
+          if (result.contains("ready")) {
+            webView.evaluateJavascript("window.__SION_OPEN_ROOM__('$roomId')", null)
+          } else if (attempts < 15) {
+            webView.postDelayed(this, 1000)
+          }
+        }
+      }
+    }
+    webView.postDelayed(poller, 2000)
   }
 
   override fun onDestroy() {

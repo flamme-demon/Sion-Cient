@@ -65,7 +65,20 @@ export default function App() {
         if (voiceId) leaveVoiceRef.current(voiceId);
       }
     };
-    return () => { delete (window as unknown as Record<string, unknown>).__SION_VOICE_ACTION__; };
+    // Handle notification tap — open room
+    (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string) => {
+      const channel = useMatrixStore.getState().channels.find(c => c.id === roomId);
+      if (channel) {
+        useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
+        useAppStore.getState().setMobileView("chat");
+        useMatrixStore.getState().loadRoomHistory(roomId);
+      }
+    };
+
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__SION_VOICE_ACTION__;
+      delete (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__;
+    };
   }, []);
 
   // Note: notification actions are handled via broadcast → __SION_VOICE_ACTION__
