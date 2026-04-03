@@ -48,6 +48,24 @@ export function stopVoiceService() {
   }
 }
 
+/** Start the Android ntfy push listener service */
+export function startPushListener(topicUrl: string) {
+  if (!isAndroid) return;
+  const bridge = getBridge();
+  if (bridge) {
+    try { (bridge as unknown as { startPushListener: (url: string) => void }).startPushListener(topicUrl); } catch { /* ignore */ }
+  }
+}
+
+/** Save room name for notification display */
+export function saveRoomName(roomId: string, roomName: string) {
+  if (!isAndroid) return;
+  const bridge = getBridge();
+  if (bridge) {
+    try { (bridge as unknown as { saveRoomName: (id: string, name: string) => void }).saveRoomName(roomId, roomName); } catch { /* ignore */ }
+  }
+}
+
 export function updateVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean) {
   if (!isAndroid || !serviceStarted) return;
   const bridge = getBridge();

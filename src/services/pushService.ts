@@ -70,6 +70,11 @@ export async function registerPusher(): Promise<void> {
       append: false,
     });
     console.log("[Sion] Push registered:", topicUrl, "via", NTFY_BASE_URL);
+
+    // Start Android background push listener service
+    import("./androidVoiceService").then(({ startPushListener }) => {
+      startPushListener(topicUrl);
+    }).catch(() => {});
   } catch (err) {
     console.warn("[Sion] Failed to register pusher:", err);
   }

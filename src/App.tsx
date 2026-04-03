@@ -175,9 +175,16 @@ export default function App() {
     }
   }, [credentials, connectionStatus, initSync]);
 
-  // Register push notifications when connected
+  // Register push notifications when connected + sync room names for Android
   useEffect(() => {
     if (connectionStatus !== "connected" || !credentials) return;
+
+    // Sync room names to Android for notification display
+    import("./services/androidVoiceService").then(({ saveRoomName }) => {
+      const allChannels = useMatrixStore.getState().channels;
+      allChannels.forEach((ch) => saveRoomName(ch.id, ch.name));
+    }).catch(() => {});
+
     import("./services/pushService").then(({ registerPusher, subscribeToPush }) => {
       registerPusher();
       const unsub = subscribeToPush((data) => {

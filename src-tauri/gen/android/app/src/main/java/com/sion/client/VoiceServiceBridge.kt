@@ -35,4 +35,20 @@ class VoiceServiceBridge(private val context: Context) {
     fun getPendingAction(): String {
         return VoiceCallService.consumePendingAction()
     }
+
+    @JavascriptInterface
+    fun startPushListener(topicUrl: String) {
+        NtfyListenerService.start(context, topicUrl)
+    }
+
+    @JavascriptInterface
+    fun stopPushListener() {
+        NtfyListenerService.stop(context)
+    }
+
+    @JavascriptInterface
+    fun saveRoomName(roomId: String, roomName: String) {
+        context.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
+            .edit().putString(roomId, roomName).apply()
+    }
 }
