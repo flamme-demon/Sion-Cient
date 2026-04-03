@@ -188,6 +188,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       localStorage.setItem("sion_last_homeserver", creds.homeserverUrl);
       localStorage.setItem("sion_last_username", creds.userId);
     }
+    // Unregister push before logout
+    import("../services/pushService").then(({ unregisterPusher }) => unregisterPusher()).catch(() => {});
     matrixService.logout();
     clearCredentials();
     useAdminStore.getState().reset();

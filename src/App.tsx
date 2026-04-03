@@ -175,6 +175,36 @@ export default function App() {
     }
   }, [credentials, connectionStatus, initSync]);
 
+  // Register push notifications when connected
+  useEffect(() => {
+    if (connectionStatus !== "connected" || !credentials) return;
+    import("./services/pushService").then(({ registerPusher, subscribeToPush }) => {
+      registerPusher();
+      const unsub = subscribeToPush((data) => {
+        // Only show notification if app is not focused
+        if (document.hasFocus()) return;
+        if (data.roomId) {
+          // Trigger notification via Tauri or Web API
+          import("@tauri-apps/plugin-notification").then(({ sendNotification, isPermissionGranted }) => {
+            isPermissionGranted().then((granted) => {
+              if (!granted) return;
+              sendNotification({
+                title: data.sender || "Sion",
+                body: data.body || "Nouveau message",
+              });
+            });
+          }).catch(() => {
+            // Fallback Web notification
+            if (Notification.permission === "granted") {
+              new Notification(data.sender || "Sion", { body: data.body || "Nouveau message" });
+            }
+          });
+        }
+      });
+      return unsub;
+    }).catch(() => {});
+  }, [connectionStatus, credentials]);
+
   // Fetch admin data early to know if user is admin
   useEffect(() => {
     if (credentials?.homeserverUrl && credentials?.accessToken && !adminInitialized) {
