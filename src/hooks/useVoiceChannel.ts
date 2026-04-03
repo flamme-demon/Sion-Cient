@@ -92,6 +92,18 @@ export function useVoiceChannel() {
             const isEncrypted = matrixRoom.hasEncryptionStateEvent();
 
             if (isEncrypted) {
+              // Force download device keys for all room members before E2EE setup
+              // This ensures the crypto SDK knows all devices for key distribution
+              try {
+                const members = matrixRoom.getJoinedMembers().map(m => m.userId);
+                const crypto = client.getCrypto();
+                if (crypto) {
+                  await crypto.getUserDeviceInfo(members, true);
+                }
+              } catch (e) {
+                console.warn("[Sion] Failed to download device keys:", e);
+              }
+
               keyProvider = new MatrixKeyProvider();
               keyProvider.setRTCSession(session);
             }
@@ -105,7 +117,7 @@ export function useVoiceChannel() {
             session.joinRoomSession(fociPreferred, undefined, {
               // Short TTL: if app crashes/reloads, membership expires in 60s
               // The MembershipManager will re-publish before expiry to keep it alive
-              membershipEventExpiryMs: 60_000,
+              membershipEventExpiryMs: 3_600_000, // 1 hour — avoid frequent renewals that disrupt audio in background
               useExperimentalToDeviceTransport: true,
               ...(isEncrypted ? { manageMediaKeys: true } : {}),
             });

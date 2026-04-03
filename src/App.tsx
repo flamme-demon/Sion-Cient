@@ -68,12 +68,19 @@ export default function App() {
     return () => { delete (window as unknown as Record<string, unknown>).__SION_VOICE_ACTION__; };
   }, []);
 
+  // Note: notification actions are handled via broadcast → __SION_VOICE_ACTION__
+  // No need for pendingActions consumption — the broadcast reaches JS directly
+
   // Sync mute/deafen state to Android foreground service notification
   const isMuted = useAppStore((s) => s.isMuted);
   const isDeafened = useAppStore((s) => s.isDeafened);
   const channels = useMatrixStore((s) => s.channels);
+  const lastNotifState = useRef({ muted: false, deafened: false });
   useEffect(() => {
     if (!connectedVoice) return;
+    // Only update notification if mute/deafen actually changed
+    if (lastNotifState.current.muted === isMuted && lastNotifState.current.deafened === isDeafened) return;
+    lastNotifState.current = { muted: isMuted, deafened: isDeafened };
     const channelName = channels.find(c => c.id === connectedVoice)?.name || "Voice";
     updateVoiceService(channelName, isMuted, isDeafened);
   }, [connectedVoice, isMuted, isDeafened, channels]);

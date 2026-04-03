@@ -3,35 +3,43 @@
 set -euo pipefail
 
 CARGO_TOML="src-tauri/Cargo.toml"
-CARGO_LOCK="src-tauri/Cargo.lock"
-BACKUP="src-tauri/Cargo.toml.desktop"
 
 # Force rustup toolchain (Arch Linux a un rustc système sans target Android)
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$HOME/.cargo/bin:$PATH"
 
-# S'assurer que Cargo.toml est propre (version git, pas modifiée par un build desktop)
-echo "[Sion] Restauration Cargo.toml depuis git..."
-git checkout "$CARGO_TOML" "$CARGO_LOCK" 2>/dev/null || true
-
-echo "[Sion] Sauvegarde Cargo.toml desktop..."
-cp "$CARGO_TOML" "$BACKUP"
-
-echo "[Sion] Désactivation CEF pour Android..."
-# Commenter le patch crates-io et la feature CEF
-sed -i 's/^default = \["cef"\]/default = []/' "$CARGO_TOML"
-sed -i 's/^cef = \[.*\]/# cef = []/' "$CARGO_TOML"
-sed -i 's/^tauri-runtime-cef/# tauri-runtime-cef/' "$CARGO_TOML"
-sed -i 's/^\[patch\.crates-io\]/# [patch.crates-io]/' "$CARGO_TOML"
-sed -i '/^# \[patch\.crates-io\]/,$ { /^[^#]/ s/^/# / }' "$CARGO_TOML"
-
-restore() {
-    echo "[Sion] Restauration Cargo.toml desktop..."
-    mv "$BACKUP" "$CARGO_TOML"
+enable_android() {
+    echo "[Sion] Mode Android..."
+    sed -i 's/^default = \["cef"\]/default = []/' "$CARGO_TOML"
+    sed -i 's/^cef = \[/# cef = [/' "$CARGO_TOML"
+    sed -i 's/^tauri-runtime-cef/# tauri-runtime-cef/' "$CARGO_TOML"
+    sed -i 's/^cef = { version/# cef = { version/' "$CARGO_TOML"
+    sed -i 's/^\[patch\.crates-io\]/# [patch.crates-io]/' "$CARGO_TOML"
+    sed -i '/^# \[patch\.crates-io\]/,$ { /^[^#]/ s/^/# / }' "$CARGO_TOML"
 }
-trap restore EXIT
+
+restore_desktop() {
+    echo "[Sion] Mode Desktop..."
+    sed -i 's/^default = \[\]/default = ["cef"]/' "$CARGO_TOML"
+    sed -i 's/^# cef = \[/cef = [/' "$CARGO_TOML"
+    sed -i 's/^# tauri-runtime-cef/tauri-runtime-cef/' "$CARGO_TOML"
+    sed -i 's/^# cef = { version/cef = { version/' "$CARGO_TOML"
+    sed -i 's/^# \[patch\.crates-io\]/[patch.crates-io]/' "$CARGO_TOML"
+    sed -i '/^\[patch\.crates-io\]/,$ { s/^# // }' "$CARGO_TOML"
+    echo "[Sion] Mise à jour Cargo.lock pour CEF..."
+    cd src-tauri && cargo update -p tauri --quiet 2>/dev/null; cd ..
+}
+
+trap restore_desktop EXIT
+enable_android
 
 echo "[Sion] Lancement build Android..."
 if [ "${1:-}" = "dev" ]; then
+    # Si Vite tourne déjà sur 5173, le tuer et laisser Tauri relancer le sien
+    if lsof -ti :5173 >/dev/null 2>&1; then
+        echo "[Sion] Vite actif sur :5173, on le tue pour le build"
+        kill $(lsof -ti :5173) 2>/dev/null
+        sleep 1
+    fi
     bun run tauri android dev
 elif [ "${1:-}" = "build" ]; then
     bun run tauri android build

@@ -314,6 +314,14 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
 
   await tryInitCrypto(1);
 
+  // Share Megolm keys with all devices in rooms, even unverified ones
+  // This is needed for E2EE between different accounts (voice + text)
+  const crypto = matrixClient.getCrypto();
+  if (crypto) {
+    const { AllDevicesIsolationMode } = await import("matrix-js-sdk/lib/crypto-api");
+    crypto.setDeviceIsolationMode(new AllDevicesIsolationMode(false));
+  }
+
   return matrixClient;
 }
 

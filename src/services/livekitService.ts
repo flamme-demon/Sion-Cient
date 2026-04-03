@@ -78,6 +78,24 @@ export function onScreenShareChange(cb: (info: ScreenShareInfo | null) => void):
   return () => { screenShareCallback = null; };
 }
 
+// Resume all paused audio elements on first user interaction (fixes autoplay policy)
+let autoplayUnlocked = false;
+function ensureAutoplayUnlock() {
+  if (autoplayUnlocked) return;
+  const unlock = () => {
+    autoplayUnlocked = true;
+    audioElements.forEach((el) => {
+      if (el.paused) el.play().catch(() => {});
+    });
+    document.removeEventListener("click", unlock);
+    document.removeEventListener("touchstart", unlock);
+    document.removeEventListener("keydown", unlock);
+  };
+  document.addEventListener("click", unlock, { once: false });
+  document.addEventListener("touchstart", unlock, { once: false });
+  document.addEventListener("keydown", unlock, { once: false });
+}
+
 function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
@@ -90,6 +108,11 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   el.muted = isCurrentlyDeafened;
   document.body.appendChild(el);
   audioElements.set(sid, el);
+
+  // Try to play, if blocked by autoplay policy, queue for unlock
+  el.play().catch(() => {
+    ensureAutoplayUnlock();
+  });
 }
 
 function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
@@ -215,7 +238,18 @@ export async function disconnectFromRoom() {
 
 export async function toggleMicrophone(enabled: boolean) {
   if (!currentRoom) return;
-  await currentRoom.localParticipant.setMicrophoneEnabled(enabled);
+  const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
+  if (micPub?.track) {
+    // mute/unmute keeps the track alive (works in Android background)
+    if (enabled) {
+      await micPub.track.unmute();
+    } else {
+      await micPub.track.mute();
+    }
+  } else if (enabled) {
+    // No track yet — create one (only works in foreground)
+    await currentRoom.localParticipant.setMicrophoneEnabled(true);
+  }
 }
 
 export async function switchAudioInput(deviceId: string) {

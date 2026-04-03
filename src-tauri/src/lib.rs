@@ -470,6 +470,9 @@ pub fn run() {
 
     let builder = tauri::Builder::<TauriRuntime>::default();
 
+    // Note: CEF command_line_args with '=' values cause cef::initialize to fail
+    // Autoplay is handled by resuming AudioContext on user interaction instead
+
     #[cfg(not(target_os = "android"))]
     let builder = builder
         .manage(shortcuts)

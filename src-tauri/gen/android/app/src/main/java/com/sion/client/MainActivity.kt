@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 class MainActivity : TauriActivity() {
 
   private var voiceActionReceiver: BroadcastReceiver? = null
+  private var cachedWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -23,9 +24,11 @@ class MainActivity : TauriActivity() {
       override fun run() {
         val webView = findWebView()
         if (webView != null) {
+          cachedWebView = webView
           webView.addJavascriptInterface(VoiceServiceBridge(activity), "__SION__")
+          // Allow media to play without user gesture (needed for LiveKit audio)
+          webView.settings.mediaPlaybackRequiresUserGesture = false
         } else {
-          // WebView not ready yet, retry
           window.decorView.postDelayed(this, 200)
         }
       }
@@ -41,9 +44,8 @@ class MainActivity : TauriActivity() {
           VoiceCallService.ACTION_DISCONNECT -> "disconnect"
           else -> return
         }
-        // Emit event to WebView
         runOnUiThread {
-          val webView = findWebView()
+          val webView = cachedWebView ?: findWebView()
           webView?.evaluateJavascript(
             "window.__SION_VOICE_ACTION__?.('$jsAction')",
             null
@@ -60,12 +62,50 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  override fun onPause() {
+    if (VoiceCallService.isRunning) {
+      // Skip TauriActivity.onPause() which pauses WebView
+      // Call Activity.onPause() directly for lifecycle
+      try {
+        val method = android.app.Activity::class.java.getDeclaredMethod("onPause")
+        method.isAccessible = true
+        method.invoke(this)
+      } catch (_: Exception) {
+        super.onPause()
+      }
+      return
+    }
+    super.onPause()
+  }
+
+  override fun onStop() {
+    if (VoiceCallService.isRunning) {
+      // Skip TauriActivity.onStop() which suspends WebView JS
+      // Call Activity.onStop() directly
+      try {
+        val method = android.app.Activity::class.java.getDeclaredMethod("onStop")
+        method.isAccessible = true
+        method.invoke(this)
+      } catch (_: Exception) {
+        super.onStop()
+      }
+      // Re-resume WebView to counteract any pause
+      cachedWebView?.onResume()
+      return
+    }
+    super.onStop()
+  }
+
+  override fun onResume() {
+    super.onResume()
+  }
+
   override fun onDestroy() {
     voiceActionReceiver?.let { unregisterReceiver(it) }
     super.onDestroy()
   }
 
-  private fun findWebView(): WebView? {
+  fun findWebView(): WebView? {
     return try {
       val decorView = window.decorView
       findWebViewRecursive(decorView as android.view.ViewGroup)
