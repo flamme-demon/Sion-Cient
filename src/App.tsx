@@ -212,31 +212,13 @@ export default function App() {
       setNotificationMode(useSettingsStore.getState().notificationMode);
     }).catch(() => {});
 
-    import("./services/pushService").then(({ registerPusher, subscribeToPush, syncPushRules }) => {
+    import("./services/pushService").then(({ registerPusher, syncPushRules }) => {
       registerPusher();
       syncPushRules(useSettingsStore.getState().notificationMode);
-      const unsub = subscribeToPush((data) => {
-        // Only show notification if app is not focused
-        if (document.hasFocus()) return;
-        if (data.roomId) {
-          // Trigger notification via Tauri or Web API
-          import("@tauri-apps/plugin-notification").then(({ sendNotification, isPermissionGranted }) => {
-            isPermissionGranted().then((granted) => {
-              if (!granted) return;
-              sendNotification({
-                title: data.sender || "Sion",
-                body: data.body || "Nouveau message",
-              });
-            });
-          }).catch(() => {
-            // Fallback Web notification
-            if (Notification.permission === "granted") {
-              new Notification(data.sender || "Sion", { body: data.body || "Nouveau message" });
-            }
-          });
-        }
-      });
-      return unsub;
+      // Note: SSE push subscription is NOT used on desktop — the Matrix sync
+      // handler in useMatrixStore.ts already manages notifications with proper
+      // filtering (mentions, DMs, etc.) and access to decrypted content.
+      // SSE push is only used by the Android NtfyListenerService when the app is closed.
     }).catch(() => {});
   }, [connectionStatus, credentials]);
 

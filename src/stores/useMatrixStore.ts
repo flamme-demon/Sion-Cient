@@ -770,17 +770,29 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         return;
       }
 
-      // Handle redaction of reactions in real-time
+      // Handle redaction in real-time (messages + reactions)
       if (event.getType?.() === "m.room.redaction") {
         const redactedId = event.getAssociatedId?.() || (event.getContent?.() as Record<string, string>)?.redacts;
         if (redactedId) {
           set((s) => {
             const existing = s.messages[room.roomId] || [];
+
+            // Check if the redacted event is a message itself
+            const msgIdx = existing.findIndex((m) => m.id === redactedId || m.eventId === redactedId);
+            if (msgIdx !== -1) {
+              return {
+                messages: {
+                  ...s.messages,
+                  [room.roomId]: existing.filter((_, i) => i !== msgIdx),
+                },
+              };
+            }
+
+            // Otherwise check if it's a reaction
             let changed = false;
             const updated = existing.map((msg) => {
               if (!msg.reactions) return msg;
               const newReactions = msg.reactions.map((r) => {
-                // Find if this redacted event is one of our tracked reaction events
                 const userEntry = Object.entries(r.eventIds).find(([, evtId]) => evtId === redactedId);
                 if (!userEntry) return r;
                 changed = true;

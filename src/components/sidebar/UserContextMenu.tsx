@@ -348,6 +348,19 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       </button>
       {showLatency && <LatencySparkline participantIdentity={rawUserId} />}
 
+      {/* Poke */}
+      {!isMyself && (
+        <button onClick={async () => {
+          const activeChannel = useAppStore.getState().activeChannel;
+          if (activeChannel) {
+            await matrixService.sendPoke(activeChannel).catch(() => {});
+          }
+          onClose();
+        }} style={itemStyle}>
+          👉 Poke
+        </button>
+      )}
+
       {/* Mute (local, works for everyone in vocal) */}
       {!isMyself && getCurrentRoom() && (
         <button onClick={handleMuteToggle} style={itemStyle}>
