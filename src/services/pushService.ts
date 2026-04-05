@@ -9,9 +9,84 @@
  */
 
 import { getMatrixClient } from "./matrixService";
+import type { NotificationMode } from "../stores/useSettingsStore";
 
 const NTFY_BASE_URL = "https://push.sionchat.fr";
 const PUSH_APP_ID = "fr.sionchat.client";
+
+/**
+ * Configure Matrix push rules based on notification mode.
+ * This controls what the SERVER sends as push, not client-side filtering.
+ *
+ * - "all": default rules (notify for all messages in joined rooms)
+ * - "mentions": only mentions, replies to me, and DMs
+ * - "minimal": only DMs
+ */
+export async function syncPushRules(_mode: NotificationMode): Promise<void> {
+  // Disabled — push rule filtering is handled in NtfyListenerService (Android)
+  // Server-side push rules for E2EE rooms are unreliable
+  // Clean up any previously created rules
+  const client = getMatrixClient();
+  if (!client) return;
+  try {
+    await client.deletePushRule("global", "override", "fr.sionchat.suppress_messages").catch(() => {});
+    await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+  } catch {}
+  return;
+}
+
+export async function _syncPushRulesDisabled(mode: NotificationMode): Promise<void> {
+  const client = getMatrixClient();
+  if (!client) return;
+
+  try {
+    // The override rule ".m.rule.message" controls whether normal messages trigger push
+    // We enable/disable it based on the mode
+    if (mode === "mentions" || mode === "minimal") {
+      // Suppress all room messages — only mentions/DMs will trigger via default rules
+      await client.setPushRuleEnabled("global", "override", ".m.rule.suppress_notices", true).catch(() => {});
+
+      // Add a rule to suppress all room messages (not DMs, not mentions)
+      try {
+        await client.addPushRule("global", "override", "fr.sionchat.suppress_messages", {
+          conditions: [
+            { kind: "event_match", key: "type", pattern: "m.room.message" },
+          ],
+          actions: ["dont_notify"],
+        });
+      } catch {
+        // Rule might already exist, update it
+        await client.setPushRuleEnabled("global", "override", "fr.sionchat.suppress_messages", true).catch(() => {});
+      }
+
+      if (mode === "minimal") {
+        // Also suppress mentions — only DMs pass through
+        try {
+          await client.addPushRule("global", "override", "fr.sionchat.suppress_mentions", {
+            conditions: [
+              { kind: "event_match", key: "type", pattern: "m.room.message" },
+              { kind: "contains_display_name" },
+            ],
+            actions: ["dont_notify"],
+          });
+        } catch {
+          await client.setPushRuleEnabled("global", "override", "fr.sionchat.suppress_mentions", true).catch(() => {});
+        }
+      } else {
+        // Mentions mode — allow mentions through
+        await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+      }
+    } else {
+      // "all" mode — remove our custom suppress rules
+      await client.deletePushRule("global", "override", "fr.sionchat.suppress_messages").catch(() => {});
+      await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+    }
+
+    console.log("[Sion] Push rules synced for mode:", mode);
+  } catch (err) {
+    console.warn("[Sion] Failed to sync push rules:", err);
+  }
+}
 
 /** Generate a deterministic topic name for this device */
 function getTopicId(): string {

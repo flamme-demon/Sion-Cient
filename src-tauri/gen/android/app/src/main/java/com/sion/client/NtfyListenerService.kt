@@ -203,6 +203,20 @@ class NtfyListenerService : Service() {
 
             if (foreground) return
 
+            // Check notification mode
+            val mode = getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+                .getString("notification_mode", "all") ?: "all"
+            val isDM = getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
+                .getString("${roomId}_dm", null) == "true"
+
+            android.util.Log.d("SionPush", "mode=$mode isDM=$isDM roomId=$roomId")
+
+            when (mode) {
+                "minimal" -> if (!isDM) return
+                "mentions" -> if (!isDM) return  // Can't detect mentions in E2EE — only DMs pass
+                // "all" — show everything
+            }
+
             showMessageNotification(roomId, eventId, unread)
         } catch (_: Exception) {
             // Ignore parse errors

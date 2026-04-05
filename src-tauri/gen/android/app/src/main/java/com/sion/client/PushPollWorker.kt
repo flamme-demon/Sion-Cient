@@ -76,7 +76,16 @@ class PushPollWorker(context: Context, params: WorkerParameters) : Worker(contex
                     } ?: false
 
                     if (!foreground) {
-                        showNotification(roomId, unread)
+                        val mode = applicationContext.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+                            .getString("notification_mode", "all") ?: "all"
+                        val isDM = applicationContext.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
+                            .getString("${roomId}_dm", null) == "true"
+                        val shouldShow = when (mode) {
+                            "minimal" -> isDM
+                            "mentions" -> isDM
+                            else -> true
+                        }
+                        if (shouldShow) showNotification(roomId, unread)
                     }
                 } catch (_: Exception) { }
             }

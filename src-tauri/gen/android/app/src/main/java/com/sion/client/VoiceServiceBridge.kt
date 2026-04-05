@@ -87,4 +87,19 @@ class VoiceServiceBridge(private val context: Context) {
         context.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
             .edit().putString(roomId, roomName).apply()
     }
+
+    @JavascriptInterface
+    fun saveRoomInfo(roomId: String, roomName: String, isDM: Boolean) {
+        context.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
+            .edit()
+            .putString(roomId, roomName)
+            .putString("${roomId}_dm", if (isDM) "true" else "false")
+            .apply()
+    }
+
+    @JavascriptInterface
+    fun setNotificationMode(mode: String) {
+        context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+            .edit().putString("notification_mode", mode).apply()
+    }
 }

@@ -14,6 +14,7 @@ import { usePendingUsersStore } from "./stores/usePendingUsersStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
 import { useVoiceChannel } from "./hooks/useVoiceChannel";
+import { useSettingsStore } from "./stores/useSettingsStore";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { MatrixRain } from "./components/sidebar/MatrixRain";
 import { updateVoiceService } from "./services/androidVoiceService";
@@ -201,14 +202,20 @@ export default function App() {
   useEffect(() => {
     if (connectionStatus !== "connected" || !credentials) return;
 
-    // Sync room names to Android for notification display
-    import("./services/androidVoiceService").then(({ saveRoomName }) => {
+    // Sync room info and notification mode to Android
+    import("./services/androidVoiceService").then(({ setNotificationMode }) => {
       const allChannels = useMatrixStore.getState().channels;
-      allChannels.forEach((ch) => saveRoomName(ch.id, ch.name));
+      const bridge = (window as unknown as Record<string, unknown>).__SION__ as
+        { saveRoomInfo?: (id: string, name: string, isDM: boolean) => void } | undefined;
+      if (bridge?.saveRoomInfo) {
+        allChannels.forEach((ch) => bridge.saveRoomInfo!(ch.id, ch.name, ch.isDM));
+      }
+      setNotificationMode(useSettingsStore.getState().notificationMode);
     }).catch(() => {});
 
-    import("./services/pushService").then(({ registerPusher, subscribeToPush }) => {
+    import("./services/pushService").then(({ registerPusher, subscribeToPush, syncPushRules }) => {
       registerPusher();
+      syncPushRules(useSettingsStore.getState().notificationMode);
       const unsub = subscribeToPush((data) => {
         // Only show notification if app is not focused
         if (document.hasFocus()) return;

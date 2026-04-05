@@ -89,7 +89,11 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
-      setNotificationMode: (v) => set({ notificationMode: v }),
+      setNotificationMode: (v) => {
+        set({ notificationMode: v });
+        import("../services/androidVoiceService").then(({ setNotificationMode: syncMode }) => syncMode(v)).catch(() => {});
+        import("../services/pushService").then(({ syncPushRules }) => syncPushRules(v)).catch(() => {});
+      },
     }),
     { name: "sion-settings" },
   ),

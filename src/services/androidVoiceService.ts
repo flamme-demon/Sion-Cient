@@ -66,6 +66,15 @@ export function saveRoomName(roomId: string, roomName: string) {
   }
 }
 
+/** Sync notification mode to Android service */
+export function setNotificationMode(mode: string) {
+  if (!isAndroid) return;
+  const bridge = getBridge();
+  if (bridge) {
+    try { (bridge as unknown as { setNotificationMode: (m: string) => void }).setNotificationMode(mode); } catch { /* ignore */ }
+  }
+}
+
 export function updateVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean) {
   if (!isAndroid || !serviceStarted) return;
   const bridge = getBridge();
