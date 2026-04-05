@@ -29,13 +29,9 @@ for cmd in bun cargo; do
     fi
 done
 
-# --- 2. Frontend build ---
-echo "[1/5] Build du frontend..."
-(cd "$PROJECT_DIR" && bun run build)
-
-# --- 3. Rust build ---
-echo "[2/5] Compilation Rust + CEF (peut prendre plusieurs minutes)..."
-(cd "$PROJECT_DIR/src-tauri" && cargo build --release)
+# --- 2. Full Tauri build (frontend + Rust) ---
+echo "[1/5] Build complet via Tauri (frontend + Rust + CEF)..."
+(cd "$PROJECT_DIR" && bun run tauri build 2>&1 || true)
 
 # --- 4. Find CEF libs ---
 echo "[3/5] Recherche des libs CEF..."

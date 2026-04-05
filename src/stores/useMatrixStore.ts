@@ -686,6 +686,9 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       Notification.requestPermission();
     }
 
+    // Track processed event IDs to prevent duplicates from SDK re-emissions
+    const processedEventIds = new Set<string>();
+
     // Listen for new messages and reactions (real-time)
     client.on(RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
       if (toStartOfTimeline) return;
@@ -815,7 +818,15 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         }
       }
 
+      // Skip encrypted events — they'll be handled when decrypted
+      if (evtType === "m.room.encrypted") return;
       if (evtType !== "m.room.message") return;
+      // Skip events with no ID or sender (malformed/pending decryption artifacts)
+      const eventId = event.getId?.();
+      if (!eventId || !event.getSender?.()) return;
+      // Prevent duplicate processing (SDK can emit Timeline twice for same event)
+      if (processedEventIds.has(eventId)) return;
+      processedEventIds.add(eventId);
       const content = event.getContent?.();
       if (!content?.msgtype) return;
 
@@ -1457,6 +1468,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
   deleteMessage: async (channelId, eventId) => {
     try {
+      // Can't redact local/pending events (ID starts with ~ instead of $)
+      if (!eventId.startsWith("$")) {
+        console.warn("[Sion] Cannot delete message with local ID:", eventId);
+        return;
+      }
       await matrixService.redactMessage(channelId, eventId);
       // Remove from local state immediately
       set((s) => ({

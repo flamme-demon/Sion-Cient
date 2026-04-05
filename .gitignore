@@ -47,3 +47,9 @@ package-for-windows.sh
 
 # Claude Code
 .claude/
+Sion_Client-v0.7.1.apk
+Sion_Client-v0.7.1.apk.idsig
+*.exe
+sion-release.keystore
+sion-build.zip
+*.AppImage
