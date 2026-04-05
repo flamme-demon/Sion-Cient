@@ -34,13 +34,16 @@ class NtfyListenerService : Service() {
             private set
 
         fun start(context: Context, topicUrl: String) {
-            // Save topic URL so service can recover after restart
             context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
                 .edit().putString("topic_url", topicUrl).apply()
             val intent = Intent(context, NtfyListenerService::class.java).apply {
                 putExtra(EXTRA_TOPIC_URL, topicUrl)
             }
-            context.startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {
@@ -66,6 +69,24 @@ class NtfyListenerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         android.util.Log.i("SionPush", "onStartCommand called")
+
+        // MUST call startForeground within 5 seconds
+        createNotificationChannels()
+        val fgNotification = NotificationCompat.Builder(this, FOREGROUND_CHANNEL_ID)
+            .setContentTitle("Sion")
+            .setContentText("Connecté — en attente de messages")
+            .setSmallIcon(R.drawable.ic_voice_notification)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, fgNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, fgNotification)
+        }
+        android.util.Log.i("SionPush", "Foreground started")
 
         val topicUrl = intent?.getStringExtra(EXTRA_TOPIC_URL)
             ?: getSharedPreferences("sion_push", Context.MODE_PRIVATE).getString("topic_url", null)
@@ -93,6 +114,24 @@ class NtfyListenerService : Service() {
         }
 
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // App was swiped — restart the service
+        android.util.Log.i("SionPush", "Task removed, scheduling restart")
+        val topicUrl = getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+            .getString("topic_url", null)
+        if (topicUrl != null) {
+            val restartIntent = Intent(this, NtfyListenerService::class.java).apply {
+                putExtra(EXTRA_TOPIC_URL, topicUrl)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(restartIntent)
+            } else {
+                startService(restartIntent)
+            }
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
@@ -197,12 +236,8 @@ class NtfyListenerService : Service() {
         val prefs = getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
         val roomName = prefs.getString(roomId, null)
 
-        val title = "Sion"
-        val body = if (roomName != null) {
-            if (unread > 1) "$roomName — $unread nouveaux messages" else "$roomName — Nouveau message"
-        } else {
-            if (unread > 1) "$unread nouveaux messages" else "Nouveau message"
-        }
+        val title = roomName ?: "Sion"
+        val body = if (unread > 1) "$unread messages non lus" else "Nouveau message"
 
         notificationCounter++
         val notifId = 3000 + (roomId.hashCode() and 0xFFFF)

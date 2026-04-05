@@ -875,6 +875,22 @@ export function getReactions(roomId: string, eventId: string): { emoji: string; 
   return Array.from(reactionMap.entries()).map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds }));
 }
 
+/** Mark a room as read — sends read receipt for the latest event */
+export async function markRoomAsRead(roomId: string): Promise<void> {
+  if (!matrixClient) return;
+  try {
+    const room = matrixClient.getRoom(roomId);
+    if (!room) return;
+    const timeline = room.getLiveTimeline().getEvents();
+    const lastEvent = timeline[timeline.length - 1];
+    if (lastEvent) {
+      await matrixClient.sendReadReceipt(lastEvent);
+    }
+  } catch (err) {
+    console.warn("[Sion] Failed to send read receipt:", err);
+  }
+}
+
 export async function sendReply(roomId: string, inReplyToEventId: string, body: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

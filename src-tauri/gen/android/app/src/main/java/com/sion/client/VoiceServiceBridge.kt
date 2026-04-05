@@ -1,6 +1,7 @@
 package com.sion.client
 
 import android.content.Context
+import android.content.Intent
 import android.webkit.JavascriptInterface
 
 class VoiceServiceBridge(private val context: Context) {
@@ -37,6 +38,20 @@ class VoiceServiceBridge(private val context: Context) {
     }
 
     @JavascriptInterface
+    fun requestBatteryOptimizationExemption() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
+                val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            }
+        }
+    }
+
+    @JavascriptInterface
     fun startPushListener(topicUrl: String) {
         // Save topic URL for polling
         context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
@@ -54,7 +69,10 @@ class VoiceServiceBridge(private val context: Context) {
         )
         android.util.Log.i("SionPush", "Push poll worker scheduled for topic: $topicUrl")
 
-        // Also start the SSE service for real-time when app is alive
+        // Request battery optimization exemption for persistent connection
+        requestBatteryOptimizationExemption()
+
+        // Start foreground SSE service for real-time push
         NtfyListenerService.start(context, topicUrl)
     }
 

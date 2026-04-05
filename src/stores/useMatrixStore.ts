@@ -1146,6 +1146,9 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     const room = client.getRoom(roomId);
     if (!room) return;
 
+    // Send read receipt when opening a room
+    matrixService.markRoomAsRead(roomId);
+
     const isFirstLoad = hasMoreVal === undefined;
 
     set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: true } }));

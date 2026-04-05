@@ -99,12 +99,8 @@ class PushPollWorker(context: Context, params: WorkerParameters) : Worker(contex
         val roomPrefs = applicationContext.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
         val roomName = roomPrefs.getString(roomId, null)
 
-        val title = "Sion"
-        val body = if (roomName != null) {
-            if (unread > 1) "$roomName — $unread nouveaux messages" else "$roomName — Nouveau message"
-        } else {
-            if (unread > 1) "$unread nouveaux messages" else "Nouveau message"
-        }
+        val title = roomName ?: "Sion"
+        val body = if (unread > 1) "$unread messages non lus" else "Nouveau message"
 
         val openIntent = PendingIntent.getActivity(
             applicationContext, 0,

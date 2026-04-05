@@ -14,6 +14,7 @@ class MainActivity : TauriActivity() {
 
   private var voiceActionReceiver: BroadcastReceiver? = null
   private var cachedWebView: WebView? = null
+  private var pendingRoomId: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -27,8 +28,9 @@ class MainActivity : TauriActivity() {
         if (webView != null) {
           cachedWebView = webView
           webView.addJavascriptInterface(VoiceServiceBridge(activity), "__SION__")
-          // Allow media to play without user gesture (needed for LiveKit audio)
           webView.settings.mediaPlaybackRequiresUserGesture = false
+          // Process pending notification navigation
+          tryNavigateToRoom()
         } else {
           window.decorView.postDelayed(this, 200)
         }
@@ -101,47 +103,59 @@ class MainActivity : TauriActivity() {
     super.onResume()
     // Clear push notifications when app comes to foreground
     val manager = getSystemService(NotificationManager::class.java)
-    // Only cancel message notifications (3000+), not voice call or listener
     for (notification in manager.activeNotifications) {
       if (notification.id >= 3000) {
         manager.cancel(notification.id)
       }
     }
     // Handle notification tap — navigate to room
-    handleNotificationIntent(intent)
+    handleNotificationIntent(getIntent())
   }
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
+    setIntent(intent)
     handleNotificationIntent(intent)
   }
 
   private fun handleNotificationIntent(intent: Intent?) {
     val roomId = intent?.getStringExtra("open_room_id") ?: return
+    android.util.Log.i("SionPush", "handleNotificationIntent: roomId=$roomId")
     intent.removeExtra("open_room_id")
 
     // Clear all message notifications
     val manager = getSystemService(NotificationManager::class.java)
     manager.cancelAll()
 
-    // Poll until JS is ready (cold start can take several seconds)
+    // Store pending room ID — will be processed when WebView is ready
+    pendingRoomId = roomId
+    tryNavigateToRoom()
+  }
+
+  private fun tryNavigateToRoom() {
+    val roomId = pendingRoomId ?: return
     val webView = cachedWebView ?: return
+
     var attempts = 0
     val poller = object : Runnable {
       override fun run() {
+        if (pendingRoomId == null) return
         attempts++
+        android.util.Log.d("SionPush", "Polling for __SION_OPEN_ROOM__ attempt $attempts")
         webView.evaluateJavascript(
           "typeof window.__SION_OPEN_ROOM__ === 'function' ? 'ready' : 'no'"
         ) { result ->
           if (result.contains("ready")) {
+            android.util.Log.i("SionPush", "Navigating to room: $roomId")
             webView.evaluateJavascript("window.__SION_OPEN_ROOM__('$roomId')", null)
-          } else if (attempts < 15) {
+            pendingRoomId = null
+          } else if (attempts < 30) {
             webView.postDelayed(this, 1000)
           }
         }
       }
     }
-    webView.postDelayed(poller, 2000)
+    webView.postDelayed(poller, 1000)
   }
 
   override fun onDestroy() {

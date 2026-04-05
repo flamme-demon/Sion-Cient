@@ -65,14 +65,23 @@ export default function App() {
         if (voiceId) leaveVoiceRef.current(voiceId);
       }
     };
-    // Handle notification tap — open room
+    // Handle notification tap — open room (with retry until channels loaded)
     (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string) => {
-      const channel = useMatrixStore.getState().channels.find(c => c.id === roomId);
-      if (channel) {
-        useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
-        useAppStore.getState().setMobileView("chat");
-        useMatrixStore.getState().loadRoomHistory(roomId);
-      }
+      console.log("[Sion] Opening room from notification:", roomId);
+      let retries = 0;
+      const tryOpen = () => {
+        const channel = useMatrixStore.getState().channels.find(c => c.id === roomId);
+        if (channel) {
+          console.log("[Sion] Navigating to channel:", channel.name);
+          useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
+          useAppStore.getState().setMobileView("chat");
+          useMatrixStore.getState().loadRoomHistory(roomId);
+        } else if (retries < 20) {
+          retries++;
+          setTimeout(tryOpen, 1000);
+        }
+      };
+      tryOpen();
     };
 
     return () => {
