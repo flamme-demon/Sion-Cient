@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { CrownIcon, ShieldIcon, FileIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
-import { useAdminStore } from "../../stores/useAdminStore";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { LinkPreview } from "./LinkPreview";

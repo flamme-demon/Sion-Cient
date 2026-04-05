@@ -34,7 +34,7 @@ export function LoginPage() {
   const captchaSiteKey = (registrationFlows?.params as Record<string, Record<string, string>>)?.["m.login.recaptcha"]?.public_key;
 
   // Fetch flows when switching to register mode or changing homeserver
-  const fetchFlowsDebounceRef = useRef<ReturnType<typeof setTimeout>>(null);
+  const fetchFlowsDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fetchFlows = useCallback(() => {
     if (mode !== "register") return;
     const hs = homeserver.trim();

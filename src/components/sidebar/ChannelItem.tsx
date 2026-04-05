@@ -58,7 +58,6 @@ function getParticipantInfo(identity: string, localUserId: string | null, localD
 export function ChannelItem({ channel }: { channel: Channel }) {
   const activeChannel = useAppStore((s) => s.activeChannel);
   const connectedVoiceChannel = useAppStore((s) => s.connectedVoiceChannel);
-  const _connectingVoiceChannel = useAppStore((s) => s.connectingVoiceChannel);
   const setActiveChannel = useAppStore((s) => s.setActiveChannel);
   const loadRoomHistory = useMatrixStore((s) => s.loadRoomHistory);
   const currentUserId = useMatrixStore((s) => s.currentUserId);

@@ -194,14 +194,14 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     }
   };
 
-  const _handleKickVoice = async () => {
+  // TODO: handleKickVoice and handleKickRoom — uncomment when UI buttons are added
+  /*
+  const handleKickVoice = async () => {
     if (!activeChannel || actionLoading) return;
     setActionLoading(true);
     try {
-      // Retirer le call.member de l'utilisateur (le déconnecte du vocal)
       const client = matrixService.getMatrixClient();
       if (client) {
-        // Trouver le state_key du call.member de cet utilisateur
         const room = client.getRoom(activeChannel);
         if (room) {
           const callMembers = room.currentState.getStateEvents("org.matrix.msc3401.call.member");
@@ -209,7 +209,6 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
           for (const evt of events) {
             const sk = evt.getStateKey?.() || "";
             if (sk.includes(matrixUserId)) {
-              // Envoyer un contenu vide pour retirer la membership
               await client.sendStateEvent(activeChannel, "org.matrix.msc3401.call.member" as any, {}, sk);
             }
           }
@@ -223,7 +222,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     }
   };
 
-  const _handleKickRoom = async () => {
+  const handleKickRoom = async () => {
     if (!activeChannel || actionLoading) return;
     setActionLoading(true);
     try {
@@ -235,6 +234,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       setActionLoading(false);
     }
   };
+  */
 
   const handleBan = async () => {
     if (!activeChannel || actionLoading) return;
