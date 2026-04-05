@@ -140,9 +140,7 @@ export async function registerUser(
     }
   }
 
-  // Step 2: determine which stages to complete
-  const stages: { type: string; [key: string]: unknown }[] = [];
-
+  // Step 2: complete stages
   if (token) {
     // Complete token stage
     await client.registerRequest({

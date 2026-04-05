@@ -327,8 +327,8 @@ export function VerificationBanner() {
                   color: "var(--color-on-surface)",
                   background: "var(--color-surface-container-high)",
                   boxSizing: "border-box",
-                  WebkitTextSecurity: "disc" as never,
-                }}
+                  WebkitTextSecurity: "disc",
+                } as React.CSSProperties}
               />
 
               <button

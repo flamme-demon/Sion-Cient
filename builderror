@@ -1,0 +1,194 @@
+[9/10] Staging des libs CEF pour le bundler...
+  13 fichiers CEF copies dans cef-dist/
+[10/10] Generation des installeurs (MSI + NSIS)...
+$ tauri build
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `bun run build`
+$ tsc -b && vite build
+src/App.tsx:43:9 - error TS6133: 'showAccountPanel' is declared but its value is never read.
+
+43   const showAccountPanel = useAppStore((s) => s.showAccountPanel);
+           ~~~~~~~~~~~~~~~~
+
+src/App.tsx:211:74 - error TS2345: Argument of type 'boolean | undefined' is not assignable to parameter of type 'boolean'.
+  Type 'undefined' is not assignable to type 'boolean'.
+
+211         allChannels.forEach((ch) => bridge.saveRoomInfo!(ch.id, ch.name, ch.isDM));
+                                                                             ~~~~~~~
+
+src/components/admin/PendingUsers.tsx:57:25 - error TS6133: 'activeUsers' is declared but its value is never read.
+
+57   const { pendingUsers, activeUsers, loading, refresh } = usePendingUsers();
+                           ~~~~~~~~~~~
+
+src/components/chat/ChatInput.tsx:60:26 - error TS2554: Expected 1 arguments, but got 0.
+
+60   const gifDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+                            ~~~~~~
+
+  node_modules/@types/react/index.d.ts:1737:24
+    1737     function useRef<T>(initialValue: T): RefObject<T>;
+                                ~~~~~~~~~~~~~~~
+    An argument for 'initialValue' was not provided.
+
+src/components/chat/Message.tsx:375:9 - error TS6133: 'isAdmin' is declared but its value is never read.
+
+375   const isAdmin = useAdminStore((s) => s.isAdmin);
+            ~~~~~~~
+
+src/components/layout/SettingsPanel.tsx:59:10 - error TS6133: 'micTesting' is declared but its value is never read.
+
+59   const [micTesting, setMicTesting] = useState(false);
+            ~~~~~~~~~~
+
+src/components/sidebar/ChannelItem.tsx:61:9 - error TS6133: 'connectingVoiceChannel' is declared but its value is never read.
+
+61   const connectingVoiceChannel = useAppStore((s) => s.connectingVoiceChannel);
+           ~~~~~~~~~~~~~~~~~~~~~~
+
+src/components/sidebar/UserContextMenu.tsx:197:9 - error TS6133: 'handleKickVoice' is declared but its value is never read.
+
+197   const handleKickVoice = async () => {
+            ~~~~~~~~~~~~~~~
+
+src/components/sidebar/UserContextMenu.tsx:226:9 - error TS6133: 'handleKickRoom' is declared but its value is never read.
+
+226   const handleKickRoom = async () => {
+            ~~~~~~~~~~~~~~
+
+src/components/sidebar/VerificationBanner.tsx:330:19 - error TS2353: Object literal may only specify known properties, and 'WebkitTextSecurity' does not exist in type 'Properties<string | number, string & {}>'.
+
+330                   WebkitTextSecurity: "disc" as never,
+                      ~~~~~~~~~~~~~~~~~~
+
+  node_modules/@types/react/index.d.ts:2808:9
+    2808         style?: CSSProperties | undefined;
+                 ~~~~~
+    The expected type comes from property 'style' which is declared here on type 'DetailedHTMLProps<InputHTMLAttributes<HTMLInputElement>, HTMLInputElement>'
+
+src/pages/LoginPage.tsx:37:33 - error TS2554: Expected 1 arguments, but got 0.
+
+37   const fetchFlowsDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+                                   ~~~~~~
+
+  node_modules/@types/react/index.d.ts:1737:24
+    1737     function useRef<T>(initialValue: T): RefObject<T>;
+                                ~~~~~~~~~~~~~~~
+    An argument for 'initialValue' was not provided.
+
+src/services/matrixService.ts:144:9 - error TS6133: 'stages' is declared but its value is never read.
+
+144   const stages: { type: string; [key: string]: unknown }[] = [];
+            ~~~~~~
+
+src/services/pushService.ts:32:43 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+32     await client.deletePushRule("global", "override", "fr.sionchat.suppress_messages").catch(() => {});
+                                             ~~~~~~~~~~
+
+src/services/pushService.ts:33:43 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+33     await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+                                             ~~~~~~~~~~
+
+src/services/pushService.ts:47:49 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+47       await client.setPushRuleEnabled("global", "override", ".m.rule.suppress_notices", true).catch(() => {});
+                                                   ~~~~~~~~~~
+
+src/services/pushService.ts:51:44 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+51         await client.addPushRule("global", "override", "fr.sionchat.suppress_messages", {
+                                              ~~~~~~~~~~
+
+src/services/pushService.ts:59:51 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+59         await client.setPushRuleEnabled("global", "override", "fr.sionchat.suppress_messages", true).catch(() => {});
+                                                     ~~~~~~~~~~
+
+src/services/pushService.ts:65:46 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+65           await client.addPushRule("global", "override", "fr.sionchat.suppress_mentions", {
+                                                ~~~~~~~~~~
+
+src/services/pushService.ts:73:53 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+73           await client.setPushRuleEnabled("global", "override", "fr.sionchat.suppress_mentions", true).catch(() => {});
+                                                       ~~~~~~~~~~
+
+src/services/pushService.ts:77:47 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+77         await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+                                                 ~~~~~~~~~~
+
+src/services/pushService.ts:81:45 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+81       await client.deletePushRule("global", "override", "fr.sionchat.suppress_messages").catch(() => {});
+                                               ~~~~~~~~~~
+
+src/services/pushService.ts:82:45 - error TS2345: Argument of type '"override"' is not assignable to parameter of type 'PushRuleKind'.
+
+82       await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+                                               ~~~~~~~~~~
+
+src/services/pushService.ts:122:32 - error TS2352: Conversion of type '{ app_display_name: string; app_id: string; data: { url: string; }; device_display_name: string; kind: null; lang: string; pushkey: string; }' to type 'IPusherRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property '"kind"' are incompatible.
+    Type 'null' is not comparable to type 'string'.
+
+122         await client.setPusher({
+                                   ~
+123           app_display_name: "Sion Client",
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+...
+129           pushkey: oldPushkey,
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+130         } as Parameters<typeof client.setPusher>[0]).catch(() => {});
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+src/services/pushService.ts:169:28 - error TS2352: Conversion of type '{ app_display_name: string; app_id: string; data: { url: string; }; device_display_name: string; kind: null; lang: string; pushkey: string; }' to type 'IPusherRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property '"kind"' are incompatible.
+    Type 'null' is not comparable to type 'string'.
+
+169     await client.setPusher({
+                               ~
+170       app_display_name: "Sion Client",
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+...
+176       pushkey: topicUrl,
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+177     } as Parameters<typeof client.setPusher>[0]);
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+src/stores/useMatrixStore.ts:928:11 - error TS2322: Type 'string | boolean' is not assignable to type 'boolean'.
+  Type 'string' is not assignable to type 'boolean'.
+
+928           shouldNotify = isDM;
+              ~~~~~~~~~~~~
+
+src/stores/useMatrixStore.ts:1067:66 - error TS2345: Argument of type 'Record<string, string[]>' is not assignable to parameter of type 'Record<string, never> | (LocalNotificationSettings & SecretStorageKeyDescriptionAesV1)'.
+  Type 'Record<string, string[]>' is not assignable to type 'LocalNotificationSettings & SecretStorageKeyDescriptionAesV1'.                                                                                                                         Property 'is_silenced' is missing in type 'Record<string, string[]>' but required in type 'LocalNotificationSettings'.                                                                                                                                                                                                                                              1067                   await client.setAccountData("m.direct" as any, directContent);                                                                                                         ~~~~~~~~~~~~~                                     
+  node_modules/matrix-js-sdk/lib/@types/local_notifications.d.ts:2:5
+    2     is_silenced: boolean;
+          ~~~~~~~~~~~
+    'is_silenced' is declared here.
+
+
+Found 26 errors.
+
+beforeBuildCommand `bun run build` failed with exit code 2
+       Error beforeBuildCommand `bun run build` failed with exit code 2
+error: script "tauri" exited with code 1
+
+========================================
+  Build reussi !
+  Binaire: C:\sion-client\src-tauri\target\release\sion-client.exe (12.6 MB)
+
+  Installeur MSI: C:\sion-client\src-tauri\target\release\bundle\msi\Sion Client_0.1.0_x64_en-US.msi (150 MB)
+  Installeur NSIS: C:\sion-client\src-tauri\target\release\bundle\nsis\Sion Client_0.1.0_x64-setup.exe (110.4 MB)
+
+  Creation du dossier standalone...
+  Dossier standalone: C:\sion-client\src-tauri\target\release\sion-client-standalone
+  Archive ZIP: C:\sion-client\src-tauri\target\release\sion-client-standalone.zip (147.9 MB)
+========================================
+
+PS C:\sion-client>

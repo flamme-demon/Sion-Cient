@@ -57,7 +57,7 @@ export function ChatInput() {
   const [gifSearch, setGifSearch] = useState("");
   const [gifResults, setGifResults] = useState<{ id: string; url: string; preview: string; width: number; height: number }[]>([]);
   const [gifLoading, setGifLoading] = useState(false);
-  const gifDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const gifDebounceRef = useRef<ReturnType<typeof setTimeout>>(null);
 
   // Message history (session-only)
   const messageHistory = useRef<string[]>([]);

@@ -54,7 +54,7 @@ function usePendingUsers() {
 
 export function PendingUsers() {
   const { t } = useTranslation();
-  const { pendingUsers, activeUsers, loading, refresh } = usePendingUsers();
+  const { pendingUsers, activeUsers: _activeUsers, loading, refresh } = usePendingUsers();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const refreshPendingCount = usePendingUsersStore((s) => s.refresh);
 

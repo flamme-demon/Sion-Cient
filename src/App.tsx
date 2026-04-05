@@ -40,7 +40,6 @@ export default function App() {
   const stopAdminCheck = useAdminStore((s) => s.stopAdminCheck);
   const startPendingListener = usePendingUsersStore((s) => s.startListening);
   const stopPendingListener = usePendingUsersStore((s) => s.stopListening);
-  const showAccountPanel = useAppStore((s) => s.showAccountPanel);
   const toggleAccountPanel = useAppStore((s) => s.toggleAccountPanel);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
   const toggleAdmin = useAppStore((s) => s.toggleAdmin);
@@ -208,7 +207,7 @@ export default function App() {
       const bridge = (window as unknown as Record<string, unknown>).__SION__ as
         { saveRoomInfo?: (id: string, name: string, isDM: boolean) => void } | undefined;
       if (bridge?.saveRoomInfo) {
-        allChannels.forEach((ch) => bridge.saveRoomInfo!(ch.id, ch.name, ch.isDM));
+        allChannels.forEach((ch) => bridge.saveRoomInfo!(ch.id, ch.name, ch.isDM ?? false));
       }
       setNotificationMode(useSettingsStore.getState().notificationMode);
     }).catch(() => {});

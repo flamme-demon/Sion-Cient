@@ -194,7 +194,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     }
   };
 
-  const handleKickVoice = async () => {
+  const _handleKickVoice = async () => {
     if (!activeChannel || actionLoading) return;
     setActionLoading(true);
     try {
@@ -223,7 +223,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     }
   };
 
-  const handleKickRoom = async () => {
+  const _handleKickRoom = async () => {
     if (!activeChannel || actionLoading) return;
     setActionLoading(true);
     try {

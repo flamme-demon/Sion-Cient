@@ -372,7 +372,6 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
     return () => window.removeEventListener("mousedown", handleClick);
   }, [showReactionPicker, showUserPopover]);
 
-  const isAdmin = useAdminStore((s) => s.isAdmin);
   const myPowerLevel = activeChannel ? matrixService.getUserPowerLevel(activeChannel) : 0;
   const targetPowerLevel = activeChannel && message.senderId ? matrixService.getMemberPowerLevel(activeChannel, message.senderId) : 0;
   const canModerateUser = myPowerLevel >= 50 && myPowerLevel > targetPowerLevel;

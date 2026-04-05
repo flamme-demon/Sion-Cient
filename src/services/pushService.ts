@@ -9,6 +9,7 @@
  */
 
 import { getMatrixClient } from "./matrixService";
+import { PushRuleKind } from "matrix-js-sdk";
 import type { NotificationMode } from "../stores/useSettingsStore";
 
 const NTFY_BASE_URL = "https://push.sionchat.fr";
@@ -29,8 +30,8 @@ export async function syncPushRules(_mode: NotificationMode): Promise<void> {
   const client = getMatrixClient();
   if (!client) return;
   try {
-    await client.deletePushRule("global", "override", "fr.sionchat.suppress_messages").catch(() => {});
-    await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+    await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_messages").catch(() => {});
+    await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_mentions").catch(() => {});
   } catch {}
   return;
 }
@@ -44,11 +45,11 @@ export async function _syncPushRulesDisabled(mode: NotificationMode): Promise<vo
     // We enable/disable it based on the mode
     if (mode === "mentions" || mode === "minimal") {
       // Suppress all room messages — only mentions/DMs will trigger via default rules
-      await client.setPushRuleEnabled("global", "override", ".m.rule.suppress_notices", true).catch(() => {});
+      await client.setPushRuleEnabled("global", PushRuleKind.Override, ".m.rule.suppress_notices", true).catch(() => {});
 
       // Add a rule to suppress all room messages (not DMs, not mentions)
       try {
-        await client.addPushRule("global", "override", "fr.sionchat.suppress_messages", {
+        await client.addPushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_messages", {
           conditions: [
             { kind: "event_match", key: "type", pattern: "m.room.message" },
           ],
@@ -56,13 +57,13 @@ export async function _syncPushRulesDisabled(mode: NotificationMode): Promise<vo
         });
       } catch {
         // Rule might already exist, update it
-        await client.setPushRuleEnabled("global", "override", "fr.sionchat.suppress_messages", true).catch(() => {});
+        await client.setPushRuleEnabled("global", PushRuleKind.Override, "fr.sionchat.suppress_messages", true).catch(() => {});
       }
 
       if (mode === "minimal") {
         // Also suppress mentions — only DMs pass through
         try {
-          await client.addPushRule("global", "override", "fr.sionchat.suppress_mentions", {
+          await client.addPushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_mentions", {
             conditions: [
               { kind: "event_match", key: "type", pattern: "m.room.message" },
               { kind: "contains_display_name" },
@@ -70,16 +71,16 @@ export async function _syncPushRulesDisabled(mode: NotificationMode): Promise<vo
             actions: ["dont_notify"],
           });
         } catch {
-          await client.setPushRuleEnabled("global", "override", "fr.sionchat.suppress_mentions", true).catch(() => {});
+          await client.setPushRuleEnabled("global", PushRuleKind.Override, "fr.sionchat.suppress_mentions", true).catch(() => {});
         }
       } else {
         // Mentions mode — allow mentions through
-        await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+        await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_mentions").catch(() => {});
       }
     } else {
       // "all" mode — remove our custom suppress rules
-      await client.deletePushRule("global", "override", "fr.sionchat.suppress_messages").catch(() => {});
-      await client.deletePushRule("global", "override", "fr.sionchat.suppress_mentions").catch(() => {});
+      await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_messages").catch(() => {});
+      await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_mentions").catch(() => {});
     }
 
     console.log("[Sion] Push rules synced for mode:", mode);
@@ -124,10 +125,10 @@ export async function registerPusher(): Promise<void> {
           app_id: PUSH_APP_ID,
           data: { url: oldUrl },
           device_display_name: client.getDeviceId() || "Sion Device",
-          kind: null,
+          kind: null as unknown as string,
           lang: "fr",
           pushkey: oldPushkey,
-        } as Parameters<typeof client.setPusher>[0]).catch(() => {});
+        }).catch(() => {});
       }
     }
 
@@ -171,10 +172,10 @@ export async function unregisterPusher(): Promise<void> {
       app_id: PUSH_APP_ID,
       data: { url: NTFY_BASE_URL },
       device_display_name: client.getDeviceId() || "Sion Device",
-      kind: null,
+      kind: null as unknown as string,
       lang: "fr",
       pushkey: topicUrl,
-    } as Parameters<typeof client.setPusher>[0]);
+    });
   } catch { /* ignore */ }
 }
 

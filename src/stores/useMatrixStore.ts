@@ -892,7 +892,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const currentUserId = client.getUserId();
       if (senderId !== currentUserId) {
         const isPoke = msgtype === "m.poke";
-        const isDM = room.getDMInviter?.() || (() => {
+        const isDM = !!room.getDMInviter?.() || (() => {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const directEvent = client.getAccountData("m.direct" as any);
@@ -1064,7 +1064,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
                 const existing = directContent[sender] || [];
                 if (!existing.includes(roomId)) {
                   directContent[sender] = [...existing, roomId];
-                  await client.setAccountData("m.direct" as any, directContent);
+                  await client.setAccountData("m.direct" as any, directContent as any);
                 }
               } catch { /* ignore */ }
             }

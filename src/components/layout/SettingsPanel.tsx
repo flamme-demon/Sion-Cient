@@ -56,7 +56,7 @@ export function SettingsPanel() {
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
   const [micLevel, setMicLevel] = useState(0);
-  const [micTesting, setMicTesting] = useState(false);
+  const [_micTesting, setMicTesting] = useState(false);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micAnimRef = useRef<number>(0);
   const micCtxRef = useRef<AudioContext | null>(null);
