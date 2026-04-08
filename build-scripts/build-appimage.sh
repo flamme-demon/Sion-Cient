@@ -42,8 +42,20 @@ for cmd in bun cargo; do
     fi
 done
 
-# --- 2. Full Tauri build (frontend + Rust) ---
-echo "[1/5] Build complet via Tauri (frontend + Rust + CEF)..."
+# --- 2. Clean caches that have repeatedly bitten us with stale modules ---
+# Vite incremental cache and the previous frontend dist are wiped so the
+# next build picks up every source change. The release binary is also
+# removed to force re-link (Cargo's incremental compilation of dependencies
+# is preserved). Without this we've seen AppImages ship with previous-build
+# JS bundles that were missing recent fixes.
+echo "[1/5] Nettoyage des caches (dist, .vite, binaire release)..."
+rm -rf "$PROJECT_DIR/dist" \
+       "$PROJECT_DIR/node_modules/.vite" \
+       "$RELEASE_DIR/sion-client" \
+       "$RELEASE_DIR/SionClient.AppDir" 2>/dev/null || true
+
+# --- 3. Full Tauri build (frontend + Rust) ---
+echo "[2/5] Build complet via Tauri (frontend + Rust + CEF)..."
 (cd "$PROJECT_DIR" && bun run tauri build 2>&1 || true)
 
 # --- 4. Find CEF libs ---

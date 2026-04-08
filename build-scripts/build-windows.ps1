@@ -180,10 +180,23 @@ Write-Host "  bun install..." -ForegroundColor Gray
 Set-Location $ProjectDir
 bun install
 
+# Wipe Vite + dist caches and the previous release binary that have
+# repeatedly bitten us with stale modules. Cargo's incremental cache for
+# dependencies is preserved (we only nuke the final binary so the link
+# step happens fresh).
+Write-Host "  Nettoyage des caches Vite et binaire release..." -ForegroundColor Gray
+if (Test-Path "$ProjectDir\dist") { Remove-Item -Recurse -Force "$ProjectDir\dist" }
+if (Test-Path "$ProjectDir\node_modules\.vite") { Remove-Item -Recurse -Force "$ProjectDir\node_modules\.vite" }
+if (Test-Path "$releaseDir\sion-client.exe") { Remove-Item -Force "$releaseDir\sion-client.exe" }
+
 # --- 7. Build frontend ---
 Write-Host "[7/10] Build du frontend..." -ForegroundColor Yellow
 Set-Location $ProjectDir
 bun run build
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERREUR: Build frontend echoue (code $LASTEXITCODE)." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
 # --- 8. Build Rust (compilation seule, pas de bundling) ---
 Write-Host "[8/10] Compilation Rust + CEF..." -ForegroundColor Yellow
