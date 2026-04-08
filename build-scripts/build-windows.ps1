@@ -289,8 +289,11 @@ if (Test-Path $exePath) {
 
     if ($msiPath) {
         $msiSize = [math]::Round($msiPath.Length / 1MB, 1)
-        Copy-Item -Force $msiPath.FullName "$buildAppsDir\"
-        Write-Host "  Installeur MSI: $buildAppsDir\$($msiPath.Name) ($msiSize MB)" -ForegroundColor White
+        # Strip the locale suffix that WiX appends — we want a clean filename
+        # like "Sion Client_0.8.2_x64.msi" instead of "..._x64_en-US.msi".
+        $cleanMsiName = $msiPath.Name -replace '_[a-z]{2}-[A-Z]{2}\.msi$', '.msi'
+        Copy-Item -Force $msiPath.FullName "$buildAppsDir\$cleanMsiName"
+        Write-Host "  Installeur MSI: $buildAppsDir\$cleanMsiName ($msiSize MB)" -ForegroundColor White
     }
     if ($nsisPath) {
         $nsisSize = [math]::Round($nsisPath.Length / 1MB, 1)
