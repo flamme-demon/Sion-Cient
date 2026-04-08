@@ -28,6 +28,8 @@ export function ScreenShareView() {
         ref={videoRef}
         autoPlay
         playsInline
+        controls
+        controlsList="nodownload noremoteplayback"
         className="w-full max-h-[50vh] object-contain"
       />
       <div className="text-xs text-[var(--color-text-secondary)] py-1">

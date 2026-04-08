@@ -4,6 +4,8 @@ export interface LiveKitConfig {
   roomName: string;
 }
 
+export type ConnectionQuality = "excellent" | "good" | "poor" | "lost" | "unknown";
+
 export interface ParticipantInfo {
   identity: string;
   name: string;
@@ -11,4 +13,5 @@ export interface ParticipantInfo {
   isMuted: boolean;
   isScreenSharing: boolean;
   audioLevel: number;
+  connectionQuality: ConnectionQuality;
 }

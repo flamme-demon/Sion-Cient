@@ -8,22 +8,95 @@ interface LinkPreviewData {
   site_name?: string;
 }
 
-const previewCache = new Map<string, LinkPreviewData | null>();
+// Successful results — cached forever for the session.
+const previewCache = new Map<string, LinkPreviewData>();
+// Failed/empty results — cached with a short TTL so we don't hammer broken
+// URLs on every re-render but still recover quickly from transient failures.
+const failureCache = new Map<string, number>();
+const FAILURE_TTL_MS = 10_000;
+
+// Concurrency limiter — when a channel scrolls and many messages render at
+// once, dozens of fetch_link_preview calls used to fire in parallel and most
+// of them failed with "error sending request" (connection/TLS exhaustion).
+// 8 is a balance between speed (parallelism) and avoiding the overload that
+// caused the cold-start failures.
+const MAX_CONCURRENT = 8;
+let activeFetches = 0;
+const fetchQueue: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (activeFetches < MAX_CONCURRENT) {
+    activeFetches++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    fetchQueue.push(() => {
+      activeFetches++;
+      resolve();
+    });
+  });
+}
+
+function releaseSlot(): void {
+  activeFetches--;
+  // LIFO: process the most recently queued fetch first. Messages render
+  // chronologically (oldest at the top, newest at the bottom), so popping
+  // the latest entry means we prioritise the messages near the user's
+  // scroll position (which is usually the bottom of the chat).
+  const next = fetchQueue.pop();
+  if (next) next();
+}
+
+/**
+ * Detect transient errors that warrant a retry (versus permanent failures
+ * like HTTP 403 / 404 which we should accept). reqwest reports connection
+ * issues as "error sending request"; this matches such transient errors.
+ */
+function isTransientError(err: unknown): boolean {
+  const msg = String(err || "");
+  return msg.includes("error sending request") || msg.includes("dns") || msg.includes("timeout");
+}
 
 async function fetchPreview(url: string): Promise<LinkPreviewData | null> {
-  if (previewCache.has(url)) return previewCache.get(url)!;
+  // Successful cache hit
+  const hit = previewCache.get(url);
+  if (hit) return hit;
 
+  // Recent failure — skip the fetch
+  const failAt = failureCache.get(url);
+  if (failAt && Date.now() - failAt < FAILURE_TTL_MS) return null;
+
+  await acquireSlot();
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    const data = await invoke<LinkPreviewData>("fetch_link_preview", { url });
-    const hasData = data && (data.title || data.description);
-    if (hasData) {
-      previewCache.set(url, data);
-      return data;
+
+    // Try up to 2 times for transient errors (e.g. cold-start TLS failures
+    // that resolve once the shared client has live keep-alive connections).
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const data = await invoke<LinkPreviewData>("fetch_link_preview", { url });
+        const hasData = data && (data.title || data.description);
+        if (hasData) {
+          previewCache.set(url, data);
+          failureCache.delete(url);
+          return data;
+        }
+        // No usable data — not a transient error, give up
+        failureCache.set(url, Date.now());
+        return null;
+      } catch (err) {
+        lastError = err;
+        if (!isTransientError(err) || attempt === 1) break;
+        // Brief backoff so the shared client can establish keep-alive
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
+    console.warn("[Sion][LinkPreview] fetch failed after retries", url, lastError);
+    failureCache.set(url, Date.now());
     return null;
-  } catch {
-    return null;
+  } finally {
+    releaseSlot();
   }
 }
 
@@ -36,8 +109,9 @@ export function LinkPreview({ url }: { url: string }) {
 
   useEffect(() => {
     if (!linkPreviews) return;
-    if (previewCache.has(url)) {
-      setData(previewCache.get(url)!);
+    const hit = previewCache.get(url);
+    if (hit) {
+      setData(hit);
       setLoaded(true);
       return;
     }

@@ -12,7 +12,10 @@ import { getMatrixClient } from "./matrixService";
 import { PushRuleKind } from "matrix-js-sdk";
 import type { NotificationMode } from "../stores/useSettingsStore";
 
-const NTFY_BASE_URL = "https://push.sionchat.fr";
+const NTFY_BASE_URL = import.meta.env.VITE_NTFY_BASE_URL;
+if (!NTFY_BASE_URL) {
+  throw new Error("[Sion] VITE_NTFY_BASE_URL is not defined in environment variables");
+}
 const PUSH_APP_ID = "fr.sionchat.client";
 
 /**

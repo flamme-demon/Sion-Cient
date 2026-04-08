@@ -84,6 +84,7 @@ export function ServerHeader() {
         {!isMobile && isAdmin !== false && (
           <button
             onClick={toggleAdmin}
+            data-panel-toggle
             style={{
               padding: 8,
               borderRadius: 12,

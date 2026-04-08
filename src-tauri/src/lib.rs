@@ -236,6 +236,20 @@ fn build_client() -> Result<reqwest::Client, reqwest::Error> {
         .build()
 }
 
+// Shared HTTP client — created once and reused across all link-preview fetches.
+// Per-call construction was exhausting connection/TLS resources under load.
+static SHARED_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn shared_client() -> &'static reqwest::Client {
+    SHARED_HTTP_CLIENT.get_or_init(|| {
+        build_client().unwrap_or_else(|err| {
+            log::error!("[Sion] Failed to build shared HTTP client: {}", err);
+            // Fallback to a default client if the configured build fails
+            reqwest::Client::new()
+        })
+    })
+}
+
 /// Try oEmbed for sites that block scraping (YouTube, etc.)
 async fn try_oembed(client: &reqwest::Client, url: &str) -> Option<LinkPreview> {
     // Known oEmbed endpoints
@@ -276,10 +290,10 @@ async fn try_oembed(client: &reqwest::Client, url: &str) -> Option<LinkPreview> 
 }
 
 async fn fetch_link_preview_inner(url: &str) -> Result<LinkPreview, Box<dyn std::error::Error>> {
-    let client = build_client()?;
+    let client = shared_client();
 
     // Try oEmbed first for known sites
-    if let Some(preview) = try_oembed(&client, url).await {
+    if let Some(preview) = try_oembed(client, url).await {
         return Ok(preview);
     }
 

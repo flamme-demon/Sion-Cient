@@ -279,3 +279,66 @@ export function MenuIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+interface SignalBarsIconProps extends IconProps {
+  /** "excellent" | "good" | "poor" | "lost" | "unknown" */
+  quality: "excellent" | "good" | "poor" | "lost" | "unknown";
+  size?: number;
+}
+
+/**
+ * Cellular-style signal strength bars (4 bars). The first N bars are filled
+ * with a color matching the quality level, the rest are dim. "lost" shows all
+ * bars in red, "unknown" shows all bars dimmed.
+ */
+export function SignalBarsIcon({ quality, size = 14, className, style }: SignalBarsIconProps) {
+  const filledCount: number =
+    quality === "excellent" ? 4 :
+    quality === "good"      ? 3 :
+    quality === "poor"      ? 1 :
+    quality === "lost"      ? 0 :
+    /* unknown */              0;
+
+  const fillColor =
+    quality === "excellent" || quality === "good" ? "var(--color-green)" :
+    quality === "poor"                            ? "var(--color-yellow)" :
+    quality === "lost"                            ? "var(--color-red)" :
+    /* unknown */                                   "var(--color-outline)";
+
+  const dimColor = "var(--color-outline-variant)";
+
+  // 4 bars with growing heights inside a 16x16 viewbox
+  const bars = [
+    { x: 1,  y: 11, w: 2.5, h: 4 },
+    { x: 5,  y: 8,  w: 2.5, h: 7 },
+    { x: 9,  y: 5,  w: 2.5, h: 10 },
+    { x: 13, y: 2,  w: 2.5, h: 13 },
+  ];
+
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      className={className}
+      style={style}
+      aria-label={`Connection quality: ${quality}`}
+    >
+      {bars.map((b, i) => (
+        <rect
+          key={i}
+          x={b.x}
+          y={b.y}
+          width={b.w}
+          height={b.h}
+          rx={0.6}
+          fill={i < filledCount ? fillColor : dimColor}
+        />
+      ))}
+      {quality === "lost" && (
+        // Strike-through indicator when fully lost
+        <line x1="1" y1="15" x2="15" y2="1" stroke="var(--color-red)" strokeWidth="1.5" strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}

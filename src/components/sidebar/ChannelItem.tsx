@@ -1,4 +1,4 @@
-import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon } from "../icons";
+import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon } from "../icons";
 import { ChannelIcon } from "./ChannelIcon";
 import { UserAvatar } from "./UserAvatar";
 import { useAppStore } from "../../stores/useAppStore";
@@ -12,7 +12,6 @@ import { getMatrixClient } from "../../services/matrixService";
 import * as matrixService from "../../services/matrixService";
 import type { Channel, UserRole } from "../../types/matrix";
 import { useMemo, useState } from "react";
-import { UserContextMenu } from "./UserContextMenu";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -70,7 +69,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   const { joinVoiceChannel, hasLiveKitConfig } = useVoiceChannel();
 
   const isMobile = useIsMobile();
-  const [userContextMenu, setUserContextMenu] = useState<{ userId: string; userName: string; x: number; y: number } | null>(null);
+  const openUserContextMenu = useAppStore((s) => s.openUserContextMenu);
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
 
   const isActive = activeChannel === channel.id;
@@ -155,6 +154,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           speaking: muted ? false : p.isSpeaking,
           muted,
           deafened,
+          connectionQuality: p.connectionQuality,
         };
       });
   }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened]);
@@ -217,7 +217,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  setUserContextMenu({ userId: u.id, userName: u.name, x: e.clientX, y: e.clientY });
+                  openUserContextMenu({ userId: u.id, userName: u.name, x: e.clientX, y: e.clientY });
                 }}
                 onMouseEnter={() => setHoveredUserId(u.id)}
                 onMouseLeave={() => setHoveredUserId(null)}
@@ -239,6 +239,9 @@ export function ChannelItem({ channel }: { channel: Channel }) {
                   {roleIcon(u.role)}
                   {u.muted && <MicIcon muted />}
                   {u.deafened && <HeadphoneIcon muted />}
+                  {u.connectionQuality && u.connectionQuality !== "excellent" && u.connectionQuality !== "unknown" && (
+                    <SignalBarsIcon quality={u.connectionQuality} size={12} />
+                  )}
                   {!isSelf && hoveredUserId === u.id && (
                     <button
                       onClick={(e) => {
@@ -272,16 +275,6 @@ export function ChannelItem({ channel }: { channel: Channel }) {
         </div>
       )}
 
-      {/* User context menu */}
-      {userContextMenu && (
-        <UserContextMenu
-          userId={userContextMenu.userId}
-          userName={userContextMenu.userName}
-          x={userContextMenu.x}
-          y={userContextMenu.y}
-          onClose={() => setUserContextMenu(null)}
-        />
-      )}
     </div>
   );
 }

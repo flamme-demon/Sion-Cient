@@ -6,6 +6,8 @@ import { SettingsPanel } from "./components/layout/SettingsPanel";
 import { MobileVoiceBar } from "./components/mobile/MobileVoiceBar";
 import { LoginPage } from "./pages/LoginPage";
 import { RecoveryKeyModal } from "./components/RecoveryKeyModal";
+import { ConnectionStatusBanner } from "./components/ConnectionStatusBanner";
+import { UserContextMenu } from "./components/sidebar/UserContextMenu";
 import { useAppStore } from "./stores/useAppStore";
 import { useAuthStore } from "./stores/useAuthStore";
 import { useMatrixStore } from "./stores/useMatrixStore";
@@ -25,6 +27,8 @@ export default function App() {
   const { t } = useTranslation();
   const showAdmin = useAppStore((s) => s.showAdmin);
   const showSettings = useAppStore((s) => s.showSettings);
+  const userContextMenu = useAppStore((s) => s.userContextMenu);
+  const closeUserContextMenu = useAppStore((s) => s.closeUserContextMenu);
   const mobileView = useAppStore((s) => s.mobileView);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const credentials = useAuthStore((s) => s.credentials);
@@ -344,6 +348,16 @@ export default function App() {
         {showAdmin && <AdminPanel />}
         {showSettings && <SettingsPanel />}
         <RecoveryKeyModal />
+        <ConnectionStatusBanner />
+        {userContextMenu && (
+          <UserContextMenu
+            userId={userContextMenu.userId}
+            userName={userContextMenu.userName}
+            x={userContextMenu.x}
+            y={userContextMenu.y}
+            onClose={closeUserContextMenu}
+          />
+        )}
 
         {/* Mobile voice bar with PTT */}
         {isMobile && connectedVoice && <MobileVoiceBar />}

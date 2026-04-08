@@ -1,5 +1,6 @@
 import * as sdk from "matrix-js-sdk";
 import type { MatrixClient } from "matrix-js-sdk";
+import { parseMentions } from "../utils/mentions";
 
 let matrixClient: MatrixClient | null = null;
 
@@ -575,7 +576,23 @@ export async function removeCallMemberEvent(roomId: string): Promise<void> {
 
 export async function sendTextMessage(roomId: string, body: string) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
-  return matrixClient.sendTextMessage(roomId, body);
+  const room = matrixClient.getRoom(roomId);
+  const parsed = room ? parseMentions(body, room) : null;
+
+  // Plain text only — fall back to the SDK helper
+  if (!parsed || !parsed.formattedBody) {
+    return matrixClient.sendTextMessage(roomId, body);
+  }
+
+  // Mentions present — send body + formatted_body + m.mentions (MSC3952)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return matrixClient.sendEvent(roomId, "m.room.message" as any, {
+    msgtype: "m.text",
+    body,
+    format: "org.matrix.custom.html",
+    formatted_body: parsed.formattedBody,
+    "m.mentions": { user_ids: parsed.mentionedUserIds },
+  });
 }
 
 export async function uploadFile(file: File): Promise<string> {
@@ -745,6 +762,20 @@ export function getRoomMembers(roomId: string): { userId: string; displayName: s
 
 export async function createChannel(name: string, isVoice: boolean, isPublic = true): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+
+  // Pre-populate the power_levels users map with all current server admins so
+  // they get PL 100 the moment the room exists. Doing this in
+  // power_level_content_override is atomic with creation; doing it post-create
+  // would race with sync.
+  const adminIds = getServerAdminUserIds();
+  const myUserId = matrixClient.getUserId() || "";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const usersPowerLevels: Record<string, number> = {};
+  if (myUserId) usersPowerLevels[myUserId] = 100; // Creator must always be admin
+  for (const adminId of adminIds) {
+    usersPowerLevels[adminId] = 100;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const initialState: any[] = [
     { type: "m.room.encryption", state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } },
@@ -760,6 +791,7 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
     preset: (isPublic ? "public_chat" : "private_chat") as never,
     initial_state: initialState,
     power_level_content_override: {
+      users: usersPowerLevels,
       events: {
         "org.matrix.msc3401.call.member": 0,
       },
@@ -796,6 +828,79 @@ export async function unbanUser(roomId: string, userId: string): Promise<void> {
 export async function setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setPowerLevel(roomId, userId, level);
+}
+
+/**
+ * Returns true if the given room is a DM (1-on-1 private chat) according to
+ * either Matrix m.direct account data, or the room's getDMInviter heuristic.
+ * Used to skip DMs when applying admin promotions across rooms.
+ */
+export function isDMRoom(roomId: string): boolean {
+  if (!matrixClient) return false;
+  const room = matrixClient.getRoom(roomId);
+  if (!room) return false;
+  if (room.getDMInviter?.()) return true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const directEvent = matrixClient.getAccountData("m.direct" as any);
+    if (!directEvent) return false;
+    const directContent = directEvent.getContent() as Record<string, string[]>;
+    return Object.values(directContent).some((rooms) => rooms.includes(roomId));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns the list of server admin user IDs, derived from the admin room's
+ * power levels. Anyone with PL >= 100 in the admin room is considered a
+ * server admin. Bot accounts (conduit / conduwuit / continuwuity) are excluded.
+ */
+export function getServerAdminUserIds(): string[] {
+  if (!matrixClient) return [];
+  const serverName = matrixClient.getDomain() || "";
+
+  // Look for the admin room — same heuristic as findAdminRoom in adminCommandService.
+  const botId = `@conduit:${serverName}`;
+  let adminRoom = null;
+  let bestScore = 0;
+  for (const room of matrixClient.getRooms()) {
+    const members = room.getJoinedMembers();
+    const name = (room.name || "").toLowerCase();
+    const hasBot = members.some((m) => m.userId === botId);
+    let score = 0;
+    if (hasBot) score += 10;
+    if (name.includes("admin") && (name.includes("conduit") || name.includes("continuwuity"))) score += 8;
+    if (hasBot && members.length === 2) score += 4;
+    if (score > bestScore) {
+      bestScore = score;
+      adminRoom = room;
+    }
+  }
+  if (!adminRoom) return [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plEvent = adminRoom.currentState.getStateEvents("m.room.power_levels" as any, "");
+  const plContent = (plEvent?.getContent?.() || {}) as { users?: Record<string, number> };
+  const users = plContent.users || {};
+
+  const admins: string[] = [];
+  for (const [userId, level] of Object.entries(users)) {
+    if (level < 100) continue;
+    if (!userId.endsWith(`:${serverName}`)) continue;
+    // Skip bot accounts — match the localpart strictly so we don't filter
+    // legitimate users whose name happens to contain "admin", "conduit", etc.
+    const local = userId.split(":")[0].toLowerCase();
+    if (
+      local === "@conduit" ||
+      local === "@conduwuit" ||
+      local === "@continuwuity" ||
+      local === "@server" ||
+      local === "@admin"
+    ) continue;
+    admins.push(userId);
+  }
+  return admins;
 }
 
 export function getMemberPowerLevel(roomId: string, userId: string): number {
@@ -891,12 +996,23 @@ export async function markRoomAsRead(roomId: string): Promise<void> {
 
 export async function sendReply(roomId: string, inReplyToEventId: string, body: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  const room = matrixClient.getRoom(roomId);
+  const parsed = room ? parseMentions(body, room) : null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await matrixClient.sendEvent(roomId, "m.room.message" as any, {
+  const content: Record<string, any> = {
     msgtype: "m.text",
     body,
     "m.relates_to": { "m.in_reply_to": { event_id: inReplyToEventId } },
-  });
+  };
+  if (parsed && parsed.formattedBody) {
+    content.format = "org.matrix.custom.html";
+    content.formatted_body = parsed.formattedBody;
+    content["m.mentions"] = { user_ids: parsed.mentionedUserIds };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.room.message" as any, content);
 }
 
 /**

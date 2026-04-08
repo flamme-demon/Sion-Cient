@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { ConnectionQuality } from "livekit-client";
 import { getCurrentRoom, muteRemoteParticipant } from "../../services/livekitService";
@@ -287,8 +287,34 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const adjustedX = Math.min(x, window.innerWidth - 220);
-  const adjustedY = Math.min(y, window.innerHeight - 300);
+  // Position is corrected after the menu is rendered so we can measure its
+  // real size. The menu's content is dynamic (latency expand, suspend button
+  // appears after async fetch, role list…) so we use a ResizeObserver to
+  // re-clamp on every size change rather than just on mount.
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: x, top: y });
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+
+    const reclamp = () => {
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      let left = x;
+      let top = y;
+      if (left + rect.width + margin > window.innerWidth) {
+        left = Math.max(margin, window.innerWidth - rect.width - margin);
+      }
+      if (top + rect.height + margin > window.innerHeight) {
+        top = Math.max(margin, window.innerHeight - rect.height - margin);
+      }
+      setPos((prev) => (prev.left === left && prev.top === top ? prev : { left, top }));
+    };
+
+    reclamp();
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [x, y]);
 
   const itemStyle: React.CSSProperties = {
     display: "flex",
@@ -313,14 +339,17 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       ref={menuRef}
       style={{
         position: "fixed",
-        left: adjustedX,
-        top: adjustedY,
+        left: pos.left,
+        top: pos.top,
         zIndex: 9999,
         background: "var(--color-surface-container-high)",
         borderRadius: 12,
         padding: 4,
         boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
         minWidth: 200,
+        maxWidth: 280,
+        maxHeight: "calc(100vh - 16px)",
+        overflowY: "auto",
       }}
     >
       {/* User name + role badge */}
@@ -348,12 +377,14 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       </button>
       {showLatency && <LatencySparkline participantIdentity={rawUserId} />}
 
-      {/* Poke */}
+      {/* Poke — always sent in the DM with the target user, never in the active channel */}
       {!isMyself && (
         <button onClick={async () => {
-          const activeChannel = useAppStore.getState().activeChannel;
-          if (activeChannel) {
-            await matrixService.sendPoke(activeChannel).catch(() => {});
+          try {
+            const dmRoomId = await matrixService.createOrGetDMRoom(matrixUserId);
+            await matrixService.sendPoke(dmRoomId);
+          } catch (err) {
+            console.error("[Sion] Failed to send poke:", err);
           }
           onClose();
         }} style={itemStyle}>

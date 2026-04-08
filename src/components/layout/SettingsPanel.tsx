@@ -5,6 +5,7 @@ import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { useClickOutside } from "../../hooks/useClickOutside";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,6 +16,9 @@ export function SettingsPanel() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const toggleSettings = useAppStore((s) => s.toggleSettings);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Click-outside-to-close — disabled on mobile (full-screen overlay)
+  useClickOutside(panelRef, toggleSettings, !isMobile);
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [recordingMute, setRecordingMute] = useState(false);
   const [recordingDeafen, setRecordingDeafen] = useState(false);
@@ -245,7 +249,7 @@ export function SettingsPanel() {
   ];
 
   return (
-    <div style={{
+    <div ref={panelRef} style={{
       ...(isMobile ? { position: 'fixed' as const, inset: 0, zIndex: 100, paddingTop: 'env(safe-area-inset-top, 0px)' } : { width: 280, minWidth: 280 }),
       background: 'var(--color-surface-container-low)', display: 'flex', flexDirection: 'column',
     }}>

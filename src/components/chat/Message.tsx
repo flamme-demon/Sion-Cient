@@ -10,6 +10,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
 import { EMOJI_GROUPS, EMOJI_BY_GROUP, EMOJI_DATA } from "../../utils/emojiData";
+import { useRecentEmojisStore } from "../../stores/useRecentEmojisStore";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -349,8 +350,11 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
 
   const [isHovered, setIsHovered] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [reactionPickerSearch, setReactionPickerSearch] = useState("");
-  const [reactionPickerGroup, setReactionPickerGroup] = useState(0);
+  const recentEmojis = useRecentEmojisStore((s) => s.recent);
+  const addRecentEmoji = useRecentEmojisStore((s) => s.add);
+  const [reactionPickerGroup, setReactionPickerGroup] = useState<number>(0);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
   const [showUserPopover, setShowUserPopover] = useState(false);
   const userPopoverRef = useRef<HTMLDivElement>(null);
@@ -443,8 +447,27 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
   };
 
   const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = () => {
+    setShowDeleteConfirm(false);
     deleteMessage(activeChannel, String(message.id));
   };
+
+  const cancelDelete = () => {
+    setShowDeleteConfirm(false);
+  };
+
+  // Auto-cancel the inline confirmation when the user moves the mouse away
+  // from the message — same hover-out behaviour as the rest of the action bar.
+  useEffect(() => {
+    if (!showDeleteConfirm) return;
+    if (!isHovered) {
+      const t = setTimeout(() => setShowDeleteConfirm(false), 400);
+      return () => clearTimeout(t);
+    }
+  }, [showDeleteConfirm, isHovered]);
 
   const handleReply = () => {
     setReplyingTo({
@@ -476,6 +499,7 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
         await matrixService.redactMessage(activeChannel, ownReactionEvtId);
       } else {
         await matrixService.sendReaction(activeChannel, eventId, emoji);
+        addRecentEmoji(emoji);
       }
     } catch (err) {
       console.error("[Sion] Failed to toggle reaction:", err);
@@ -836,6 +860,30 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
                     }}
                   />
                 </div>
+                {reactionPickerSearch.length < 2 && recentEmojis.length > 0 && (
+                  <div style={{
+                    display: 'flex', flexWrap: 'nowrap', gap: 2, padding: '4px 8px 6px 8px',
+                    overflowX: 'auto', borderBottom: '1px solid var(--color-outline-variant)',
+                  }}>
+                    {recentEmojis.map((emoji, i) => (
+                      <button
+                        key={`recent-${i}`}
+                        onMouseDown={(e) => { e.preventDefault(); handleReaction(emoji); }}
+                        title={t("chat.recentEmojis", { defaultValue: "Récemment utilisés" })}
+                        style={{
+                          width: 30, height: 30, flexShrink: 0,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 18, border: 'none', borderRadius: 6,
+                          background: 'transparent', cursor: 'pointer',
+                          transition: 'background 100ms', padding: 0,
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                      >{emoji}</button>
+                    ))}
+                  </div>
+                )}
+
                 {reactionPickerSearch.length < 2 && (
                   <div style={{
                     display: 'flex',
@@ -934,7 +982,7 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
               <PinIcon />
             </button>
           )}
-          {canDelete && (
+          {canDelete && !showDeleteConfirm && (
             <button
               onClick={handleDelete}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-error-container)'; }}
@@ -944,6 +992,37 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
             >
               <TrashIcon />
             </button>
+          )}
+          {canDelete && showDeleteConfirm && (
+            <>
+              <button
+                onClick={confirmDelete}
+                title={t("chat.deleteMessageConfirm")}
+                style={{
+                  ...actionButtonStyle,
+                  background: 'var(--color-error)',
+                  color: 'var(--color-on-error)',
+                  fontWeight: 700,
+                  fontSize: 13,
+                  padding: '6px 10px',
+                }}
+              >
+                ✓
+              </button>
+              <button
+                onClick={cancelDelete}
+                title={t("auth.cancel")}
+                style={{
+                  ...actionButtonStyle,
+                  color: 'var(--color-on-surface-variant)',
+                  fontWeight: 700,
+                  fontSize: 13,
+                  padding: '6px 10px',
+                }}
+              >
+                ✗
+              </button>
+            </>
           )}
         </div>
       )}

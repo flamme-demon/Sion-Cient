@@ -4,6 +4,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
+import { useAppStore } from "../../stores/useAppStore";
 
 // Sanitize Matrix HTML — allow safe tags only
 function sanitizeHtml(html: string): string {
@@ -153,6 +154,8 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, formattedBody, msgtype }: MarkdownRendererProps) {
+  const openUserContextMenu = useAppStore((s) => s.openUserContextMenu);
+
   // If Matrix HTML is available, sanitize and render directly
   if (formattedBody) {
     const clean = sanitizeHtml(formattedBody);
@@ -160,6 +163,26 @@ export function MarkdownRenderer({ content, formattedBody, msgtype }: MarkdownRe
       <div
         className="matrix-html"
         dangerouslySetInnerHTML={{ __html: clean }}
+        onClick={(e) => {
+          // Intercept matrix.to mention links — open the user context menu
+          // (mute/poke/etc.) instead of letting the browser open Element.
+          const target = (e.target as HTMLElement).closest("a") as HTMLAnchorElement | null;
+          if (!target) return;
+          const href = target.getAttribute("href") || "";
+          const isMention =
+            href.startsWith("https://matrix.to/#/@") ||
+            href.startsWith("https://matrix.to/#/%40");
+          if (!isMention) return;
+
+          e.preventDefault();
+          // Extract the Matrix user ID from the href
+          // Possible forms: https://matrix.to/#/@user:server  or  ...%40user%3Aserver
+          const fragment = href.split("#/")[1] || "";
+          const userId = decodeURIComponent(fragment.split("?")[0]);
+          if (!userId.startsWith("@")) return;
+          const userName = target.textContent || userId;
+          openUserContextMenu({ userId, userName, x: e.clientX, y: e.clientY });
+        }}
       />
     );
   }

@@ -58,6 +58,8 @@ export interface ChatMessage {
   role: UserRole;
   avatarUrl?: string;
   time: string;
+  /** Original event timestamp in milliseconds — used for day separators */
+  ts?: number;
   text: string;
   /** HTML formatted body (org.matrix.custom.html) */
   formattedBody?: string;

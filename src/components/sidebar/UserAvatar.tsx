@@ -27,7 +27,7 @@ export function UserAvatar({ name, speaking, size = "sm", avatarUrl, presence }:
             height: dim,
             borderRadius: '50%',
             objectFit: 'cover' as const,
-            transition: 'all 200ms',
+            transition: 'background 200ms, color 200ms',
             outline: speaking ? '2px solid var(--color-green)' : 'none',
             outlineOffset: 1,
             animation: speaking ? 'speaking-glow 2s ease-in-out infinite' : 'none',

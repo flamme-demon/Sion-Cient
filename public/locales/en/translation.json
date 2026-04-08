@@ -55,6 +55,7 @@
     "dropFilesHint": "Files will be attached to your message",
     "attachFile": "Attach file",
     "deleteMessage": "Delete message",
+    "deleteMessageConfirm": "Delete this message?",
     "editMessage": "Edit message",
     "edited": "edited",
     "editing": "Editing message",

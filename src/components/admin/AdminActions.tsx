@@ -81,10 +81,22 @@ export function AdminActions() {
         }
       }
 
-      // Build entries, skip bot accounts
+      // Build entries, skip bot accounts (Continuwuity / Conduwuit / Conduit
+      // bots — never expose them as a manageable user since demoting the
+      // homeserver bot would break admin powers)
+      const isBot = (userId: string) => {
+        const local = userId.split(":")[0].toLowerCase();
+        return (
+          local === "@conduit" ||
+          local === "@conduwuit" ||
+          local === "@continuwuity" ||
+          local === "@server" ||
+          local === "@admin"
+        );
+      };
       const entries: { userId: string; isAdmin: boolean }[] = [];
       for (const userId of knownIds) {
-        if (userId.includes("conduwuit") || userId.includes("continuwuity")) continue;
+        if (isBot(userId)) continue;
         entries.push({ userId, isAdmin: adminIds.has(userId) });
       }
 
@@ -112,29 +124,59 @@ export function AdminActions() {
     try {
       const adminRoomId = findAdminRoom();
 
+      // Build the list of rooms to apply the change to. We restrict to rooms
+      // where WE (the current admin) are joined AND have power level 100,
+      // because the Matrix API requires that to read/write state events.
+      // The Continuwuity admin API can list rooms we aren't in, but those
+      // requests return 404/403, so filter them out upfront.
+      const promoteClient = getMatrixClient();
+      const myUserId = promoteClient?.getUserId() || "";
+      let targetRoomIds: string[] = [];
+      if (promoteClient) {
+        for (const room of promoteClient.getRooms()) {
+          if (room.roomId === adminRoomId) continue;
+          if (matrixService.isDMRoom(room.roomId)) continue;
+          // Skip rooms we're not joined to
+          if (room.getMyMembership() !== "join") continue;
+          // Skip rooms where we don't have admin power
+          const myPl = matrixService.getMemberPowerLevel(room.roomId, myUserId);
+          if (myPl < 100) continue;
+          targetRoomIds.push(room.roomId);
+        }
+      }
+
       if (makeAdmin) {
-        // Promouvoir : donner les droits admin + force-join admin room
+        // Promouvoir : flag homeserver + join admin room + set PL 100 partout
         await sendAdminCommand(`!admin users make-user-admin ${userId}`);
         if (adminRoomId) {
           try {
             await sendAdminCommand(`!admin users force-join-room ${userId} ${adminRoomId}`);
           } catch { /* peut-être déjà dans la room */ }
         }
-      } else {
-        // Rétrograder : force-demote dans toutes les rooms + force-leave admin room
-        let roomIds: string[] = [];
-        try {
-          const res = await getRoomsList();
-          const data = res as { rooms?: string[] };
-          if (Array.isArray(data.rooms)) roomIds = data.rooms;
-          else if (Array.isArray(res)) roomIds = res as string[];
-        } catch {
-          const client = getMatrixClient();
-          if (client) roomIds = client.getRooms().map((r) => r.roomId);
+        // Continuwuity has no `force-promote` bot command, so we set PL via
+        // the Matrix API. targetRoomIds is already pre-filtered to rooms
+        // where we have admin powers, so M_FORBIDDEN errors should be rare.
+        if (promoteClient) {
+          for (const roomId of targetRoomIds) {
+            // Force-join the target user if they aren't already a member,
+            // otherwise setPowerLevel can't grant anything.
+            const room = promoteClient.getRoom(roomId);
+            const isMember = room?.getMember(userId)?.membership === "join";
+            if (!isMember) {
+              try {
+                await sendAdminCommand(`!admin users force-join-room ${userId} ${roomId}`);
+              } catch { /* ignore — already member or cannot join */ }
+            }
+            try {
+              await promoteClient.setPowerLevel(roomId, userId, 100);
+            } catch (err) {
+              console.warn(`[Sion] Could not set PL 100 for ${userId} in ${roomId}:`, err);
+            }
+          }
         }
-
-        // Force-demote dans chaque room
-        for (const roomId of roomIds) {
+      } else {
+        // Rétrograder : force-demote dans toutes les rooms non-DM + leave admin room
+        for (const roomId of targetRoomIds) {
           try {
             await sendAdminCommand(`!admin users force-demote ${userId} ${roomId}`);
           } catch { /* ignore */ }

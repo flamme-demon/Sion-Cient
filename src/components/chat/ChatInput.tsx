@@ -10,6 +10,7 @@ import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
+import { useRecentEmojisStore } from "../../stores/useRecentEmojisStore";
 
 const TENOR_API_KEY = "LIVDSRZULELA";
 const TENOR_BASE = "https://g.tenor.com/v1";
@@ -49,7 +50,9 @@ export function ChatInput() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [pickerTab, setPickerTab] = useState<"emoji" | "gif">("emoji");
   const [emojiPickerSearch, setEmojiPickerSearch] = useState("");
-  const [emojiPickerGroup, setEmojiPickerGroup] = useState(0);
+  const recentEmojis = useRecentEmojisStore((s) => s.recent);
+  const addRecentEmoji = useRecentEmojisStore((s) => s.add);
+  const [emojiPickerGroup, setEmojiPickerGroup] = useState<number>(0);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
 
@@ -338,6 +341,7 @@ export function ChatInput() {
   };
 
   const pickEmoji = (emoji: string) => {
+    addRecentEmoji(emoji);
     const textarea = textareaRef.current;
     const cursorPos = textarea ? textarea.selectionStart : inputText.length;
     const newText = inputText.slice(0, cursorPos) + emoji + inputText.slice(cursorPos);
@@ -611,6 +615,30 @@ export function ChatInput() {
                         }}
                       />
                     </div>
+
+                    {emojiPickerSearch.length < 2 && recentEmojis.length > 0 && (
+                      <div style={{
+                        display: 'flex', flexWrap: 'nowrap', gap: 2, padding: '4px 8px 6px 8px',
+                        overflowX: 'auto', borderBottom: '1px solid var(--color-outline-variant)',
+                      }}>
+                        {recentEmojis.map((emoji, i) => (
+                          <button
+                            key={`recent-${i}`}
+                            onMouseDown={(e) => { e.preventDefault(); pickEmoji(emoji); }}
+                            title={t("chat.recentEmojis", { defaultValue: "Récemment utilisés" })}
+                            style={{
+                              width: 32, height: 32, flexShrink: 0,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 20, border: 'none', borderRadius: 6,
+                              background: 'transparent', cursor: 'pointer',
+                              transition: 'background 100ms', padding: 0,
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                          >{emoji}</button>
+                        ))}
+                      </div>
+                    )}
 
                     {emojiPickerSearch.length < 2 && (
                       <div style={{ display: 'flex', gap: 0, padding: '0 6px', borderBottom: '1px solid var(--color-outline-variant)' }}>

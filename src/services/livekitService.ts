@@ -10,8 +10,9 @@ import {
   type BaseKeyProvider,
   type AudioPreset,
 } from "livekit-client";
-import type { ParticipantInfo } from "../types/livekit";
+import type { ParticipantInfo, ConnectionQuality as SionConnectionQuality } from "../types/livekit";
 import { useSettingsStore, type AudioQualityPreset } from "../stores/useSettingsStore";
+import { SpeakingDetector } from "./speakingDetector";
 
 
 function getAudioPreset(quality: AudioQualityPreset): AudioPreset {
@@ -30,6 +31,60 @@ let currentRoom: Room | null = null;
 let isCurrentlyDeafened = false;
 // Map of remote audio elements: trackSid -> HTMLAudioElement
 const audioElements = new Map<string, HTMLAudioElement>();
+
+// Client-side speaking detection (bypasses SFU smoothing for low-latency
+// speaker indicator). Keyed by participant identity.
+const speakingDetectors = new Map<string, SpeakingDetector>();
+const speakingState = new Map<string, boolean>();
+let participantUpdateCallback: (() => void) | null = null;
+
+function setSpeakingState(identity: string, isSpeaking: boolean) {
+  const prev = speakingState.get(identity) || false;
+  if (prev === isSpeaking) return;
+  speakingState.set(identity, isSpeaking);
+  participantUpdateCallback?.();
+}
+
+function startSpeakingDetectorForStream(identity: string, stream: MediaStream) {
+  // Replace any previous detector for this participant
+  speakingDetectors.get(identity)?.stop();
+  const detector = new SpeakingDetector(
+    stream,
+    (isSpeaking) => setSpeakingState(identity, isSpeaking),
+  );
+  detector.start();
+  speakingDetectors.set(identity, detector);
+}
+
+function stopSpeakingDetector(identity: string) {
+  const detector = speakingDetectors.get(identity);
+  if (detector) {
+    detector.stop();
+    speakingDetectors.delete(identity);
+  }
+  speakingState.delete(identity);
+}
+
+function stopAllSpeakingDetectors() {
+  speakingDetectors.forEach((d) => d.stop());
+  speakingDetectors.clear();
+  speakingState.clear();
+}
+
+/**
+ * Map LiveKit's ConnectionQuality (string enum: "excellent" | "good" | "poor"
+ * | "lost" | "unknown") onto our own union type. Defensive: covers SDK
+ * additions and unset values.
+ */
+function mapConnectionQuality(q: unknown): SionConnectionQuality {
+  switch (q) {
+    case "excellent": return "excellent";
+    case "good":      return "good";
+    case "poor":      return "poor";
+    case "lost":      return "lost";
+    default:          return "unknown";
+  }
+}
 
 // Screen share tracking
 export interface ScreenShareInfo {
@@ -96,7 +151,7 @@ function ensureAutoplayUnlock() {
   document.addEventListener("keydown", unlock, { once: false });
 }
 
-function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
+function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
   if (audioElements.has(sid)) return;
@@ -109,13 +164,39 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   document.body.appendChild(el);
   audioElements.set(sid, el);
 
-  // Try to play, if blocked by autoplay policy, queue for unlock
-  el.play().catch(() => {
-    ensureAutoplayUnlock();
-  });
+  const setupSpeakingDetectorOnce = () => {
+    // Client-side speaking detection — bypasses SFU smoothing.
+    // CRITICAL: cloning a remote RTCRtpReceiver track does NOT produce a
+    // functional independent track in Chromium — the clone reports readyState
+    // "live" but never delivers samples to the AnalyserNode (verified in CEF
+    // logs). The correct approach is HTMLMediaElement.captureStream(), which
+    // taps the audio element's RENDERED output and returns a fresh MediaStream
+    // whose samples actually flow through Web Audio.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const captured: MediaStream | undefined = (el as any).captureStream?.()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      || (el as any).mozCaptureStream?.();
+    if (captured && captured.getAudioTracks().length > 0) {
+      startSpeakingDetectorForStream(participant.identity, captured);
+    } else {
+      console.warn("[Sion] captureStream() returned no audio tracks for", participant.identity);
+    }
+  };
+
+  // Try to play, then set up the detector once playback has actually started.
+  // captureStream() before the element is playing returns a stream with no
+  // audio tracks in Chromium.
+  el.play()
+    .then(setupSpeakingDetectorOnce)
+    .catch(() => {
+      ensureAutoplayUnlock();
+      // Fall back: try to set up the detector anyway after a short delay,
+      // in case the play() rejection was non-fatal.
+      setTimeout(setupSpeakingDetectorOnce, 500);
+    });
 }
 
-function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, _participant: RemoteParticipant) {
+function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
   const el = audioElements.get(sid);
@@ -124,6 +205,7 @@ function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
     el.remove();
     audioElements.delete(sid);
   }
+  stopSpeakingDetector(participant.identity);
 }
 
 function detachAllAudio() {
@@ -179,6 +261,23 @@ export async function connectToRoom(
   room.on(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
   room.on(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
 
+  // Connection state — propagated to useLiveKitStore for the global banner
+  room.on(RoomEvent.Reconnecting, () => {
+    import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
+      useLiveKitStore.getState().setConnectionState("reconnecting");
+    });
+  });
+  room.on(RoomEvent.Reconnected, () => {
+    import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
+      useLiveKitStore.getState().setConnectionState("connected");
+    });
+  });
+  room.on(RoomEvent.Disconnected, () => {
+    import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
+      useLiveKitStore.getState().setConnectionState("disconnected");
+    });
+  });
+
   await room.connect(url, token);
   currentRoom = room;
 
@@ -201,6 +300,23 @@ export async function connectToRoom(
   } catch (err) {
     console.warn("[Sion] Impossible d'activer le microphone automatiquement:", err);
   }
+
+  // Local participant speaking detection — re-attach the detector whenever
+  // the local mic publication changes (mute/unmute, device switch, etc.).
+  const refreshLocalDetector = () => {
+    const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+    const mst = micPub?.track?.mediaStreamTrack;
+    if (mst) {
+      startSpeakingDetectorForStream(room.localParticipant.identity, new MediaStream([mst]));
+    } else {
+      stopSpeakingDetector(room.localParticipant.identity);
+    }
+  };
+  room.on(RoomEvent.LocalTrackPublished, refreshLocalDetector);
+  room.on(RoomEvent.LocalTrackUnpublished, refreshLocalDetector);
+  room.on(RoomEvent.TrackMuted, refreshLocalDetector);
+  room.on(RoomEvent.TrackUnmuted, refreshLocalDetector);
+  refreshLocalDetector();
 
   return room;
 }
@@ -230,6 +346,7 @@ export async function disconnectFromRoom() {
     currentRoom.off(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
     screenShareCallback?.(null);
     screenShareCallback = null;
+    stopAllSpeakingDetectors();
     detachAllAudio();
     await currentRoom.disconnect();
     currentRoom = null;
@@ -332,10 +449,13 @@ export function getParticipants(): ParticipantInfo[] {
   const mapParticipant = (p: RemoteParticipant | LocalParticipant): ParticipantInfo => ({
     identity: p.identity,
     name: p.name || p.identity,
-    isSpeaking: p.isSpeaking,
+    // Use our client-side speaking detector instead of LiveKit SFU's smoothed
+    // server-side state, which has ~1.6s of debounce.
+    isSpeaking: speakingState.get(p.identity) || false,
     isMuted: !p.isMicrophoneEnabled,
     isScreenSharing: p.isScreenShareEnabled,
     audioLevel: p.audioLevel,
+    connectionQuality: mapConnectionQuality(p.connectionQuality),
   });
 
   participants.push(mapParticipant(currentRoom.localParticipant));
@@ -351,14 +471,22 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
 
   const update = () => callback(getParticipants());
 
+  // Subscribe the speaking-detector callback so any RMS-driven state flip
+  // immediately propagates to the UI.
+  participantUpdateCallback = update;
+
   // Remote participant events
   currentRoom.on(RoomEvent.ParticipantConnected, update);
   currentRoom.on(RoomEvent.ParticipantDisconnected, update);
+  // ActiveSpeakersChanged kept as a fallback, but our local detector is the
+  // primary source of speaking state now.
   currentRoom.on(RoomEvent.ActiveSpeakersChanged, update);
   currentRoom.on(RoomEvent.TrackSubscribed, update);
   currentRoom.on(RoomEvent.TrackUnsubscribed, update);
   currentRoom.on(RoomEvent.TrackMuted, update);
   currentRoom.on(RoomEvent.TrackUnmuted, update);
+  // Connection-quality changes for the signal-bars indicator
+  currentRoom.on(RoomEvent.ConnectionQualityChanged, update);
 
   // Local participant events
   currentRoom.on(RoomEvent.LocalTrackPublished, update);
@@ -369,6 +497,7 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
 
   return () => {
     if (!currentRoom) return;
+    if (participantUpdateCallback === update) participantUpdateCallback = null;
     currentRoom.off(RoomEvent.ParticipantConnected, update);
     currentRoom.off(RoomEvent.ParticipantDisconnected, update);
     currentRoom.off(RoomEvent.ActiveSpeakersChanged, update);
@@ -376,6 +505,7 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     currentRoom.off(RoomEvent.TrackUnsubscribed, update);
     currentRoom.off(RoomEvent.TrackMuted, update);
     currentRoom.off(RoomEvent.TrackUnmuted, update);
+    currentRoom.off(RoomEvent.ConnectionQualityChanged, update);
     currentRoom.off(RoomEvent.LocalTrackPublished, update);
     currentRoom.off(RoomEvent.LocalTrackUnpublished, update);
   };

@@ -10,6 +10,7 @@ import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
 import { playMessageReceived } from "../services/soundService";
+import { findAdminRoom } from "../services/adminCommandService";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
@@ -32,7 +33,7 @@ interface MatrixState {
   roomHasMore: Record<string, boolean>;
   roomLoadingHistory: Record<string, boolean>;
   roomPaginationFrom: Record<string, string>;
-  connectionStatus: "disconnected" | "connecting" | "connected" | "error";
+  connectionStatus: "disconnected" | "connecting" | "connected" | "reconnecting" | "error";
   currentUserId: string | null;
   needsVerification: boolean;
   isRestoringKeys: boolean;
@@ -307,8 +308,9 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
       const senderId = evt.getSender?.() || "unknown";
       const sender = getDisplayName(senderId, room, client);
       const avatarUrl = getAvatarFromSender(senderId, room, client);
-      const time = new Date(evt.getTs?.() || Date.now()).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: "🔒 Message chiffré (clé de déchiffrement manquante)", msgtype: "m.encrypted", avatarUrl });
+      const ts = evt.getTs?.() || Date.now();
+      const time = new Date(ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, ts, text: "🔒 Message chiffré (clé de déchiffrement manquante)", msgtype: "m.encrypted", avatarUrl });
       continue;
     }
 
@@ -321,7 +323,8 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
     const senderId = evt.getSender?.() || "unknown";
     const sender = getDisplayName(senderId, room, client);
     const avatarUrl = getAvatarFromSender(senderId, room, client);
-    const time = new Date(evt.getTs?.() || Date.now()).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    const ts = evt.getTs?.() || Date.now();
+    const time = new Date(ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
     // Messages texte
     if (msgtype === "m.text" || msgtype === "m.notice" || msgtype === "m.emote" || msgtype === "m.poke") {
@@ -360,7 +363,7 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
       const rawBody = replyTo ? stripReplyFallback(content.body) : content.body;
       const rawFormatted = content.format === "org.matrix.custom.html" ? content.formatted_body : undefined;
       const formattedBody = rawFormatted && replyTo ? stripMxReply(rawFormatted) : rawFormatted;
-      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: rawBody, formattedBody, msgtype, avatarUrl, replyTo });
+      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, ts, text: rawBody, formattedBody, msgtype, avatarUrl, replyTo });
       continue;
     }
 
@@ -385,7 +388,7 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
         // Si chiffré E2EE (content.file présent), stocker les clés pour décryption au rendu
         encryptedFile: content.file ? { ...content.file } : undefined,
       };
-      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: "", attachments: [attachment], avatarUrl });
+      msgs.push({ id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, ts, text: "", attachments: [attachment], avatarUrl });
     }
   }
   // Parse reactions (m.annotation) and attach to messages
@@ -567,6 +570,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         }
       } else if (state === "ERROR") {
         set({ connectionStatus: "error" });
+      } else if (state === "RECONNECTING") {
+        set({ connectionStatus: "reconnecting" });
+      } else if (state === "CATCHUP") {
+        // After reconnection, the SDK catches up — treat as still recovering
+        set({ connectionStatus: "reconnecting" });
       }
     });
 
@@ -705,7 +713,9 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           if (reactionEvtId.startsWith("~")) reactionEvtId = "";
           set((s) => {
             const existing = s.messages[room.roomId] || [];
-            const idx = existing.findIndex((m) => m.id === rel.event_id);
+            const idx = existing.findIndex(
+              (m) => m.id === rel.event_id || m.eventId === rel.event_id,
+            );
             if (idx === -1) return s;
             const updated = [...existing];
             const msg = { ...updated[idx] };
@@ -820,8 +830,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       if (evtType === "m.room.message" || evtType === "m.room.encrypted") {
         const eventSender = event.getSender?.();
         if (eventSender && eventSender !== client.getUserId()) {
-          // Pas de son pour l'admin room (bot conduit)
-          if (!eventSender.includes("conduit")) {
+          // Pas de son pour l'admin room (bot conduit OU autres admins humains
+          // qui exécutent des commandes via le menu Admin)
+          const isAdminRoom = room.roomId === findAdminRoom();
+          if (!eventSender.includes("conduit") && !isAdminRoom) {
             const activeChannel = useAppStore.getState().activeChannel;
             if (activeChannel === room.roomId || room.getJoinedMemberCount() === 2) {
               playMessageReceived();
@@ -847,7 +859,8 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const senderId = event.getSender?.() || "unknown";
       const sender = getDisplayName(senderId, room, client);
       const avatarUrl = getAvatarFromSender(senderId, room, client);
-      const time = new Date(event.getTs?.() || Date.now()).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      const ts = event.getTs?.() || Date.now();
+      const time = new Date(ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
       // Handle edit events (m.replace) in real-time
       const relatesTo = content["m.relates_to"];
@@ -887,7 +900,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         const rawBody = replyTo ? stripReplyFallback(content.body) : content.body;
         const rawFormatted = content.format === "org.matrix.custom.html" ? content.formatted_body : undefined;
         const formattedBody = rawFormatted && replyTo ? stripMxReply(rawFormatted) : rawFormatted;
-        msg = { id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: rawBody, formattedBody, msgtype, avatarUrl, replyTo };
+        msg = { id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, ts, text: rawBody, formattedBody, msgtype, avatarUrl, replyTo };
       } else if (msgtype === "m.image" || msgtype === "m.file" || msgtype === "m.video" || msgtype === "m.audio") {
         const mxcUrl: string = content.url || content.file?.url || "";
         const httpUrl = mxcUrl ? matrixService.mxcToHttp(mxcUrl) : null;
@@ -905,7 +918,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           height: info.h,
           encryptedFile: content.file ? { ...content.file } : undefined,
         };
-        msg = { id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, text: "", attachments: [attachment], avatarUrl };
+        msg = { id: evtId, eventId: evtId, senderId, user: sender, role: "user", time, ts, text: "", attachments: [attachment], avatarUrl };
       }
 
       if (!msg) return;
@@ -913,7 +926,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
       // Notifications (Tauri native)
       const currentUserId = client.getUserId();
-      if (senderId !== currentUserId) {
+      // Skip all notifications for the admin room — actions from other admins
+      // (open admin menu, run commands) generate messages we don't want to ping on.
+      // The message is still added to the store below, just no notification.
+      const isAdminRoomNotif = room.roomId === findAdminRoom();
+      if (senderId !== currentUserId && !isAdminRoomNotif) {
         const isPoke = msgtype === "m.poke";
         const isDM = !!room.getDMInviter?.() || (() => {
           try {
@@ -1125,23 +1142,78 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         set((s) => {
           let changed = false;
           const updated = { ...s.messages };
-          for (const [roomId, msgs] of Object.entries(updated)) {
+
+          // Include rooms that may have no messages yet but just received decrypted events
+          const roomIdsToCheck = new Set<string>(Object.keys(updated));
+          for (const room of client.getRooms()) {
+            roomIdsToCheck.add(room.roomId);
+          }
+
+          for (const roomId of roomIdsToCheck) {
             const room = client.getRoom(roomId);
             if (!room) continue;
-            const needsUpdate = msgs.some((m) => m.eventId && decryptedIds.has(m.eventId));
-            if (!needsUpdate) continue;
+            const msgs = updated[roomId] || [];
 
             const freshMsgs = extractMessagesFromRoom(room);
             const freshById = new Map(freshMsgs.map((m) => [m.eventId, m]));
-            updated[roomId] = msgs.map((msg) => {
+            const freshIds = new Set(freshMsgs.map((m) => m.eventId));
+
+            // 0. Drop stale local-echo entries: when the SDK confirms a sent
+            // message, it mutates the eventId in place from "~localXXX" to
+            // "$realXXX". Our store still holds the old local ID — without
+            // removing it, the insert step below would create a duplicate.
+            const cleanedMsgs = msgs.filter(
+              (m) => !m.eventId?.startsWith("~") || freshIds.has(m.eventId),
+            );
+            if (cleanedMsgs.length !== msgs.length) changed = true;
+            const existingIds = new Set(cleanedMsgs.map((m) => m.eventId));
+
+            // A message has displayable content if it has text OR attachments
+            const hasContent = (m: ChatMessage) =>
+              !!m.text || (Array.isArray(m.attachments) && m.attachments.length > 0);
+
+            // 1. Update existing messages whose decryption just completed
+            let next = cleanedMsgs.map((msg) => {
               if (!msg.eventId || !decryptedIds.has(msg.eventId)) return msg;
               const fresh = freshById.get(msg.eventId);
-              if (fresh && fresh.text) {
+              if (fresh && hasContent(fresh)) {
                 changed = true;
                 return fresh;
               }
               return msg;
             });
+
+            // 2. Insert newly decrypted messages that were never added (real-time E2EE)
+            const toInsert = freshMsgs.filter(
+              (fm) =>
+                fm.eventId &&
+                decryptedIds.has(fm.eventId) &&
+                !existingIds.has(fm.eventId) &&
+                hasContent(fm),
+            );
+            if (toInsert.length > 0) {
+              next = [...next, ...toInsert];
+              changed = true;
+            }
+
+            // 3. Sync reactions from freshMsgs. When an m.reaction event is decrypted,
+            // its eventId (the reaction's own id) won't match any message in next, so
+            // steps 1-2 won't fire. But extractMessagesFromRoom already attached the
+            // new reaction to its target inside freshMsgs. We propagate that here.
+            const reactionsKey = (m: ChatMessage) =>
+              (m.reactions || [])
+                .map((r) => `${r.emoji}:${r.count}:${r.userIds.slice().sort().join(",")}`)
+                .join("|");
+            next = next.map((msg) => {
+              if (!msg.eventId) return msg;
+              const fresh = freshById.get(msg.eventId);
+              if (!fresh) return msg;
+              if (reactionsKey(msg) === reactionsKey(fresh)) return msg;
+              changed = true;
+              return { ...msg, reactions: fresh.reactions };
+            });
+
+            if (next !== msgs) updated[roomId] = next;
           }
           return changed ? { messages: updated } : s;
         });

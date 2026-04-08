@@ -6,6 +6,62 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
 
+/** Returns true if both timestamps fall on the same calendar day (local time). */
+function isSameDay(a: number, b: number): boolean {
+  const da = new Date(a);
+  const db = new Date(b);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
+}
+
+/** Format a date for the day separator chip: "Aujourd'hui" / "Hier" / "8 avril" / "8 avril 2025". */
+function formatDaySeparator(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  if (isSameDay(ts, now.getTime())) return "Aujourd'hui";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (isSameDay(ts, yesterday.getTime())) return "Hier";
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
+function DaySeparator({ ts }: { ts: number }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        margin: "12px 0 8px",
+        pointerEvents: "none",
+      }}
+    >
+      <span
+        style={{
+          padding: "4px 12px",
+          borderRadius: 999,
+          background: "var(--color-surface-container-high)",
+          color: "var(--color-on-surface-variant)",
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: "0.02em",
+          textTransform: "capitalize",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+        }}
+      >
+        {formatDaySeparator(ts)}
+      </span>
+    </div>
+  );
+}
+
 export function MessageList() {
   const activeChannel = useAppStore((s) => s.activeChannel);
   const messagesMap = useMatrixStore((s) => s.messages);
@@ -100,6 +156,41 @@ export function MessageList() {
     }
   }, [messages, scrollToBottom]);
 
+  // Keep the chat anchored to the bottom when content height grows AFTER
+  // the initial render. This happens when LinkPreview cards finish loading,
+  // images decode, GIFs render their first frame, etc. — without this, the
+  // newest message gets pushed off-screen as previews fill in.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let lastHeight = el.scrollHeight;
+    const ro = new ResizeObserver(() => {
+      const currHeight = el.scrollHeight;
+      if (currHeight !== lastHeight) {
+        if (isAtBottomRef.current) {
+          scrollToBottom();
+        }
+        lastHeight = currHeight;
+      }
+    });
+    // Observe each direct child so we catch height changes from any message
+    for (const child of Array.from(el.children)) {
+      ro.observe(child);
+    }
+    // Re-observe whenever children change
+    const mo = new MutationObserver(() => {
+      ro.disconnect();
+      for (const child of Array.from(el.children)) {
+        ro.observe(child);
+      }
+    });
+    mo.observe(el, { childList: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [scrollToBottom]);
+
   // Track whether the user has manually scrolled away from bottom at least once
   const userHasScrolledRef = useRef(false);
 
@@ -173,10 +264,16 @@ export function MessageList() {
       )}
 
       {messages.map((msg, i) => {
-        const showHeader = i === 0 || messages[i - 1].user !== msg.user;
+        const prev = i > 0 ? messages[i - 1] : null;
+        const showDaySeparator =
+          msg.ts !== undefined && (i === 0 || (prev?.ts !== undefined && !isSameDay(prev.ts, msg.ts)));
+        // After a day separator we want the message header to show again,
+        // even if the previous message was from the same user.
+        const showHeader = i === 0 || showDaySeparator || messages[i - 1].user !== msg.user;
         const eventId = msg.eventId || String(msg.id);
         return (
           <div key={msg.id} data-event-id={eventId} style={{ minWidth: 0 }}>
+            {showDaySeparator && msg.ts !== undefined && <DaySeparator ts={msg.ts} />}
             <Message
               message={msg}
               showHeader={showHeader}

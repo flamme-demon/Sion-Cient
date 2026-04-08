@@ -96,7 +96,7 @@ All build scripts are located in the `build-scripts/` directory.
 
 ```bash
 ./build-scripts/build-appimage.sh
-# Output: dist-appimage/Sion_Client-x86_64.AppImage
+# Output: dist-appimage/Sion_Client-X.Y.Z-x86_64.AppImage
 ```
 
 ### Windows
@@ -122,7 +122,8 @@ The client connects to a Matrix homeserver at login. Voice channels use MatrixRT
 
 - Voice channel = Matrix room with custom `m.room.type`
 - Joining a voice channel = `matrixClient.joinRoom()` + LiveKit token generation + LiveKit room connect
-- Speaking indicator from `participant.isSpeaking` (LiveKit SDK)
+- Speaking indicator: client-side RMS detection via Web Audio API (sub-100ms latency, bypasses LiveKit SFU smoothing)
+- Per-participant connection quality bars from LiveKit's `ConnectionQualityChanged` event
 - User list = Matrix presence + LiveKit participants combined
 - Link previews fetched server-side via Tauri command (reqwest + scraper / oEmbed)
 - Video transcoding: MP4 (H.264) auto-transcoded to WebM (VP9) via system ffmpeg when native codec is unavailable

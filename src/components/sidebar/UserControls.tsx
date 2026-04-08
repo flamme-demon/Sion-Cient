@@ -34,7 +34,9 @@ export function UserControls() {
     padding: 8,
     borderRadius: 12,
     display: 'flex' as const,
-    transition: 'all 200ms',
+    // Background fades smoothly, color/icon flips instantly so the muted state
+    // is reflected the moment the shortcut fires (no perceived input lag).
+    transition: 'background 150ms',
     background: active
       ? variant === 'accent' ? 'var(--color-secondary-container)' : 'var(--color-error-container)'
       : 'transparent',
@@ -87,7 +89,7 @@ export function UserControls() {
           <button onClick={toggleDeafen} style={iconBtnStyle(isDeafened)} title={isDeafened ? t("controls.undeafen") : t("controls.deafen")}>
             <HeadphoneIcon muted={isDeafened} />
           </button>
-          <button onClick={toggleSettings} style={iconBtnStyle(showSettings, 'accent')} title={t("settings.title")}>
+          <button onClick={toggleSettings} data-panel-toggle style={iconBtnStyle(showSettings, 'accent')} title={t("settings.title")}>
             <SettingsIcon />
           </button>
         </div>

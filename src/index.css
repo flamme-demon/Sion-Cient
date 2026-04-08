@@ -177,6 +177,27 @@ body {
   text-decoration: none;
 }
 .matrix-html a:hover { text-decoration: underline; }
+
+/* Mention pills — matrix.to/#/@user:server links rendered as soft pastilles.
+   The @ is hidden visually because the link content is just the display name. */
+.matrix-html a[href^="https://matrix.to/#/@"],
+.matrix-html a[href^="https://matrix.to/#/%40"] {
+  display: inline-block;
+  background: var(--color-primary-container);
+  color: var(--color-on-primary-container);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.95em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: filter 150ms;
+}
+.matrix-html a[href^="https://matrix.to/#/@"]:hover,
+.matrix-html a[href^="https://matrix.to/#/%40"]:hover {
+  filter: brightness(1.15);
+  text-decoration: none;
+}
 .matrix-html code {
   background: var(--color-surface-container-highest);
   border-radius: 6px;

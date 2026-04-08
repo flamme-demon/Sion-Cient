@@ -15,6 +15,19 @@ APPDIR="$RELEASE_DIR/SionClient.AppDir"
 OUTPUT_DIR="$PROJECT_DIR/dist-appimage"
 APP_NAME="sion-client"
 
+# Read version from tauri.conf.json (fallback to package.json)
+VERSION=$(grep -m1 '"version"' "$PROJECT_DIR/src-tauri/tauri.conf.json" 2>/dev/null \
+    | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+if [ -z "$VERSION" ]; then
+    VERSION=$(grep -m1 '"version"' "$PROJECT_DIR/package.json" \
+        | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+fi
+if [ -z "$VERSION" ]; then
+    echo "ERREUR: Impossible de lire la version depuis tauri.conf.json ou package.json"
+    exit 1
+fi
+echo "Version detectee: $VERSION"
+
 echo ""
 echo "========================================"
 echo "  Sion Client - Build AppImage"
@@ -131,13 +144,13 @@ chmod +x "$APPDIR/AppRun"
 
 # Build the AppImage
 mkdir -p "$OUTPUT_DIR"
-ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT_DIR/Sion_Client-x86_64.AppImage"
+ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT_DIR/Sion_Client-${VERSION}-x86_64.AppImage"
 
 # --- Result ---
 echo ""
 echo "========================================"
 
-APPIMAGE="$OUTPUT_DIR/Sion_Client-x86_64.AppImage"
+APPIMAGE="$OUTPUT_DIR/Sion_Client-${VERSION}-x86_64.AppImage"
 
 if [ -f "$APPIMAGE" ]; then
     SIZE=$(du -h "$APPIMAGE" | cut -f1)

@@ -55,6 +55,7 @@
     "dropFilesHint": "Les fichiers seront joints à votre message",
     "attachFile": "Joindre un fichier",
     "deleteMessage": "Supprimer le message",
+    "deleteMessageConfirm": "Supprimer ce message ?",
     "editMessage": "Modifier le message",
     "edited": "modifié",
     "editing": "Modification en cours",

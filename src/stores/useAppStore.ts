@@ -13,6 +13,13 @@ export interface PendingFile {
 
 type MobileView = "sidebar" | "chat";
 
+export interface UserContextMenuState {
+  userId: string;
+  userName: string;
+  x: number;
+  y: number;
+}
+
 interface AppState {
   activeChannel: string;
   connectedVoiceChannel: string | null;
@@ -30,6 +37,8 @@ interface AppState {
   isSpeaking: boolean;
   pendingAutoJoinVoice: string | null;
   connectingVoiceChannel: string | null;
+  /** Globally-positioned user context menu, opened from sidebar voice list, mention pills, etc. */
+  userContextMenu: UserContextMenuState | null;
 
   setActiveChannel: (id: string, hasVoice: boolean) => void;
   setConnectedVoice: (id: string | null) => void;
@@ -54,6 +63,8 @@ interface AppState {
   setMobileView: (view: MobileView) => void;
   setIsSpeaking: (v: boolean) => void;
   setPendingAutoJoinVoice: (roomId: string | null) => void;
+  openUserContextMenu: (state: UserContextMenuState) => void;
+  closeUserContextMenu: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -73,6 +84,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isSpeaking: false,
   pendingAutoJoinVoice: null,
   connectingVoiceChannel: null,
+  userContextMenu: null,
 
   setActiveChannel: (id, _hasVoice) =>
     set(() => ({
@@ -148,5 +160,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMobileView: (view) => set({ mobileView: view }),
   setIsSpeaking: (v) => set({ isSpeaking: v }),
   setPendingAutoJoinVoice: (roomId) => set({ pendingAutoJoinVoice: roomId }),
+  openUserContextMenu: (s) => set({ userContextMenu: s }),
+  closeUserContextMenu: () => set({ userContextMenu: null }),
   setConnectingVoice: (id) => set({ connectingVoiceChannel: id }),
 }));
