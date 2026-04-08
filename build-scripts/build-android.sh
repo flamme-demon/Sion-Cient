@@ -43,6 +43,33 @@ if [ "${1:-}" = "dev" ]; then
     bun run tauri android dev
 elif [ "${1:-}" = "build" ]; then
     bun run tauri android build
+
+    # Centralised installer collection — copy the signed APK to build-apps/
+    PROJECT_DIR="$(pwd)"
+    BUILD_APPS_DIR="$PROJECT_DIR/build-apps"
+    mkdir -p "$BUILD_APPS_DIR"
+
+    VERSION=$(grep -m1 '"version"' "$PROJECT_DIR/package.json" \
+        | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+    : "${VERSION:=0.0.0}"
+
+    # Tauri places the signed release APK under src-tauri/gen/android/app/build/outputs/apk/
+    APK_SRC=$(find "$PROJECT_DIR/src-tauri/gen/android/app/build/outputs/apk/universal/release" \
+        -name "*.apk" 2>/dev/null | head -1)
+    if [ -z "$APK_SRC" ]; then
+        APK_SRC=$(find "$PROJECT_DIR/src-tauri/gen/android/app/build/outputs/apk" \
+            -name "*-release*.apk" 2>/dev/null | head -1)
+    fi
+
+    if [ -n "$APK_SRC" ] && [ -f "$APK_SRC" ]; then
+        APK_DEST="$BUILD_APPS_DIR/Sion_Client-${VERSION}.apk"
+        cp -f "$APK_SRC" "$APK_DEST"
+        SIZE=$(du -h "$APK_DEST" | cut -f1)
+        echo ""
+        echo "[Sion] APK copie: $APK_DEST ($SIZE)"
+    else
+        echo "[Sion] ATTENTION: APK release introuvable dans src-tauri/gen/android/app/build/outputs/apk/"
+    fi
 else
     echo "Usage: $0 [dev|build]"
     exit 1

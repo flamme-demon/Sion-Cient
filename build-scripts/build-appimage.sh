@@ -166,10 +166,18 @@ APPIMAGE="$OUTPUT_DIR/Sion_Client-${VERSION}-x86_64.AppImage"
 
 if [ -f "$APPIMAGE" ]; then
     SIZE=$(du -h "$APPIMAGE" | cut -f1)
+
+    # Centralised installer collection — same place every script drops into.
+    BUILD_APPS_DIR="$PROJECT_DIR/build-apps"
+    mkdir -p "$BUILD_APPS_DIR"
+    cp -f "$APPIMAGE" "$BUILD_APPS_DIR/"
+    FINAL_PATH="$BUILD_APPS_DIR/$(basename "$APPIMAGE")"
+    chmod +x "$FINAL_PATH"
+
     echo "  Build reussi !"
-    echo "  AppImage: $APPIMAGE ($SIZE)"
+    echo "  AppImage: $FINAL_PATH ($SIZE)"
     echo ""
-    echo "  Pour lancer: chmod +x \"$APPIMAGE\" && \"$APPIMAGE\""
+    echo "  Pour lancer: \"$FINAL_PATH\""
 else
     echo "  ERREUR: AppImage non trouvee."
     echo "  Verifiez les logs ci-dessus."

@@ -279,17 +279,23 @@ if (Test-Path $exePath) {
     Write-Host "  Binaire: $exePath ($size MB)" -ForegroundColor White
     Write-Host ""
 
+    # Centralised installer collection — same place every script drops into.
+    $buildAppsDir = "$ProjectDir\build-apps"
+    if (-not (Test-Path $buildAppsDir)) { New-Item -ItemType Directory -Force -Path $buildAppsDir | Out-Null }
+
     # Check for bundles
     $msiPath = Get-ChildItem "$releaseDir\bundle\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
     $nsisPath = Get-ChildItem "$releaseDir\bundle\nsis\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 
     if ($msiPath) {
         $msiSize = [math]::Round($msiPath.Length / 1MB, 1)
-        Write-Host "  Installeur MSI: $($msiPath.FullName) ($msiSize MB)" -ForegroundColor White
+        Copy-Item -Force $msiPath.FullName "$buildAppsDir\"
+        Write-Host "  Installeur MSI: $buildAppsDir\$($msiPath.Name) ($msiSize MB)" -ForegroundColor White
     }
     if ($nsisPath) {
         $nsisSize = [math]::Round($nsisPath.Length / 1MB, 1)
-        Write-Host "  Installeur NSIS: $($nsisPath.FullName) ($nsisSize MB)" -ForegroundColor White
+        Copy-Item -Force $nsisPath.FullName "$buildAppsDir\"
+        Write-Host "  Installeur NSIS: $buildAppsDir\$($nsisPath.Name) ($nsisSize MB)" -ForegroundColor White
     }
 
     # Also create standalone directory + ZIP
@@ -314,8 +320,12 @@ if (Test-Path $exePath) {
             Copy-Item "$tauriDir\icons\icon.ico" "$standaloneDir\sion-client.ico"
         }
 
-        # Create ZIP
-        $zipPath = "$releaseDir\sion-client-standalone.zip"
+        # Create ZIP — versioned name, dropped into build-apps/ alongside the
+        # MSI and NSIS installers for easy distribution.
+        $version = (Get-Content "$tauriDir\Cargo.toml" | Select-String '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+        if (-not $version) { $version = "0.0.0" }
+        $zipName = "Sion_Client_${version}_x64-standalone.zip"
+        $zipPath = "$buildAppsDir\$zipName"
         if (Test-Path $zipPath) { Remove-Item $zipPath }
         Compress-Archive -Path "$standaloneDir\*" -DestinationPath $zipPath
         $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
