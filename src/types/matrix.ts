@@ -12,6 +12,8 @@ export interface VoiceChannelUser extends MatrixUser {
   speaking: boolean;
   muted: boolean;
   deafened: boolean;
+  /** LiveKit-reported connection quality. Undefined when offline / not in voice. */
+  connectionQuality?: "excellent" | "good" | "poor" | "lost" | "unknown";
 }
 
 export interface Channel {

@@ -228,12 +228,30 @@ $confJson.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @
 [System.IO.File]::WriteAllText($tauriConf, ($confJson | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
 Set-Location $ProjectDir
+
+# Wipe stale bundles so we can detect a failed `tauri build` (otherwise the
+# script picks up the previous successful build's installers and reports a
+# misleading version).
+$msiBundleDir = "$releaseDir\bundle\msi"
+$nsisBundleDir = "$releaseDir\bundle\nsis"
+if (Test-Path $msiBundleDir) { Remove-Item -Recurse -Force $msiBundleDir }
+if (Test-Path $nsisBundleDir) { Remove-Item -Recurse -Force $nsisBundleDir }
+
 bun run tauri build
+$tauriBuildExitCode = $LASTEXITCODE
 
 # Restore tauri.conf.json from backup (guaranteed clean)
 Set-Location $ProjectDir
 if (Test-Path "$tauriConf.bak") {
     Move-Item -Force "$tauriConf.bak" $tauriConf
+}
+
+if ($tauriBuildExitCode -ne 0) {
+    Write-Host ""
+    Write-Host "ERREUR: tauri build a echoue (code $tauriBuildExitCode)." -ForegroundColor Red
+    Write-Host "       Les installeurs MSI/NSIS n'ont pas ete generes." -ForegroundColor Red
+    Write-Host "       Verifier les erreurs ci-dessus." -ForegroundColor Red
+    exit $tauriBuildExitCode
 }
 
 # --- Result ---

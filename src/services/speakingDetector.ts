@@ -24,16 +24,21 @@ export class SpeakingDetector {
   private source: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private silentGain: GainNode | null = null;
-  private buffer: Float32Array;
+  // tsconfig has erasableSyntaxOnly enabled, so we can't use parameter
+  // properties — declare the fields explicitly. The Float32Array is also
+  // explicitly typed against ArrayBuffer (not ArrayBufferLike) to keep
+  // strict TS happy when calling getFloatTimeDomainData.
+  private buffer: Float32Array<ArrayBuffer>;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private currentSpeaking = false;
   private flipCounter = 0;
+  private readonly stream: MediaStream;
+  private readonly onChange: (isSpeaking: boolean) => void;
 
-  constructor(
-    private readonly stream: MediaStream,
-    private readonly onChange: (isSpeaking: boolean) => void,
-  ) {
-    this.buffer = new Float32Array(FFT_SIZE);
+  constructor(stream: MediaStream, onChange: (isSpeaking: boolean) => void) {
+    this.stream = stream;
+    this.onChange = onChange;
+    this.buffer = new Float32Array(new ArrayBuffer(FFT_SIZE * 4));
   }
 
   start(): void {
