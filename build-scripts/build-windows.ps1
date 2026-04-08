@@ -297,8 +297,11 @@ if (Test-Path $exePath) {
     }
     if ($nsisPath) {
         $nsisSize = [math]::Round($nsisPath.Length / 1MB, 1)
-        Copy-Item -Force $nsisPath.FullName "$buildAppsDir\"
-        Write-Host "  Installeur NSIS: $buildAppsDir\$($nsisPath.Name) ($nsisSize MB)" -ForegroundColor White
+        # Strip the "-setup" suffix Tauri/NSIS appends — harmonise with the
+        # MSI naming so we get "Sion Client_X.Y.Z_x64.exe".
+        $cleanNsisName = $nsisPath.Name -replace '-setup\.exe$', '.exe'
+        Copy-Item -Force $nsisPath.FullName "$buildAppsDir\$cleanNsisName"
+        Write-Host "  Installeur NSIS: $buildAppsDir\$cleanNsisName ($nsisSize MB)" -ForegroundColor White
     }
 
     # Also create standalone directory + ZIP
@@ -324,10 +327,11 @@ if (Test-Path $exePath) {
         }
 
         # Create ZIP — versioned name, dropped into build-apps/ alongside the
-        # MSI and NSIS installers for easy distribution.
+        # MSI and NSIS installers for easy distribution. Same naming pattern
+        # as Tauri's bundles (product name with space, no extra suffix).
         $version = (Get-Content "$tauriDir\Cargo.toml" | Select-String '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
         if (-not $version) { $version = "0.0.0" }
-        $zipName = "Sion_Client_${version}_x64-standalone.zip"
+        $zipName = "Sion Client_${version}_x64.zip"
         $zipPath = "$buildAppsDir\$zipName"
         if (Test-Path $zipPath) { Remove-Item $zipPath }
         Compress-Archive -Path "$standaloneDir\*" -DestinationPath $zipPath
