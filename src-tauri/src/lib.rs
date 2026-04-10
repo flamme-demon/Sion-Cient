@@ -1,9 +1,9 @@
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 use rdev::Key;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 use serde::Serialize;
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 #[cfg(not(target_os = "android"))]
@@ -23,16 +23,16 @@ type TauriRuntime = tauri::Cef;
 #[cfg(not(feature = "cef"))]
 type TauriRuntime = tauri::Wry;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 struct ShortcutState {
     mute_keys: Vec<Key>,
     deafen_keys: Vec<Key>,
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 type SharedShortcuts = Arc<Mutex<ShortcutState>>;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn parse_key(s: &str) -> Option<Key> {
     match s.trim() {
         "Ctrl" => Some(Key::ControlLeft),
@@ -85,7 +85,7 @@ fn parse_key(s: &str) -> Option<Key> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn parse_shortcut(shortcut: &str) -> Vec<Key> {
     if shortcut.is_empty() {
         return vec![];
@@ -93,7 +93,7 @@ fn parse_shortcut(shortcut: &str) -> Vec<Key> {
     shortcut.split('+').filter_map(parse_key).collect()
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn keys_match(required: &[Key], pressed: &HashSet<Key>) -> bool {
     if required.is_empty() {
         return false;
@@ -715,18 +715,24 @@ async fn transcode_video(url: String) -> Result<String, String> {
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, state: tauri::State<'_, SharedShortcuts>, payload: UpdateShortcutsPayload) {
-    let mut shortcuts = state.lock().unwrap();
-    shortcuts.mute_keys = parse_shortcut(&payload.mute);
-    shortcuts.deafen_keys = parse_shortcut(&payload.deafen);
-    log::info!(
-        "[Sion] Global shortcuts updated: mute={:?}, deafen={:?}",
-        shortcuts.mute_keys,
-        shortcuts.deafen_keys
-    );
+fn update_shortcuts(
+    app: tauri::AppHandle<TauriRuntime>,
+    #[cfg(target_os = "linux")] state: tauri::State<'_, SharedShortcuts>,
+    payload: UpdateShortcutsPayload,
+) {
+    // Update rdev key state (Linux only — rdev handles focused capture)
+    #[cfg(target_os = "linux")]
+    {
+        let mut shortcuts = state.lock().unwrap();
+        shortcuts.mute_keys = parse_shortcut(&payload.mute);
+        shortcuts.deafen_keys = parse_shortcut(&payload.deafen);
+    }
 
-    // Register with tauri-plugin-global-shortcut for background capture
-    // (KDE Wayland XWayland compat). rdev handles focused window capture.
+    log::info!("[Sion] Global shortcuts updated: mute={}, deafen={}", payload.mute, payload.deafen);
+
+    // Register with tauri-plugin-global-shortcut (all desktop platforms).
+    // On Linux/KDE Wayland: background capture via XWayland compat.
+    // On Windows: native global hotkeys.
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
@@ -739,7 +745,6 @@ fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, state: tauri::State<'_,
     if let Some(s) = deafen_sc { to_register.push(s); }
 
     if !to_register.is_empty() {
-        log::info!("[Sion] Registering {} plugin shortcuts...", to_register.len());
         if let Err(e) = gs.on_shortcuts(to_register, move |_app, shortcut, event| {
             if event.state != ShortcutState::Pressed { return; }
             if mute_sc.is_some() && shortcut == &mute_sc.unwrap() {
@@ -749,8 +754,6 @@ fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, state: tauri::State<'_,
             }
         }) {
             log::warn!("[Sion] Failed to register plugin shortcuts: {}", e);
-        } else {
-            log::info!("[Sion] Plugin shortcuts registered OK");
         }
     }
 }
@@ -842,16 +845,16 @@ fn get_shortcut_ws_port() -> u16 {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg_attr(feature = "cef", tauri::cef_entry_point)]
 pub fn run() {
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "linux")]
     let shortcuts: SharedShortcuts = Arc::new(Mutex::new(ShortcutState {
         mute_keys: vec![],
         deafen_keys: vec![],
     }));
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "linux")]
     let shortcuts_clone = shortcuts.clone();
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "linux")]
     let shortcuts_managed = shortcuts.clone();
 
     let builder = tauri::Builder::<TauriRuntime>::default();
@@ -867,9 +870,11 @@ pub fn run() {
         ("--autoplay-policy".to_string(), Some("no-user-gesture-required".to_string())),
     ]);
 
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(shortcuts_managed);
+
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .manage(shortcuts_managed)
         .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, start_voice_service, stop_voice_service]);
 
     #[cfg(target_os = "android")]
@@ -914,10 +919,9 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             start_ws_server();
 
-            // rdev captures keyboard events at the evdev level — works when
-            // the app is focused (even on Wayland). The plugin handles background.
-            // Dedup is handled by the JS debounce (150ms).
-            #[cfg(not(target_os = "android"))]
+            // rdev captures keyboard events at the evdev level — Linux only.
+            // Works when focused (even on Wayland). The plugin handles background.
+            #[cfg(target_os = "linux")]
             {
                 use rdev::{listen, EventType};
                 let sc = shortcuts_clone;
