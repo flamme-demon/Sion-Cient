@@ -11,7 +11,9 @@ use std::net::TcpListener;
 #[cfg(not(target_os = "android"))]
 use std::sync::atomic::{AtomicU16, Ordering};
 #[cfg(not(target_os = "android"))]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 #[cfg(not(target_os = "android"))]
 use std::thread;
 use std::time::Duration;
@@ -713,26 +715,10 @@ async fn transcode_video(url: String) -> Result<String, String> {
     Ok(b64)
 }
 
+/// Register global shortcuts via plugin + update rdev state (Linux).
+/// Shared logic extracted so both Linux and non-Linux entry points use it.
 #[cfg(not(target_os = "android"))]
-#[tauri::command]
-fn update_shortcuts(
-    app: tauri::AppHandle<TauriRuntime>,
-    #[cfg(target_os = "linux")] state: tauri::State<'_, SharedShortcuts>,
-    payload: UpdateShortcutsPayload,
-) {
-    // Update rdev key state (Linux only — rdev handles focused capture)
-    #[cfg(target_os = "linux")]
-    {
-        let mut shortcuts = state.lock().unwrap();
-        shortcuts.mute_keys = parse_shortcut(&payload.mute);
-        shortcuts.deafen_keys = parse_shortcut(&payload.deafen);
-    }
-
-    log::info!("[Sion] Global shortcuts updated: mute={}, deafen={}", payload.mute, payload.deafen);
-
-    // Register with tauri-plugin-global-shortcut (all desktop platforms).
-    // On Linux/KDE Wayland: background capture via XWayland compat.
-    // On Windows: native global hotkeys.
+fn register_plugin_shortcuts(app: &tauri::AppHandle<TauriRuntime>, payload: &UpdateShortcutsPayload) {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
@@ -756,6 +742,23 @@ fn update_shortcuts(
             log::warn!("[Sion] Failed to register plugin shortcuts: {}", e);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, state: tauri::State<'_, SharedShortcuts>, payload: UpdateShortcutsPayload) {
+    let mut shortcuts = state.lock().unwrap();
+    shortcuts.mute_keys = parse_shortcut(&payload.mute);
+    shortcuts.deafen_keys = parse_shortcut(&payload.deafen);
+    log::info!("[Sion] Global shortcuts updated: mute={}, deafen={}", payload.mute, payload.deafen);
+    register_plugin_shortcuts(&app, &payload);
+}
+
+#[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
+#[tauri::command]
+fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, payload: UpdateShortcutsPayload) {
+    log::info!("[Sion] Global shortcuts updated: mute={}, deafen={}", payload.mute, payload.deafen);
+    register_plugin_shortcuts(&app, &payload);
 }
 
 // WebSocket server for global shortcut polling. JS sends "poll" every 100ms,
