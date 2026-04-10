@@ -26,7 +26,7 @@ function roleColor(role: UserRole): string {
 }
 
 // Extract display name and avatar from LiveKit participant identity
-function getParticipantInfo(identity: string, localUserId: string | null, localDisplayName: string | null, localAvatarUrl: string | undefined) {
+function getParticipantInfo(identity: string, roomId: string | null, localUserId: string | null, localDisplayName: string | null, localAvatarUrl: string | undefined) {
   // Check if this is the local user
   const isLocal = localUserId && (identity === localUserId || identity.startsWith(localUserId + ":"));
 
@@ -34,13 +34,24 @@ function getParticipantInfo(identity: string, localUserId: string | null, localD
     return { name: localDisplayName, avatarUrl: localAvatarUrl, isLocal: true };
   }
 
-  // Try to get user info from Matrix client
+  // Extract Matrix user ID from identity (format: @user:server.com or @user:server.com:deviceId)
+  const userIdMatch = identity.match(/^(@[^:]+:[^:]+)/);
+  const userId = userIdMatch ? userIdMatch[1] : identity;
+
   const client = getMatrixClient();
   if (client) {
-    // Extract Matrix user ID from identity (format: @user:server.com or @user:server.com:deviceId)
-    const userIdMatch = identity.match(/^(@[^:]+:[^:]+)/);
-    const userId = userIdMatch ? userIdMatch[1] : identity;
+    // Try room member first — populated from room state events, reliable after sync
+    if (roomId) {
+      const room = client.getRoom(roomId);
+      const member = room?.getMember?.(userId);
+      if (member?.name) {
+        const avatarMxc = member.getMxcAvatarUrl?.() || member.events?.member?.getContent?.()?.avatar_url;
+        const avatarUrl = avatarMxc ? (client.mxcUrlToHttp(avatarMxc) ?? undefined) : undefined;
+        return { name: member.name, avatarUrl, isLocal: false };
+      }
+    }
 
+    // Fallback: global User object (may not have displayName right after reload)
     const user = client.getUser(userId);
     if (user) {
       const name = user.displayName || userIdMatch?.[1]?.replace("@", "").split(":")[0] || identity;
@@ -63,6 +74,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   const liveKitParticipants = useLiveKitStore((s) => s.participants);
   const liveKitConnected = useLiveKitStore((s) => s.connected);
   const credentials = useAuthStore((s) => s.credentials);
+  const matrixConnected = useMatrixStore((s) => s.connectionStatus);
   const isMuted = useAppStore((s) => s.isMuted);
   const isDeafened = useAppStore((s) => s.isDeafened);
   const setSidebarView = useSettingsStore((s) => s.setSidebarView);
@@ -142,7 +154,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
         return matrixMemberIds.has(userId);
       })
       .map((p) => {
-        const info = getParticipantInfo(p.identity, localUserId, localDisplayName, localAvatarUrl);
+        const info = getParticipantInfo(p.identity, channel.id, localUserId, localDisplayName, localAvatarUrl);
         const isSelf = info.isLocal;
         const muted = isSelf ? isMuted : p.isMuted;
         const deafened = isSelf ? isDeafened : false;
@@ -157,7 +169,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           connectionQuality: p.connectionQuality,
         };
       });
-  }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened]);
+  }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened, matrixConnected]);
 
   return (
     <div>

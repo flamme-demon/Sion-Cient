@@ -14,6 +14,8 @@ const previewCache = new Map<string, LinkPreviewData>();
 // URLs on every re-render but still recover quickly from transient failures.
 const failureCache = new Map<string, number>();
 const FAILURE_TTL_MS = 10_000;
+// Permanent failures (403, 404, etc.) — cached much longer, no point retrying.
+const PERMANENT_FAILURE_TTL_MS = 300_000; // 5 min
 
 // Concurrency limiter — when a channel scrolls and many messages render at
 // once, dozens of fetch_link_preview calls used to fire in parallel and most
@@ -57,6 +59,12 @@ function isTransientError(err: unknown): boolean {
   return msg.includes("error sending request") || msg.includes("dns") || msg.includes("timeout");
 }
 
+/** HTTP 4xx/5xx errors that will never resolve on retry. */
+function isPermanentHttpError(err: unknown): boolean {
+  const msg = String(err || "");
+  return /HTTP (403|404|405|410|451)/.test(msg);
+}
+
 async function fetchPreview(url: string): Promise<LinkPreviewData | null> {
   // Successful cache hit
   const hit = previewCache.get(url);
@@ -92,8 +100,13 @@ async function fetchPreview(url: string): Promise<LinkPreviewData | null> {
         await new Promise((r) => setTimeout(r, 250));
       }
     }
-    console.warn("[Sion][LinkPreview] fetch failed after retries", url, lastError);
-    failureCache.set(url, Date.now());
+    if (isPermanentHttpError(lastError)) {
+      // Silent — sites like LeBonCoin, Amazon block bot requests; nothing we can do.
+      failureCache.set(url, Date.now() + PERMANENT_FAILURE_TTL_MS - FAILURE_TTL_MS);
+    } else {
+      console.warn("[Sion][LinkPreview] fetch failed after retries", url, lastError);
+      failureCache.set(url, Date.now());
+    }
     return null;
   } finally {
     releaseSlot();

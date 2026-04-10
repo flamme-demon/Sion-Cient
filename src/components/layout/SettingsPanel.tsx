@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import i18n from "../../i18n";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { SettingsIcon, ArrowLeftIcon } from "../icons";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -8,7 +9,7 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import { useClickOutside } from "../../hooks/useClickOutside";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
-import { invoke } from "@tauri-apps/api/core";
+
 
 type SettingsTab = "general" | "audio" | "chat" | "shortcuts" | "advanced";
 
@@ -54,11 +55,17 @@ export function SettingsPanel() {
   const enableGifs = useSettingsStore((s) => s.enableGifs);
   const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
+  const language = useSettingsStore((s) => s.language);
+  const setLanguage = useSettingsStore((s) => s.setLanguage);
   const setNotificationMode = useSettingsStore((s) => s.setNotificationMode);
   const channels = useMatrixStore((s) => s.channels);
 
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+  const [defaultInputLabel, setDefaultInputLabel] = useState("");
+  const [defaultOutputLabel, setDefaultOutputLabel] = useState("");
+  const [defaultInputId, setDefaultInputId] = useState("");
+  const [defaultOutputId, setDefaultOutputId] = useState("");
   const [micLevel, setMicLevel] = useState(0);
   const [_micTesting, setMicTesting] = useState(false);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -79,6 +86,7 @@ export function SettingsPanel() {
   const startMicTest = useCallback(async () => {
     stopMicTest();
     try {
+      // CefAudioShim handles PulseAudio device IDs transparently in getUserMedia
       const constraints: MediaStreamConstraints = { audio: audioInputDevice ? { deviceId: { exact: audioInputDevice } } : true };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       micStreamRef.current = stream;
@@ -166,30 +174,34 @@ export function SettingsPanel() {
 
   useEffect(() => {
     async function loadDevices() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((t) => t.stop());
-      } catch { /* Permission denied */ }
-
+      // CefAudioShim overrides enumerateDevices to return PulseAudio devices
+      // when CEF returns empty IDs. This works transparently.
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasRealIds = devices.some((d) => d.deviceId !== "" && d.deviceId !== "default");
+      const filterMeta = (list: MediaDeviceInfo[]) =>
+        list.length > 1 ? list.filter((d) => d.deviceId !== "default") : list;
 
-      if (hasRealIds) {
-        const filterDefault = (list: MediaDeviceInfo[]) => list.length > 1 ? list.filter((d) => d.deviceId !== "default") : list;
-        setAudioInputs(filterDefault(devices.filter((d) => d.kind === "audioinput")));
-        setAudioOutputs(filterDefault(devices.filter((d) => d.kind === "audiooutput")));
-        return;
+      let defaultSourceId = "";
+      let defaultSinkId = "";
+
+      // Fetch default device labels from PulseAudio (Tauri only)
+      if (window.__TAURI_INTERNALS__) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const defaults = await invoke<{ source_id: string; source_label: string; sink_id: string; sink_label: string }>("get_default_audio_devices");
+          setDefaultInputLabel(defaults.source_label);
+          setDefaultOutputLabel(defaults.sink_label);
+          setDefaultInputId(defaults.source_id);
+          setDefaultOutputId(defaults.sink_id);
+          defaultSourceId = defaults.source_id;
+          defaultSinkId = defaults.sink_id;
+        } catch { /* not in Tauri */ }
       }
 
-      try {
-        const nativeDevices = await invoke<{ id: string; name: string; kind: string }[]>("list_audio_devices");
-        const toMediaDevice = (d: { id: string; name: string; kind: string }): MediaDeviceInfo => ({
-          deviceId: d.id, groupId: "", kind: (d.kind === "input" ? "audioinput" : "audiooutput") as MediaDeviceKind,
-          label: d.name, toJSON() { return this; },
-        });
-        setAudioInputs(nativeDevices.filter((d) => d.kind === "input").map(toMediaDevice));
-        setAudioOutputs(nativeDevices.filter((d) => d.kind === "output").map(toMediaDevice));
-      } catch { setAudioInputs([]); setAudioOutputs([]); }
+      // Filter out the device that matches system default (already shown as "Par défaut — ...")
+      const inputs = filterMeta(devices.filter((d) => d.kind === "audioinput"));
+      const outputs = filterMeta(devices.filter((d) => d.kind === "audiooutput"));
+      setAudioInputs(defaultSourceId ? inputs.filter((d) => d.deviceId !== defaultSourceId) : inputs);
+      setAudioOutputs(defaultSinkId ? outputs.filter((d) => d.deviceId !== defaultSinkId) : outputs);
     }
     loadDevices();
     navigator.mediaDevices.addEventListener("devicechange", loadDevices);
@@ -291,6 +303,14 @@ export function SettingsPanel() {
         {activeTab === "general" && (<>
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.language")}</div>
+              <select value={language || i18n.language?.slice(0, 2)} onChange={(e) => setLanguage(e.target.value)} style={selectStyle}>
+                <option value="fr">{t("settings.languageFr")}</option>
+                <option value="en">{t("settings.languageEn")}</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.defaultChannel")}</div>
               <select value={defaultChannel} onChange={(e) => setDefaultChannel(e.target.value)} style={selectStyle}>
                 <option value="">{t("settings.noDefault")}</option>
@@ -321,9 +341,9 @@ export function SettingsPanel() {
             {audioInputs.length > 0 && (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioInput")}</div>
-                <select value={audioInputDevice} onChange={(e) => { setAudioInputDevice(e.target.value); livekitService.switchAudioInput(e.target.value); }} style={selectStyle}>
-                  <option value="">{t("settings.defaultDevice")}</option>
-                  {audioInputs.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>)}
+                <select value={audioInputDevice} onChange={(e) => { setAudioInputDevice(e.target.value); livekitService.switchAudioInput(e.target.value || defaultInputId); }} style={selectStyle}>
+                  <option value="">{t("settings.defaultDevice")}{defaultInputLabel ? ` — ${defaultInputLabel}` : ""}</option>
+                  {audioInputs.map((d, i) => <option key={`${d.deviceId}-${i}`} value={d.deviceId}>{d.label || d.deviceId}</option>)}
                 </select>
               </div>
             )}
@@ -391,9 +411,9 @@ export function SettingsPanel() {
             {audioOutputs.length > 0 && (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioOutput")}</div>
-                <select value={audioOutputDevice} onChange={(e) => { setAudioOutputDevice(e.target.value); livekitService.switchAudioOutput(e.target.value); }} style={selectStyle}>
-                  <option value="">{t("settings.defaultDevice")}</option>
-                  {audioOutputs.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>)}
+                <select value={audioOutputDevice} onChange={(e) => { setAudioOutputDevice(e.target.value); livekitService.switchAudioOutput(e.target.value || defaultOutputId); }} style={selectStyle}>
+                  <option value="">{t("settings.defaultDevice")}{defaultOutputLabel ? ` — ${defaultOutputLabel}` : ""}</option>
+                  {audioOutputs.map((d, i) => <option key={`${d.deviceId}-${i}`} value={d.deviceId}>{d.label || d.deviceId}</option>)}
                 </select>
               </div>
             )}

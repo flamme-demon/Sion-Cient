@@ -3,6 +3,7 @@ import {
   RoomEvent,
   Track,
   AudioPresets,
+  EncryptionEvent,
   type RemoteTrack,
   type RemoteTrackPublication,
   type RemoteParticipant,
@@ -69,6 +70,59 @@ function stopAllSpeakingDetectors() {
   speakingDetectors.forEach((d) => d.stop());
   speakingDetectors.clear();
   speakingState.clear();
+}
+
+// ── E2EE MissingKey auto-recovery ──────────────────────────────────────
+// When a participant's encryption key is missing (stale session, reconnect,
+// long-running connection), we detect the repeated MissingKey errors and
+// trigger a recovery: first re-emit keys, then if that fails, a full
+// LiveKit reconnect cycle.
+let missingKeyCount = 0;
+let missingKeyWindowStart = 0;
+let missingKeyRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let e2eeRecoveryCallback: (() => Promise<void>) | null = null;
+const MISSING_KEY_THRESHOLD = 30; // errors within the window to trigger recovery
+const MISSING_KEY_WINDOW_MS = 5_000;
+
+function resetMissingKeyState() {
+  missingKeyCount = 0;
+  missingKeyWindowStart = 0;
+  if (missingKeyRecoveryTimer) {
+    clearTimeout(missingKeyRecoveryTimer);
+    missingKeyRecoveryTimer = null;
+  }
+}
+
+function onE2EEError(error: Error) {
+  if (!error.message?.includes("missing key") && !error.message?.includes("MissingKey")) return;
+
+  const now = Date.now();
+  if (now - missingKeyWindowStart > MISSING_KEY_WINDOW_MS) {
+    missingKeyCount = 0;
+    missingKeyWindowStart = now;
+  }
+  missingKeyCount++;
+
+  if (missingKeyCount >= MISSING_KEY_THRESHOLD && !missingKeyRecoveryTimer) {
+    console.warn(`[Sion][E2EE] ${missingKeyCount} MissingKey errors in ${MISSING_KEY_WINDOW_MS}ms — triggering recovery`);
+    // Debounce: wait a bit before acting (keys may arrive shortly)
+    missingKeyRecoveryTimer = setTimeout(async () => {
+      missingKeyRecoveryTimer = null;
+      if (e2eeRecoveryCallback) {
+        try {
+          await e2eeRecoveryCallback();
+        } catch (err) {
+          console.error("[Sion][E2EE] Recovery failed:", err);
+        }
+      }
+      missingKeyCount = 0;
+    }, 2_000);
+  }
+}
+
+/** Register a callback that will be called when E2EE recovery is needed. */
+export function setE2EERecoveryCallback(cb: (() => Promise<void>) | null) {
+  e2eeRecoveryCallback = cb;
 }
 
 /**
@@ -283,6 +337,7 @@ export async function connectToRoom(
 
   if (e2eeKeyProvider) {
     await room.setE2EEEnabled(true);
+    room.on(EncryptionEvent.EncryptionError, onE2EEError);
   }
 
   // Attach audio tracks from participants already in the room
@@ -344,8 +399,11 @@ export async function disconnectFromRoom() {
     currentRoom.off(RoomEvent.TrackUnsubscribed, detachAudioTrack);
     currentRoom.off(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
     currentRoom.off(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
+    currentRoom.off(EncryptionEvent.EncryptionError, onE2EEError);
     screenShareCallback?.(null);
     screenShareCallback = null;
+    resetMissingKeyState();
+    e2eeRecoveryCallback = null;
     stopAllSpeakingDetectors();
     detachAllAudio();
     await currentRoom.disconnect();
@@ -371,12 +429,32 @@ export async function toggleMicrophone(enabled: boolean) {
 
 export async function switchAudioInput(deviceId: string) {
   if (!currentRoom) return;
+  // The CefAudioShim transparently handles PulseAudio device IDs in
+  // getUserMedia, so LiveKit's standard switchActiveDevice just works.
   await currentRoom.switchActiveDevice("audioinput", deviceId);
+
+  // Refresh the local speaking detector
+  const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const mst = micPub?.track?.mediaStreamTrack;
+  if (mst) {
+    startSpeakingDetectorForStream(currentRoom.localParticipant.identity, new MediaStream([mst]));
+  }
 }
 
 export async function switchAudioOutput(deviceId: string) {
   if (!currentRoom) return;
   await currentRoom.switchActiveDevice("audiooutput", deviceId);
+
+  // Update sinkId on all manually-created audio elements
+  for (const el of audioElements.values()) {
+    if ("setSinkId" in el) {
+      try {
+        await (el as HTMLAudioElement & { setSinkId(id: string): Promise<void> }).setSinkId(deviceId);
+      } catch {
+        // CefAudioShim handles PulseAudio IDs in setSinkId override
+      }
+    }
+  }
 }
 
 export function setDeafened(deafened: boolean) {

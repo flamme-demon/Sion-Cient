@@ -16,14 +16,15 @@ function keyEventToString(e: KeyboardEvent): string {
 
 export { keyEventToString };
 
-// Send shortcut config to Tauri backend
+let lastSyncedShortcuts = "";
 async function syncShortcutsToBackend(mute: string, deafen: string) {
+  const key = `${mute}|${deafen}`;
+  if (key === lastSyncedShortcuts) return;
+  lastSyncedShortcuts = key;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("update_shortcuts", { payload: { mute, deafen } });
-  } catch {
-    // Not in Tauri
-  }
+  } catch { /* Not in Tauri */ }
 }
 
 export function useKeyboardShortcuts() {
@@ -31,12 +32,11 @@ export function useKeyboardShortcuts() {
   const toggleDeafen = useAppStore((s) => s.toggleDeafen);
   const muteShortcut = useSettingsStore((s) => s.muteShortcut);
   const deafenShortcut = useSettingsStore((s) => s.deafenShortcut);
-  // Debounce to prevent double-toggle (rdev global + web keydown both fire when focused)
   const lastToggleRef = useRef<number>(0);
 
   const debouncedMute = () => {
     const now = Date.now();
-    if (now - lastToggleRef.current > 150) {
+    if (now - lastToggleRef.current > 300) {
       lastToggleRef.current = now;
       toggleMute();
     }
@@ -44,44 +44,67 @@ export function useKeyboardShortcuts() {
 
   const debouncedDeafen = () => {
     const now = Date.now();
-    if (now - lastToggleRef.current > 150) {
+    if (now - lastToggleRef.current > 300) {
       lastToggleRef.current = now;
       toggleDeafen();
     }
   };
 
-  // Sync shortcuts to Tauri backend
   useEffect(() => {
     syncShortcutsToBackend(muteShortcut, deafenShortcut);
   }, [muteShortcut, deafenShortcut]);
 
-  // Listen for global shortcut events from Tauri (rdev backend)
+  // Push-based WebSocket: Rust pushes "mute,ts" or "deafen,ts" instantly
+  // when rdev/plugin detects a global shortcut. No polling needed.
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    if (!window.__TAURI_INTERNALS__) return;
+    let ws: WebSocket | null = null;
+    let alive = true;
 
-    (async () => {
+    const connectWs = async () => {
       try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<string>("global-shortcut", (event) => {
-          if (event.payload === "mute") debouncedMute();
-          if (event.payload === "deafen") debouncedDeafen();
-        });
-      } catch {
-        // Not in Tauri
-      }
-    })();
+        const { invoke } = await import("@tauri-apps/api/core");
+        const port = await invoke<number>("get_shortcut_ws_port");
+        if (!port || !alive) return;
 
-    return () => { if (unlisten) unlisten(); };
+        ws = new WebSocket(`ws://127.0.0.1:${port}`);
+
+        ws.onmessage = (ev) => {
+          const data = typeof ev.data === "string" ? ev.data : "";
+          const parts = data.split(",");
+          if (parts.length < 1) return;
+          const action = parts[0];
+          if (action === "mute") debouncedMute();
+          else if (action === "deafen") debouncedDeafen();
+        };
+
+        ws.onclose = () => {
+          if (alive) setTimeout(connectWs, 1000);
+        };
+        ws.onerror = () => ws?.close();
+      } catch {
+        if (alive) setTimeout(connectWs, 2000);
+      }
+    };
+
+    connectWs();
+    return () => {
+      alive = false;
+      if (ws) { ws.onclose = null; ws.close(); }
+    };
   }, [toggleMute, toggleDeafen]);
 
-  // Web fallback: keydown listener (browser dev mode only)
+  // Web keydown — only used in browser dev mode (no Tauri).
+  // In Tauri, rdev + plugin handle all shortcuts via WS push.
   useEffect(() => {
-    if (!muteShortcut && !deafenShortcut) return;
     if (window.__TAURI_INTERNALS__) return;
+    if (!muteShortcut && !deafenShortcut) return;
 
     function handleKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const isFKey = /^F\d{1,2}$/.test(e.key);
+      const hasModifier = e.ctrlKey || e.altKey || e.metaKey;
+      if ((tag === "INPUT" || tag === "TEXTAREA") && !isFKey && !hasModifier) return;
       const combo = keyEventToString(e);
       if (muteShortcut && combo === muteShortcut) {
         e.preventDefault();

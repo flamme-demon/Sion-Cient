@@ -10,11 +10,10 @@ export function UserAvatar({ name, speaking, size = "sm", avatarUrl, presence }:
   const dim = size === "sm" ? 24 : 36;
   const fontSize = size === "sm" ? 10 : 14;
 
-  // Extract display name: if name starts with @, extract the localpart (@user:server.com → user)
-  // Otherwise use the first character of the name
+  // Extract display name initial — use Array.from to handle emoji (surrogate pairs) correctly
   const initial = name.startsWith("@")
     ? (name.match(/^@([^:]+):/)?.[1]?.[0]?.toUpperCase() || name[1]?.toUpperCase() || "?")
-    : name[0]?.toUpperCase() || "?";
+    : (Array.from(name)[0]?.toUpperCase() || "?");
 
   return (
     <div style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>

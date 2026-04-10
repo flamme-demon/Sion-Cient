@@ -26,6 +26,7 @@ interface SettingsState {
   defaultChannel: string;
   autoJoinVoice: boolean;
   enableGifs: boolean;
+  language: string;
 
   setMutedSpeakAlert: (v: boolean) => void;
   setJoinMuted: (v: boolean) => void;
@@ -46,6 +47,7 @@ interface SettingsState {
   setAutoJoinVoice: (v: boolean) => void;
   setEnableGifs: (v: boolean) => void;
   setNotificationMode: (v: NotificationMode) => void;
+  setLanguage: (v: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -69,6 +71,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultChannel: "",
       autoJoinVoice: false,
       enableGifs: false,
+      language: "",
       notificationMode: "mentions" as NotificationMode,
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
@@ -89,6 +92,10 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
+      setLanguage: (v) => {
+        set({ language: v });
+        import("i18next").then((i18n) => i18n.default.changeLanguage(v));
+      },
       setNotificationMode: (v) => {
         set({ notificationMode: v });
         import("../services/androidVoiceService").then(({ setNotificationMode: syncMode }) => syncMode(v)).catch(() => {});

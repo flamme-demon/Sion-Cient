@@ -154,19 +154,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         saved.deviceId = deviceId;
         saveCredentials(saved);
       }
-      // Update displayName if missing
+      // Don't fetch displayName from server here — we keep the local value.
+      // It will be pushed to the server AFTER the initial sync completes
+      // (see useMatrixStore sync handler) to avoid being overwritten by
+      // stale m.room.member events during sync.
       if (!saved.displayName || saved.displayName === saved.userId) {
         const profileName = await matrixService.fetchDisplayName(saved.userId);
-        if (profileName) {
-          saved.displayName = profileName;
-        }
+        if (profileName) saved.displayName = profileName;
       }
-      // Update avatarUrl if missing
-      if (!saved.avatarUrl) {
-        const avatarUrl = await matrixService.getAvatarUrl(saved.userId);
-        if (avatarUrl) {
-          saved.avatarUrl = avatarUrl;
-        }
+      // Always refresh avatarUrl from server
+      const avatarUrl = await matrixService.getAvatarUrl(saved.userId);
+      if (avatarUrl) {
+        saved.avatarUrl = avatarUrl;
       }
       if (saved.displayName || saved.avatarUrl) {
         saveCredentials(saved);

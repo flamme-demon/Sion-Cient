@@ -9,6 +9,7 @@ import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitToke
 import { getMatrixClient } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
+import { setE2EERecoveryCallback } from "../services/livekitService";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 
 // Module-level tracking — survives component unmount/remount
@@ -124,6 +125,25 @@ export function useVoiceChannel() {
 
             activeRTCSession = session;
             activeKeyProvider = keyProvider || null;
+
+            // E2EE recovery: when MissingKey errors pile up, re-emit keys
+            // so the other participants can decrypt our stream again.
+            if (isEncrypted) {
+              setE2EERecoveryCallback(async () => {
+                console.warn("[Sion][E2EE] Recovery: re-emitting encryption keys");
+                try {
+                  session.reemitEncryptionKeys();
+                  // Also re-download device keys in case a participant rotated devices
+                  const crypto = client.getCrypto();
+                  if (crypto) {
+                    const memberIds = matrixRoom.getJoinedMembers().map(m => m.userId);
+                    await crypto.getUserDeviceInfo(memberIds, true);
+                  }
+                } catch (err) {
+                  console.error("[Sion][E2EE] Recovery reemit failed:", err);
+                }
+              });
+            }
           }
 
           await joinRoom(matrixRoomId);

@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.8.2"
+version = "0.9.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -35,7 +35,12 @@ tauri-plugin-notification = "2.3.3"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf", default-features = false, optional = true }
 cef = { version = "=144.1.0", default-features = false, optional = true }
+tauri-plugin-global-shortcut = "2"
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
+tungstenite = "0.24"
+ashpd = "0.11"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "macros"] }
 cpal = "0.15"
 
 [target.'cfg(target_os = "android")'.dependencies]

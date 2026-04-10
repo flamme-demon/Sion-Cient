@@ -5,6 +5,10 @@ import "highlight.js/styles/github-dark.css";
 import "./index.css";
 import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
+import { installCefAudioShim } from "./services/cefAudioShim";
+
+// Override enumerateDevices/getUserMedia in CEF so WebRTC sees real devices
+installCefAudioShim().catch(() => {});
 
 // Intercept all clicks on external links to open in default browser (Tauri/CEF)
 document.addEventListener("click", (e) => {

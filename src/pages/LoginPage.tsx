@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import i18n from "../i18n";
 import { useAuthStore } from "../stores/useAuthStore";
+import { useSettingsStore } from "../stores/useSettingsStore";
 import { EyeIcon, EyeOffIcon } from "../components/icons";
 
 type AuthMode = "login" | "register";
@@ -249,6 +251,16 @@ export function LoginPage() {
         input::placeholder { color: var(--color-outline); }
       `}</style>
       <div style={styles.card}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: -8 }}>
+          <select
+            value={useSettingsStore.getState().language || i18n.language?.slice(0, 2)}
+            onChange={(e) => { useSettingsStore.getState().setLanguage(e.target.value); }}
+            style={{ background: 'transparent', border: 'none', color: 'var(--color-on-surface-variant)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            <option value="fr">FR</option>
+            <option value="en">EN</option>
+          </select>
+        </div>
         <div style={styles.logo}>
           <div style={styles.logoText}>Sion</div>
           <div style={styles.logoSub}>Matrix Voice & Text Client</div>

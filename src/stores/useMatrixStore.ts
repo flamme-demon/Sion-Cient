@@ -488,6 +488,17 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
         set({ channels, connectionStatus: "connected", messages });
 
+        // Push local displayName to server AFTER sync completes — this ensures
+        // stale m.room.member events from the sync don't overwrite the emoji name.
+        import("./useAuthStore").then(({ useAuthStore: authStore }) => {
+          const creds = authStore.getState().credentials;
+          if (creds?.displayName && creds.displayName !== creds.userId) {
+            import("../services/matrixService").then(({ setDisplayName }) => {
+              setDisplayName(creds.displayName!).catch(() => {});
+            });
+          }
+        });
+
         // Auto-accept pending invites (received while offline)
         const invitedRooms = client.getRooms().filter((r) =>
           r.getMyMembership() === "invite"
