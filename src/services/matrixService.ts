@@ -595,30 +595,21 @@ export async function sendTextMessage(roomId: string, body: string) {
   });
 }
 
-let cachedMaxUploadSize: number | null = null;
+const DEFAULT_MAX_UPLOAD = 100 * 1024 * 1024;
+let cachedMaxUploadSize = 0;
 
 export async function getMaxUploadSize(): Promise<number> {
-  if (cachedMaxUploadSize !== null) return cachedMaxUploadSize;
-  if (!matrixClient) return 100 * 1024 * 1024; // 100MB fallback
+  if (cachedMaxUploadSize > 0) return cachedMaxUploadSize;
+  if (!matrixClient) return DEFAULT_MAX_UPLOAD;
   try {
-    const url = matrixClient.getHomeserverUrl() + "/_matrix/media/v3/config";
-    const resp = await matrixClient.http.authedRequest(
-      // @ts-expect-error — internal method, works with matrix-js-sdk
-      "GET" as unknown, "/_matrix/media/v3/config", undefined, undefined, { prefix: "" },
-    ) as { "m.upload.size"?: number };
-    cachedMaxUploadSize = resp?.["m.upload.size"] || 100 * 1024 * 1024;
+    const resp = await fetch(
+      matrixClient.getHomeserverUrl() + "/_matrix/media/v3/config",
+      { headers: { Authorization: `Bearer ${matrixClient.getAccessToken()}` } },
+    );
+    const data = await resp.json();
+    cachedMaxUploadSize = data?.["m.upload.size"] || DEFAULT_MAX_UPLOAD;
   } catch {
-    // Try authenticated fetch as fallback
-    try {
-      const resp = await fetch(
-        matrixClient.getHomeserverUrl() + "/_matrix/media/v3/config",
-        { headers: { Authorization: `Bearer ${matrixClient.getAccessToken()}` } },
-      );
-      const data = await resp.json();
-      cachedMaxUploadSize = data?.["m.upload.size"] || 100 * 1024 * 1024;
-    } catch {
-      cachedMaxUploadSize = 100 * 1024 * 1024;
-    }
+    cachedMaxUploadSize = DEFAULT_MAX_UPLOAD;
   }
   return cachedMaxUploadSize;
 }
