@@ -2,6 +2,10 @@
   "app": {
     "pressBackAgain": "Appuyez encore pour quitter"
   },
+  "update": {
+    "available": "Nouvelle version v{{version}} disponible",
+    "download": "Télécharger"
+  },
   "server": {
     "online": "En ligne",
     "name": "Mon Serveur"

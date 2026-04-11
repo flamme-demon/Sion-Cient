@@ -7,6 +7,7 @@ import { MobileVoiceBar } from "./components/mobile/MobileVoiceBar";
 import { LoginPage } from "./pages/LoginPage";
 import { RecoveryKeyModal } from "./components/RecoveryKeyModal";
 import { ConnectionStatusBanner } from "./components/ConnectionStatusBanner";
+import { UpdateBanner } from "./components/layout/UpdateBanner";
 import { UserContextMenu } from "./components/sidebar/UserContextMenu";
 import { useAppStore } from "./stores/useAppStore";
 import { useAuthStore } from "./stores/useAuthStore";
@@ -349,6 +350,7 @@ export default function App() {
         {showSettings && <SettingsPanel />}
         <RecoveryKeyModal />
         <ConnectionStatusBanner />
+        <UpdateBanner />
         {userContextMenu && (
           <UserContextMenu
             userId={userContextMenu.userId}

@@ -50,7 +50,8 @@ interface AppState {
   toggleAdmin: () => void;
   toggleSettings: () => void;
   toggleAccountPanel: () => void;
-  addPendingFile: (file: File) => void;
+  addPendingFile: (file: File) => Promise<void> | void;
+  fileError: string | null;
   removePendingFile: (id: string) => void;
   clearPendingFiles: () => void;
   setDraggingOver: (v: boolean) => void;
@@ -126,11 +127,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleAdmin: () => set((s) => ({ showAdmin: !s.showAdmin, showSettings: s.showAdmin ? s.showSettings : false })),
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings, showAdmin: s.showSettings ? s.showAdmin : false })),
   toggleAccountPanel: () => set((s) => ({ showAccountPanel: !s.showAccountPanel })),
-  addPendingFile: (file) => {
-    // Limit file size to 100MB to prevent WebView crashes on mobile
-    const MAX_FILE_SIZE = 100 * 1024 * 1024;
-    if (file.size > MAX_FILE_SIZE) {
-      console.warn("[Sion] File too large:", file.name, file.size);
+  fileError: null,
+  addPendingFile: async (file) => {
+    // Check server upload limit
+    let maxSize = 100 * 1024 * 1024;
+    try {
+      const { getMaxUploadSize } = await import("../services/matrixService");
+      maxSize = await getMaxUploadSize();
+    } catch { /* use default */ }
+
+    if (file.size > maxSize) {
+      const maxMB = Math.round(maxSize / 1024 / 1024);
+      const fileMB = Math.round(file.size / 1024 / 1024);
+      const msg = `Fichier trop volumineux (${fileMB} MB). La limite du serveur est de ${maxMB} MB.`;
+      set({ fileError: msg });
+      setTimeout(() => set({ fileError: null }), 5000);
       return;
     }
     const id = crypto.randomUUID();

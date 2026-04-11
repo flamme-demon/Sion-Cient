@@ -595,6 +595,34 @@ export async function sendTextMessage(roomId: string, body: string) {
   });
 }
 
+let cachedMaxUploadSize: number | null = null;
+
+export async function getMaxUploadSize(): Promise<number> {
+  if (cachedMaxUploadSize !== null) return cachedMaxUploadSize;
+  if (!matrixClient) return 100 * 1024 * 1024; // 100MB fallback
+  try {
+    const url = matrixClient.getHomeserverUrl() + "/_matrix/media/v3/config";
+    const resp = await matrixClient.http.authedRequest(
+      // @ts-expect-error — internal method, works with matrix-js-sdk
+      "GET" as unknown, "/_matrix/media/v3/config", undefined, undefined, { prefix: "" },
+    ) as { "m.upload.size"?: number };
+    cachedMaxUploadSize = resp?.["m.upload.size"] || 100 * 1024 * 1024;
+  } catch {
+    // Try authenticated fetch as fallback
+    try {
+      const resp = await fetch(
+        matrixClient.getHomeserverUrl() + "/_matrix/media/v3/config",
+        { headers: { Authorization: `Bearer ${matrixClient.getAccessToken()}` } },
+      );
+      const data = await resp.json();
+      cachedMaxUploadSize = data?.["m.upload.size"] || 100 * 1024 * 1024;
+    } catch {
+      cachedMaxUploadSize = 100 * 1024 * 1024;
+    }
+  }
+  return cachedMaxUploadSize;
+}
+
 export async function uploadFile(file: File): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const response = await matrixClient.uploadContent(file, { type: file.type });

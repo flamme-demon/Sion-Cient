@@ -30,6 +30,7 @@ export function ChatInput() {
   const channels = useMatrixStore((s) => s.channels);
   const addPendingFile = useAppStore((s) => s.addPendingFile);
   const pendingFiles = useAppStore((s) => s.pendingFiles);
+  const fileError = useAppStore((s) => s.fileError);
   const clearPendingFiles = useAppStore((s) => s.clearPendingFiles);
   const editingMessage = useAppStore((s) => s.editingMessage);
   const clearEditingMessage = useAppStore((s) => s.clearEditingMessage);
@@ -369,6 +370,20 @@ export function ChatInput() {
 
   return (
     <div style={{ padding: '8px 20px 20px 20px' }}>
+      {/* File error banner */}
+      {fileError && (
+        <div style={{
+          padding: '8px 16px',
+          marginBottom: 4,
+          borderRadius: 12,
+          background: 'var(--color-error-container)',
+          color: 'var(--color-on-error-container)',
+          fontSize: 12,
+          fontWeight: 500,
+        }}>
+          {fileError}
+        </div>
+      )}
       {/* Reply preview */}
       {replyingTo && !editingMessage && (
         <div style={{

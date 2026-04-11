@@ -2,6 +2,10 @@
   "app": {
     "pressBackAgain": "Press back again to exit"
   },
+  "update": {
+    "available": "New version v{{version}} available",
+    "download": "Download"
+  },
   "server": {
     "online": "Online",
     "name": "My Server"
