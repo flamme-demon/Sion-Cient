@@ -14,7 +14,7 @@ export interface UpdateInfo {
 }
 
 let lastCheck = 0;
-let cachedUpdate: UpdateInfo | null = null;
+let cachedUpdate: UpdateInfo | null | undefined;
 
 function getCurrentVersion(): string {
   // Injected by Vite from package.json

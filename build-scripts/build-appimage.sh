@@ -147,7 +147,15 @@ cp "$APPDIR/$APP_NAME.desktop" "$APPDIR/usr/share/applications/"
 # Create AppRun script — sets LD_LIBRARY_PATH so CEF libs are found
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/bash
-SELF_DIR="$(dirname "$(readlink -f "$0")")"
+SELF="$(readlink -f "$0")"
+SELF_DIR="$(dirname "$SELF")"
+SELF_NAME="$(basename "$SELF")"
+
+# Remove older Sion AppImages in the same directory
+for old in "$(dirname "$SELF")"/Sion_Client-*-x86_64.AppImage; do
+    [ -f "$old" ] && [ "$(basename "$old")" != "$SELF_NAME" ] && rm -f "$old" 2>/dev/null
+done
+
 export LD_LIBRARY_PATH="$SELF_DIR/usr/lib/sion-client:${LD_LIBRARY_PATH}"
 exec "$SELF_DIR/usr/bin/sion-client" "$@"
 APPRUN
@@ -170,12 +178,17 @@ if [ -f "$APPIMAGE" ]; then
     # Centralised installer collection — same place every script drops into.
     BUILD_APPS_DIR="$PROJECT_DIR/build-apps"
     mkdir -p "$BUILD_APPS_DIR"
+    # Remove old AppImages before copying the new one
+    rm -f "$BUILD_APPS_DIR"/Sion_Client-*-x86_64.AppImage
     cp -f "$APPIMAGE" "$BUILD_APPS_DIR/"
     FINAL_PATH="$BUILD_APPS_DIR/$(basename "$APPIMAGE")"
     chmod +x "$FINAL_PATH"
+    # Also create a versionless symlink for easy access
+    ln -sf "$(basename "$APPIMAGE")" "$BUILD_APPS_DIR/Sion_Client-x86_64.AppImage"
 
     echo "  Build reussi !"
     echo "  AppImage: $FINAL_PATH ($SIZE)"
+    echo "  Lien: $BUILD_APPS_DIR/Sion_Client-x86_64.AppImage"
     echo ""
     echo "  Pour lancer: \"$FINAL_PATH\""
 else

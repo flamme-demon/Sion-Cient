@@ -708,6 +708,37 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // Track processed event IDs to prevent duplicates from SDK re-emissions
     const processedEventIds = new Set<string>();
 
+    // Listen for voice kick events (Sion-specific)
+    client.on(RoomEvent.Timeline, (event, room) => {
+      if (!room || event.getType?.() !== "com.sion.voice_kick") return;
+      const content = event.getContent?.();
+      const myUserId = client.getUserId();
+      if (!content?.kicked_user || content.kicked_user !== myUserId) return;
+
+      // Verify the sender has power level >= 50 (moderator+)
+      const senderId = event.getSender?.() || "";
+      const senderPL = room.getMember?.(senderId)?.powerLevel ?? 0;
+      if (senderPL < 50) {
+        console.warn("[Sion] Ignoring voice kick from non-moderator:", senderId, "PL:", senderPL);
+        return;
+      }
+
+      const kickerName = content.kicked_by_name || senderId;
+      console.warn("[Sion] Voice kicked by:", kickerName);
+
+      // Disconnect from voice
+      if (useAppStore.getState().connectedVoiceChannel) {
+        import("../services/livekitService").then(({ disconnectFromRoom }) => {
+          disconnectFromRoom();
+          useAppStore.getState().disconnectVoice();
+        });
+      }
+
+      // Show persistent kick message
+      const reason = content.reason ? ` — ${content.reason}` : "";
+      useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}` });
+    });
+
     // Listen for new messages and reactions (real-time)
     client.on(RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
       if (toStartOfTimeline) return;

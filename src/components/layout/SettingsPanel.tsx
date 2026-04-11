@@ -563,6 +563,9 @@ export function SettingsPanel() {
             >
               {t("settings.purgeCache")}
             </button>
+            <div style={{ marginTop: 24, textAlign: 'center', fontSize: 11, color: 'var(--color-outline)' }}>
+              Sion Client v{__APP_VERSION__}
+            </div>
           </div>
         )}
       </div>

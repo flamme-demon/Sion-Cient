@@ -194,25 +194,21 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     }
   };
 
-  // TODO: handleKickVoice and handleKickRoom — uncomment when UI buttons are added
-  /*
   const handleKickVoice = async () => {
     if (!activeChannel || actionLoading) return;
+    const reason = window.prompt(t("contextMenu.kickReason")) || "";
     setActionLoading(true);
     try {
       const client = matrixService.getMatrixClient();
       if (client) {
-        const room = client.getRoom(activeChannel);
-        if (room) {
-          const callMembers = room.currentState.getStateEvents("org.matrix.msc3401.call.member");
-          const events = Array.isArray(callMembers) ? callMembers : callMembers ? [callMembers] : [];
-          for (const evt of events) {
-            const sk = evt.getStateKey?.() || "";
-            if (sk.includes(matrixUserId)) {
-              await client.sendStateEvent(activeChannel, "org.matrix.msc3401.call.member" as any, {}, sk);
-            }
-          }
-        }
+        const myUserId = client.getUserId() || "";
+        const myName = client.getUser(myUserId)?.displayName || myUserId;
+        await client.sendEvent(activeChannel, "com.sion.voice_kick" as any, {
+          kicked_user: matrixUserId,
+          kicked_by: myUserId,
+          kicked_by_name: myName,
+          reason,
+        });
       }
       onClose();
     } catch (err) {
@@ -221,20 +217,6 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       setActionLoading(false);
     }
   };
-
-  const handleKickRoom = async () => {
-    if (!activeChannel || actionLoading) return;
-    setActionLoading(true);
-    try {
-      await matrixService.kickUser(activeChannel, matrixUserId);
-      onClose();
-    } catch (err) {
-      console.error("[Sion] Failed to kick from room:", err);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-  */
 
   const handleBan = async () => {
     if (!activeChannel || actionLoading) return;
@@ -403,6 +385,11 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       {!isMyself && canModerate && (
         <>
           <div style={{ height: 1, background: "var(--color-outline-variant)", margin: "4px 8px" }} />
+          {getCurrentRoom() && (
+            <button onClick={handleKickVoice} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-orange)", opacity: actionLoading ? 0.5 : 1 }}>
+              {t("contextMenu.kickVoice")}
+            </button>
+          )}
           <button onClick={handleBan} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-error)", opacity: actionLoading ? 0.5 : 1 }}>
             {t("contextMenu.ban")}
           </button>

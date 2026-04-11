@@ -19,7 +19,6 @@ function isNativeId(id: string | undefined): boolean {
 function extractDeviceId(constraint: unknown): string | undefined {
   if (!constraint || typeof constraint !== "object") return undefined;
   const c = constraint as Record<string, unknown>;
-  // { exact: "..." } or { ideal: "..." } or just a string
   if (typeof c.exact === "string") return c.exact;
   if (typeof c.ideal === "string") return c.ideal;
   return undefined;
@@ -35,39 +34,31 @@ export async function installCefAudioShim() {
     const hasRealIds = devices.some(
       (d) => d.deviceId && d.deviceId !== "" && d.deviceId !== "default" && d.label !== "",
     );
-    if (hasRealIds) {
-      console.log("[Sion][CefShim] Browser returns real device IDs — shim not needed");
-      return;
-    }
+    if (hasRealIds) return;
   } catch {
     return;
   }
 
-  console.log("[Sion][CefShim] Installing audio device shim for CEF");
   shimInstalled = true;
-
   const { invoke } = await import("@tauri-apps/api/core");
 
   // ── Override enumerateDevices ──────────────────────────────────────────
   const originalEnumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
 
   navigator.mediaDevices.enumerateDevices = async (): Promise<MediaDeviceInfo[]> => {
-    // Always include real web devices (videoinput, etc.)
     const webDevices = await originalEnumerate();
 
     let nativeAudio: { id: string; name: string; kind: string }[] = [];
     try {
       nativeAudio = await invoke<typeof nativeAudio>("list_audio_devices");
     } catch {
-      return webDevices; // Tauri not ready — return whatever the browser gives
+      return webDevices;
     }
 
-    // Keep non-audio web devices (video, etc.) as-is
     const nonAudio = webDevices.filter(
       (d) => d.kind !== "audioinput" && d.kind !== "audiooutput",
     );
 
-    // Convert native devices to MediaDeviceInfo shape
     const nativeDevices: MediaDeviceInfo[] = nativeAudio.map((d) => ({
       deviceId: d.id,
       groupId: "",
@@ -91,7 +82,6 @@ export async function installCefAudioShim() {
         (typeof audioConstraints.deviceId === "string" ? audioConstraints.deviceId : undefined);
 
       if (requestedId && isNativeId(requestedId)) {
-        // Save the current default so we can restore it after capture
         let oldDefault: string | undefined;
         try {
           const defaults = await invoke<{ source_id: string }>("get_default_audio_devices");
@@ -101,40 +91,23 @@ export async function installCefAudioShim() {
         // Set PulseAudio default so Chrome negotiates the right audio format
         try {
           await invoke("set_default_audio", { deviceId: requestedId, kind: "input" });
-          console.log("[Sion][CefShim] Temp default →", requestedId);
-        } catch (err) {
-          console.warn("[Sion][CefShim] Failed to set temp default:", err);
-        }
+        } catch { /* best-effort */ }
 
-        // getUserMedia without deviceId — Chrome creates stream on C920 with correct format
         const { deviceId: _stripped, ...restAudio } = audioConstraints;
         const stream = await originalGetUserMedia({
           ...constraints,
           audio: Object.keys(restAudio).length > 0 ? restAudio : true,
         });
 
-        // Always pin the stream to the target device after PipeWire registers it.
-        // PipeWire remembers per-app routing, so we must explicitly move even
-        // when switching back to the default device.
+        // Pin the stream to the target device after PipeWire registers it,
+        // then restore the system default.
         setTimeout(async () => {
-          try {
-            await invoke("switch_audio_device", { deviceId: requestedId, kind: "input" });
-            console.log("[Sion][CefShim] Pinned stream to", requestedId);
-          } catch { /* stream not yet registered */ }
+          try { await invoke("switch_audio_device", { deviceId: requestedId, kind: "input" }); } catch { /* not yet registered */ }
 
-          // Restore system default if we changed it
           if (oldDefault && oldDefault !== requestedId) {
-            try {
-              await invoke("set_default_audio", { deviceId: oldDefault, kind: "input" });
-              console.log("[Sion][CefShim] Restored default →", oldDefault);
-            } catch { /* best-effort */ }
-
-            // Re-pin after restore (PipeWire may move the stream back)
+            try { await invoke("set_default_audio", { deviceId: oldDefault, kind: "input" }); } catch { /* best-effort */ }
             await new Promise((r) => setTimeout(r, 300));
-            try {
-              await invoke("switch_audio_device", { deviceId: requestedId, kind: "input" });
-              console.log("[Sion][CefShim] Re-pinned stream to", requestedId);
-            } catch { /* best-effort */ }
+            try { await invoke("switch_audio_device", { deviceId: requestedId, kind: "input" }); } catch { /* best-effort */ }
           }
         }, 500);
 
@@ -151,11 +124,7 @@ export async function installCefAudioShim() {
       if (isNativeId(sinkId)) {
         try {
           await invoke("switch_audio_device", { deviceId: sinkId, kind: "output" });
-          console.log("[Sion][CefShim] Switched PA sink to:", sinkId);
-        } catch (err) {
-          console.warn("[Sion][CefShim] Failed to switch PA sink:", err);
-        }
-        // Call original with empty string (default device — which is now our target)
+        } catch { /* best-effort */ }
         return originalSetSinkId.call(this, "");
       }
       return originalSetSinkId.call(this, sinkId);

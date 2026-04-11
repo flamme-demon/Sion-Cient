@@ -80,6 +80,7 @@
     "mute": "Mute",
     "unmute": "Unmute",
     "kickVoice": "Kick",
+    "kickReason": "Kick reason (optional):",
     "kickRoom": "Kick from channel",
     "ban": "Ban from channel",
     "changeRole": "Role in this channel",

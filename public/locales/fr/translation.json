@@ -80,6 +80,7 @@
     "mute": "Couper le son",
     "unmute": "Rétablir le son",
     "kickVoice": "Kick",
+    "kickReason": "Raison du kick (optionnel) :",
     "kickRoom": "Expulser du salon",
     "ban": "Bannir du salon",
     "changeRole": "Rôle dans ce salon",

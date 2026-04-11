@@ -31,6 +31,8 @@ export function ChatInput() {
   const addPendingFile = useAppStore((s) => s.addPendingFile);
   const pendingFiles = useAppStore((s) => s.pendingFiles);
   const fileError = useAppStore((s) => s.fileError);
+  const kickMessage = useAppStore((s) => s.kickMessage);
+  const dismissKick = useAppStore((s) => s.dismissKick);
   const clearPendingFiles = useAppStore((s) => s.clearPendingFiles);
   const editingMessage = useAppStore((s) => s.editingMessage);
   const clearEditingMessage = useAppStore((s) => s.clearEditingMessage);
@@ -370,7 +372,7 @@ export function ChatInput() {
 
   return (
     <div style={{ padding: '8px 20px 20px 20px' }}>
-      {/* File error banner */}
+      {/* File error banner (auto-dismiss) */}
       {fileError && (
         <div style={{
           padding: '8px 16px',
@@ -382,6 +384,27 @@ export function ChatInput() {
           fontWeight: 500,
         }}>
           {fileError}
+        </div>
+      )}
+      {/* Kick message (persistent, must dismiss) */}
+      {kickMessage && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 16px',
+          marginBottom: 4,
+          borderRadius: 12,
+          background: 'var(--color-error-container)',
+          color: 'var(--color-on-error-container)',
+          fontSize: 12,
+          fontWeight: 500,
+        }}>
+          <span>{kickMessage}</span>
+          <button onClick={dismissKick} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: 'var(--color-on-error-container)', fontSize: 14, padding: '0 4px',
+          }}>✕</button>
         </div>
       )}
       {/* Reply preview */}

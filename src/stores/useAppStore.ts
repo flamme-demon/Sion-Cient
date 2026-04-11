@@ -52,6 +52,8 @@ interface AppState {
   toggleAccountPanel: () => void;
   addPendingFile: (file: File) => Promise<void> | void;
   fileError: string | null;
+  kickMessage: string | null;
+  dismissKick: () => void;
   removePendingFile: (id: string) => void;
   clearPendingFiles: () => void;
   setDraggingOver: (v: boolean) => void;
@@ -128,6 +130,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings, showAdmin: s.showSettings ? s.showAdmin : false })),
   toggleAccountPanel: () => set((s) => ({ showAccountPanel: !s.showAccountPanel })),
   fileError: null,
+  kickMessage: null,
+  dismissKick: () => set({ kickMessage: null }),
   addPendingFile: async (file) => {
     // Check server upload limit
     let maxSize = 100 * 1024 * 1024;
