@@ -381,14 +381,21 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
         </button>
       )}
 
-      {/* Moderation actions — need PL >= 50 and > target */}
-      {!isMyself && canModerate && (
+      {/* Voice kick — PL >= 50 and >= target (admins can kick each other) */}
+      {!isMyself && myPowerLevel >= 50 && myPowerLevel >= targetPowerLevel && getCurrentRoom() && (
         <>
           <div style={{ height: 1, background: "var(--color-outline-variant)", margin: "4px 8px" }} />
-          {getCurrentRoom() && (
-            <button onClick={handleKickVoice} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-orange)", opacity: actionLoading ? 0.5 : 1 }}>
-              {t("contextMenu.kickVoice")}
-            </button>
+          <button onClick={handleKickVoice} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-orange)", opacity: actionLoading ? 0.5 : 1 }}>
+            {t("contextMenu.kickVoice")}
+          </button>
+        </>
+      )}
+
+      {/* Ban — PL >= 50 and strictly > target */}
+      {!isMyself && canModerate && (
+        <>
+          {!(myPowerLevel >= 50 && myPowerLevel >= targetPowerLevel && getCurrentRoom()) && (
+            <div style={{ height: 1, background: "var(--color-outline-variant)", margin: "4px 8px" }} />
           )}
           <button onClick={handleBan} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-error)", opacity: actionLoading ? 0.5 : 1 }}>
             {t("contextMenu.ban")}

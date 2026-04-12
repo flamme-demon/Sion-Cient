@@ -27,4 +27,5 @@ Thumbs.db
 
 # Other
 sion-release.keystore
+keystore.properties
 package-for-windows.sh

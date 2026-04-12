@@ -148,6 +148,24 @@ export function useVoiceChannel() {
 
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
+
+          // Re-emit encryption keys after LiveKit connect so existing
+          // participants receive our key. Also re-emit when new participants
+          // join (they may have missed our initial key emission).
+          if (isEncrypted) {
+            const { getCurrentRoom } = await import("../services/livekitService");
+            const { RoomEvent } = await import("livekit-client");
+            const lkRoom = getCurrentRoom();
+            if (lkRoom) {
+              // Re-emit after a short delay to ensure our track is published
+              setTimeout(() => session.reemitEncryptionKeys(), 2000);
+              // Re-emit whenever a new participant joins
+              lkRoom.on(RoomEvent.ParticipantConnected, () => {
+                setTimeout(() => session.reemitEncryptionKeys(), 1000);
+              });
+            }
+          }
+
           setConnectedVoice(matrixRoomId);
           useAppStore.getState().setConnectingVoice(null);
           // Start Android foreground service
