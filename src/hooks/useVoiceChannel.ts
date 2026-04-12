@@ -152,16 +152,15 @@ export function useVoiceChannel() {
           // Re-emit encryption keys after LiveKit connect so existing
           // participants receive our key. Also re-emit when new participants
           // join (they may have missed our initial key emission).
-          if (isEncrypted) {
+          if (activeRTCSession && activeKeyProvider) {
             const { getCurrentRoom } = await import("../services/livekitService");
             const { RoomEvent } = await import("livekit-client");
             const lkRoom = getCurrentRoom();
+            const rtcSession = activeRTCSession;
             if (lkRoom) {
-              // Re-emit after a short delay to ensure our track is published
-              setTimeout(() => session.reemitEncryptionKeys(), 2000);
-              // Re-emit whenever a new participant joins
+              setTimeout(() => rtcSession.reemitEncryptionKeys(), 2000);
               lkRoom.on(RoomEvent.ParticipantConnected, () => {
-                setTimeout(() => session.reemitEncryptionKeys(), 1000);
+                setTimeout(() => rtcSession.reemitEncryptionKeys(), 1000);
               });
             }
           }
