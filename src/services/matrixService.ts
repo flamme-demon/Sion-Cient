@@ -738,13 +738,27 @@ export async function createOrGetDMRoom(userId: string): Promise<string> {
 
 export async function editMessage(roomId: string, originalEventId: string, newText: string) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return matrixClient.sendEvent(roomId, "m.room.message" as any, {
-    msgtype: "m.text",
-    body: `* ${newText}`,
-    "m.new_content": { msgtype: "m.text", body: newText },
-    "m.relates_to": { rel_type: "m.replace", event_id: originalEventId },
-  });
+  // Use REST API directly to avoid SDK pendingEventOrdering bug
+  const baseUrl = matrixClient.getHomeserverUrl();
+  const token = matrixClient.getAccessToken();
+  const txnId = `m${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  const res = await fetch(
+    `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
+    {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        msgtype: "m.text",
+        body: `* ${newText}`,
+        "m.new_content": { msgtype: "m.text", body: newText },
+        "m.relates_to": { rel_type: "m.replace", event_id: originalEventId },
+      }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Edit failed: ${res.status}`);
+  }
 }
 
 export function getUserPowerLevel(roomId: string): number {

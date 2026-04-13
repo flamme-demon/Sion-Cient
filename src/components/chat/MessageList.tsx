@@ -1,7 +1,9 @@
 import { useEffect, useRef, useMemo, useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Message } from "./Message";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { findAdminRoom } from "../../services/adminCommandService";
 
 const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
@@ -62,17 +64,46 @@ function DaySeparator({ ts }: { ts: number }) {
   );
 }
 
+function UnreadSeparator() {
+  const { t } = useTranslation();
+  return (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      margin: "8px 0",
+      pointerEvents: "none",
+    }}>
+      <div style={{ flex: 1, height: 1, background: "var(--color-error)" }} />
+      <span style={{
+        fontSize: 10,
+        fontWeight: 700,
+        color: "var(--color-error)",
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        whiteSpace: "nowrap",
+      }}>
+        {t("chat.newMessages")}
+      </span>
+      <div style={{ flex: 1, height: 1, background: "var(--color-error)" }} />
+    </div>
+  );
+}
+
 export function MessageList() {
+  const { t } = useTranslation();
   const activeChannel = useAppStore((s) => s.activeChannel);
   const messagesMap = useMatrixStore((s) => s.messages);
   const roomHasMore = useMatrixStore((s) => s.roomHasMore);
   const roomLoadingHistory = useMatrixStore((s) => s.roomLoadingHistory);
   const loadRoomHistory = useMatrixStore((s) => s.loadRoomHistory);
+  const lastReadMessageId = useAppStore((s) => s.lastReadMessageId);
+  const setLastReadMessageId = useAppStore((s) => s.setLastReadMessageId);
 
   const messages = useMemo(() => messagesMap[activeChannel] || EMPTY_MESSAGES, [messagesMap, activeChannel]);
   const isLoading = activeChannel ? roomLoadingHistory[activeChannel] ?? false : false;
-  // Only allow pagination if loadRoomHistory has been called at least once (roomHasMore is explicitly set)
   const hasMore = activeChannel ? roomHasMore[activeChannel] ?? false : false;
+
 
   const scrollToMessageId = useAppStore((s) => s.scrollToMessageId);
   const setScrollToMessageId = useAppStore((s) => s.setScrollToMessageId);
@@ -82,12 +113,35 @@ export function MessageList() {
   const isAtBottomRef = useRef(true);
   const prevChannelRef = useRef(activeChannel);
   const prevMessagesLenRef = useRef(0);
-  // Guard against triggering loadRoomHistory during programmatic scrolls
   const suppressScrollLoadRef = useRef(false);
-  // After channel change, force scroll-to-bottom on every message update for a short period
   const channelJustChangedRef = useRef(false);
 
-  // Scroll to bottom helper — uses double rAF + setTimeout fallback for reliability
+  // Track unread state (disabled for admin room)
+  const isAdminRoom = activeChannel === findAdminRoom();
+  const lastReadId = !isAdminRoom && activeChannel ? lastReadMessageId[activeChannel] : undefined;
+  const [showScrollDown, setShowScrollDown] = useState(false);
+
+  // Find the index of the unread separator
+  const unreadSepIndex = useMemo(() => {
+    if (!lastReadId || messages.length === 0) return -1;
+    const idx = messages.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
+    if (idx === -1 || idx >= messages.length - 1) return -1; // All read or last message
+    return idx + 1; // Separator goes AFTER the last read message
+  }, [lastReadId, messages]);
+
+  const unreadCount = unreadSepIndex >= 0 ? messages.length - unreadSepIndex : 0;
+
+  // Mark messages as read when at bottom
+  const markAsRead = useCallback(() => {
+    if (!activeChannel || messages.length === 0) return;
+    const lastMsg = messages[messages.length - 1];
+    const lastId = lastMsg.eventId || String(lastMsg.id);
+    if (lastId && lastId !== lastReadMessageId[activeChannel]) {
+      setLastReadMessageId(activeChannel, lastId);
+    }
+  }, [activeChannel, messages, lastReadMessageId, setLastReadMessageId]);
+
+  // Scroll to bottom helper
   const scrollToBottom = useCallback(() => {
     const doScroll = () => {
       const el = containerRef.current;
@@ -97,9 +151,18 @@ export function MessageList() {
         suppressScrollLoadRef.current = false;
       }
     };
-    // Double rAF ensures DOM is painted, setTimeout as fallback
     requestAnimationFrame(() => requestAnimationFrame(doScroll));
     setTimeout(doScroll, 50);
+  }, []);
+
+  // Scroll to unread separator
+  const scrollToUnread = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const sep = el.querySelector("[data-unread-sep]");
+    if (sep) {
+      sep.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
   }, []);
 
   // On channel change: scroll to bottom and mark as just changed
@@ -110,8 +173,6 @@ export function MessageList() {
       isAtBottomRef.current = true;
       channelJustChangedRef.current = true;
       scrollToBottom();
-      // Keep forcing scroll-to-bottom for 5s after channel change
-      // to handle loadRoomHistory multi-round loading + decryption reloads
       const timer = setTimeout(() => { channelJustChangedRef.current = false; }, 5000);
       return () => clearTimeout(timer);
     }
@@ -126,7 +187,6 @@ export function MessageList() {
     const currLen = messages.length;
     prevMessagesLenRef.current = currLen;
 
-    // After channel change, always snap to bottom regardless
     if (channelJustChangedRef.current) {
       scrollToBottom();
       return;
@@ -134,7 +194,6 @@ export function MessageList() {
 
     if (currLen <= prevLen) return;
 
-    // New messages were prepended (history load) — preserve scroll position
     const newCount = currLen - prevLen;
     if (!isAtBottomRef.current && prevLen > 0) {
       suppressScrollLoadRef.current = true;
@@ -150,16 +209,14 @@ export function MessageList() {
       return;
     }
 
-    // Auto-scroll to bottom for new messages if user is at bottom
     if (isAtBottomRef.current) {
       scrollToBottom();
+      markAsRead();
     }
-  }, [messages, scrollToBottom]);
+  }, [messages, scrollToBottom, markAsRead]);
 
-  // Keep the chat anchored to the bottom when content height grows AFTER
-  // the initial render. This happens when LinkPreview cards finish loading,
-  // images decode, GIFs render their first frame, etc. — without this, the
-  // newest message gets pushed off-screen as previews fill in.
+  // ResizeObserver — observe only the scroll container itself (not each child).
+  // This is much lighter than observing 150+ children individually.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -167,77 +224,54 @@ export function MessageList() {
     const ro = new ResizeObserver(() => {
       const currHeight = el.scrollHeight;
       if (currHeight !== lastHeight) {
-        if (isAtBottomRef.current) {
-          scrollToBottom();
-        }
+        if (isAtBottomRef.current) scrollToBottom();
         lastHeight = currHeight;
       }
     });
-    // Observe each direct child so we catch height changes from any message
-    for (const child of Array.from(el.children)) {
-      ro.observe(child);
-    }
-    // Re-observe whenever children change
-    const mo = new MutationObserver(() => {
-      ro.disconnect();
-      for (const child of Array.from(el.children)) {
-        ro.observe(child);
-      }
-    });
-    mo.observe(el, { childList: true });
-    return () => {
-      ro.disconnect();
-      mo.disconnect();
-    };
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [scrollToBottom]);
 
-  // Track whether the user has manually scrolled away from bottom at least once
   const userHasScrolledRef = useRef(false);
+  useEffect(() => { userHasScrolledRef.current = false; }, [activeChannel]);
 
-  // Reset on channel change
-  useEffect(() => {
-    userHasScrolledRef.current = false;
-  }, [activeChannel]);
-
-  // Auto-load initial history when a channel has no messages and hasn't been loaded yet
-  // This is critical for voice channels where the initial sync timeline only contains signaling events
+  // Auto-load initial history
   useEffect(() => {
     if (!activeChannel) return;
     const alreadyLoaded = roomHasMore[activeChannel] !== undefined;
-    if (alreadyLoaded) return; // Already loaded history for this room
-    if (roomLoadingHistory[activeChannel]) return; // Already loading
+    if (alreadyLoaded || roomLoadingHistory[activeChannel]) return;
     loadRoomHistory(activeChannel);
   }, [activeChannel, roomHasMore, roomLoadingHistory, loadRoomHistory]);
 
-  // Scroll handler: detect near-top for lazy loading + track if at bottom
+  // Scroll handler
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    // Track if user is at bottom (within 50px)
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    const wasAtBottom = isAtBottomRef.current;
+    isAtBottomRef.current = atBottom;
 
-    // If user scrolled away from bottom, stop forcing scroll-to-bottom
-    if (!isAtBottomRef.current) {
+    // Only update state when it actually changes (avoids re-rendering 158 messages)
+    if (wasAtBottom !== atBottom) {
+      setShowScrollDown(!atBottom);
+      if (atBottom) markAsRead();
+    }
+
+    if (!atBottom) {
       channelJustChangedRef.current = false;
       userHasScrolledRef.current = true;
     }
 
-    // Don't trigger history load during programmatic scrolls
-    if (suppressScrollLoadRef.current) return;
-
-    // Don't trigger pagination right after channel change (content may be short/empty)
-    if (channelJustChangedRef.current) return;
-
-    // Only trigger pagination when user has manually scrolled up, content is scrollable, and near top
+    if (suppressScrollLoadRef.current || channelJustChangedRef.current) return;
     if (!userHasScrolledRef.current) return;
     const isScrollable = el.scrollHeight > el.clientHeight + 10;
     if (isScrollable && el.scrollTop < SCROLL_TOP_THRESHOLD && activeChannel && hasMore && !isLoading) {
       loadRoomHistory(activeChannel);
     }
-  }, [activeChannel, hasMore, isLoading, loadRoomHistory]);
+  }, [activeChannel, hasMore, isLoading, loadRoomHistory, markAsRead]);
 
-  // Scroll to a specific message when requested (e.g. from PinnedBar)
+  // Scroll to specific message (from PinnedBar)
   useEffect(() => {
     if (!scrollToMessageId || !containerRef.current) return;
     const el = containerRef.current.querySelector(`[data-event-id="${scrollToMessageId}"]`);
@@ -250,39 +284,96 @@ export function MessageList() {
   }, [scrollToMessageId, setScrollToMessageId]);
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 flex flex-col min-w-0"
-      onScroll={handleScroll}
-    >
-      {/* Top indicator */}
-      {isLoading && (
-        <div className="text-center text-text-muted text-sm py-3">Chargement...</div>
-      )}
-      {!isLoading && !hasMore && messages.length > 0 && (
-        <div className="text-center text-text-muted text-sm py-3">Début de la conversation</div>
+    <div style={{ position: "relative", display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+      {/* Unread messages banner (top) */}
+      {unreadCount > 0 && showScrollDown && (
+        <button
+          onClick={scrollToUnread}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 10,
+            padding: "5px 16px",
+            borderRadius: "0 0 12px 12px",
+            border: "none",
+            background: "var(--color-primary)",
+            color: "var(--color-on-primary)",
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: "pointer",
+            fontFamily: "inherit",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          }}
+        >
+          {t("chat.unreadCount", { count: unreadCount })}
+        </button>
       )}
 
-      {messages.map((msg, i) => {
-        const prev = i > 0 ? messages[i - 1] : null;
-        const showDaySeparator =
-          msg.ts !== undefined && (i === 0 || (prev?.ts !== undefined && !isSameDay(prev.ts, msg.ts)));
-        // After a day separator we want the message header to show again,
-        // even if the previous message was from the same user.
-        const showHeader = i === 0 || showDaySeparator || messages[i - 1].user !== msg.user;
-        const eventId = msg.eventId || String(msg.id);
-        return (
-          <div key={msg.id} data-event-id={eventId} style={{ minWidth: 0 }}>
-            {showDaySeparator && msg.ts !== undefined && <DaySeparator ts={msg.ts} />}
-            <Message
-              message={msg}
-              showHeader={showHeader}
-              isFirst={i === 0}
-              highlighted={highlightedId === eventId}
-            />
-          </div>
-        );
-      })}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 flex flex-col min-w-0"
+        onScroll={handleScroll}
+      >
+        {/* Top indicator */}
+        {isLoading && (
+          <div className="text-center text-text-muted text-sm py-3">Chargement...</div>
+        )}
+        {!isLoading && !hasMore && messages.length > 0 && (
+          <div className="text-center text-text-muted text-sm py-3">Début de la conversation</div>
+        )}
+
+        {messages.map((msg, i) => {
+          const prev = i > 0 ? messages[i - 1] : null;
+          const showDaySeparator =
+            msg.ts !== undefined && (i === 0 || (prev?.ts !== undefined && !isSameDay(prev.ts, msg.ts)));
+          const showHeader = i === 0 || showDaySeparator || messages[i - 1].user !== msg.user;
+          const eventId = msg.eventId || String(msg.id);
+          const showUnreadSep = i === unreadSepIndex;
+          return (
+            <div key={msg.id} data-event-id={eventId} style={{ minWidth: 0 }}>
+              {showUnreadSep && <div data-unread-sep><UnreadSeparator /></div>}
+              {showDaySeparator && msg.ts !== undefined && <DaySeparator ts={msg.ts} />}
+              <Message
+                message={msg}
+                showHeader={showHeader}
+                isFirst={i === 0}
+                highlighted={highlightedId === eventId}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Scroll to bottom button */}
+      {showScrollDown && (
+        <button
+          onClick={() => { scrollToBottom(); markAsRead(); }}
+          style={{
+            position: "absolute",
+            bottom: 12,
+            right: 24,
+            zIndex: 10,
+            width: 36,
+            height: 36,
+            borderRadius: "50%",
+            border: "none",
+            background: "var(--color-surface-container-high)",
+            color: "var(--color-on-surface)",
+            fontSize: 16,
+            cursor: "pointer",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

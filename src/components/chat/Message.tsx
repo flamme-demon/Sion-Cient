@@ -1,11 +1,28 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { CrownIcon, ShieldIcon, FileIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
+import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
-import { LinkPreview } from "./LinkPreview";
+import { LinkPreview as LinkPreviewInner } from "./LinkPreview";
+
+// Lazy-load link previews: only fetch/render when visible in viewport
+function LinkPreview({ url }: { url: string }) {
+  const [visible, setVisible] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setVisible(true); io.disconnect(); }
+    }, { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  return <div ref={ref}>{visible && <LinkPreviewInner url={url} />}</div>;
+}
 import type { ChatMessage, UserRole, FileAttachment } from "../../types/matrix";
 import { createDecryptedObjectUrl } from "../../utils/decryptMedia";
+import { openFileWithDefaultApp, downloadFileToDownloads } from "../../utils/openExternal";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
@@ -259,6 +276,7 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
 }
 
 function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
+  const { t } = useTranslation();
   const isImage = attachment.mimeType.startsWith("image/");
   const isAudio = attachment.mimeType.startsWith("audio/");
   const isVideo = attachment.mimeType.startsWith("video/");
@@ -311,24 +329,71 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
     return <VideoPlayer resolvedUrl={resolvedUrl} attachment={attachment} />;
   }
 
+  const handleOpen = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!attachment.url) return;
+    openFileWithDefaultApp(attachment.url, attachment.name);
+  };
+
+  const isDownloaded = useAppStore((s) => attachment.url ? s.downloadedFiles.has(attachment.url) : false);
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!attachment.url) return;
+    const savedPath = await downloadFileToDownloads(attachment.url, attachment.name);
+    if (savedPath) {
+      useAppStore.getState().markAsDownloaded(attachment.url);
+      useAppStore.getState().showDownloadNotification(attachment.name, savedPath);
+    }
+  };
+
   return (
-    <a
-      href={resolvedUrl || "#"}
-      target="_blank"
-      rel="noopener noreferrer"
+    <div
+      onClick={resolvedUrl ? handleOpen : undefined}
       style={{
         display: 'flex', alignItems: 'center', gap: 10,
         background: 'var(--color-surface-container-high)', borderRadius: 12,
-        padding: '10px 14px', textDecoration: 'none', marginTop: 6,
+        padding: '10px 14px', marginTop: 6,
         opacity: resolvedUrl ? 1 : 0.5,
+        cursor: resolvedUrl ? 'pointer' : 'default',
       }}
     >
       <FileIcon />
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <span style={{ color: 'var(--color-primary)', fontSize: 12, fontWeight: 500 }}>{attachment.name}</span>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+        <span style={{ color: 'var(--color-primary)', fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachment.name}</span>
         <span style={{ color: 'var(--color-outline)', fontSize: 10 }}>{formatFileSize(attachment.size)}</span>
       </div>
-    </a>
+      {resolvedUrl && (
+        <button
+          onClick={handleDownload}
+          title={isDownloaded ? t("download.alreadySaved") : t("download.save")}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: isDownloaded ? '#4caf50' : 'var(--color-outline)',
+            padding: 4, borderRadius: 6,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+            position: 'relative',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = isDownloaded ? '#66bb6a' : 'var(--color-primary)')}
+          onMouseLeave={(e) => (e.currentTarget.style.color = isDownloaded ? '#4caf50' : 'var(--color-outline)')}
+        >
+          <DownloadIcon />
+          {isDownloaded && (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{
+              position: 'absolute', bottom: 0, right: -2,
+              color: '#4caf50',
+              background: 'var(--color-surface-container-high)',
+              borderRadius: '50%',
+              padding: 1,
+            }}>
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -339,7 +404,7 @@ interface MessageProps {
   highlighted?: boolean;
 }
 
-export function Message({ message, showHeader, isFirst, highlighted }: MessageProps) {
+export const Message = React.memo(function Message({ message, showHeader, isFirst, highlighted }: MessageProps) {
   const { t } = useTranslation();
   const currentUserId = useMatrixStore((s) => s.currentUserId);
   const deleteMessage = useMatrixStore((s) => s.deleteMessage);
@@ -452,7 +517,8 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
 
   const confirmDelete = () => {
     setShowDeleteConfirm(false);
-    deleteMessage(activeChannel, String(message.id));
+    const evtId = message.eventId || String(message.id);
+    deleteMessage(activeChannel, evtId);
   };
 
   const cancelDelete = () => {
@@ -1029,4 +1095,4 @@ export function Message({ message, showHeader, isFirst, highlighted }: MessagePr
 
     </div>
   );
-}
+});

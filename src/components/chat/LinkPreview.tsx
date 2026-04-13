@@ -8,11 +8,24 @@ interface LinkPreviewData {
   site_name?: string;
 }
 
-// Successful results — cached forever for the session.
+// Successful results — cached for the session, capped at 200 entries.
 const previewCache = new Map<string, LinkPreviewData>();
-// Failed/empty results — cached with a short TTL so we don't hammer broken
-// URLs on every re-render but still recover quickly from transient failures.
 const failureCache = new Map<string, number>();
+const MAX_CACHE_SIZE = 200;
+
+function trimCache<V>(cache: Map<string, V>) {
+  if (cache.size > MAX_CACHE_SIZE) {
+    const it = cache.keys();
+    for (let i = cache.size - MAX_CACHE_SIZE; i > 0; i--) it.next();
+    // Delete oldest entries
+    const keysToDelete: string[] = [];
+    const iter = cache.keys();
+    for (let i = 0; i < cache.size - MAX_CACHE_SIZE; i++) {
+      keysToDelete.push(iter.next().value!);
+    }
+    for (const k of keysToDelete) cache.delete(k);
+  }
+}
 const FAILURE_TTL_MS = 10_000;
 // Permanent failures (403, 404, etc.) — cached much longer, no point retrying.
 const PERMANENT_FAILURE_TTL_MS = 300_000; // 5 min
@@ -87,6 +100,7 @@ async function fetchPreview(url: string): Promise<LinkPreviewData | null> {
         const hasData = data && (data.title || data.description);
         if (hasData) {
           previewCache.set(url, data);
+          trimCache(previewCache);
           failureCache.delete(url);
           return data;
         }

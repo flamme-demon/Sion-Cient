@@ -4799,6 +4799,7 @@ dependencies = [
  "base64 0.22.1",
  "cef",
  "cpal",
+ "dirs",
  "jni",
  "log",
  "open",

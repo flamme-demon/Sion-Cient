@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.9.2"
+version = "0.9.3"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -29,6 +29,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], defa
 urlencoding = "2"
 scraper = "0.22"
 base64 = "0.22"
+dirs = "6"
 tauri-plugin-notification = "2.3.3"
 
 # Desktop-only dependencies (all platforms except Android)

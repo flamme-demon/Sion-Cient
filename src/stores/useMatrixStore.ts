@@ -877,7 +877,8 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           const isAdminRoom = room.roomId === findAdminRoom();
           if (!eventSender.includes("conduit") && !isAdminRoom) {
             const activeChannel = useAppStore.getState().activeChannel;
-            if (activeChannel === room.roomId || room.getJoinedMemberCount() === 2) {
+            const connectedVoice = useAppStore.getState().connectedVoiceChannel;
+            if (activeChannel === room.roomId || connectedVoice === room.roomId || room.getJoinedMemberCount() === 2) {
               playMessageReceived();
             }
           }
@@ -1604,7 +1605,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       set((s) => ({
         messages: {
           ...s.messages,
-          [channelId]: (s.messages[channelId] || []).filter((m) => m.id !== eventId),
+          [channelId]: (s.messages[channelId] || []).filter((m) => m.id !== eventId && m.eventId !== eventId),
         },
       }));
     } catch (err) {

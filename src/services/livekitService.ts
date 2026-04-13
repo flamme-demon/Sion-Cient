@@ -81,8 +81,8 @@ let missingKeyCount = 0;
 let missingKeyWindowStart = 0;
 let missingKeyRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
 let e2eeRecoveryCallback: (() => Promise<void>) | null = null;
-const MISSING_KEY_THRESHOLD = 30; // errors within the window to trigger recovery
-const MISSING_KEY_WINDOW_MS = 5_000;
+const MISSING_KEY_THRESHOLD = 5; // errors within the window to trigger recovery
+const MISSING_KEY_WINDOW_MS = 3_000;
 
 function resetMissingKeyState() {
   missingKeyCount = 0;
@@ -116,7 +116,7 @@ function onE2EEError(error: Error) {
         }
       }
       missingKeyCount = 0;
-    }, 2_000);
+    }, 500);
   }
 }
 
@@ -189,10 +189,13 @@ export function onScreenShareChange(cb: (info: ScreenShareInfo | null) => void):
 
 // Resume all paused audio elements on first user interaction (fixes autoplay policy)
 let autoplayUnlocked = false;
+let autoplayListenersAdded = false;
 function ensureAutoplayUnlock() {
-  if (autoplayUnlocked) return;
+  if (autoplayUnlocked || autoplayListenersAdded) return;
+  autoplayListenersAdded = true;
   const unlock = () => {
     autoplayUnlocked = true;
+    autoplayListenersAdded = false;
     audioElements.forEach((el) => {
       if (el.paused) el.play().catch(() => {});
     });
@@ -200,9 +203,9 @@ function ensureAutoplayUnlock() {
     document.removeEventListener("touchstart", unlock);
     document.removeEventListener("keydown", unlock);
   };
-  document.addEventListener("click", unlock, { once: false });
-  document.addEventListener("touchstart", unlock, { once: false });
-  document.addEventListener("keydown", unlock, { once: false });
+  document.addEventListener("click", unlock, { once: true });
+  document.addEventListener("touchstart", unlock, { once: true });
+  document.addEventListener("keydown", unlock, { once: true });
 }
 
 function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
@@ -310,6 +313,28 @@ export async function connectToRoom(
   // Attach remote audio tracks for playback
   room.on(RoomEvent.TrackSubscribed, attachAudioTrack);
   room.on(RoomEvent.TrackUnsubscribed, detachAudioTrack);
+
+  // When a participant reconnects (e.g. Ctrl+R), LiveKit may skip their new
+  // tracks with "already ended". Clean up stale audio on disconnect, then
+  // re-attach tracks on reconnect after a short delay.
+  room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+    // Clean up all audio elements for this participant
+    for (const [, pub] of participant.trackPublications) {
+      if (pub.track && pub.track.kind === Track.Kind.Audio) {
+        detachAudioTrack(pub.track as RemoteTrack, pub as RemoteTrackPublication, participant);
+      }
+    }
+  });
+  room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
+    // After a short delay, attach any audio tracks the SDK may have skipped
+    setTimeout(() => {
+      for (const [, pub] of participant.trackPublications) {
+        if (pub.track && pub.track.kind === Track.Kind.Audio && pub.isSubscribed) {
+          attachAudioTrack(pub.track as RemoteTrack, pub as RemoteTrackPublication, participant);
+        }
+      }
+    }, 500);
+  });
 
   // Screen share tracks
   room.on(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);

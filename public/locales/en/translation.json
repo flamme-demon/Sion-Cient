@@ -6,6 +6,13 @@
     "available": "New version v{{version}} available",
     "download": "Download"
   },
+  "download": {
+    "saved": "{{filename}} downloaded",
+    "open": "Open",
+    "showFolder": "Show in folder",
+    "save": "Download",
+    "alreadySaved": "Already downloaded"
+  },
   "server": {
     "online": "Online",
     "name": "My Server"
@@ -51,6 +58,9 @@
     "undeafen": "Undeafen"
   },
   "chat": {
+    "newMessages": "New messages",
+    "unreadCount": "{{count}} new message",
+    "unreadCount_other": "{{count}} new messages",
     "placeholder": "Message #{{channel}}",
     "shareScreen": "Share Screen",
     "stopShare": "Stop Sharing",

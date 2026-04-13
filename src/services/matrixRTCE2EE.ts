@@ -15,7 +15,7 @@ export class MatrixKeyProvider extends BaseKeyProvider {
   private session: MatrixRTCSession | null = null;
 
   constructor() {
-    super({ sharedKey: false, ratchetWindowSize: 0, failureTolerance: -1 });
+    super({ sharedKey: false, ratchetWindowSize: 16, failureTolerance: -1 });
   }
 
   setRTCSession(session: MatrixRTCSession): void {

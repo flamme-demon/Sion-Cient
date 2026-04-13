@@ -6,6 +6,13 @@
     "available": "Nouvelle version v{{version}} disponible",
     "download": "Télécharger"
   },
+  "download": {
+    "saved": "{{filename}} téléchargé",
+    "open": "Ouvrir",
+    "showFolder": "Ouvrir le dossier",
+    "save": "Télécharger",
+    "alreadySaved": "Déjà téléchargé"
+  },
   "server": {
     "online": "En ligne",
     "name": "Mon Serveur"
@@ -51,6 +58,9 @@
     "undeafen": "Désactiver sourdine"
   },
   "chat": {
+    "newMessages": "Nouveaux messages",
+    "unreadCount": "{{count}} nouveau message",
+    "unreadCount_other": "{{count}} nouveaux messages",
     "placeholder": "Message #{{channel}}",
     "shareScreen": "Partager l'écran",
     "stopShare": "Arrêter le partage",

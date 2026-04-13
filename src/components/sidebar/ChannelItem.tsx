@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon } from "../icons";
 import { ChannelIcon } from "./ChannelIcon";
 import { UserAvatar } from "./UserAvatar";
@@ -8,10 +9,10 @@ import { useAuthStore } from "../../stores/useAuthStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useVoiceChannel } from "../../hooks/useVoiceChannel";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { findAdminRoom } from "../../services/adminCommandService";
 import { getMatrixClient } from "../../services/matrixService";
 import * as matrixService from "../../services/matrixService";
 import type { Channel, UserRole } from "../../types/matrix";
-import { useMemo, useState } from "react";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -83,6 +84,17 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   const isMobile = useIsMobile();
   const openUserContextMenu = useAppStore((s) => s.openUserContextMenu);
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
+
+  const messages = useMatrixStore((s) => s.messages[channel.id]);
+  const lastReadId = useAppStore((s) => s.lastReadMessageId[channel.id]);
+
+  const unreadCount = useMemo(() => {
+    if (!messages || messages.length === 0 || channel.id === findAdminRoom()) return 0;
+    if (!lastReadId) return messages.length;
+    const idx = messages.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
+    if (idx === -1) return messages.length;
+    return messages.length - idx - 1;
+  }, [messages, lastReadId, channel.id]);
 
   const isActive = activeChannel === channel.id;
   const isConnectedChannel = connectedVoiceChannel === channel.id;
@@ -200,6 +212,20 @@ export function ChannelItem({ channel }: { channel: Channel }) {
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
           {channel.isDM ? `💬 ${channel.name}` : channel.name}
         </span>
+        {unreadCount > 0 && !isActive && (
+          <span style={{
+            minWidth: 18, height: 18, padding: '0 5px',
+            borderRadius: 9,
+            background: 'var(--color-error)',
+            color: 'var(--color-on-error, #fff)',
+            fontSize: 10, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+            lineHeight: 1,
+          }}>
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
         {channel.hasVoice && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: isConnectedChannel ? 'var(--color-green)' : 'var(--color-outline)' }}>
             <SpeakerIcon />

@@ -8,6 +8,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { RecoveryKeyModal } from "./components/RecoveryKeyModal";
 import { ConnectionStatusBanner } from "./components/ConnectionStatusBanner";
 import { UpdateBanner } from "./components/layout/UpdateBanner";
+import { DownloadToast } from "./components/layout/DownloadToast";
 import { UserContextMenu } from "./components/sidebar/UserContextMenu";
 import { useAppStore } from "./stores/useAppStore";
 import { useAuthStore } from "./stores/useAuthStore";
@@ -351,6 +352,7 @@ export default function App() {
         <RecoveryKeyModal />
         <ConnectionStatusBanner />
         <UpdateBanner />
+        <DownloadToast />
         {userContextMenu && (
           <UserContextMenu
             userId={userContextMenu.userId}

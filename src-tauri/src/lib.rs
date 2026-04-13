@@ -623,6 +623,69 @@ fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
 }
 
+/// Download a file to a temp directory and open it with the system default application.
+#[tauri::command]
+async fn open_file_default(url: String, filename: String) -> Result<String, String> {
+    let temp_dir = std::env::temp_dir().join("sion-files");
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("mkdir: {e}"))?;
+    let path = temp_dir.join(&filename);
+
+    let client = reqwest::Client::new();
+    let resp = client.get(&url).send().await.map_err(|e| format!("download: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
+
+    open::that(&path).map_err(|e| format!("open: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Download a file and save it to the user's Downloads folder.
+#[tauri::command]
+async fn download_file(url: String, filename: String) -> Result<String, String> {
+    let downloads = dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .ok_or_else(|| "Cannot find Downloads directory".to_string())?;
+    std::fs::create_dir_all(&downloads).map_err(|e| format!("mkdir: {e}"))?;
+
+    // Avoid overwriting: append (1), (2), etc. if file already exists
+    let base = std::path::Path::new(&filename);
+    let stem = base.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let ext = base.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let mut path = downloads.join(&filename);
+    let mut counter = 1u32;
+    while path.exists() {
+        path = downloads.join(format!("{stem} ({counter}){ext}"));
+        counter += 1;
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client.get(&url).send().await.map_err(|e| format!("download: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_local_file(path: String) -> Result<(), String> {
+    open::that(&path).map_err(|e| format!("open file: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn show_in_folder(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+    open::that(dir).map_err(|e| format!("open folder: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle<TauriRuntime>) {
     app.exit(0);
@@ -878,11 +941,11 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, start_voice_service, stop_voice_service]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, start_voice_service, stop_voice_service]);
 
     #[cfg(target_os = "android")]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![open_url, fetch_link_preview, transcode_video, exit_app, start_voice_service, stop_voice_service]);
+        .invoke_handler(tauri::generate_handler![open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, exit_app, start_voice_service, stop_voice_service]);
 
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());

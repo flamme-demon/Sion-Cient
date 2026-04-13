@@ -39,6 +39,10 @@ interface AppState {
   connectingVoiceChannel: string | null;
   /** Globally-positioned user context menu, opened from sidebar voice list, mention pills, etc. */
   userContextMenu: UserContextMenuState | null;
+  /** Download completion toast */
+  downloadNotification: { filename: string; path: string } | null;
+  /** Tracks URLs that have been downloaded to Downloads folder */
+  downloadedFiles: Set<string>;
 
   setActiveChannel: (id: string, hasVoice: boolean) => void;
   setConnectedVoice: (id: string | null) => void;
@@ -54,6 +58,8 @@ interface AppState {
   fileError: string | null;
   kickMessage: string | null;
   dismissKick: () => void;
+  lastReadMessageId: Record<string, string>;
+  setLastReadMessageId: (roomId: string, messageId: string) => void;
   removePendingFile: (id: string) => void;
   clearPendingFiles: () => void;
   setDraggingOver: (v: boolean) => void;
@@ -68,6 +74,9 @@ interface AppState {
   setPendingAutoJoinVoice: (roomId: string | null) => void;
   openUserContextMenu: (state: UserContextMenuState) => void;
   closeUserContextMenu: () => void;
+  showDownloadNotification: (filename: string, path: string) => void;
+  dismissDownloadNotification: () => void;
+  markAsDownloaded: (url: string) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -88,6 +97,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingAutoJoinVoice: null,
   connectingVoiceChannel: null,
   userContextMenu: null,
+  downloadNotification: null,
+  downloadedFiles: new Set<string>(JSON.parse(localStorage.getItem("sion-downloaded-files") || "[]")),
 
   setActiveChannel: (id, _hasVoice) =>
     set(() => ({
@@ -132,6 +143,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   fileError: null,
   kickMessage: null,
   dismissKick: () => set({ kickMessage: null }),
+  lastReadMessageId: JSON.parse(localStorage.getItem("sion-last-read") || "{}"),
+  setLastReadMessageId: (roomId, messageId) => {
+    const updated = { ...get().lastReadMessageId, [roomId]: messageId };
+    set({ lastReadMessageId: updated });
+    localStorage.setItem("sion-last-read", JSON.stringify(updated));
+  },
   addPendingFile: async (file) => {
     // Check server upload limit
     let maxSize = 100 * 1024 * 1024;
@@ -178,4 +195,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   openUserContextMenu: (s) => set({ userContextMenu: s }),
   closeUserContextMenu: () => set({ userContextMenu: null }),
   setConnectingVoice: (id) => set({ connectingVoiceChannel: id }),
+  showDownloadNotification: (filename, path) => {
+    set({ downloadNotification: { filename, path } });
+    setTimeout(() => set({ downloadNotification: null }), 6000);
+  },
+  dismissDownloadNotification: () => set({ downloadNotification: null }),
+  markAsDownloaded: (url) => set((s) => {
+    const next = new Set(s.downloadedFiles);
+    next.add(url);
+    localStorage.setItem("sion-downloaded-files", JSON.stringify([...next]));
+    return { downloadedFiles: next };
+  }),
 }));

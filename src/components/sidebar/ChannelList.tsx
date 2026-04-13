@@ -6,6 +6,7 @@ import { useSettingsStore, type ChannelSortMode } from "../../stores/useSettings
 import { SortIcon } from "../icons";
 import { ChannelItem } from "./ChannelItem";
 import { MatrixRain } from "./MatrixRain";
+import { findAdminRoom } from "../../services/adminCommandService";
 
 const SORT_OPTIONS: ChannelSortMode[] = ["created", "name", "activity"];
 
@@ -55,6 +56,34 @@ export function ChannelList() {
     }
   }, [channels, channelSort, sidebarView]);
 
+  const allMessages = useMatrixStore((s) => s.messages);
+  const lastReadMessageId = useAppStore((s) => s.lastReadMessageId);
+  const activeChannel = useAppStore((s) => s.activeChannel);
+
+  const { unreadChannels, unreadDMs } = useMemo(() => {
+    const adminRoom = findAdminRoom();
+    let chCount = 0;
+    let dmCount = 0;
+    for (const ch of channels) {
+      if (ch.id === adminRoom || ch.id === activeChannel) continue;
+      const msgs = allMessages[ch.id];
+      if (!msgs || msgs.length === 0) continue;
+      const lastReadId = lastReadMessageId[ch.id];
+      let unread: number;
+      if (!lastReadId) {
+        unread = msgs.length;
+      } else {
+        const idx = msgs.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
+        unread = idx === -1 ? msgs.length : msgs.length - idx - 1;
+      }
+      if (unread > 0) {
+        if (ch.isDM) dmCount += unread;
+        else chCount += unread;
+      }
+    }
+    return { unreadChannels: chCount, unreadDMs: dmCount };
+  }, [channels, allMessages, lastReadMessageId, activeChannel]);
+
   const tabStyle = (active: boolean): React.CSSProperties => ({
     flex: 1,
     padding: '6px 8px',
@@ -74,11 +103,27 @@ export function ChannelList() {
     <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px' }}>
       {/* Tabs + sort */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px 8px 12px' }}>
-        <button onClick={() => setSidebarView("channels")} style={tabStyle(sidebarView === "channels")}>
+        <button onClick={() => setSidebarView("channels")} style={{ ...tabStyle(sidebarView === "channels"), position: 'relative' }}>
           {t("channels.tabChannels")}
+          {sidebarView !== "channels" && unreadChannels > 0 && (
+            <span style={{
+              position: 'absolute', top: 2, right: 2,
+              minWidth: 8, height: 8,
+              borderRadius: 4,
+              background: 'var(--color-error)',
+            }} />
+          )}
         </button>
-        <button onClick={() => setSidebarView("dm")} style={tabStyle(sidebarView === "dm")}>
+        <button onClick={() => setSidebarView("dm")} style={{ ...tabStyle(sidebarView === "dm"), position: 'relative' }}>
           {t("channels.tabDM")}
+          {sidebarView !== "dm" && unreadDMs > 0 && (
+            <span style={{
+              position: 'absolute', top: 2, right: 2,
+              minWidth: 8, height: 8,
+              borderRadius: 4,
+              background: 'var(--color-error)',
+            }} />
+          )}
         </button>
         <div ref={menuRef} style={{ position: 'relative', marginLeft: 'auto', flexShrink: 0 }}>
           <button

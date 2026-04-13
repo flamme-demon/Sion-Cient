@@ -15,6 +15,9 @@ import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 // Module-level tracking — survives component unmount/remount
 let activeRTCSession: MatrixRTCSession | null = null;
 let activeKeyProvider: MatrixKeyProvider | null = null;
+// Track E2EE reemit resources for cleanup
+let reemitInterval: ReturnType<typeof setInterval> | null = null;
+let reemitParticipantHandler: (() => void) | null = null;
 
 // Best-effort cleanup on page unload (reload, close tab)
 window.addEventListener("beforeunload", () => {
@@ -31,6 +34,17 @@ window.addEventListener("beforeunload", () => {
 });
 
 async function cleanupActiveSession() {
+  // Clean up E2EE reemit resources
+  if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
+  if (reemitParticipantHandler) {
+    import("../services/livekitService").then(({ getCurrentRoom }) => {
+      import("livekit-client").then(({ RoomEvent }) => {
+        getCurrentRoom()?.off(RoomEvent.ParticipantConnected, reemitParticipantHandler!);
+        reemitParticipantHandler = null;
+      });
+    }).catch(() => {});
+  }
+
   if (activeRTCSession) {
     try {
       await activeRTCSession.leaveRoomSession();
@@ -149,19 +163,32 @@ export function useVoiceChannel() {
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
 
-          // Re-emit encryption keys after LiveKit connect so existing
-          // participants receive our key. Also re-emit when new participants
-          // join (they may have missed our initial key emission).
+          // Re-emit encryption keys aggressively after connect:
+          // 1. Multiple re-emits at increasing intervals to handle timing issues
+          // 2. Re-emit when new participants join
+          // 3. Periodic re-emit every 30s for the first 2 minutes
           if (activeRTCSession && activeKeyProvider) {
             const { getCurrentRoom } = await import("../services/livekitService");
             const { RoomEvent } = await import("livekit-client");
             const lkRoom = getCurrentRoom();
             const rtcSession = activeRTCSession;
             if (lkRoom) {
-              setTimeout(() => rtcSession.reemitEncryptionKeys(), 2000);
-              lkRoom.on(RoomEvent.ParticipantConnected, () => {
+              for (const delay of [1000, 3000, 6000]) {
+                setTimeout(() => rtcSession.reemitEncryptionKeys(), delay);
+              }
+              reemitParticipantHandler = () => {
                 setTimeout(() => rtcSession.reemitEncryptionKeys(), 1000);
-              });
+              };
+              lkRoom.on(RoomEvent.ParticipantConnected, reemitParticipantHandler);
+              let reemitCount = 0;
+              reemitInterval = setInterval(() => {
+                reemitCount++;
+                if (reemitCount > 4 || !activeRTCSession) {
+                  if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
+                  return;
+                }
+                rtcSession.reemitEncryptionKeys();
+              }, 30_000);
             }
           }
 
