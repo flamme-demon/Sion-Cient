@@ -57,6 +57,7 @@ interface AppState {
   addPendingFile: (file: File) => Promise<void> | void;
   fileError: string | null;
   kickMessage: string | null;
+  kickedFromRoom: string | null;
   dismissKick: () => void;
   lastReadMessageId: Record<string, string>;
   setLastReadMessageId: (roomId: string, messageId: string) => void;
@@ -142,7 +143,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleAccountPanel: () => set((s) => ({ showAccountPanel: !s.showAccountPanel })),
   fileError: null,
   kickMessage: null,
-  dismissKick: () => set({ kickMessage: null }),
+  kickedFromRoom: null,
+  dismissKick: () => set({ kickMessage: null, kickedFromRoom: null }),
   lastReadMessageId: JSON.parse(localStorage.getItem("sion-last-read") || "{}"),
   setLastReadMessageId: (roomId, messageId) => {
     const updated = { ...get().lastReadMessageId, [roomId]: messageId };

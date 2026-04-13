@@ -194,8 +194,11 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     }
   };
 
+  const connectedVoiceChannel = useAppStore((s) => s.connectedVoiceChannel);
+
   const handleKickVoice = async () => {
-    if (!activeChannel || actionLoading) return;
+    const voiceRoom = connectedVoiceChannel || activeChannel;
+    if (!voiceRoom || actionLoading) return;
     const reason = window.prompt(t("contextMenu.kickReason")) || "";
     setActionLoading(true);
     try {
@@ -203,7 +206,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       if (client) {
         const myUserId = client.getUserId() || "";
         const myName = client.getUser(myUserId)?.displayName || myUserId;
-        await client.sendEvent(activeChannel, "com.sion.voice_kick" as any, {
+        await client.sendEvent(voiceRoom, "com.sion.voice_kick" as any, {
           kicked_user: matrixUserId,
           kicked_by: myUserId,
           kicked_by_name: myName,

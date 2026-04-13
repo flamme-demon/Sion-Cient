@@ -121,15 +121,24 @@ export function MessageList() {
   const lastReadId = !isAdminRoom && activeChannel ? lastReadMessageId[activeChannel] : undefined;
   const [showScrollDown, setShowScrollDown] = useState(false);
 
-  // Find the index of the unread separator
-  const unreadSepIndex = useMemo(() => {
-    if (!lastReadId || messages.length === 0) return -1;
-    const idx = messages.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
-    if (idx === -1 || idx >= messages.length - 1) return -1; // All read or last message
-    return idx + 1; // Separator goes AFTER the last read message
-  }, [lastReadId, messages]);
+  const currentUserId = useMatrixStore((s) => s.currentUserId);
 
-  const unreadCount = unreadSepIndex >= 0 ? messages.length - unreadSepIndex : 0;
+  // Find the index of the unread separator (skip our own messages)
+  const { unreadSepIndex, unreadCount } = useMemo(() => {
+    if (!lastReadId || messages.length === 0) return { unreadSepIndex: -1, unreadCount: 0 };
+    const idx = messages.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
+    if (idx === -1 || idx >= messages.length - 1) return { unreadSepIndex: -1, unreadCount: 0 };
+    // Count only messages from others after the last read
+    let othersCount = 0;
+    for (let i = idx + 1; i < messages.length; i++) {
+      if (messages[i].senderId !== currentUserId) othersCount++;
+    }
+    if (othersCount === 0) return { unreadSepIndex: -1, unreadCount: 0 };
+    // Place separator before the first unread message from someone else
+    let sepIdx = idx + 1;
+    while (sepIdx < messages.length && messages[sepIdx].senderId === currentUserId) sepIdx++;
+    return { unreadSepIndex: sepIdx, unreadCount: othersCount };
+  }, [lastReadId, messages, currentUserId]);
 
   // Mark messages as read when at bottom
   const markAsRead = useCallback(() => {

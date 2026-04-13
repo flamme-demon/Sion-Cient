@@ -59,6 +59,17 @@ async function cleanupActiveSession() {
   }
 }
 
+/**
+ * Full voice cleanup for kick: LiveKit disconnect + MatrixRTC leave + state reset.
+ * Exported for use outside React components (e.g. store listeners).
+ */
+export async function cleanupVoiceOnKick() {
+  await cleanupActiveSession();
+  const { disconnectFromRoom } = await import("../services/livekitService");
+  await disconnectFromRoom();
+  useAppStore.getState().disconnectVoice();
+}
+
 export function useVoiceChannel() {
   const { joinRoom } = useMatrix();
   const { connect, disconnect, connected, participants } = useLiveKit();

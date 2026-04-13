@@ -726,17 +726,17 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const kickerName = content.kicked_by_name || senderId;
       console.warn("[Sion] Voice kicked by:", kickerName);
 
-      // Disconnect from voice
-      if (useAppStore.getState().connectedVoiceChannel) {
-        import("../services/livekitService").then(({ disconnectFromRoom }) => {
-          disconnectFromRoom();
-          useAppStore.getState().disconnectVoice();
+      // Full clean disconnect: LiveKit + MatrixRTC session
+      const kickedRoom = useAppStore.getState().connectedVoiceChannel;
+      if (kickedRoom) {
+        import("../hooks/useVoiceChannel").then(({ cleanupVoiceOnKick }) => {
+          cleanupVoiceOnKick();
         });
       }
 
-      // Show persistent kick message
+      // Show persistent kick message with room reference for reconnect
       const reason = content.reason ? ` — ${content.reason}` : "";
-      useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}` });
+      useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || room.roomId });
     });
 
     // Listen for new messages and reactions (real-time)
@@ -1172,6 +1172,31 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     const pendingDecryptedEvents = new Set<string>();
 
     client.on(MatrixEventEvent.Decrypted, (event) => {
+      // Check for voice kick in decrypted events (custom events arrive
+      // as m.room.encrypted first, so the Timeline listener misses them)
+      if (event.getType?.() === "com.sion.voice_kick") {
+        const content = event.getContent?.();
+        const myUserId = client.getUserId();
+        if (content?.kicked_user === myUserId) {
+          const roomId = event.getRoomId?.();
+          const room = roomId ? client.getRoom(roomId) : null;
+          const senderId = event.getSender?.() || "";
+          const senderPL = room?.getMember?.(senderId)?.powerLevel ?? 0;
+          if (senderPL >= 50) {
+            const kickerName = content.kicked_by_name || senderId;
+            console.warn("[Sion] Voice kicked by (decrypted):", kickerName);
+            const kickedRoom = useAppStore.getState().connectedVoiceChannel;
+            if (kickedRoom) {
+              import("../hooks/useVoiceChannel").then(({ cleanupVoiceOnKick }) => {
+                cleanupVoiceOnKick();
+              });
+            }
+            const reason = content.reason ? ` — ${content.reason}` : "";
+            useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || roomId });
+          }
+        }
+      }
+
       const evtId = event.getId?.();
       if (evtId) pendingDecryptedEvents.add(evtId);
 

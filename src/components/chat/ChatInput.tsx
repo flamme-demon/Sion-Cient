@@ -401,10 +401,24 @@ export function ChatInput() {
           fontWeight: 500,
         }}>
           <span>{kickMessage}</span>
-          <button onClick={dismissKick} style={{
-            background: 'transparent', border: 'none', cursor: 'pointer',
-            color: 'var(--color-on-error-container)', fontSize: 14, padding: '0 4px',
-          }}>✕</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button onClick={() => {
+              const roomId = useAppStore.getState().kickedFromRoom;
+              dismissKick();
+              if (roomId) {
+                useAppStore.getState().setPendingAutoJoinVoice(roomId);
+              }
+            }} style={{
+              background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)',
+              cursor: 'pointer', color: 'var(--color-on-error-container)',
+              fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 8,
+              fontFamily: 'inherit',
+            }}>{t("voice.reconnect")}</button>
+            <button onClick={dismissKick} style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--color-on-error-container)', fontSize: 14, padding: '0 4px',
+            }}>✕</button>
+          </div>
         </div>
       )}
       {/* Reply preview */}

@@ -125,12 +125,14 @@ export default function App() {
       if (state.pendingAutoJoinVoice && state.pendingAutoJoinVoice !== prev.pendingAutoJoinVoice) {
         const roomId = state.pendingAutoJoinVoice;
         useAppStore.getState().setPendingAutoJoinVoice(null);
+        // Short delay for reconnect, longer for initial mobile auto-join
+        const isReconnect = connectionStatus === "connected";
         setTimeout(() => {
           console.log("[Sion] Auto-joining voice channel:", roomId);
           joinVoiceRef.current(roomId).catch((err: unknown) =>
             console.error("[Sion] Auto-join voice failed:", err)
           );
-        }, 3000);
+        }, isReconnect ? 500 : 3000);
       }
     });
     return unsub;
