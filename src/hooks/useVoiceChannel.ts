@@ -9,7 +9,9 @@ import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitToke
 import { getMatrixClient } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
-import { setE2EERecoveryCallback } from "../services/livekitService";
+import { setE2EERecoveryCallback, getCurrentRoom } from "../services/livekitService";
+import { RoomEvent } from "livekit-client";
+import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 
 // Module-level tracking — survives component unmount/remount
@@ -18,12 +20,12 @@ let activeKeyProvider: MatrixKeyProvider | null = null;
 // Track E2EE reemit resources for cleanup
 let reemitInterval: ReturnType<typeof setInterval> | null = null;
 let reemitParticipantHandler: (() => void) | null = null;
+let reemitMembershipHandler: (() => void) | null = null;
 
 // Best-effort cleanup on page unload (reload, close tab)
 window.addEventListener("beforeunload", () => {
+  if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
   if (activeRTCSession) {
-    // Fire-and-forget: leaveRoomSession with a short timeout
-    // Even if this doesn't complete, the membership will expire via TTL (60s)
     activeRTCSession.leaveRoomSession(2000).catch(() => {});
     activeRTCSession = null;
   }
@@ -31,18 +33,22 @@ window.addEventListener("beforeunload", () => {
     activeKeyProvider.disconnect();
     activeKeyProvider = null;
   }
+  // Listeners on lkRoom/rtcSession don't need explicit removal here:
+  // the page is being destroyed, all JS objects will be GC'd.
+  reemitParticipantHandler = null;
+  reemitMembershipHandler = null;
 });
 
 async function cleanupActiveSession() {
   // Clean up E2EE reemit resources
   if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
   if (reemitParticipantHandler) {
-    import("../services/livekitService").then(({ getCurrentRoom }) => {
-      import("livekit-client").then(({ RoomEvent }) => {
-        getCurrentRoom()?.off(RoomEvent.ParticipantConnected, reemitParticipantHandler!);
-        reemitParticipantHandler = null;
-      });
-    }).catch(() => {});
+    getCurrentRoom()?.off(RoomEvent.ParticipantConnected, reemitParticipantHandler);
+    reemitParticipantHandler = null;
+  }
+  if (reemitMembershipHandler && activeRTCSession) {
+    activeRTCSession.off(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
+    reemitMembershipHandler = null;
   }
 
   if (activeRTCSession) {
@@ -174,32 +180,25 @@ export function useVoiceChannel() {
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
 
-          // Re-emit encryption keys aggressively after connect:
-          // 1. Multiple re-emits at increasing intervals to handle timing issues
-          // 2. Re-emit when new participants join
-          // 3. Periodic re-emit every 30s for the first 2 minutes
+          // Re-emit encryption keys after connect:
+          // 1. One initial re-emit after 2s (handles early timing)
+          // 2. Re-emit when a LiveKit participant joins
+          // 3. Re-emit when MatrixRTC memberships change (processes delayed keys)
           if (activeRTCSession && activeKeyProvider) {
-            const { getCurrentRoom } = await import("../services/livekitService");
-            const { RoomEvent } = await import("livekit-client");
             const lkRoom = getCurrentRoom();
             const rtcSession = activeRTCSession;
             if (lkRoom) {
-              for (const delay of [1000, 3000, 6000]) {
-                setTimeout(() => rtcSession.reemitEncryptionKeys(), delay);
-              }
+              setTimeout(() => rtcSession.reemitEncryptionKeys(), 2000);
+
               reemitParticipantHandler = () => {
-                setTimeout(() => rtcSession.reemitEncryptionKeys(), 1000);
+                rtcSession.reemitEncryptionKeys();
               };
               lkRoom.on(RoomEvent.ParticipantConnected, reemitParticipantHandler);
-              let reemitCount = 0;
-              reemitInterval = setInterval(() => {
-                reemitCount++;
-                if (reemitCount > 4 || !activeRTCSession) {
-                  if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
-                  return;
-                }
+
+              reemitMembershipHandler = () => {
                 rtcSession.reemitEncryptionKeys();
-              }, 30_000);
+              };
+              rtcSession.on(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
             }
           }
 
