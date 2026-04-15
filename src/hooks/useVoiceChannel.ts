@@ -9,7 +9,7 @@ import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitToke
 import { getMatrixClient } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
-import { setE2EERecoveryCallback, getCurrentRoom } from "../services/livekitService";
+import { getCurrentRoom } from "../services/livekitService";
 import { RoomEvent } from "livekit-client";
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
@@ -22,9 +22,27 @@ let reemitInterval: ReturnType<typeof setInterval> | null = null;
 let reemitParticipantHandler: (() => void) | null = null;
 let reemitMembershipHandler: (() => void) | null = null;
 
-// Best-effort cleanup on page unload (reload, close tab)
-window.addEventListener("beforeunload", () => {
+// Best-effort cleanup on page unload (reload, close tab, OS shutdown).
+// We send an explicit `room.disconnect()` to the LiveKit SFU so the server
+// cleans up our participation server-side. Without this, the SFU only
+// notices we're gone via socket timeout (~30s) and meanwhile peers see
+// our publication as still active — which after our reconnect leaves them
+// with a stale "stuck in desired" RemoteTrackPublication (LiveKit SDK bug).
+//
+// Both `pagehide` and `beforeunload` are wired:
+//  - `beforeunload` fires on Ctrl+R, tab close, window close (most cases)
+//  - `pagehide` fires on bfcache + on iOS where beforeunload is unreliable
+// Calling disconnect() on both is harmless (idempotent after first call).
+function gracefulVoiceShutdown(_reason: string) {
   if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
+  // Fire-and-forget the LiveKit disconnect — we don't have time to await
+  // before the page dies, but the WS leave message usually flushes in time.
+  import("../services/livekitService").then(({ getCurrentRoom }) => {
+    const room = getCurrentRoom();
+    if (room) {
+      try { room.disconnect(true); } catch { /* ignore */ }
+    }
+  }).catch(() => {});
   if (activeRTCSession) {
     activeRTCSession.leaveRoomSession(2000).catch(() => {});
     activeRTCSession = null;
@@ -33,11 +51,22 @@ window.addEventListener("beforeunload", () => {
     activeKeyProvider.disconnect();
     activeKeyProvider = null;
   }
-  // Listeners on lkRoom/rtcSession don't need explicit removal here:
-  // the page is being destroyed, all JS objects will be GC'd.
   reemitParticipantHandler = null;
   reemitMembershipHandler = null;
-});
+}
+window.addEventListener("beforeunload", () => gracefulVoiceShutdown("beforeunload"));
+window.addEventListener("pagehide", () => gracefulVoiceShutdown("pagehide"));
+
+// Tauri-specific: when the user closes the window via the X / app updater /
+// OS shutdown, the Rust side intercepts the close and emits this event,
+// then waits ~1.5s before destroying the window. That gives us a deterministic
+// window for the LiveKit leave to flush — much more reliable than browser
+// `beforeunload` alone.
+if (typeof window !== "undefined" && (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+  import("@tauri-apps/api/event").then(({ listen }) => {
+    listen("sion-graceful-shutdown", () => gracefulVoiceShutdown("tauri-close"));
+  }).catch(() => { /* not in Tauri */ });
+}
 
 async function cleanupActiveSession() {
   // Clean up E2EE reemit resources
@@ -157,38 +186,35 @@ export function useVoiceChannel() {
             activeRTCSession = session;
             activeKeyProvider = keyProvider || null;
 
-            // E2EE recovery: when MissingKey errors pile up, re-emit keys
-            // so the other participants can decrypt our stream again.
-            if (isEncrypted) {
-              setE2EERecoveryCallback(async () => {
-                console.warn("[Sion][E2EE] Recovery: re-emitting encryption keys");
-                try {
-                  session.reemitEncryptionKeys();
-                  // Also re-download device keys in case a participant rotated devices
-                  const crypto = client.getCrypto();
-                  if (crypto) {
-                    const memberIds = matrixRoom.getJoinedMembers().map(m => m.userId);
-                    await crypto.getUserDeviceInfo(memberIds, true);
-                  }
-                } catch (err) {
-                  console.error("[Sion][E2EE] Recovery reemit failed:", err);
-                }
-              });
-            }
+            // We deliberately do NOT register an E2EE recovery callback.
+            // Element Call's proven approach is to trust LiveKit's ratchet
+            // window (set in MatrixKeyProvider) + matrix-js-sdk's to-device
+            // retries. Any application-level recovery that rejoins the
+            // MatrixRTC session creates a feedback loop: rejoin → peer
+            // rotates key → brief drift → new MissingKey → new rejoin.
           }
 
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
 
           // Re-emit encryption keys after connect:
-          // 1. One initial re-emit after 2s (handles early timing)
+          // 1. Periodic re-emits during the first 15s (catches keys arriving after
+          //    the initial sync race — the EncryptionManager may not have been ready
+          //    when the first to-device key arrived)
           // 2. Re-emit when a LiveKit participant joins
           // 3. Re-emit when MatrixRTC memberships change (processes delayed keys)
           if (activeRTCSession && activeKeyProvider) {
             const lkRoom = getCurrentRoom();
             const rtcSession = activeRTCSession;
             if (lkRoom) {
-              setTimeout(() => rtcSession.reemitEncryptionKeys(), 2000);
+              let reemitCount = 0;
+              reemitInterval = setInterval(() => {
+                reemitCount++;
+                rtcSession.reemitEncryptionKeys();
+                if (reemitCount >= 5) {
+                  if (reemitInterval) { clearInterval(reemitInterval); reemitInterval = null; }
+                }
+              }, 3000);
 
               reemitParticipantHandler = () => {
                 rtcSession.reemitEncryptionKeys();

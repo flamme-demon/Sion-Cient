@@ -2,6 +2,12 @@ import { create } from "zustand";
 import * as livekitService from "../services/livekitService";
 import { playMute, playUnmute, playDeafen, playUndeafen } from "../services/soundService";
 
+// Timestamp at which the app session started. Used as a cutoff for unread
+// badge computation on channels the user has never opened: historical
+// messages loaded during the initial sync must not count as unread,
+// otherwise channels display "99+" as soon as the client connects.
+export const APP_SESSION_START_TS = Date.now();
+
 export interface PendingFile {
   id: string;
   file: File;

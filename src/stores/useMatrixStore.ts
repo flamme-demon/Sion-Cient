@@ -9,7 +9,7 @@ import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
-import { playMessageReceived } from "../services/soundService";
+import { playMessageReceived, playPoke } from "../services/soundService";
 import { findAdminRoom } from "../services/adminCommandService";
 
 export type VerificationStep =
@@ -73,6 +73,27 @@ interface MatrixState {
 // Internal references for the active verification flow
 let activeVerificationRequest: VerificationRequest | null = null;
 let activeSasCallbacks: ShowSasCallbacks | null = null;
+
+// Extract the quoted text from a Matrix reply-fallback body. Matrix clients
+// prefix the reply body with lines of the form `> <@user:server> original text`
+// so that non-reply-aware clients still see the quote. We use this as a
+// fallback when the replied-to message isn't in our cached timeline (e.g. it
+// fell out of the loaded window, or the reply event arrived before the
+// original was processed).
+function extractReplyQuoteBody(body: string): string | undefined {
+  const lines = body.split("\n");
+  const quoteLines: string[] = [];
+  for (const l of lines) {
+    if (!l.startsWith("> ")) break;
+    quoteLines.push(l.slice(2));
+  }
+  if (quoteLines.length === 0) return undefined;
+  // First quoted line is typically `<@user:server> actual text`
+  const first = quoteLines[0].replace(/^<[^>]+>\s*/, "");
+  const rest = quoteLines.slice(1).join("\n");
+  const joined = (rest ? first + "\n" + rest : first).trim();
+  return joined || undefined;
+}
 
 // Strip Matrix reply fallback from body text (lines starting with "> " until first blank line)
 function stripReplyFallback(body: string): string {
@@ -267,7 +288,7 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
       }
     } catch { /* ignore */ }
 
-    // Fallback: si la room a 2 membres, pas de room.type, et pas de nom explicite → c'est un DM
+    // Fallback: 2-member DM (we and the peer both still joined).
     if (!isDM && room.getJoinedMemberCount() <= 2 && !roomType && !customType) {
       const myUserId = client.getUserId();
       const members = room.getJoinedMembers();
@@ -275,6 +296,29 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
       if (otherMember && members.length === 2) {
         isDM = true;
         dmUserId = otherMember.userId;
+      }
+    }
+
+    // Orphan DM: peer has left, we're the only joined member. Detected from
+    // the historic member list (≤2 total ever) so these rooms still surface
+    // under the MP tab and become eligible for the cleanup actions.
+    if (!isDM && !roomType && !customType) {
+      const myUserId = client.getUserId();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allMembers = (room as any).getMembers?.() || [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const liveMembers = allMembers.filter((m: any) => m.membership === "join" || m.membership === "invite");
+      if (
+        liveMembers.length === 1
+        && liveMembers[0].userId === myUserId
+        && allMembers.length <= 2
+      ) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const peer = allMembers.find((m: any) => m.userId !== myUserId);
+        if (peer) {
+          isDM = true;
+          dmUserId = peer.userId;
+        }
       }
     }
   }
@@ -352,11 +396,16 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
       if (inReplyTo?.event_id) {
         const replyEvtId = inReplyTo.event_id;
         const replyMsg = msgs.find((m) => m.id === replyEvtId);
+        // Fallback: if the original isn't in our cache, pull the quoted text
+        // out of the reply body itself so we still show something useful.
+        const fallbackText = !replyMsg?.text ? extractReplyQuoteBody(content.body || "") : undefined;
         replyTo = {
           eventId: replyEvtId,
           senderId: replyMsg?.senderId,
           user: replyMsg?.user,
-          text: replyMsg?.text,
+          text: replyMsg?.text || fallbackText,
+          msgtype: replyMsg?.msgtype,
+          attachmentName: replyMsg?.attachments?.[0]?.name,
         };
       }
 
@@ -499,12 +548,37 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           }
         });
 
-        // Auto-accept pending invites (received while offline)
+        // Auto-accept pending invites (received while offline).
+        // Also update m.direct for DM invites — otherwise the user ends up
+        // with the joined room but no m.direct entry, so the next call to
+        // createOrGetDMRoom() creates a duplicate DM.
         const invitedRooms = client.getRooms().filter((r) =>
           r.getMyMembership() === "invite"
         );
         for (const room of invitedRooms) {
-          client.joinRoom(room.roomId).catch((err) => {
+          const myUserId = client.getUserId();
+          const myMember = myUserId ? room.getMember(myUserId) : null;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const inviteEvent = (myMember as any)?.events?.member;
+          const isDirect = inviteEvent?.getContent?.()?.is_direct === true;
+          const inviter = inviteEvent?.getSender?.();
+          client.joinRoom(room.roomId).then(async () => {
+            if (isDirect && inviter) {
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const directEvent = client.getAccountData("m.direct" as any);
+                const directContent = (directEvent?.getContent() || {}) as Record<string, string[]>;
+                const existing = directContent[inviter] || [];
+                if (!existing.includes(room.roomId)) {
+                  directContent[inviter] = [...existing, room.roomId];
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  await client.setAccountData("m.direct" as any, directContent as any);
+                }
+              } catch (err) {
+                console.warn("[Sion] Failed to update m.direct after offline invite auto-join:", err);
+              }
+            }
+          }).catch((err) => {
             console.error("[Sion] Failed to auto-join pending invite:", err);
           });
         }
@@ -709,8 +783,14 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     const processedEventIds = new Set<string>();
 
     // Listen for voice kick events (Sion-specific)
-    client.on(RoomEvent.Timeline, (event, room) => {
+    client.on(RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
+      if (toStartOfTimeline) return; // skip backfill/pagination
       if (!room || event.getType?.() !== "com.sion.voice_kick") return;
+      // Ignore stale kick events (initial sync replay, reload, etc.) —
+      // a legitimate kick is delivered within seconds. Without this check,
+      // reloading the app re-triggers the kick banner from timeline replay.
+      const eventTs = event.getTs?.() ?? 0;
+      if (Date.now() - eventTs > 60_000) return;
       const content = event.getContent?.();
       const myUserId = client.getUserId();
       if (!content?.kicked_user || content.kicked_user !== myUserId) return;
@@ -879,7 +959,17 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
             const activeChannel = useAppStore.getState().activeChannel;
             const connectedVoice = useAppStore.getState().connectedVoiceChannel;
             if (activeChannel === room.roomId || connectedVoice === room.roomId || room.getJoinedMemberCount() === 2) {
-              playMessageReceived();
+              // For plain m.room.message we can read msgtype now. For encrypted
+              // events, defer the sound to the Decrypted handler so we can
+              // distinguish a poke (fanfare) from a regular message (blop).
+              if (evtType === "m.room.message") {
+                const eventMsgtype = event.getContent?.()?.msgtype;
+                if (eventMsgtype === "m.poke") {
+                  playPoke();
+                } else {
+                  playMessageReceived();
+                }
+              }
             }
           }
         }
@@ -933,11 +1023,17 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           const replyEvtId = inReplyTo.event_id;
           const existing = get().messages[room.roomId] || [];
           const replyMsg = existing.find((m) => m.id === replyEvtId);
+          // Fallback: extract the quoted text from the reply body itself if
+          // the original message isn't in our cache (e.g. not yet loaded or
+          // outside the currently-loaded window).
+          const fallbackText = !replyMsg?.text ? extractReplyQuoteBody(content.body || "") : undefined;
           replyTo = {
             eventId: replyEvtId,
             senderId: replyMsg?.senderId,
             user: replyMsg?.user,
-            text: replyMsg?.text,
+            text: replyMsg?.text || fallbackText,
+            msgtype: replyMsg?.msgtype,
+            attachmentName: replyMsg?.attachments?.[0]?.name,
           };
         }
         const rawBody = replyTo ? stripReplyFallback(content.body) : content.body;
@@ -1165,6 +1261,62 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       set({ channels });
     });
 
+    // Auto-leave a DM when the only other member leaves it. Without this,
+    // each side accumulates "ghost" 1-member rooms after the peer cleans up
+    // (or simply leaves) — visually noisy, and the room stays alive
+    // server-side forever. The peer can re-invite via createOrGetDMRoom's
+    // reuseRoom flow if they want to resume the conversation.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.on(RoomMemberEvent.Membership, async (event, member) => {
+      if (member.membership !== "leave") return;
+      const myUserId = client.getUserId();
+      if (!myUserId || member.userId === myUserId) return; // their leave, not ours
+      const roomId = event.getRoomId?.();
+      if (!roomId) return;
+      const room = client.getRoom(roomId);
+      if (!room) return;
+      if (room.getMyMembership() !== "join") return;
+      // Only consider DM-shaped rooms.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allMembers = (room as any).getMembers?.() || [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const liveMembers = allMembers.filter((m: any) => m.membership === "join" || m.membership === "invite");
+      const looksDM =
+        !!room.getDMInviter?.()
+        || (() => {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const directEvent = (client as any).getAccountData("m.direct");
+            const directContent = (directEvent?.getContent?.() || {}) as Record<string, string[]>;
+            return Object.values(directContent).some((arr) => arr.includes(roomId));
+          } catch { return false; }
+        })()
+        // Shape-based fallback: ≤2 historic members, no name set, no type —
+        // catches DMs that lost their m.direct entry but are still 1:1 in shape.
+        || (allMembers.length <= 2 && !room.name);
+      if (!looksDM) return;
+      // We must be the only one left after the peer's leave
+      if (liveMembers.length !== 1 || liveMembers[0].userId !== myUserId) return;
+      try {
+        await client.leave(roomId);
+        // Scrub from m.direct so it doesn't reappear as a candidate for this peer
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const directEvent = (client as any).getAccountData("m.direct");
+          const prev = (directEvent?.getContent?.() || {}) as Record<string, string[]>;
+          const next: Record<string, string[]> = {};
+          for (const [peer, rooms] of Object.entries(prev)) {
+            const filtered = rooms.filter((rid) => rid !== roomId);
+            if (filtered.length > 0) next[peer] = filtered;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (client as any).setAccountData("m.direct", next);
+        } catch { /* m.direct cleanup is best-effort */ }
+      } catch (err) {
+        console.warn(`[Sion][DM] Failed to auto-leave orphaned DM ${roomId}:`, err);
+      }
+    });
+
     // Listen for decrypted events — update individual messages in place.
     // We track which event IDs were decrypted and only update those,
     // to avoid re-extracting entire room timelines (which loses history).
@@ -1172,9 +1324,41 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     const pendingDecryptedEvents = new Set<string>();
 
     client.on(MatrixEventEvent.Decrypted, (event) => {
+      // Play notification sound once the message has actually been decrypted.
+      // Freshness window keeps us from replaying sounds for historical events
+      // that decrypt during initial sync or after key re-emit.
+      if (event.getType?.() === "m.room.message") {
+        const eventTs = event.getTs?.() ?? 0;
+        if (Date.now() - eventTs < 10_000) {
+          const sender = event.getSender?.();
+          const myUserId = client.getUserId();
+          const roomId = event.getRoomId?.();
+          const room = roomId ? client.getRoom(roomId) : null;
+          if (sender && sender !== myUserId && room && !sender.includes("conduit")) {
+            const isAdminRoom = roomId === findAdminRoom();
+            if (!isAdminRoom) {
+              const activeChannel = useAppStore.getState().activeChannel;
+              const connectedVoice = useAppStore.getState().connectedVoiceChannel;
+              if (activeChannel === roomId || connectedVoice === roomId || room.getJoinedMemberCount() === 2) {
+                const msgtype = event.getContent?.()?.msgtype;
+                if (msgtype === "m.poke") {
+                  playPoke();
+                } else {
+                  playMessageReceived();
+                }
+              }
+            }
+          }
+        }
+      }
+
       // Check for voice kick in decrypted events (custom events arrive
       // as m.room.encrypted first, so the Timeline listener misses them)
       if (event.getType?.() === "com.sion.voice_kick") {
+        // Ignore stale kicks — same rationale as the Timeline handler:
+        // reloads would otherwise re-trigger the banner from replayed events.
+        const eventTs = event.getTs?.() ?? 0;
+        if (Date.now() - eventTs > 60_000) return;
         const content = event.getContent?.();
         const myUserId = client.getUserId();
         if (content?.kicked_user === myUserId) {
@@ -1299,7 +1483,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   },
 
   loadRoomHistory: async (roomId) => {
-    const { roomLoadingHistory, roomHasMore, roomPaginationFrom } = get();
+    const { roomLoadingHistory, roomHasMore } = get();
     const hasMoreVal = roomHasMore[roomId];
     if (roomLoadingHistory[roomId]) return;
     if (hasMoreVal !== true && hasMoreVal !== undefined) return;
@@ -1312,93 +1496,33 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // Send read receipt when opening a room
     matrixService.markRoomAsRead(roomId);
 
-    const isFirstLoad = hasMoreVal === undefined;
-
     set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: true } }));
 
     try {
-      // 1. Show sync messages immediately (first load only)
-      const syncMsgs = extractMessagesFromRoom(room);
-      if (isFirstLoad && syncMsgs.length > 0) {
-        set((s) => ({
-          messages: { ...s.messages, [roomId]: syncMsgs },
-        }));
-      }
-
-      // 2. Load history via filtered /messages API — skips signaling events server-side.
-      const baseUrl = client.getHomeserverUrl();
-      const accessToken = client.getAccessToken();
-      const filterStr = JSON.stringify({ not_types: ["org.matrix.msc3401.call.member"] });
-
-      // Continue from where we left off (scroll-up pagination)
-      let from = isFirstLoad ? "" : (roomPaginationFrom[roomId] || "");
-      const allRawEvents: Record<string, unknown>[] = [];
-      const MAX_PAGES = 5; // 5 pages per load = 500 events
-      let serverHasMore = true;
-
-      for (let page = 0; page < MAX_PAGES; page++) {
-        const params = new URLSearchParams({ dir: "b", limit: "100", filter: filterStr });
-        if (from) params.set("from", from);
-
-        const res = await fetch(
-          `${baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages?${params}`,
-          { headers: { Authorization: `Bearer ${accessToken}` } },
-        );
-        const data = await res.json();
-        const chunk = data.chunk || [];
-        allRawEvents.push(...chunk);
-
-        if (!data.end || chunk.length === 0) {
-          serverHasMore = false;
-          break;
-        }
-        from = data.end;
-      }
-
-      // 3. Create MatrixEvent objects and decrypt.
-      // Reverse: API returns newest-first (dir=b), we want oldest-first.
-      allRawEvents.reverse();
+      // Use the SDK's scrollback instead of a custom /messages fetch.
+      // scrollback() uses the prev_batch token attached to the live timeline
+      // by sync, which is the correct starting point for backward
+      // pagination. A raw /messages?dir=b call without this token often
+      // returns an empty chunk (especially for freshly-joined rooms), which
+      // is why history was never showing up for late joiners in practice.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const matrixEvents: any[] = [];
-      for (const raw of allRawEvents) {
-        const evt = new MatrixEvent(raw);
+      await (client as any).scrollback(room, 200);
+
+      // Decrypt any encrypted events that were backfilled
+      const timeline = room.getLiveTimeline().getEvents();
+      for (const evt of timeline) {
         if (evt.isEncrypted()) {
           try {
             await client.decryptEventIfNeeded(evt);
           } catch { /* will show as encrypted placeholder */ }
         }
-        matrixEvents.push(evt);
       }
 
-      // 4. Extract messages from decrypted events
-      const historyMsgs = extractMessagesFromEvents(matrixEvents, room, client);
+      const merged = extractMessagesFromEvents(timeline, room, client);
 
-      // 5. Merge: existing messages + new history + sync
-      // On first load: history + sync. On scroll-up: existing + new history.
-      const existingMsgs = isFirstLoad ? [] : (get().messages[roomId] || []);
-      const seenIds = new Set<string>();
-      const merged: ChatMessage[] = [];
-
-      // Add new history (older messages from this API call)
-      for (const msg of historyMsgs) {
-        if (msg.eventId) seenIds.add(msg.eventId);
-        merged.push(msg);
-      }
-      // Add existing messages (from previous loads)
-      for (const msg of existingMsgs) {
-        if (msg.eventId && seenIds.has(msg.eventId)) continue;
-        seenIds.add(msg.eventId || "");
-        merged.push(msg);
-      }
-      // Add sync messages (first load only)
-      if (isFirstLoad) {
-        for (const msg of syncMsgs) {
-          if (msg.eventId && seenIds.has(msg.eventId)) continue;
-          merged.push(msg);
-        }
-      }
-
-      // 6. Load pinned messages that aren't in loaded messages
+      // Load pinned messages that may not be in the backfilled window
+      const baseUrl = client.getHomeserverUrl();
+      const accessToken = client.getAccessToken();
       const pinnedIds = matrixService.getPinnedEventIds(roomId);
       const loadedIds = new Set(merged.map((m) => m.eventId).filter(Boolean));
       const missingPinnedIds = pinnedIds.filter((id) => !loadedIds.has(id));
@@ -1417,26 +1541,28 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               try { await client.decryptEventIfNeeded(evt); } catch { /* skip */ }
             }
             const pinnedMsgs = extractMessagesFromEvents([evt], room, client);
-            if (pinnedMsgs.length > 0) {
-              merged.push(pinnedMsgs[0]);
-            }
+            if (pinnedMsgs.length > 0) merged.push(pinnedMsgs[0]);
           } catch { /* skip unavailable pinned messages */ }
         }
       }
 
+      // Whether older history is still available: the live timeline exposes
+      // a backward pagination token only while more events exist on the server.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const liveTimeline = (room as any).getLiveTimeline?.();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const canPaginateBackward = !!liveTimeline?.getPaginationToken?.("b");
+
       set((s) => ({
         messages: merged.length > 0 ? { ...s.messages, [roomId]: merged } : s.messages,
-        roomHasMore: { ...s.roomHasMore, [roomId]: serverHasMore },
-        roomPaginationFrom: { ...s.roomPaginationFrom, [roomId]: from },
+        roomHasMore: { ...s.roomHasMore, [roomId]: canPaginateBackward },
         roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false },
       }));
 
-      // 7. Cache message IDs for next launch (only if meaningful count)
       if (merged.length > 5) {
         const messageIds = merged.map((m) => m.eventId).filter(Boolean) as string[];
-        setCachedRoom(roomId, messageIds, from || null);
+        setCachedRoom(roomId, messageIds, null);
       }
-
     } catch (err) {
       console.error("[Sion] Failed to load room history:", err);
       set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false } }));
@@ -1649,3 +1775,68 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     verificationStep: "idle", verificationEmojis: [], verificationError: null,
   }),
 }));
+
+// Dev helper: expose matrix client + a couple of one-shot admin actions
+// on `window` so issues can be worked around from DevTools.
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__SION_DEBUG__ = {
+    getClient: () => matrixService.getMatrixClient(),
+    // Get the current LiveKit Room so tests can inspect remote participants,
+    // subscribed tracks, and whether audio is actually coming through.
+    getLKRoom: () => {
+      // Lazy import to avoid a circular dependency at module load.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      return import("../services/livekitService").then(m => m.getCurrentRoom());
+    },
+    // One-shot dump of LiveKit voice state: self + remotes, with their tracks.
+    dumpVoice: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const room: any = await (window as any).__SION_DEBUG__.getLKRoom();
+      if (!room) { console.log("[Sion] no current LiveKit room"); return; }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const summarize = (p: any) => ({
+        identity: p.identity,
+        name: p.name,
+        isLocal: p === room.localParticipant,
+        tracks: Array.from(p.trackPublications?.values?.() ?? []).map(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (pub: any) => ({
+            sid: pub.trackSid,
+            source: pub.source,
+            kind: pub.kind,
+            muted: pub.isMuted,
+            subscribed: pub.isSubscribed,
+            hasTrack: !!pub.track,
+          }),
+        ),
+      });
+      const all = [room.localParticipant, ...room.remoteParticipants.values()].map(summarize);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows: any[] = [];
+      for (const p of all) {
+        if (p.tracks.length === 0) {
+          rows.push({ who: p.identity, sid: "(none)", source: "", kind: "", muted: "", subscribed: "", hasTrack: false });
+        } else {
+          for (const t of p.tracks) rows.push({ who: p.identity, ...t });
+        }
+      }
+      console.table(rows);
+      return all;
+    },
+    // Fix up an existing room so members who join later can see past messages.
+    // Requires PL >= 50 in the room (admin-equivalent).
+    setHistoryShared: async (roomId: string) => {
+      const client = matrixService.getMatrixClient();
+      if (!client) throw new Error("No matrix client");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (client as any).sendStateEvent(
+        roomId,
+        "m.room.history_visibility",
+        { history_visibility: "shared" },
+        "",
+      );
+      console.log(`[Sion] history_visibility set to shared for ${roomId}`);
+    },
+  };
+}

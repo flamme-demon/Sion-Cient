@@ -1,12 +1,13 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useMatrixStore } from "../../stores/useMatrixStore";
-import { useAppStore } from "../../stores/useAppStore";
+import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useSettingsStore, type ChannelSortMode } from "../../stores/useSettingsStore";
 import { SortIcon } from "../icons";
 import { ChannelItem } from "./ChannelItem";
 import { MatrixRain } from "./MatrixRain";
 import { findAdminRoom } from "../../services/adminCommandService";
+import { getMatrixClient } from "../../services/matrixService";
 
 const SORT_OPTIONS: ChannelSortMode[] = ["created", "name", "activity"];
 
@@ -40,6 +41,10 @@ export function ChannelList() {
   }, [menuOpen]);
 
   const sortedChannels = useMemo(() => {
+    // Show all DM rooms, including duplicates — hiding them would mask the
+    // fact that a peer posted in a different room than the one the user is
+    // watching (leading to "the message disappeared" confusion). Duplicates
+    // are cleaned up via the admin-side "Nettoyer MP dupliqués" action.
     const filtered = channels.filter((ch) =>
       sidebarView === "dm" ? ch.isDM : !ch.isDM
     );
@@ -59,22 +64,34 @@ export function ChannelList() {
   const allMessages = useMatrixStore((s) => s.messages);
   const lastReadMessageId = useAppStore((s) => s.lastReadMessageId);
   const activeChannel = useAppStore((s) => s.activeChannel);
+  const currentUserId = useMatrixStore((s) => s.currentUserId);
 
   const { unreadChannels, unreadDMs } = useMemo(() => {
     const adminRoom = findAdminRoom();
     let chCount = 0;
     let dmCount = 0;
+    // Own messages (e.g. poke sent by the user) never count as unread.
+    const isUnreadMsg = (m: { senderId?: string }) => !currentUserId || m.senderId !== currentUserId;
     for (const ch of channels) {
       if (ch.id === adminRoom || ch.id === activeChannel) continue;
       const msgs = allMessages[ch.id];
       if (!msgs || msgs.length === 0) continue;
       const lastReadId = lastReadMessageId[ch.id];
+      const sessionFilter = (m: { ts?: number; senderId?: string }) =>
+        (m.ts ?? 0) > APP_SESSION_START_TS && isUnreadMsg(m);
       let unread: number;
       if (!lastReadId) {
-        unread = msgs.length;
+        // Channel never opened: ignore historical messages from initial sync,
+        // only count messages received during the current session.
+        unread = msgs.filter(sessionFilter).length;
       } else {
         const idx = msgs.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
-        unread = idx === -1 ? msgs.length : msgs.length - idx - 1;
+        if (idx === -1) {
+          // lastReadId outside loaded window — fall back to session-start filter.
+          unread = msgs.filter(sessionFilter).length;
+        } else {
+          unread = msgs.slice(idx + 1).filter(isUnreadMsg).length;
+        }
       }
       if (unread > 0) {
         if (ch.isDM) dmCount += unread;
@@ -82,7 +99,7 @@ export function ChannelList() {
       }
     }
     return { unreadChannels: chCount, unreadDMs: dmCount };
-  }, [channels, allMessages, lastReadMessageId, activeChannel]);
+  }, [channels, allMessages, lastReadMessageId, activeChannel, currentUserId]);
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     flex: 1,
@@ -114,7 +131,46 @@ export function ChannelList() {
             }} />
           )}
         </button>
-        <button onClick={() => setSidebarView("dm")} style={{ ...tabStyle(sidebarView === "dm"), position: 'relative' }}>
+        <button
+          onClick={() => setSidebarView("dm")}
+          onContextMenu={async (e) => {
+            e.preventDefault();
+            const myUserId = useMatrixStore.getState().currentUserId;
+            const empties = channels.filter((ch) =>
+              ch.isDM
+              && (ch.voiceUsers?.length ?? 0) === 0
+              && !!myUserId
+              // Only "empty" DMs: ours is the sole surviving member
+              && (() => {
+                try {
+                  const cli = getMatrixClient();
+                  const room = cli?.getRoom(ch.id);
+                  if (!room) return false;
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const live = (room.getMembers?.() || []).filter((m: any) =>
+                    m.membership === "join" || m.membership === "invite",
+                  );
+                  return live.length === 1 && live[0].userId === myUserId;
+                } catch { return false; }
+              })()
+            );
+            if (empties.length === 0) {
+              window.alert("Aucune conversation vide à nettoyer.");
+              return;
+            }
+            if (!window.confirm(`Quitter ${empties.length} conversation(s) vide(s) ?`)) return;
+            const cli = getMatrixClient();
+            for (const ch of empties) {
+              try {
+                await cli?.leave(ch.id);
+              } catch (err) {
+                console.warn("[Sion][DM] bulk leave failed for", ch.id, err);
+              }
+            }
+            window.alert(`${empties.length} conversation(s) vide(s) quittée(s).`);
+          }}
+          style={{ ...tabStyle(sidebarView === "dm"), position: 'relative' }}
+        >
           {t("channels.tabDM")}
           {sidebarView !== "dm" && unreadDMs > 0 && (
             <span style={{

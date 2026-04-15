@@ -59,8 +59,9 @@
     "undeafen": "Undeafen"
   },
   "chat": {
-    "newMessages": "New messages",
-    "unreadCount": "{{count}} new message",
+    "newMessages_one": "New message",
+    "newMessages_other": "New messages",
+    "unreadCount_one": "{{count}} new message",
     "unreadCount_other": "{{count}} new messages",
     "placeholder": "Message #{{channel}}",
     "shareScreen": "Share Screen",

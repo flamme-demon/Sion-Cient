@@ -69,6 +69,15 @@ export function playMessageReceived() {
   setTimeout(() => playTone(1000, 0.06, 0.06, "sine"), 50);
 }
 
+/** Son de poke — mini fanfare "tada !" style trompette (arpège do-mi-sol).
+ *  Sawtooth pour un timbre cuivré sans échantillon audio. */
+export function playPoke() {
+  const vol = 0.08;
+  playTone(523, 0.10, vol, "sawtooth");                             // C5 — ta
+  setTimeout(() => playTone(659, 0.10, vol, "sawtooth"), 90);       // E5 — da
+  setTimeout(() => playTone(784, 0.22, vol, "sawtooth"), 180);      // G5 — daaa
+}
+
 /** Son de connexion vocale — accord montant */
 export function playVoiceJoin() {
   playTone(440, 0.12, 0.1);

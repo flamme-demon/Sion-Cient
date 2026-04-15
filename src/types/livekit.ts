@@ -12,6 +12,8 @@ export interface ParticipantInfo {
   isSpeaking: boolean;
   isMuted: boolean;
   isScreenSharing: boolean;
+  /** Remote participant has explicitly toggled deafen ("AFK"); broadcast via LiveKit metadata. */
+  isDeafened: boolean;
   audioLevel: number;
   connectionQuality: ConnectionQuality;
 }

@@ -1,5 +1,6 @@
 #[cfg(target_os = "linux")]
 use rdev::Key;
+use tauri::Emitter;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 use serde::Serialize;
@@ -928,13 +929,29 @@ pub fn run() {
     // CEF flags to prevent JS suspension when window is unfocused.
     // Without these, WebSocket/timers/events are frozen in background,
     // breaking global keyboard shortcuts.
+    // `mut` is only needed on Linux where we push the PipeWire feature below;
+    // on other platforms the vec is built and consumed as-is. `allow` avoids
+    // a spurious warning on non-Linux targets.
     #[cfg(feature = "cef")]
-    let builder = builder.command_line_args([
-        ("--disable-background-timer-throttling".to_string(), None::<String>),
-        ("--disable-backgrounding-occluded-windows".to_string(), None::<String>),
-        ("--disable-renderer-backgrounding".to_string(), None::<String>),
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut cef_args: Vec<(String, Option<String>)> = vec![
+        ("--disable-background-timer-throttling".to_string(), None),
+        ("--disable-backgrounding-occluded-windows".to_string(), None),
+        ("--disable-renderer-backgrounding".to_string(), None),
         ("--autoplay-policy".to_string(), Some("no-user-gesture-required".to_string())),
-    ]);
+    ];
+
+    // Linux-only: WebRtcPipeWireCapturer routes getDisplayMedia through
+    // xdg-desktop-portal + PipeWire, which is what lets the portal dialog
+    // expose the "Share audio" checkbox on Wayland (KDE / GNOME).
+    // Without this, audio during screen share silently never gets captured.
+    // On Windows and macOS, screen share audio is handled by the OS-native
+    // capture path and needs no extra flag.
+    #[cfg(all(feature = "cef", target_os = "linux"))]
+    cef_args.push(("--enable-features".to_string(), Some("WebRtcPipeWireCapturer".to_string())));
+
+    #[cfg(feature = "cef")]
+    let builder = builder.command_line_args(cef_args);
 
     #[cfg(target_os = "linux")]
     let builder = builder.manage(shortcuts_managed);
@@ -950,7 +967,7 @@ pub fn run() {
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
 
-    builder
+    let builder = builder
             .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             if cfg!(debug_assertions) {
@@ -1040,7 +1057,28 @@ pub fn run() {
             }
 
             Ok(())
-        })
+        });
+
+    // Desktop-only graceful close handler. On Android there's no window
+    // X button (the app stays alive in the background), and the desktop-
+    // specific `Window::destroy()` API isn't available — so this whole
+    // handler is gated to non-Android targets.
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let win = window.clone();
+            let _ = window.emit("sion-graceful-shutdown", ());
+            // Give JS ~1.5s to flush the LiveKit WS leave + MatrixRTC
+            // membership state event before forcing the close.
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                let _ = win.destroy();
+            });
+        }
+    });
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

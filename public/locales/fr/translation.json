@@ -59,8 +59,9 @@
     "undeafen": "Désactiver sourdine"
   },
   "chat": {
-    "newMessages": "Nouveaux messages",
-    "unreadCount": "{{count}} nouveau message",
+    "newMessages_one": "Nouveau message",
+    "newMessages_other": "Nouveaux messages",
+    "unreadCount_one": "{{count}} nouveau message",
     "unreadCount_other": "{{count}} nouveaux messages",
     "placeholder": "Message #{{channel}}",
     "shareScreen": "Partager l'écran",

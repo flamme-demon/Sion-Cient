@@ -98,7 +98,6 @@ export async function registerPusher(): Promise<void> {
       pushkey: topicUrl,
       append: false,
     });
-    console.log("[Sion] Push registered:", topicUrl, "via", NTFY_BASE_URL);
 
     // Start Android background push listener service
     import("./androidVoiceService").then(({ startPushListener }) => {
@@ -148,7 +147,6 @@ export function subscribeToPush(
   }
 
   const url = `${NTFY_BASE_URL}/${topicId}/sse`;
-  console.log("[Sion] Subscribing to push:", url);
 
   eventSource = new EventSource(url);
 

@@ -39,6 +39,20 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// Block browser/CEF default keyboard shortcuts that open dialogs we don't
+// want (Ctrl+S "Save page", Ctrl+P "Print", Ctrl+O "Open file", Ctrl+U "View
+// source"). Keep Ctrl+R (reload) and Ctrl+F (find) alive — users genuinely
+// expect those to work, and the real cause of spurious reloads was Vite
+// watching .log files, not Ctrl+R.
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const k = e.key.toLowerCase();
+  if (k === "s" || k === "p" || k === "o" || k === "u") {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, { capture: true });
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />

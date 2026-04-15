@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { checkUserSuspended, suspendUser, getRoomsList } from "../../services/adminService";
-import { getMatrixClient, inviteUser } from "../../services/matrixService";
+import { getMatrixClient } from "../../services/matrixService";
 import { sendAdminCommand, findAdminRoom } from "../../services/adminCommandService";
 import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 
@@ -101,15 +101,12 @@ export function PendingUsers() {
         const room = client?.getRoom(roomId);
         if (room && !room.name && room.getJoinedMemberCount() <= 2) continue;
         try {
-          // Vérifier la join_rule de la room
-          const room = client?.getRoom(roomId);
+          // Only auto-join PUBLIC channels. Private (invite-only) rooms
+          // must stay invite-only — a newly approved user shouldn't be
+          // force-joined into a private channel they were never invited to.
           const joinRuleEvent = room?.currentState.getStateEvents("m.room.join_rules", "");
           const joinRule = joinRuleEvent?.getContent?.()?.join_rule;
-
-          if (joinRule === "invite") {
-            // Room sur invitation : inviter d'abord puis force-join
-            await inviteUser(roomId, userId);
-          }
+          if (joinRule !== "public") continue;
           await sendAdminCommand(`!admin users force-join-room ${userId} ${roomId}`);
         } catch {
           // Ignorer les erreurs individuelles

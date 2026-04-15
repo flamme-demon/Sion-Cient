@@ -71,7 +71,7 @@ export interface ChatMessage {
   /** Whether this message has been edited */
   edited?: boolean;
   /** Reply reference */
-  replyTo?: { eventId: string; senderId?: string; user?: string; text?: string };
+  replyTo?: { eventId: string; senderId?: string; user?: string; text?: string; msgtype?: string; attachmentName?: string };
   /** Reactions on this message */
   reactions?: { emoji: string; count: number; userIds: string[]; eventIds: Record<string, string> }[];
 }

@@ -4,7 +4,6 @@ import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon, UserAddIcon } from "..
 import { ChannelIcon } from "../sidebar/ChannelIcon";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
-import { useAdminStore } from "../../stores/useAdminStore";
 import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
@@ -115,11 +114,14 @@ export function ChatHeader() {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteLoading, setInviteLoading] = useState<string | null>(null);
   const [serverUsers, setServerUsers] = useState<string[]>([]);
-  const isAdmin = useAdminStore((s) => s.isAdmin);
   const knownUserIds = usePendingUsersStore((s) => s._knownUserIds);
 
   const canEdit = activeChannel
     ? matrixService.getUserPowerLevel(activeChannel) >= matrixService.getStatePowerLevel(activeChannel)
+    : false;
+
+  const canInvite = activeChannel
+    ? matrixService.getUserPowerLevel(activeChannel) >= matrixService.getInvitePowerLevel(activeChannel)
     : false;
 
   const isInviteOnly = (() => {
@@ -214,7 +216,7 @@ export function ChatHeader() {
           )}
           <ChannelIcon icon={channel?.icon} />
           <span style={{ fontWeight: 600, fontSize: isMobile ? 15 : 16, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{channelName}</span>
-          {canEdit && !isMobile && (
+          {canEdit && !isMobile && !channel?.isDM && (
             <button
               onClick={openEditModal}
               style={{
@@ -235,7 +237,7 @@ export function ChatHeader() {
               <PencilIcon />
             </button>
           )}
-          {isAdmin && !isMobile && isInviteOnly && (
+          {canInvite && !isMobile && isInviteOnly && !channel?.isDM && (
             <button
               onClick={() => {
                 const client = getMatrixClient();

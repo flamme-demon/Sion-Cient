@@ -51,6 +51,10 @@ export function useKeyboardShortcuts() {
   };
 
   useEffect(() => {
+    // Android has no global-shortcut backend (no rdev, no global-shortcut
+    // plugin enabled); the Tauri command would be missing and we'd spam
+    // the console with rejected invokes on every settings change.
+    if (/Android/i.test(navigator.userAgent)) return;
     syncShortcutsToBackend(muteShortcut, deafenShortcut);
   }, [muteShortcut, deafenShortcut]);
 
@@ -58,6 +62,8 @@ export function useKeyboardShortcuts() {
   // when rdev/plugin detects a global shortcut. No polling needed.
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
+    // No background WS server on Android — same reason as above.
+    if (/Android/i.test(navigator.userAgent)) return;
     let ws: WebSocket | null = null;
     let alive = true;
 

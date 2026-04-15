@@ -38,6 +38,7 @@ const audioElements = new Map<string, HTMLAudioElement>();
 const speakingDetectors = new Map<string, SpeakingDetector>();
 const speakingState = new Map<string, boolean>();
 let participantUpdateCallback: (() => void) | null = null;
+let pendingTimerCleanup: (() => void) | null = null;
 
 function setSpeakingState(identity: string, isSpeaking: boolean) {
   const prev = speakingState.get(identity) || false;
@@ -77,52 +78,25 @@ function stopAllSpeakingDetectors() {
 // long-running connection), we detect the repeated MissingKey errors and
 // trigger a recovery: first re-emit keys, then if that fails, a full
 // LiveKit reconnect cycle.
+// We no longer do any application-level "recovery" on MissingKey: aligning
+// with Element Call's approach, we trust LiveKit's ratchet window and
+// matrix-js-sdk's to-device retry semantics to absorb transient drift.
+// This handler only logs for diagnostics — do NOT trigger leave/rejoin or
+// any other action, otherwise we build feedback loops where each rejoin
+// rotates the peer's key and creates a new MissingKey.
 let missingKeyCount = 0;
-let missingKeyWindowStart = 0;
-let missingKeyRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
-let e2eeRecoveryCallback: (() => Promise<void>) | null = null;
-const MISSING_KEY_THRESHOLD = 5; // errors within the window to trigger recovery
-const MISSING_KEY_WINDOW_MS = 3_000;
 
 function resetMissingKeyState() {
   missingKeyCount = 0;
-  missingKeyWindowStart = 0;
-  if (missingKeyRecoveryTimer) {
-    clearTimeout(missingKeyRecoveryTimer);
-    missingKeyRecoveryTimer = null;
-  }
 }
 
 function onE2EEError(error: Error) {
   if (!error.message?.includes("missing key") && !error.message?.includes("MissingKey")) return;
-
-  const now = Date.now();
-  if (now - missingKeyWindowStart > MISSING_KEY_WINDOW_MS) {
-    missingKeyCount = 0;
-    missingKeyWindowStart = now;
-  }
   missingKeyCount++;
-
-  if (missingKeyCount >= MISSING_KEY_THRESHOLD && !missingKeyRecoveryTimer) {
-    console.warn(`[Sion][E2EE] ${missingKeyCount} MissingKey errors in ${MISSING_KEY_WINDOW_MS}ms — triggering recovery`);
-    // Debounce: wait a bit before acting (keys may arrive shortly)
-    missingKeyRecoveryTimer = setTimeout(async () => {
-      missingKeyRecoveryTimer = null;
-      if (e2eeRecoveryCallback) {
-        try {
-          await e2eeRecoveryCallback();
-        } catch (err) {
-          console.error("[Sion][E2EE] Recovery failed:", err);
-        }
-      }
-      missingKeyCount = 0;
-    }, 500);
+  // Only surface the warning every few errors to avoid spamming the console.
+  if (missingKeyCount === 1 || missingKeyCount % 20 === 0) {
+    console.warn(`[Sion][E2EE] MissingKey #${missingKeyCount}: ${error.message}`);
   }
-}
-
-/** Register a callback that will be called when E2EE recovery is needed. */
-export function setE2EERecoveryCallback(cb: (() => Promise<void>) | null) {
-  e2eeRecoveryCallback = cb;
 }
 
 /**
@@ -314,6 +288,69 @@ export async function connectToRoom(
   room.on(RoomEvent.TrackSubscribed, attachAudioTrack);
   room.on(RoomEvent.TrackUnsubscribed, detachAudioTrack);
 
+  // Force-subscribe to every published audio track. In theory LiveKit
+  // auto-subscribes on connect, but when a remote participant reloads and
+  // republishes their microphone, the new publication sometimes lands with
+  // `isSubscribed = false` on our side — the peer is audible to everyone
+  // except us. Calling setSubscribed(true) here makes the behaviour
+  // deterministic regardless of auto-subscribe state.
+  //
+  // Additionally: if the subscription stays stuck in the `desired` state for
+  // longer than `STUCK_SUBSCRIPTION_MS`, the track is silently lost because
+  // its underlying MediaStreamTrack arrived with `readyState === 'ended'`
+  // (a LiveKit SDK bug observed post-reload). The only known recovery is a
+  // full-reconnect via `simulateScenario('full-reconnect')`, which we
+  // trigger automatically as a self-heal — at most once per recovery
+  // cooldown to avoid loops.
+  const STUCK_SUBSCRIPTION_MS = 3_000;
+  const STUCK_RECONNECT_COOLDOWN_MS = 20_000;
+  let lastStuckReconnectAt = 0;
+  // Track outstanding watchdog timeouts so we can clear them on disconnect —
+  // otherwise they hold references to the (now defunct) Room for up to 3s
+  // after disconnect.
+  const stuckCheckTimers = new Set<ReturnType<typeof setTimeout>>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const scheduleStuckCheck = (publication: any, participant: RemoteParticipant) => {
+    const t = setTimeout(async () => {
+      stuckCheckTimers.delete(t);
+      if (publication.isSubscribed) return;
+      // Still desired but not delivered — likely the "ended track" bug.
+      if (Date.now() - lastStuckReconnectAt < STUCK_RECONNECT_COOLDOWN_MS) {
+        console.warn(`[Sion][LK] audio ${publication.trackSid} from ${participant.identity} stuck at '${publication.subscriptionStatus}' but in reconnect cooldown`);
+        return;
+      }
+      lastStuckReconnectAt = Date.now();
+      console.warn(`[Sion][LK] audio ${publication.trackSid} from ${participant.identity} stuck at '${publication.subscriptionStatus}' — triggering full-reconnect`);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (room as any).simulateScenario("full-reconnect");
+      } catch (err) {
+        console.error("[Sion][LK] full-reconnect failed:", err);
+      }
+    }, STUCK_SUBSCRIPTION_MS);
+    stuckCheckTimers.add(t);
+  };
+  // Expose so disconnectFromRoom can clear them — assigned via a module-level
+  // ref to avoid closing over the Room from outside this scope.
+  pendingTimerCleanup = () => {
+    for (const t of stuckCheckTimers) clearTimeout(t);
+    stuckCheckTimers.clear();
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const forceSubscribeAudio = (publication: any, participant: RemoteParticipant) => {
+    if (publication?.kind !== Track.Kind.Audio) return;
+    if (publication.isSubscribed) {
+      return;
+    }
+    try {
+      publication.setSubscribed(true);
+    } catch (err) {
+      console.warn("[Sion][LK] force-subscribe failed:", err);
+    }
+    scheduleStuckCheck(publication, participant);
+  };
+  room.on(RoomEvent.TrackPublished, forceSubscribeAudio);
+
   // When a participant reconnects (e.g. Ctrl+R), LiveKit may skip their new
   // tracks with "already ended". Clean up stale audio on disconnect, then
   // re-attach tracks on reconnect after a short delay.
@@ -329,7 +366,14 @@ export async function connectToRoom(
     // After a short delay, attach any audio tracks the SDK may have skipped
     setTimeout(() => {
       for (const [, pub] of participant.trackPublications) {
-        if (pub.track && pub.track.kind === Track.Kind.Audio && pub.isSubscribed) {
+        if (pub.kind !== Track.Kind.Audio) continue;
+        if (!pub.isSubscribed) {
+          // Same republish-after-reload fallback applied to participants
+          // that were already in the room when we connected.
+          forceSubscribeAudio(pub, participant);
+          continue;
+        }
+        if (pub.track) {
           attachAudioTrack(pub.track as RemoteTrack, pub as RemoteTrackPublication, participant);
         }
       }
@@ -365,10 +409,24 @@ export async function connectToRoom(
     room.on(EncryptionEvent.EncryptionError, onE2EEError);
   }
 
-  // Attach audio tracks from participants already in the room
+  // Attach audio tracks from participants already in the room. For any
+  // publication that LiveKit did NOT auto-subscribe to (observed after a
+  // peer has reloaded and republished), explicitly request subscription —
+  // TrackSubscribed will fire once the stream arrives, which in turn
+  // attaches the audio element via our main handler.
   room.remoteParticipants.forEach((participant) => {
     participant.trackPublications.forEach((pub) => {
-      if (pub.track && pub.track.kind === Track.Kind.Audio && pub.isSubscribed) {
+      if (pub.kind !== Track.Kind.Audio) return;
+      if (!pub.isSubscribed) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (pub as any).setSubscribed(true);
+        } catch (err) {
+          console.warn("[Sion][LK] force-subscribe (existing) failed:", err);
+        }
+        return;
+      }
+      if (pub.track) {
         attachAudioTrack(pub.track as RemoteTrack, pub as RemoteTrackPublication, participant);
       }
     });
@@ -428,7 +486,8 @@ export async function disconnectFromRoom() {
     screenShareCallback?.(null);
     screenShareCallback = null;
     resetMissingKeyState();
-    e2eeRecoveryCallback = null;
+    pendingTimerCleanup?.();
+    pendingTimerCleanup = null;
     stopAllSpeakingDetectors();
     detachAllAudio();
     await currentRoom.disconnect();
@@ -488,6 +547,19 @@ export function setDeafened(deafened: boolean) {
   audioElements.forEach((el) => {
     el.muted = deafened;
   });
+  // Propagate the deafened (AFK) state to other participants via LiveKit
+  // participant metadata. Subscribers display this as an AFK indicator
+  // distinct from the regular "muted mic" icon.
+  if (currentRoom) {
+    try {
+      const meta = JSON.stringify({ deafened });
+      currentRoom.localParticipant.setMetadata(meta).catch((err) => {
+        console.warn("[Sion] Failed to broadcast deafened state:", err);
+      });
+    } catch (err) {
+      console.warn("[Sion] setMetadata threw:", err);
+    }
+  }
 }
 
 export async function updateAudioProcessing(options: {
@@ -541,7 +613,15 @@ export async function updateAudioQuality(quality: AudioQualityPreset) {
 
 export async function toggleScreenShare(enabled: boolean) {
   if (!currentRoom) return;
-  await currentRoom.localParticipant.setScreenShareEnabled(enabled);
+  // audio: true enables capture of the shared stream's audio (tab audio).
+  // systemAudio: 'include' asks the browser/portal to offer system audio as an
+  // option in the picker — without it, Chromium-based runtimes (including CEF)
+  // default to tab-audio-only, and on Linux KDE Wayland the portal never
+  // exposes an audio checkbox to the user at all.
+  await currentRoom.localParticipant.setScreenShareEnabled(enabled, {
+    audio: true,
+    systemAudio: "include",
+  });
 }
 
 export function getParticipants(): ParticipantInfo[] {
@@ -549,17 +629,28 @@ export function getParticipants(): ParticipantInfo[] {
 
   const participants: ParticipantInfo[] = [];
 
-  const mapParticipant = (p: RemoteParticipant | LocalParticipant): ParticipantInfo => ({
-    identity: p.identity,
-    name: p.name || p.identity,
-    // Use our client-side speaking detector instead of LiveKit SFU's smoothed
-    // server-side state, which has ~1.6s of debounce.
-    isSpeaking: speakingState.get(p.identity) || false,
-    isMuted: !p.isMicrophoneEnabled,
-    isScreenSharing: p.isScreenShareEnabled,
-    audioLevel: p.audioLevel,
-    connectionQuality: mapConnectionQuality(p.connectionQuality),
-  });
+  const mapParticipant = (p: RemoteParticipant | LocalParticipant): ParticipantInfo => {
+    // Read deafen/AFK state from participant metadata (broadcast via setMetadata).
+    let isDeafened = false;
+    if (p.metadata) {
+      try {
+        const parsed = JSON.parse(p.metadata) as { deafened?: boolean };
+        isDeafened = parsed.deafened === true;
+      } catch { /* metadata is non-JSON; ignore */ }
+    }
+    return {
+      identity: p.identity,
+      name: p.name || p.identity,
+      // Use our client-side speaking detector instead of LiveKit SFU's smoothed
+      // server-side state, which has ~1.6s of debounce.
+      isSpeaking: speakingState.get(p.identity) || false,
+      isMuted: !p.isMicrophoneEnabled,
+      isScreenSharing: p.isScreenShareEnabled,
+      isDeafened,
+      audioLevel: p.audioLevel,
+      connectionQuality: mapConnectionQuality(p.connectionQuality),
+    };
+  };
 
   participants.push(mapParticipant(currentRoom.localParticipant));
   currentRoom.remoteParticipants.forEach((p) => {
@@ -590,6 +681,8 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
   currentRoom.on(RoomEvent.TrackUnmuted, update);
   // Connection-quality changes for the signal-bars indicator
   currentRoom.on(RoomEvent.ConnectionQualityChanged, update);
+  // Metadata changes — used to broadcast the AFK/deafened state across peers
+  currentRoom.on(RoomEvent.ParticipantMetadataChanged, update);
 
   // Local participant events
   currentRoom.on(RoomEvent.LocalTrackPublished, update);
@@ -609,6 +702,7 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     currentRoom.off(RoomEvent.TrackMuted, update);
     currentRoom.off(RoomEvent.TrackUnmuted, update);
     currentRoom.off(RoomEvent.ConnectionQualityChanged, update);
+    currentRoom.off(RoomEvent.ParticipantMetadataChanged, update);
     currentRoom.off(RoomEvent.LocalTrackPublished, update);
     currentRoom.off(RoomEvent.LocalTrackUnpublished, update);
   };

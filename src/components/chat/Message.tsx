@@ -751,11 +751,30 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
           overflow: 'hidden',
         }}>
           {/* Reply quote — Telegram-style, inside bubble */}
-          {message.replyTo && (
+          {message.replyTo && (() => {
+            // Build a human-readable preview of the quoted message.
+            // Prefer the actual text; otherwise fall back to a type-specific
+            // hint so replies to images/files/etc. don't show a useless "...".
+            const r = message.replyTo;
+            const trimmed = r.text?.trim();
+            let previewText: string;
+            if (trimmed) {
+              previewText = trimmed.slice(0, 150);
+            } else {
+              switch (r.msgtype) {
+                case "m.image": previewText = `📷 ${r.attachmentName || "Image"}`; break;
+                case "m.video": previewText = `🎥 ${r.attachmentName || "Vidéo"}`; break;
+                case "m.audio": previewText = `🎵 ${r.attachmentName || "Audio"}`; break;
+                case "m.file":  previewText = `📎 ${r.attachmentName || "Fichier"}`; break;
+                case "m.poke":  previewText = "👉 Poke"; break;
+                default:        previewText = r.attachmentName || "…";
+              }
+            }
+            return (
             <div
               onClick={() => {
-                if (message.replyTo?.eventId) {
-                  useAppStore.getState().setScrollToMessageId(message.replyTo.eventId);
+                if (r.eventId) {
+                  useAppStore.getState().setScrollToMessageId(r.eventId);
                 }
               }}
               style={{
@@ -763,12 +782,14 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
                 borderRadius: 10,
                 padding: '5px 10px',
                 marginBottom: 6,
-                cursor: message.replyTo.eventId ? 'pointer' : 'default',
+                cursor: r.eventId ? 'pointer' : 'default',
                 background: isOwnMessage ? 'rgba(0,0,0,0.1)' : 'var(--color-surface-container)',
                 overflow: 'hidden',
                 transition: 'background 150ms',
+                // Keep the quote readable even when the reply text is tiny
+                minWidth: 180,
               }}
-              onMouseEnter={(e) => { if (message.replyTo?.eventId) e.currentTarget.style.background = isOwnMessage ? 'rgba(0,0,0,0.15)' : 'var(--color-surface-container-high)'; }}
+              onMouseEnter={(e) => { if (r.eventId) e.currentTarget.style.background = isOwnMessage ? 'rgba(0,0,0,0.15)' : 'var(--color-surface-container-high)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = isOwnMessage ? 'rgba(0,0,0,0.1)' : 'var(--color-surface-container)'; }}
             >
               <div style={{
@@ -780,9 +801,9 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
                 flexShrink: 0,
               }} />
               <div style={{ overflow: 'hidden', minWidth: 0 }}>
-                {message.replyTo.user && (
+                {r.user && (
                   <div style={{ fontWeight: 600, fontSize: 11, color: 'var(--color-primary)', lineHeight: 1.3 }}>
-                    {message.replyTo.user}
+                    {r.user}
                   </div>
                 )}
                 <div style={{
@@ -794,11 +815,12 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
                   opacity: 0.8,
                   lineHeight: 1.3,
                 }}>
-                  {message.replyTo.text?.slice(0, 150) || "..."}
+                  {previewText}
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
           <div style={message.replyTo ? { padding: '0 8px' } : undefined}>
           <MarkdownRenderer content={message.text} formattedBody={message.formattedBody} msgtype={message.msgtype} />
           {(() => {

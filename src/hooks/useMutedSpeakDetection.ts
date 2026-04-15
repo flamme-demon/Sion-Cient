@@ -31,6 +31,7 @@ function playMutedAlert() {
 
 export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
   const isMuted = useAppStore((s) => s.isMuted);
+  const isDeafened = useAppStore((s) => s.isDeafened);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const mutedSpeakAlert = useSettingsStore((s) => s.mutedSpeakAlert);
   const micThreshold = useSettingsStore((s) => s.micThreshold);
@@ -49,7 +50,9 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
   }, []);
 
   useEffect(() => {
-    if (!isMuted || !connectedVoice || !mutedSpeakAlert) return;
+    // Skip when deafened: the user is intentionally AFK (mic + speakers off),
+    // they don't need an alert that they're muted because they already know.
+    if (!isMuted || isDeafened || !connectedVoice || !mutedSpeakAlert) return;
 
     let audioCtx: AudioContext | null = null;
     let stream: MediaStream | null = null;
@@ -91,5 +94,5 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
       if (stream) stream.getTracks().forEach((t) => t.stop());
       if (audioCtx) audioCtx.close();
     };
-  }, [isMuted, connectedVoice, mutedSpeakAlert, micThreshold, triggerAlert]);
+  }, [isMuted, isDeafened, connectedVoice, mutedSpeakAlert, micThreshold, triggerAlert]);
 }

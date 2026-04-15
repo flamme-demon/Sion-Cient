@@ -15,7 +15,12 @@ export class MatrixKeyProvider extends BaseKeyProvider {
   private session: MatrixRTCSession | null = null;
 
   constructor() {
-    super({ sharedKey: false, ratchetWindowSize: 16, failureTolerance: -1 });
+    // Align with Element Call's config: the ratchet window lets LiveKit's
+    // decoder forward-ratchet up to 10 steps when the peer rotated their
+    // key slightly before we received the new index — absorbs natural
+    // drift without any application-level recovery. keyringSize caps how
+    // many historical keys we keep per participant.
+    super({ ratchetWindowSize: 10, keyringSize: 256 });
   }
 
   setRTCSession(session: MatrixRTCSession): void {

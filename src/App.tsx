@@ -73,12 +73,10 @@ export default function App() {
     };
     // Handle notification tap — open room (with retry until channels loaded)
     (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string) => {
-      console.log("[Sion] Opening room from notification:", roomId);
       let retries = 0;
       const tryOpen = () => {
         const channel = useMatrixStore.getState().channels.find(c => c.id === roomId);
         if (channel) {
-          console.log("[Sion] Navigating to channel:", channel.name);
           useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
           useAppStore.getState().setMobileView("chat");
           useMatrixStore.getState().loadRoomHistory(roomId);
@@ -128,7 +126,6 @@ export default function App() {
         // Short delay for reconnect, longer for initial mobile auto-join
         const isReconnect = connectionStatus === "connected";
         setTimeout(() => {
-          console.log("[Sion] Auto-joining voice channel:", roomId);
           joinVoiceRef.current(roomId).catch((err: unknown) =>
             console.error("[Sion] Auto-join voice failed:", err)
           );

@@ -17,7 +17,21 @@ export default defineConfig({
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 5174 } : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // Do NOT include arbitrary user files (logs, notes, build artifacts)
+      // in the watcher — any change on a non-module file Vite doesn't know
+      // how to HMR will trigger a full page reload. In particular, saving
+      // `*.log` files inside the project dir (e.g. from Kate while copying
+      // debug output) was causing Sion to reload every Ctrl+S.
+      ignored: [
+        "**/src-tauri/**",
+        "**/*.log",
+        "**/logs/**",
+        "**/dist/**",
+        "**/.git/**",
+        "**/build-scripts/**",
+        "**/*.txt",
+        "**/*.md",
+      ],
     },
     headers: process.env.TAURI_ENV_PLATFORM === "android"
       ? {}

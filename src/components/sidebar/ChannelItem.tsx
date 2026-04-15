@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon } from "../icons";
 import { ChannelIcon } from "./ChannelIcon";
 import { UserAvatar } from "./UserAvatar";
-import { useAppStore } from "../../stores/useAppStore";
+import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAuthStore } from "../../stores/useAuthStore";
@@ -90,11 +90,26 @@ export function ChannelItem({ channel }: { channel: Channel }) {
 
   const unreadCount = useMemo(() => {
     if (!messages || messages.length === 0 || channel.id === findAdminRoom()) return 0;
-    if (!lastReadId) return messages.length;
+    // Messages sent by the current user are always considered read — they shouldn't
+    // bump the unread badge (e.g. sending a poke in a DM, or own messages echoed back).
+    const isUnreadMsg = (m: { senderId?: string; ts?: number }) => !currentUserId || m.senderId !== currentUserId;
+    // Session-start fallback: ignore pre-session history whose read state
+    // we don't reliably know.
+    const sessionFilter = (m: { ts?: number; senderId?: string }) =>
+      (m.ts ?? 0) > APP_SESSION_START_TS && isUnreadMsg(m);
+
+    if (!lastReadId) {
+      // Channel never opened: count only messages that arrived this session.
+      return messages.filter(sessionFilter).length;
+    }
     const idx = messages.findIndex((m) => (m.eventId || String(m.id)) === lastReadId);
-    if (idx === -1) return messages.length;
-    return messages.length - idx - 1;
-  }, [messages, lastReadId, channel.id]);
+    if (idx === -1) {
+      // lastReadId fell outside the loaded window (e.g. long-running channel).
+      // We can't trust the full list — fall back to session-start filter.
+      return messages.filter(sessionFilter).length;
+    }
+    return messages.slice(idx + 1).filter(isUnreadMsg).length;
+  }, [messages, lastReadId, channel.id, currentUserId]);
 
   const isActive = activeChannel === channel.id;
   const isConnectedChannel = connectedVoiceChannel === channel.id;
@@ -169,7 +184,9 @@ export function ChannelItem({ channel }: { channel: Channel }) {
         const info = getParticipantInfo(p.identity, channel.id, localUserId, localDisplayName, localAvatarUrl);
         const isSelf = info.isLocal;
         const muted = isSelf ? isMuted : p.isMuted;
-        const deafened = isSelf ? isDeafened : false;
+        // Local: use the store (canonical truth). Remote: read the deafened
+        // flag broadcast via LiveKit participant metadata.
+        const deafened = isSelf ? isDeafened : p.isDeafened;
         return {
           id: p.identity,
           name: info.name,
@@ -183,12 +200,46 @@ export function ChannelItem({ channel }: { channel: Channel }) {
       });
   }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened, matrixConnected]);
 
+  // Context menu state (right-click on a DM offers "leave conversation")
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeCtxMenu = () => setCtxMenu(null);
+  const handleLeaveDM = async () => {
+    closeCtxMenu();
+    if (!channel.isDM) return;
+    if (!window.confirm(`Quitter la conversation avec ${channel.name} ?`)) return;
+    try {
+      const client = getMatrixClient();
+      if (!client) return;
+      await client.leave(channel.id);
+      // Scrub this room from m.direct so it doesn't come back as an auto-resolved DM.
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const directEvent = (client as any).getAccountData("m.direct");
+        const prev = (directEvent?.getContent?.() || {}) as Record<string, string[]>;
+        const next: Record<string, string[]> = {};
+        for (const [peer, rooms] of Object.entries(prev)) {
+          const filtered = rooms.filter((rid) => rid !== channel.id);
+          if (filtered.length > 0) next[peer] = filtered;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (client as any).setAccountData("m.direct", next);
+      } catch { /* m.direct cleanup is best-effort */ }
+    } catch (err) {
+      console.error("[Sion] Failed to leave DM:", err);
+    }
+  };
+
   return (
     <div>
       {/* M3 Navigation Drawer item */}
       <button
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={(e) => {
+          if (!channel.isDM) return;
+          e.preventDefault();
+          setCtxMenu({ x: e.clientX, y: e.clientY });
+        }}
         style={{
           width: '100%',
           display: 'flex',
@@ -270,12 +321,30 @@ export function ChannelItem({ channel }: { channel: Channel }) {
                 }}
               >
                 <UserAvatar name={u.name} speaking={isConnectedChannel && u.speaking} size="sm" avatarUrl={u.avatarUrl || undefined} />
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, color: roleColor(u.role), fontWeight: u.role !== "user" ? 600 : 400, opacity: 0.8 }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, color: roleColor(u.role), fontWeight: u.role !== "user" ? 600 : 400, opacity: u.deafened ? 0.55 : 0.8 }}>
                   {u.name}
                 </span>
+                {u.deafened && (
+                  <span
+                    title="AFK (sourdine)"
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      letterSpacing: '0.05em',
+                      padding: '1px 5px',
+                      borderRadius: 6,
+                      background: 'var(--color-surface-container-high)',
+                      color: 'var(--color-on-surface-variant)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    AFK
+                  </span>
+                )}
                 <span style={{ display: 'flex', gap: 4, alignItems: 'center', opacity: 0.5 }}>
                   {roleIcon(u.role)}
-                  {u.muted && <MicIcon muted />}
+                  {/* Hide redundant mic/headphone icons when AFK badge already conveys the state */}
+                  {u.muted && !u.deafened && <MicIcon muted />}
                   {u.deafened && <HeadphoneIcon muted />}
                   {u.connectionQuality && u.connectionQuality !== "excellent" && u.connectionQuality !== "unknown" && (
                     <SignalBarsIcon quality={u.connectionQuality} size={12} />
@@ -313,6 +382,44 @@ export function ChannelItem({ channel }: { channel: Channel }) {
         </div>
       )}
 
+      {ctxMenu && (
+        <>
+          {/* Invisible fullscreen catcher closes the menu on any outside click */}
+          <div
+            onClick={closeCtxMenu}
+            onContextMenu={(e) => { e.preventDefault(); closeCtxMenu(); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 999 }}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              left: ctxMenu.x,
+              top: ctxMenu.y,
+              zIndex: 1000,
+              background: 'var(--color-surface-container-high)',
+              borderRadius: 12,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+              padding: '6px 0',
+              minWidth: 220,
+              fontSize: 13,
+            }}
+          >
+            <button
+              onClick={handleLeaveDM}
+              style={{
+                width: '100%', padding: '8px 16px', border: 'none',
+                background: 'transparent', textAlign: 'left' as const,
+                cursor: 'pointer', color: 'var(--color-error)', fontFamily: 'inherit',
+                fontSize: 13,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-error-container)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              Quitter cette conversation
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

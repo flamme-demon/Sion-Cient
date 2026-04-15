@@ -692,28 +692,102 @@ export async function sendImageUrl(roomId: string, imageUrl: string): Promise<vo
 
 export async function createOrGetDMRoom(userId: string): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  const client = matrixClient;
 
-  // Check existing DMs via m.direct account data
+  const myUserId = client.getUserId();
+
+  // Helper: if a room is our DM with the target user, make sure they are
+  // currently a member (re-invite if they left), heal m.direct, and return
+  // the room id. Avoids creating a fresh room when a usable one already
+  // exists — even when the peer has left a previous copy.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reuseRoom = async (room: any): Promise<string> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const peerMember = room.getMember?.(userId);
+    const peerMembership = peerMember?.membership;
+    if (peerMembership !== "join" && peerMembership !== "invite") {
+      try {
+        await client.invite(room.roomId, userId);
+      } catch (err) {
+        console.warn(`[Sion] Failed to re-invite ${userId} to ${room.roomId}:`, err);
+      }
+    }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const directEvent = client.getAccountData("m.direct" as any);
+      const directContent = (directEvent?.getContent() as Record<string, string[]>) || {};
+      const existing = directContent[userId] || [];
+      if (!existing.includes(room.roomId)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (client as any).setAccountData("m.direct", { ...directContent, [userId]: [...existing, room.roomId] });
+      }
+    } catch (err) {
+      console.warn("[Sion] Failed to heal m.direct:", err);
+    }
+    return room.roomId;
+  };
+
+  // 1. Check existing DMs via m.direct account data
+  let directCheckResult = "no m.direct entry";
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const directEvent = matrixClient.getAccountData("m.direct" as any);
+    const directEvent = client.getAccountData("m.direct" as any);
     if (directEvent) {
       const directContent = directEvent.getContent() as Record<string, string[]>;
       const existingRooms = directContent[userId];
       if (existingRooms && existingRooms.length > 0) {
-        // Verify the room still exists in our joined rooms
+        directCheckResult = `m.direct has ${existingRooms.length} room(s) for ${userId}: ${existingRooms.join(", ")}`;
         for (const roomId of existingRooms) {
-          const room = matrixClient.getRoom(roomId);
-          if (room) return roomId;
+          const room = client.getRoom(roomId);
+          if (!room) continue;
+          if (room.getMyMembership() !== "join") continue;
+          return reuseRoom(room);
         }
+        directCheckResult += ` — but none are currently joined`;
       }
     }
   } catch {
-    // No m.direct data yet, proceed to create
+    // No m.direct data yet, proceed to fallback
   }
 
-  // Create a new DM room
-  const { room_id } = await matrixClient.createRoom({
+  // 2. Fallback: scan joined rooms for a DM-shaped room with the target user.
+  //    Catches the case where m.direct is out of sync, or where the peer
+  //    has left an existing DM room (leaving us with 1 joined member).
+  const skipReasons: string[] = [];
+  for (const room of client.getRooms()) {
+    if (room.getMyMembership() !== "join") continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allMembers = (room as any).getMembers?.() || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const liveMembers = allMembers.filter((m: any) => m.membership === "join" || m.membership === "invite");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasTargetAnyState = allMembers.some((m: any) => m.userId === userId);
+    if (!hasTargetAnyState) continue; // unrelated room
+    if (liveMembers.length > 2) {
+      skipReasons.push(`${room.roomId}: ${liveMembers.length} live members`);
+      continue;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const livePeer = liveMembers.find((m: any) => m.userId !== myUserId);
+    if (livePeer && livePeer.userId !== userId) {
+      skipReasons.push(`${room.roomId}: live peer is ${livePeer.userId}, not target`);
+      continue;
+    }
+    // Anything that (a) contains the target and (b) has ≤2 live members with
+    // one being us is DM-shaped enough to reuse. Dropping the earlier stricter
+    // `getDMInviter() || !room.name` check — that was rejecting rooms we had
+    // explicitly created as DMs on the sender side (no inviter on the sender,
+    // name may be set to the peer display name by the server).
+    return reuseRoom(room);
+  }
+
+  // 3. No reusable DM found — create a new one
+  console.warn(
+    `[Sion][DM] Creating new DM with ${userId}. Diagnosis:\n` +
+    `  m.direct: ${directCheckResult}\n` +
+    `  Fallback scan skipped: ${skipReasons.length === 0 ? "no candidate found" : skipReasons.join("; ")}`
+  );
+  const { room_id } = await client.createRoom({
     is_direct: true,
     invite: [userId],
     preset: "trusted_private_chat" as never,
@@ -722,13 +796,12 @@ export async function createOrGetDMRoom(userId: string): Promise<string> {
   // Update m.direct account data
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const directEvent = matrixClient.getAccountData("m.direct" as any);
+    const directEvent = client.getAccountData("m.direct" as any);
     const directContent = (directEvent?.getContent() as Record<string, string[]>) || {};
     const userRooms = directContent[userId] || [];
     userRooms.push(room_id);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (matrixClient as any).setAccountData("m.direct", { ...directContent, [userId]: userRooms });
+    await (client as any).setAccountData("m.direct", { ...directContent, [userId]: userRooms });
   } catch (err) {
     console.warn("[Sion] Failed to update m.direct:", err);
   }
@@ -775,10 +848,23 @@ export function getStatePowerLevel(roomId: string): number {
   if (!matrixClient) return 50;
   const room = matrixClient.getRoom(roomId);
   if (!room) return 50;
-  const plEvent = room.currentState?.getStateEvents?.("m.room.power_levels", "");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plEvent = room.currentState?.getStateEvents?.("m.room.power_levels" as any, "");
   if (!plEvent) return 50;
   const content = plEvent.getContent?.() || {};
   return content.state_default ?? 50;
+}
+
+/** Power level required to invite a new user. Matrix default is 0. */
+export function getInvitePowerLevel(roomId: string): number {
+  if (!matrixClient) return 0;
+  const room = matrixClient.getRoom(roomId);
+  if (!room) return 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plEvent = room.currentState?.getStateEvents?.("m.room.power_levels" as any, "");
+  if (!plEvent) return 0;
+  const content = plEvent.getContent?.() || {};
+  return content.invite ?? 0;
 }
 
 export function getRoomMembers(roomId: string): { userId: string; displayName: string; avatarUrl: string | null }[] {
@@ -813,6 +899,12 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
   const initialState: any[] = [
     { type: "m.room.encryption", state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } },
     { type: "m.room.join_rules", state_key: "", content: { join_rule: isPublic ? "public" : "invite" } },
+    // Explicitly set history_visibility so users who join AFTER messages have
+    // been posted still see that history. The public_chat preset is supposed
+    // to set this to "shared" by default but not every homeserver honors it
+    // (observed on Continuwuity) — being explicit avoids the "I joined but I
+    // don't see what was said before" surprise.
+    { type: "m.room.history_visibility", state_key: "", content: { history_visibility: "shared" } },
   ];
   if (isVoice) {
     initialState.push({ type: "m.room.type", state_key: "", content: { type: "m.voice_channel" } });
@@ -830,12 +922,88 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
       },
     } as never,
   });
+
+  // For public channels, invite every known user on the server so the
+  // channel appears in their client immediately (Discord-style).
+  if (isPublic) {
+    await fanOutPublicInvites(room_id);
+  }
+
   return room_id;
+}
+
+/**
+ * Invite every known server user to a public channel so it appears in
+ * their client (Discord-style). Matrix's "public" join_rule only means
+ * "anyone *can* join" — without an explicit invite or a public-directory
+ * entry, other clients never learn the channel exists. Our auto-accept
+ * logic handles the invite on their side.
+ *
+ * "All server users" is approximated by the union of joined members
+ * across every room the current user shares — that covers everyone the
+ * client has ever seen. Users already joined or invited are skipped.
+ */
+async function fanOutPublicInvites(roomId: string): Promise<void> {
+  if (!matrixClient) return;
+  const client = matrixClient;
+  try {
+    const serverName = client.getDomain() || "";
+    const myUserId = client.getUserId();
+    const isBot = (userId: string) => {
+      const local = userId.split(":")[0].toLowerCase();
+      return local === "@conduit" || local === "@conduwuit" || local === "@continuwuity" || local === "@server";
+    };
+
+    // Build the set of users already a member (joined or invited) of the
+    // target room so we don't re-invite them.
+    const targetRoom = client.getRoom(roomId);
+    const alreadyMember = new Set<string>();
+    if (targetRoom) {
+      for (const m of targetRoom.getMembers()) {
+        if (m.membership === "join" || m.membership === "invite") {
+          alreadyMember.add(m.userId);
+        }
+      }
+    }
+
+    const toInvite = new Set<string>();
+    for (const room of client.getRooms()) {
+      for (const m of room.getJoinedMembers()) {
+        const userId = m.userId;
+        if (!userId || userId === myUserId) continue;
+        if (!userId.endsWith(`:${serverName}`)) continue;
+        if (isBot(userId)) continue;
+        if (alreadyMember.has(userId)) continue;
+        toInvite.add(userId);
+      }
+    }
+    for (const userId of toInvite) {
+      client.invite(roomId, userId).catch((err: unknown) => {
+        console.warn("[Sion] Failed to invite user to public channel:", userId, err);
+      });
+    }
+  } catch (err) {
+    console.warn("[Sion] Failed to fan-out invites for public channel:", err);
+  }
 }
 
 export async function setRoomJoinRule(roomId: string, joinRule: "public" | "invite"): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  // Detect whether this is a transition from invite → public, so we can
+  // fan out invites to users who weren't members of the previously-private
+  // channel. Without this, flipping a private channel to public would
+  // leave it invisible to everyone who hadn't already been invited.
+  const room = matrixClient.getRoom(roomId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const prevJoinRule: string | undefined = room?.currentState.getStateEvents("m.room.join_rules" as any, "")?.getContent?.()?.join_rule;
+  const becomingPublic = joinRule === "public" && prevJoinRule !== "public";
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendStateEvent(roomId, "m.room.join_rules" as any, { join_rule: joinRule }, "");
+
+  if (becomingPublic) {
+    await fanOutPublicInvites(roomId);
+  }
 }
 
 export async function inviteUser(roomId: string, userId: string): Promise<void> {

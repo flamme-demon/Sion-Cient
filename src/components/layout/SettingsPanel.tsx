@@ -183,8 +183,9 @@ export function SettingsPanel() {
       let defaultSourceId = "";
       let defaultSinkId = "";
 
-      // Fetch default device labels from PulseAudio (Tauri only)
-      if (window.__TAURI_INTERNALS__) {
+      // Fetch default device labels from PulseAudio (desktop Tauri only —
+      // command isn't registered on Android so we'd just get a noisy reject).
+      if (window.__TAURI_INTERNALS__ && !/Android/i.test(navigator.userAgent)) {
         try {
           const { invoke } = await import("@tauri-apps/api/core");
           const defaults = await invoke<{ source_id: string; source_label: string; sink_id: string; sink_label: string }>("get_default_audio_devices");

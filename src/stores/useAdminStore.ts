@@ -99,9 +99,18 @@ export const useAdminStore = create<AdminState>((set, get) => ({
 
   startAdminCheck: () => {
     if (adminCheckInterval) return;
-    // Vérifie le statut admin toutes les 15s (appel léger à getRoomsList)
-    adminCheckInterval = setInterval(async () => {
-      if (!savedHomeserverUrl || !savedAccessToken) return;
+    // Adaptive polling: admins keep a 15s heartbeat so we notice a demotion
+    // quickly; non-admins poll at 5min to detect a promotion without spamming
+    // the server (and the DevTools console) with 403 errors every 15s.
+    const ADMIN_POLL_MS = 15_000;
+    const NON_ADMIN_POLL_MS = 5 * 60_000;
+    const scheduleNext = () => {
+      if (adminCheckInterval) clearTimeout(adminCheckInterval);
+      const delay = get().isAdmin ? ADMIN_POLL_MS : NON_ADMIN_POLL_MS;
+      adminCheckInterval = setTimeout(tick, delay);
+    };
+    const tick = async () => {
+      if (!savedHomeserverUrl || !savedAccessToken) { scheduleNext(); return; }
       const wasAdmin = get().isAdmin;
       try {
         await getRoomsList();
@@ -118,7 +127,9 @@ export const useAdminStore = create<AdminState>((set, get) => ({
           }
         }
       }
-    }, 15000);
+      scheduleNext();
+    };
+    scheduleNext();
   },
 
   stopAdminCheck: () => {
