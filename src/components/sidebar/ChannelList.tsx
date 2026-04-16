@@ -46,7 +46,7 @@ export function ChannelList() {
     // watching (leading to "the message disappeared" confusion). Duplicates
     // are cleaned up via the admin-side "Nettoyer MP dupliqués" action.
     const filtered = channels.filter((ch) =>
-      sidebarView === "dm" ? ch.isDM : !ch.isDM
+      !ch.isSoundboard && (sidebarView === "dm" ? ch.isDM : !ch.isDM)
     );
     const copy = [...filtered];
     switch (channelSort) {

@@ -115,6 +115,15 @@ fn keys_match(required: &[Key], pressed: &HashSet<Key>) -> bool {
 struct UpdateShortcutsPayload {
     mute: String,
     deafen: String,
+    #[serde(default)]
+    soundboard: Vec<SoundboardShortcut>,
+}
+
+#[cfg(not(target_os = "android"))]
+#[derive(Deserialize, Clone)]
+struct SoundboardShortcut {
+    id: String,
+    combo: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -790,17 +799,37 @@ fn register_plugin_shortcuts(app: &tauri::AppHandle<TauriRuntime>, payload: &Upd
     let mute_sc = if !payload.mute.is_empty() { payload.mute.parse::<Shortcut>().ok() } else { None };
     let deafen_sc = if !payload.deafen.is_empty() { payload.deafen.parse::<Shortcut>().ok() } else { None };
 
+    // Parse all soundboard combos, keeping a map combo → soundId for dispatch.
+    let mut soundboard_map: Vec<(Shortcut, String)> = Vec::new();
+    for sb in &payload.soundboard {
+        if sb.combo.is_empty() { continue; }
+        if let Ok(sc) = sb.combo.parse::<Shortcut>() {
+            soundboard_map.push((sc, sb.id.clone()));
+        }
+    }
+
     let mut to_register: Vec<Shortcut> = Vec::new();
     if let Some(s) = mute_sc { to_register.push(s); }
     if let Some(s) = deafen_sc { to_register.push(s); }
+    for (sc, _) in &soundboard_map { to_register.push(*sc); }
 
     if !to_register.is_empty() {
+        let soundboard_clone = soundboard_map.clone();
         if let Err(e) = gs.on_shortcuts(to_register, move |_app, shortcut, event| {
             if event.state != ShortcutState::Pressed { return; }
             if mute_sc.is_some() && shortcut == &mute_sc.unwrap() {
                 push_shortcut_event("mute");
-            } else if deafen_sc.is_some() && shortcut == &deafen_sc.unwrap() {
+                return;
+            }
+            if deafen_sc.is_some() && shortcut == &deafen_sc.unwrap() {
                 push_shortcut_event("deafen");
+                return;
+            }
+            for (sc, id) in &soundboard_clone {
+                if shortcut == sc {
+                    push_shortcut_event(&format!("soundboard:{}", id));
+                    return;
+                }
             }
         }) {
             log::warn!("[Sion] Failed to register plugin shortcuts: {}", e);

@@ -27,6 +27,11 @@ interface SettingsState {
   autoJoinVoice: boolean;
   enableGifs: boolean;
   language: string;
+  soundboardEnabled: boolean;
+  soundboardVolume: number;
+  screenShareAudio: boolean;
+  screenShareResolution: "720p" | "1080p" | "1440p";
+  screenShareFramerate: 5 | 15 | 30 | 60;
 
   setMutedSpeakAlert: (v: boolean) => void;
   setJoinMuted: (v: boolean) => void;
@@ -46,6 +51,11 @@ interface SettingsState {
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
   setEnableGifs: (v: boolean) => void;
+  setSoundboardEnabled: (v: boolean) => void;
+  setSoundboardVolume: (v: number) => void;
+  setScreenShareAudio: (v: boolean) => void;
+  setScreenShareResolution: (v: "720p" | "1080p" | "1440p") => void;
+  setScreenShareFramerate: (v: 5 | 15 | 30 | 60) => void;
   setNotificationMode: (v: NotificationMode) => void;
   setLanguage: (v: string) => void;
 }
@@ -72,6 +82,11 @@ export const useSettingsStore = create<SettingsState>()(
       autoJoinVoice: false,
       enableGifs: false,
       language: "",
+      soundboardEnabled: true,
+      soundboardVolume: 0.2,
+      screenShareAudio: true,
+      screenShareResolution: "1080p" as const,
+      screenShareFramerate: 15 as const,
       notificationMode: "mentions" as NotificationMode,
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
@@ -92,6 +107,14 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
+      setSoundboardEnabled: (v) => set({ soundboardEnabled: v }),
+      setSoundboardVolume: (v) => {
+        set({ soundboardVolume: v });
+        import("../services/soundboardService").then(({ setPlaybackVolume }) => setPlaybackVolume(v));
+      },
+      setScreenShareAudio: (v) => set({ screenShareAudio: v }),
+      setScreenShareResolution: (v) => set({ screenShareResolution: v }),
+      setScreenShareFramerate: (v) => set({ screenShareFramerate: v }),
       setLanguage: (v) => {
         set({ language: v });
         import("i18next").then((i18n) => i18n.default.changeLanguage(v));

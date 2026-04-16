@@ -30,6 +30,13 @@ function isStereoPreset(quality: AudioQualityPreset): boolean {
 
 let currentRoom: Room | null = null;
 let isCurrentlyDeafened = false;
+// AFK/deafened state of remote participants — received via data channel.
+// We don't use LiveKit participant metadata because the Matrix RTC focus
+// issues JWTs without canUpdateOwnMetadata, so setMetadata silently fails.
+const remoteDeafenState = new Map<string, boolean>();
+const AFK_TOPIC = "sion-afk";
+const afkEncoder = new TextEncoder();
+const afkDecoder = new TextDecoder();
 // Map of remote audio elements: trackSid -> HTMLAudioElement
 const audioElements = new Map<string, HTMLAudioElement>();
 
@@ -185,11 +192,28 @@ function ensureAutoplayUnlock() {
 function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
+
+  // Idempotent on the same sid.
   if (audioElements.has(sid)) return;
+
+  // LiveKit republishes tracks with NEW sids after simulateScenario("full-reconnect")
+  // or when a peer reloads. The previous `<audio>` element is tied to a now-dead
+  // MediaStream but the DOM element stays attached and can keep buffering, causing
+  // layered / looping / extremely-loud playback. Detach any stale element for this
+  // same participant before attaching the new one.
+  for (const [oldSid, oldEl] of audioElements) {
+    if (oldEl.dataset.participantId === participant.identity && oldSid !== sid) {
+      oldEl.pause();
+      oldEl.srcObject = null;
+      oldEl.remove();
+      audioElements.delete(oldSid);
+    }
+  }
 
   const el = track.attach();
   el.id = `sion-audio-${sid}`;
   el.style.display = "none";
+  el.dataset.participantId = participant.identity;
   // Respect current deafen state
   el.muted = isCurrentlyDeafened;
   document.body.appendChild(el);
@@ -242,6 +266,7 @@ function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
 function detachAllAudio() {
   audioElements.forEach((el) => el.remove());
   audioElements.clear();
+  remoteDeafenState.clear();
 }
 
 export async function connectToRoom(
@@ -321,6 +346,16 @@ export async function connectToRoom(
       }
       lastStuckReconnectAt = Date.now();
       console.warn(`[Sion][LK] audio ${publication.trackSid} from ${participant.identity} stuck at '${publication.subscriptionStatus}' — triggering full-reconnect`);
+      // Wipe all remote audio elements before the reconnect so we don't
+      // leave stale DOM audio tags buffering on a dead MediaStream while the
+      // new session republishes. Without this, a cascade of full-reconnects
+      // across peers compounds into layered / extremely-loud playback.
+      for (const [, oldEl] of audioElements) {
+        oldEl.pause();
+        oldEl.srcObject = null;
+        oldEl.remove();
+      }
+      audioElements.clear();
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (room as any).simulateScenario("full-reconnect");
@@ -547,18 +582,18 @@ export function setDeafened(deafened: boolean) {
   audioElements.forEach((el) => {
     el.muted = deafened;
   });
-  // Propagate the deafened (AFK) state to other participants via LiveKit
-  // participant metadata. Subscribers display this as an AFK indicator
-  // distinct from the regular "muted mic" icon.
-  if (currentRoom) {
-    try {
-      const meta = JSON.stringify({ deafened });
-      currentRoom.localParticipant.setMetadata(meta).catch((err) => {
-        console.warn("[Sion] Failed to broadcast deafened state:", err);
-      });
-    } catch (err) {
-      console.warn("[Sion] setMetadata threw:", err);
-    }
+  broadcastAfk();
+}
+
+function broadcastAfk() {
+  if (!currentRoom) return;
+  try {
+    const payload = afkEncoder.encode(JSON.stringify({ deafened: isCurrentlyDeafened }));
+    currentRoom.localParticipant.publishData(payload, { reliable: true, topic: AFK_TOPIC }).catch((err) => {
+      console.warn("[Sion] Failed to broadcast AFK state:", err);
+    });
+  } catch (err) {
+    console.warn("[Sion] publishData threw:", err);
   }
 }
 
@@ -613,14 +648,26 @@ export async function updateAudioQuality(quality: AudioQualityPreset) {
 
 export async function toggleScreenShare(enabled: boolean) {
   if (!currentRoom) return;
-  // audio: true enables capture of the shared stream's audio (tab audio).
-  // systemAudio: 'include' asks the browser/portal to offer system audio as an
-  // option in the picker — without it, Chromium-based runtimes (including CEF)
-  // default to tab-audio-only, and on Linux KDE Wayland the portal never
-  // exposes an audio checkbox to the user at all.
+  const settings = useSettingsStore.getState();
+  const wantAudio = settings.screenShareAudio;
+
+  // Map our user-friendly presets to LiveKit's ScreenSharePresets. Falls back
+  // to the SDK default (h1080fps15) for any unexpected combination.
+  const { ScreenSharePresets } = await import("livekit-client");
+  const presetKey = `${settings.screenShareResolution}-${settings.screenShareFramerate}fps` as const;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const presetMap: Record<string, any> = {
+    "720p-5fps": ScreenSharePresets.h720fps5,
+    "720p-15fps": ScreenSharePresets.h720fps5,
+    "1080p-15fps": ScreenSharePresets.h1080fps15,
+    "1080p-30fps": ScreenSharePresets.h1080fps30,
+    "1440p-30fps": ScreenSharePresets.h1080fps30,
+  };
+  const preset = presetMap[presetKey] ?? ScreenSharePresets.h1080fps15;
   await currentRoom.localParticipant.setScreenShareEnabled(enabled, {
-    audio: true,
-    systemAudio: "include",
+    audio: wantAudio,
+    ...(wantAudio ? { systemAudio: "include" as const } : {}),
+    resolution: preset,
   });
 }
 
@@ -630,14 +677,9 @@ export function getParticipants(): ParticipantInfo[] {
   const participants: ParticipantInfo[] = [];
 
   const mapParticipant = (p: RemoteParticipant | LocalParticipant): ParticipantInfo => {
-    // Read deafen/AFK state from participant metadata (broadcast via setMetadata).
-    let isDeafened = false;
-    if (p.metadata) {
-      try {
-        const parsed = JSON.parse(p.metadata) as { deafened?: boolean };
-        isDeafened = parsed.deafened === true;
-      } catch { /* metadata is non-JSON; ignore */ }
-    }
+    // Self: canonical store state. Remote: state learned via data channel.
+    const isLocal = p === currentRoom?.localParticipant;
+    const isDeafened = isLocal ? isCurrentlyDeafened : (remoteDeafenState.get(p.identity) ?? false);
     return {
       identity: p.identity,
       name: p.name || p.identity,
@@ -681,8 +723,33 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
   currentRoom.on(RoomEvent.TrackUnmuted, update);
   // Connection-quality changes for the signal-bars indicator
   currentRoom.on(RoomEvent.ConnectionQualityChanged, update);
-  // Metadata changes — used to broadcast the AFK/deafened state across peers
-  currentRoom.on(RoomEvent.ParticipantMetadataChanged, update);
+  // AFK/deafened state arrives on a reliable data channel (topic = AFK_TOPIC)
+  const handleAfkData = (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+    if (!participant) return;
+    if (topic === AFK_TOPIC) {
+      try {
+        const parsed = JSON.parse(afkDecoder.decode(payload)) as { deafened?: boolean };
+        remoteDeafenState.set(participant.identity, parsed.deafened === true);
+        update();
+      } catch { /* ignore malformed */ }
+      return;
+    }
+    // Soundboard broadcast — lazy-load to avoid circular import at module load
+    import("./soundboardService").then(({ SOUNDBOARD_TOPIC, handleRemoteBroadcast }) => {
+      if (topic === SOUNDBOARD_TOPIC) handleRemoteBroadcast(payload);
+    }).catch(() => {});
+  };
+  currentRoom.on(RoomEvent.DataReceived, handleAfkData);
+
+  // Re-broadcast our state to newcomers so they learn it, and forget
+  // state for disconnected peers.
+  const rebroadcastOnJoin = () => { broadcastAfk(); update(); };
+  const forgetOnLeave = (p: RemoteParticipant) => {
+    remoteDeafenState.delete(p.identity);
+    update();
+  };
+  currentRoom.on(RoomEvent.ParticipantConnected, rebroadcastOnJoin);
+  currentRoom.on(RoomEvent.ParticipantDisconnected, forgetOnLeave);
 
   // Local participant events
   currentRoom.on(RoomEvent.LocalTrackPublished, update);
@@ -702,7 +769,9 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     currentRoom.off(RoomEvent.TrackMuted, update);
     currentRoom.off(RoomEvent.TrackUnmuted, update);
     currentRoom.off(RoomEvent.ConnectionQualityChanged, update);
-    currentRoom.off(RoomEvent.ParticipantMetadataChanged, update);
+    currentRoom.off(RoomEvent.DataReceived, handleAfkData);
+    currentRoom.off(RoomEvent.ParticipantConnected, rebroadcastOnJoin);
+    currentRoom.off(RoomEvent.ParticipantDisconnected, forgetOnLeave);
     currentRoom.off(RoomEvent.LocalTrackPublished, update);
     currentRoom.off(RoomEvent.LocalTrackUnpublished, update);
   };

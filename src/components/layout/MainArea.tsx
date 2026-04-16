@@ -5,6 +5,8 @@ import { ScreenShareView } from "../chat/ScreenShareView";
 import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
 import { DropZone } from "../chat/DropZone";
+import { MemberPanel } from "../chat/MemberPanel";
+import { SoundboardPanel } from "../chat/SoundboardPanel";
 import { useAppStore } from "../../stores/useAppStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { MOBILE_VOICE_BAR_HEIGHT } from "../mobile/MobileVoiceBar";
@@ -39,18 +41,22 @@ export function MainArea() {
 
   return (
     <div
-      className="flex-1 flex flex-col min-w-0 relative"
+      className="flex-1 flex min-w-0 relative"
       style={needsVoiceBarPadding ? { paddingBottom: MOBILE_VOICE_BAR_HEIGHT } : undefined}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <ChatHeader />
-      <PinnedBar />
-      <ScreenShareView />
-      <MessageList />
-      <ChatInput />
-      <DropZone />
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        <ChatHeader />
+        <PinnedBar />
+        <ScreenShareView />
+        <MessageList />
+        <ChatInput />
+        <DropZone />
+      </div>
+      {!isMobile && <MemberPanel />}
+      {!isMobile && <SoundboardPanel />}
     </div>
   );
 }

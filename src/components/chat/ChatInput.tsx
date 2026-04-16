@@ -72,6 +72,10 @@ export function ChatInput() {
 
   const isMobile = useIsMobile();
   const channelName = channels.find((c) => c.id === activeChannel)?.name || "general";
+  // Re-evaluated on every render — cheap, reads cached room state. Gating
+  // the UI here avoids M_FORBIDDEN errors on read-only rooms (e.g. soundboard
+  // room where only moderators can upload).
+  const canSend = activeChannel ? matrixService.canSendMessage(activeChannel) : false;
 
   // Close emoji picker on outside click/touch
   // Fetch GIFs from Tenor (only when enabled and tab is active)
@@ -585,6 +589,34 @@ export function ChatInput() {
         <FilePreview />
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, padding: '6px 8px 6px 4px' }}>
           {!editingMessage && <AttachButton />}
+          {!editingMessage && !isMobile && channels.some((c) => c.isSoundboard) && (
+            <button
+              type="button"
+              onClick={() => useAppStore.getState().toggleSoundboardPanel()}
+              title={t("soundboard.title")}
+              style={{
+                border: 'none',
+                cursor: 'pointer',
+                padding: 8,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                borderRadius: '50%',
+                background: 'transparent',
+                color: 'var(--color-on-surface-variant)',
+                transition: 'background 150ms',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            </button>
+          )}
           {!editingMessage && (
             <div ref={emojiPickerRef} style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
               <button
@@ -786,8 +818,9 @@ export function ChatInput() {
             onPaste={handlePaste}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            placeholder={t("chat.placeholder", { channel: channelName })}
+            placeholder={canSend ? t("chat.placeholder", { channel: channelName }) : t("chat.readOnly")}
             rows={1}
+            disabled={!canSend}
             style={{
               flex: 1,
               background: 'transparent',
@@ -801,23 +834,26 @@ export function ChatInput() {
               maxHeight: 120,
               padding: '8px 4px',
               letterSpacing: '0.01em',
+              cursor: canSend ? 'text' : 'not-allowed',
+              opacity: canSend ? 1 : 0.5,
             }}
           />
           {/* M3 FAB-style send */}
           <button
             type="button"
             onClick={handleSend}
+            disabled={!canSend}
             style={{
               border: 'none',
-              cursor: 'pointer',
+              cursor: canSend ? 'pointer' : 'not-allowed',
               padding: 10,
               display: 'flex',
               flexShrink: 0,
               borderRadius: '50%',
               transition: 'all 200ms',
-              background: hasContent ? 'var(--color-primary)' : 'transparent',
-              color: hasContent ? 'var(--color-on-primary)' : 'var(--color-outline)',
-              opacity: hasContent ? 1 : 0.4,
+              background: hasContent && canSend ? 'var(--color-primary)' : 'transparent',
+              color: hasContent && canSend ? 'var(--color-on-primary)' : 'var(--color-outline)',
+              opacity: hasContent && canSend ? 1 : 0.4,
             }}
           >
             <SendIcon />

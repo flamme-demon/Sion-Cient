@@ -245,10 +245,34 @@ export function AdminActions() {
     }
   };
 
+  const [soundboardBusy, setSoundboardBusy] = useState(false);
+  const [soundboardToast, setSoundboardToast] = useState<string | null>(null);
+
+  const handleSoundboard = async () => {
+    if (soundboardBusy) return;
+    setSoundboardBusy(true);
+    setSoundboardToast(null);
+    try {
+      const res = await matrixService.createOrSyncSoundboardRoom();
+      if (res.alreadyExisted) {
+        setSoundboardToast(t("admin.actions.soundboardSynced", { count: res.invitedCount }));
+      } else {
+        setSoundboardToast(t("admin.actions.soundboardCreated"));
+      }
+    } catch (err) {
+      console.error("[Sion] Failed to create/sync soundboard:", err);
+      setSoundboardToast(t("admin.actions.soundboardFailed"));
+    } finally {
+      setSoundboardBusy(false);
+      setTimeout(() => setSoundboardToast(null), 4000);
+    }
+  };
+
   const actions = [
     { label: t("admin.actions.createRoom"), icon: "+", onClick: () => setShowCreateModal(true), enabled: true },
     { label: t("admin.actions.manageRooms"), icon: "🏠", onClick: () => setShowRoomManager(true), enabled: true },
     { label: t("admin.actions.permissions"), icon: "\u{1F6E1}", onClick: () => setShowPermissions(true), enabled: true },
+    { label: t("admin.actions.soundboard"), icon: "🔊", onClick: handleSoundboard, enabled: !soundboardBusy },
   ];
 
   return (
@@ -257,6 +281,17 @@ export function AdminActions() {
       borderRadius: 16,
       padding: '10px 12px',
     }}>
+      {soundboardToast && (
+        <div style={{
+          padding: '8px 12px',
+          marginBottom: 8,
+          borderRadius: 12,
+          background: 'var(--color-primary-container)',
+          color: 'var(--color-on-primary-container)',
+          fontSize: 12,
+          textAlign: 'center',
+        }}>{soundboardToast}</div>
+      )}
       <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
         {actions.map((action, i) => (
           <button

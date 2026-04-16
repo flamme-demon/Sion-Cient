@@ -7,13 +7,16 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 - **Voice channels** with low-latency audio via LiveKit (WebRTC)
 - **Text channels** with Markdown, file attachments, reactions, replies, message editing
 - **Video/audio playback** in chat with automatic ffmpeg transcoding for H.264 compatibility
-- **Screen sharing** in voice channels with dedicated viewer
+- **Screen sharing** in voice channels with dedicated viewer, configurable resolution/framerate/audio
+- **Soundboard** — shared server-wide sound library with per-sound category/emoji/hotkey, LiveKit broadcast to voice participants
 - **Link previews** with OG metadata extraction (YouTube oEmbed, GitHub, etc.)
 - **End-to-end encryption** (E2EE) for both text and voice via Matrix Rust Crypto + LiveKit E2EE
 - **Cross-device verification** (emoji comparison, recovery key)
-- **Global keyboard shortcuts** for mute/deafen (via rdev)
+- **Global keyboard shortcuts** for mute/deafen/soundboard (via rdev + tauri-plugin-global-shortcut)
+- **Member panel** per room with inline promote/demote (moderator ↔ user)
 - **User context menus** (profile, invite, kick, ban, power levels)
 - **Admin panel** for Continuwuity server management
+- **AFK indicator** — sourdine propagated to peers via LiveKit data channel
 - **Internationalization** (French default, English available)
 - **Dark theme** with Material Design 3 inspired UI
 
@@ -25,7 +28,7 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 | Frontend | React 19, TypeScript 5.9, Vite 7, Tailwind CSS v4 |
 | Desktop | [Tauri v2](https://tauri.app/) with CEF runtime (Chromium) |
 | Matrix SDK | [matrix-js-sdk](https://github.com/element-hq/matrix-js-sdk) 41.0 |
-| Voice/Video | [livekit-client](https://github.com/livekit/client-sdk-js) 2.17 |
+| Voice/Video | [livekit-client](https://github.com/livekit/client-sdk-js) 2.18 |
 | State | [Zustand](https://github.com/pmndrs/zustand) 5 |
 | i18n | react-i18next 16 |
 

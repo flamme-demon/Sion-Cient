@@ -27,6 +27,7 @@ export interface Channel {
   lastActivity: number;
   isDM?: boolean;
   dmUserId?: string;
+  isSoundboard?: boolean;
 }
 
 export interface FileAttachment {

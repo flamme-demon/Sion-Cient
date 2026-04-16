@@ -1104,12 +1104,179 @@ export function getServerAdminUserIds(): string[] {
   return admins;
 }
 
+export const SOUNDBOARD_ALIAS_LOCAL = "soundboard";
+
+/**
+ * Returns the soundboard room id if the alias resolves, otherwise null.
+ * Uses the current homeserver's domain so we never hardcode a host.
+ */
+export async function findSoundboardRoom(): Promise<string | null> {
+  if (!matrixClient) return null;
+  const domain = matrixClient.getDomain();
+  if (!domain) return null;
+  const alias = `#${SOUNDBOARD_ALIAS_LOCAL}:${domain}`;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res: any = await matrixClient.getRoomIdForAlias(alias);
+    return res?.room_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface SoundboardCreationResult {
+  roomId: string;
+  alreadyExisted: boolean;
+  invitedCount: number;
+}
+
+/**
+ * Creates the server-wide soundboard room (alias #soundboard:<domain>) if it
+ * doesn't exist yet, then invites every known server user. Only admins and
+ * moderators (PL >= 50) can upload — this is enforced via power_levels
+ * (events_default: 50). If the room already exists, we just fan out invites
+ * to newcomers so no-one is left behind after admin promotions or signups.
+ */
+export async function createOrSyncSoundboardRoom(): Promise<SoundboardCreationResult> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  const client = matrixClient;
+  const domain = client.getDomain();
+  if (!domain) throw new Error("No homeserver domain");
+
+  const existing = await findSoundboardRoom();
+  if (existing) {
+    const invited = await inviteAllServerUsers(existing);
+    return { roomId: existing, alreadyExisted: true, invitedCount: invited };
+  }
+
+  const adminIds = getServerAdminUserIds();
+  const myUserId = client.getUserId() || "";
+  const usersPowerLevels: Record<string, number> = {};
+  if (myUserId) usersPowerLevels[myUserId] = 100;
+  for (const adminId of adminIds) usersPowerLevels[adminId] = 100;
+
+  const { room_id } = await client.createRoom({
+    name: "Soundboard",
+    topic: "Bibliothèque de sons partagée",
+    room_alias_name: SOUNDBOARD_ALIAS_LOCAL,
+    visibility: "private" as never,
+    preset: "public_chat" as never,
+    initial_state: [
+      { type: "m.room.history_visibility", state_key: "", content: { history_visibility: "shared" } },
+      { type: "m.room.guest_access", state_key: "", content: { guest_access: "forbidden" } },
+    ],
+    power_level_content_override: {
+      users: usersPowerLevels,
+      users_default: 0,
+      events_default: 50,
+      state_default: 100,
+      invite: 50,
+      kick: 50,
+      ban: 100,
+      redact: 50,
+    } as never,
+  });
+
+  const invited = await inviteAllServerUsers(room_id);
+  return { roomId: room_id, alreadyExisted: false, invitedCount: invited };
+}
+
+/**
+ * Invite every local server user to the room. Uses the Continuwuity admin bot
+ * (`!admin users list-users`) as the authoritative source so users we've
+ * never shared a room with still get invited. Falls back to the room-discovery
+ * set if the admin command fails. Admin-only.
+ */
+async function inviteAllServerUsers(roomId: string): Promise<number> {
+  if (!matrixClient) return 0;
+  const client = matrixClient;
+  const serverName = client.getDomain() || "";
+  const myUserId = client.getUserId();
+  const isBot = (userId: string) => {
+    const local = userId.split(":")[0].toLowerCase();
+    return local === "@conduit" || local === "@conduwuit" || local === "@continuwuity" || local === "@server";
+  };
+
+  const targetRoom = client.getRoom(roomId);
+  // Only joined counts as "already in". Users stuck in "invite" or "leave"
+  // states should be force-joined so the soundboard is mandatory-like.
+  const alreadyJoined = new Set<string>();
+  if (targetRoom) {
+    for (const m of targetRoom.getMembers()) {
+      if (m.membership === "join") alreadyJoined.add(m.userId);
+    }
+  }
+
+  const { sendAdminCommand, parseUserList } = await import("./adminCommandService");
+
+  const toJoin = new Set<string>();
+  try {
+    const response = await sendAdminCommand("!admin users list-users");
+    for (const userId of parseUserList(response)) {
+      if (!userId || userId === myUserId) continue;
+      if (!userId.endsWith(`:${serverName}`)) continue;
+      if (isBot(userId)) continue;
+      if (alreadyJoined.has(userId)) continue;
+      toJoin.add(userId);
+    }
+  } catch (err) {
+    console.warn("[Sion] Admin list-users failed, falling back to room discovery:", err);
+    for (const room of client.getRooms()) {
+      for (const m of room.getJoinedMembers()) {
+        const userId = m.userId;
+        if (!userId || userId === myUserId) continue;
+        if (!userId.endsWith(`:${serverName}`)) continue;
+        if (isBot(userId)) continue;
+        if (alreadyJoined.has(userId)) continue;
+        toJoin.add(userId);
+      }
+    }
+  }
+
+  // Force-join each pending user via the admin bot. This bypasses the
+  // invite/accept flow so users don't have to open Sion first to get the
+  // soundboard, AND handles the case of users already at "invite" state who
+  // never accepted.
+  let successCount = 0;
+  for (const userId of toJoin) {
+    try {
+      await sendAdminCommand(`!admin users force-join-room ${userId} ${roomId}`);
+      successCount += 1;
+    } catch (err) {
+      console.warn("[Sion] Failed to force-join user to soundboard:", userId, err);
+    }
+  }
+  return successCount;
+}
+
 export function getMemberPowerLevel(roomId: string, userId: string): number {
   if (!matrixClient) return 0;
   const room = matrixClient.getRoom(roomId);
   if (!room) return 0;
   const member = room.getMember(userId);
   return member?.powerLevel ?? 0;
+}
+
+/**
+ * Returns true if the current user has enough power level to send a regular
+ * message in this room. Reads m.room.power_levels and checks the PL required
+ * for `m.room.message` (falls back to events_default if not overridden).
+ */
+export function canSendMessage(roomId: string): boolean {
+  if (!matrixClient) return false;
+  const room = matrixClient.getRoom(roomId);
+  if (!room) return false;
+  const myUserId = matrixClient.getUserId();
+  if (!myUserId) return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const plEvent = room.currentState.getStateEvents("m.room.power_levels" as any, "");
+  const plContent = (plEvent?.getContent?.() || {}) as {
+    events_default?: number;
+    events?: Record<string, number>;
+  };
+  const required = plContent.events?.["m.room.message"] ?? plContent.events_default ?? 0;
+  const myPl = room.getMember(myUserId)?.powerLevel ?? 0;
+  return myPl >= required;
 }
 
 export async function setRoomName(roomId: string, name: string): Promise<void> {

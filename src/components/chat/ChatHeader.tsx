@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon, UserAddIcon } from "../icons";
+import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon, UserAddIcon, UsersIcon } from "../icons";
 import { ChannelIcon } from "../sidebar/ChannelIcon";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -9,6 +9,8 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { getMatrixClient } from "../../services/matrixService";
 import { getCurrentRoom } from "../../services/livekitService";
+import * as livekitService from "../../services/livekitService";
+import { ScreenShareOptionsModal } from "./ScreenShareOptionsModal";
 
 function buildWavePath(amplitude: number, phase: number): string {
   if (amplitude < 0.01) return "M0,10 L400,10";
@@ -112,6 +114,7 @@ export function ChatHeader() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editJoinRule, setEditJoinRule] = useState<"public" | "invite">("public");
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showScreenShareOptions, setShowScreenShareOptions] = useState(false);
   const [inviteLoading, setInviteLoading] = useState<string | null>(null);
   const [serverUsers, setServerUsers] = useState<string[]>([]);
   const knownUserIds = usePendingUsersStore((s) => s._knownUserIds);
@@ -265,33 +268,79 @@ export function ChatHeader() {
               <UserAddIcon />
             </button>
           )}
+          {!isMobile && !channel?.isDM && (
+            <button
+              onClick={useAppStore.getState().toggleMemberPanel}
+              style={{
+                padding: 6,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                background: 'transparent',
+                color: 'var(--color-on-surface-variant)',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'background 200ms',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              title={t("members.title")}
+            >
+              <UsersIcon />
+            </button>
+          )}
           {!isMobile && (
             <span style={{ color: 'var(--color-outline)', fontSize: 12, marginLeft: 4 }}>{channel?.topic || t("channels.discussion")}</span>
           )}
         </div>
         {connectedVoice && !isMobile && (
-          <button
-            onClick={toggleScreenShare}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '10px 20px',
-              borderRadius: 20,
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: 600,
-              fontFamily: 'inherit',
-              letterSpacing: '0.02em',
-              transition: 'all 200ms',
-              background: isScreenSharing ? 'var(--color-error-container)' : 'var(--color-primary-container)',
-              color: isScreenSharing ? 'var(--color-error)' : 'var(--color-on-primary-container)',
-            }}
-          >
-            <ScreenIcon />
-            {isScreenSharing ? t("chat.stopShare") : t("chat.shareScreen")}
-          </button>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {isScreenSharing && (
+              <button
+                onClick={() => setShowScreenShareOptions(true)}
+                title={t("screenShare.title")}
+                style={{
+                  padding: 8,
+                  borderRadius: 12,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: 'var(--color-surface-container-high)',
+                  color: 'var(--color-on-surface-variant)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  fontSize: 14,
+                }}
+              >⚙</button>
+            )}
+            <button
+              onClick={() => {
+                if (isScreenSharing) {
+                  toggleScreenShare();
+                } else {
+                  setShowScreenShareOptions(true);
+                }
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '10px 20px',
+                borderRadius: 20,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+                letterSpacing: '0.02em',
+                transition: 'all 200ms',
+                background: isScreenSharing ? 'var(--color-error-container)' : 'var(--color-primary-container)',
+                color: isScreenSharing ? 'var(--color-error)' : 'var(--color-on-primary-container)',
+              }}
+            >
+              <ScreenIcon />
+              {isScreenSharing ? t("chat.stopShare") : t("chat.shareScreen")}
+            </button>
+          </div>
         )}
       </div>
 
@@ -635,6 +684,27 @@ export function ChatHeader() {
             </div>
           </div>
         </div>
+      )}
+
+      {showScreenShareOptions && (
+        <ScreenShareOptionsModal
+          editing={isScreenSharing}
+          onClose={() => setShowScreenShareOptions(false)}
+          onConfirm={async () => {
+            setShowScreenShareOptions(false);
+            if (isScreenSharing) {
+              // Restart with the new preset so the change takes effect.
+              try {
+                await livekitService.toggleScreenShare(false);
+                await livekitService.toggleScreenShare(true);
+              } catch (err) {
+                console.error("[Sion] Failed to restart screen share:", err);
+              }
+            } else {
+              toggleScreenShare();
+            }
+          }}
+        />
       )}
     </>
   );

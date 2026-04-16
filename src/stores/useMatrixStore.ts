@@ -323,9 +323,15 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
     }
   }
 
+  // Soundboard rooms are hidden from the sidebar — users access them via the
+  // dedicated panel in the chat input. Detected by canonical alias starting
+  // with #soundboard:
+  const canonicalAlias: string = room.getCanonicalAlias?.() || "";
+  const isSoundboard = canonicalAlias.startsWith("#soundboard:");
+
   return {
     id: room.roomId,
-    name: room.name || room.getCanonicalAlias?.() || room.roomId,
+    name: room.name || canonicalAlias || room.roomId,
     topic: topic || undefined,
     icon,
     hasVoice,
@@ -334,6 +340,7 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
     lastActivity,
     isDM,
     dmUserId,
+    isSoundboard,
   };
 }
 

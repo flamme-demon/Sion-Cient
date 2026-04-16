@@ -23,7 +23,10 @@ async function syncShortcutsToBackend(mute: string, deafen: string) {
   lastSyncedShortcuts = key;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("update_shortcuts", { payload: { mute, deafen } });
+    const { loadHotkeys } = await import("../services/soundboardHotkeys");
+    const map = loadHotkeys();
+    const soundboard = Object.entries(map).map(([id, combo]) => ({ id, combo }));
+    await invoke("update_shortcuts", { payload: { mute, deafen, soundboard } });
   } catch { /* Not in Tauri */ }
 }
 
@@ -82,6 +85,24 @@ export function useKeyboardShortcuts() {
           const action = parts[0];
           if (action === "mute") debouncedMute();
           else if (action === "deafen") debouncedDeafen();
+          else if (action.startsWith("soundboard:")) {
+            // Respect the global toggle — if soundboard is disabled, hotkeys
+            // don't fire anything locally and don't broadcast.
+            if (!useSettingsStore.getState().soundboardEnabled) return;
+            const eventId = action.slice("soundboard:".length);
+            import("../services/soundboardService").then(async ({ listSounds, playSoundLocal, broadcastSound }) => {
+              const sounds = await listSounds();
+              const sound = sounds.find((s) => s.eventId === eventId);
+              if (!sound) return;
+              try {
+                await playSoundLocal(sound.mxcUrl);
+                const { useAppStore } = await import("../stores/useAppStore");
+                if (useAppStore.getState().connectedVoiceChannel) broadcastSound(sound.mxcUrl);
+              } catch (err) {
+                console.warn("[Sion] soundboard hotkey play failed:", err);
+              }
+            }).catch(() => {});
+          }
         };
 
         ws.onclose = () => {

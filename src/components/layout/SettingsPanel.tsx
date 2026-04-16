@@ -54,6 +54,8 @@ export function SettingsPanel() {
   const setAutoJoinVoice = useSettingsStore((s) => s.setAutoJoinVoice);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
   const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
+  const screenShareAudio = useSettingsStore((s) => s.screenShareAudio);
+  const setScreenShareAudio = useSettingsStore((s) => s.setScreenShareAudio);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
@@ -396,13 +398,23 @@ export function SettingsPanel() {
               </button>
             </div>
 
-            <div style={rowStyle}>
+            <div style={{ ...rowStyle, marginBottom: 14 }}>
               <div style={{ marginRight: 12 }}>
                 <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.joinMuted")}</div>
                 <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.joinMutedDesc")}</div>
               </div>
               <button onClick={() => setJoinMuted(!joinMuted)} style={toggleStyle(joinMuted)}>
                 <div style={toggleDotStyle(joinMuted)} />
+              </button>
+            </div>
+
+            <div style={rowStyle}>
+              <div style={{ marginRight: 12 }}>
+                <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.screenShareAudio")}</div>
+                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.screenShareAudioDesc")}</div>
+              </div>
+              <button onClick={() => setScreenShareAudio(!screenShareAudio)} style={toggleStyle(screenShareAudio)}>
+                <div style={toggleDotStyle(screenShareAudio)} />
               </button>
             </div>
           </div>
