@@ -708,6 +708,7 @@ export async function createOrGetDMRoom(userId: string): Promise<string> {
     if (peerMembership !== "join" && peerMembership !== "invite") {
       try {
         await client.invite(room.roomId, userId);
+        await shareHistoricKeys(room.roomId, userId);
       } catch (err) {
         console.warn(`[Sion] Failed to re-invite ${userId} to ${room.roomId}:`, err);
       }
@@ -978,9 +979,11 @@ async function fanOutPublicInvites(roomId: string): Promise<void> {
       }
     }
     for (const userId of toInvite) {
-      client.invite(roomId, userId).catch((err: unknown) => {
-        console.warn("[Sion] Failed to invite user to public channel:", userId, err);
-      });
+      client.invite(roomId, userId)
+        .then(() => shareHistoricKeys(roomId, userId))
+        .catch((err: unknown) => {
+          console.warn("[Sion] Failed to invite user to public channel:", userId, err);
+        });
     }
   } catch (err) {
     console.warn("[Sion] Failed to fan-out invites for public channel:", err);
@@ -1009,6 +1012,30 @@ export async function setRoomJoinRule(roomId: string, joinRule: "public" | "invi
 export async function inviteUser(roomId: string, userId: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.invite(roomId, userId);
+  await shareHistoricKeys(roomId, userId);
+}
+
+/**
+ * Shares our shareable Megolm session keys for this room with a newly-
+ * invited user (MSC4268). After accepting the invite, the user can decrypt
+ * historic messages we had the key for — without compromising the E2EE
+ * model (we only share what we're entitled to read).
+ *
+ * Experimental API: rust-crypto only. Silently no-ops on legacy crypto
+ * stores or older server versions.
+ */
+export async function shareHistoricKeys(roomId: string, userId: string): Promise<void> {
+  if (!matrixClient) return;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const crypto = (matrixClient as any).getCrypto?.();
+  if (!crypto?.shareRoomHistoryWithUser) return;
+  try {
+    await crypto.shareRoomHistoryWithUser(roomId, userId);
+  } catch (err) {
+    // Not fatal — the invite still succeeded, the user just won't see
+    // pre-join history.
+    console.warn("[Sion] shareRoomHistoryWithUser failed:", userId, err);
+  }
 }
 
 export async function kickUser(roomId: string, userId: string, reason?: string): Promise<void> {

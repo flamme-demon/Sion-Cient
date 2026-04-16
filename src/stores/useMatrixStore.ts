@@ -1268,6 +1268,33 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       set({ channels });
     });
 
+    // When a user joins a room we're already in, proactively share our
+    // shareable historic Megolm keys with them (MSC4268). All existing
+    // members do this in parallel, so the newcomer accumulates keys from
+    // multiple senders — maximum coverage without any admin action.
+    //
+    // Silently no-ops on clients/crypto stores that don't support MSC4268,
+    // and on non-E2EE rooms (no Megolm sessions to share).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.on(RoomMemberEvent.Membership, async (_event: any, member: any) => {
+      if (member.membership !== "join") return;
+      const myUserId = client.getUserId();
+      if (!myUserId || member.userId === myUserId) return; // skip our own join
+      const roomId = member.roomId;
+      if (!roomId) return;
+      const room = client.getRoom(roomId);
+      if (!room || room.getMyMembership() !== "join") return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const crypto = (client as any).getCrypto?.();
+      if (!crypto?.shareRoomHistoryWithUser) return;
+      try {
+        await crypto.shareRoomHistoryWithUser(roomId, member.userId);
+      } catch {
+        // Non-fatal — the member just won't see the messages whose keys we
+        // had. Other members' clients do the same share in parallel.
+      }
+    });
+
     // Auto-leave a DM when the only other member leaves it. Without this,
     // each side accumulates "ghost" 1-member rooms after the peer cleans up
     // (or simply leaves) — visually noisy, and the room stays alive
@@ -1391,7 +1418,13 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const evtId = event.getId?.();
       if (evtId) pendingDecryptedEvents.add(evtId);
 
-      if (decryptReloadTimer) clearTimeout(decryptReloadTimer);
+      // Coalesce bursts of decryption events into a single state update.
+      // Throttle (not debounce): schedule a flush at most once every 200ms.
+      // The previous debounce reset the timer on every new decryption, so
+      // during a burst at login (hundreds of events) the timer never fired
+      // until decryption calmed down, leaving rooms apparently empty on
+      // first click.
+      if (decryptReloadTimer) return;
       decryptReloadTimer = setTimeout(() => {
         decryptReloadTimer = null;
         if (pendingDecryptedEvents.size === 0) return;
@@ -1476,7 +1509,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           }
           return changed ? { messages: updated } : s;
         });
-      }, 1000);
+      }, 200);
     });
 
     // Clear old cache — v1 stored raw event IDs (thousands of signaling events).
@@ -1508,12 +1541,32 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     try {
       // Use the SDK's scrollback instead of a custom /messages fetch.
       // scrollback() uses the prev_batch token attached to the live timeline
-      // by sync, which is the correct starting point for backward
-      // pagination. A raw /messages?dir=b call without this token often
-      // returns an empty chunk (especially for freshly-joined rooms), which
-      // is why history was never showing up for late joiners in practice.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (client as any).scrollback(room, 200);
+      // by sync. The Matrix /messages endpoint returns ALL event types
+      // (state, call.member, reactions, …) in a single chunk — for voice-heavy
+      // rooms with lots of membership churn, a single 200-event page can
+      // contain zero actual messages. Loop until we have enough displayable
+      // messages or we've hit the start of the timeline.
+      // Load 30 more messages on top of whatever we already have. Works
+      // both for the initial load and subsequent scroll-up: each call
+      // expands the timeline by ~30 displayable messages, regardless of
+      // how many non-message events (state, call memberships) are in
+      // between.
+      const MESSAGES_PER_CALL = 30;
+      const MAX_ITERATIONS = 10;
+      const countMessages = () => room.getLiveTimeline().getEvents()
+        .filter((e: { getType: () => string }) => e.getType?.() === "m.room.message").length;
+      const startMessages = countMessages();
+      const target = startMessages + MESSAGES_PER_CALL;
+      let lastEventCount = room.getLiveTimeline().getEvents().length;
+      for (let i = 0; i < MAX_ITERATIONS; i++) {
+        if (countMessages() >= target) break;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (client as any).scrollback(room, 200);
+        const newCount = room.getLiveTimeline().getEvents().length;
+        // No new events → we're at the start of history.
+        if (newCount === lastEventCount) break;
+        lastEventCount = newCount;
+      }
 
       // Decrypt any encrypted events that were backfilled
       const timeline = room.getLiveTimeline().getEvents();
