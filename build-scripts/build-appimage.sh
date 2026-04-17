@@ -162,9 +162,20 @@ APPRUN
 
 chmod +x "$APPDIR/AppRun"
 
-# Build the AppImage
+# Prune unused CEF locales — Chrome ships 100+ .pak locale files, ~25 MB total.
+# Sion only supports fr and en, so keep only those two and drop the rest.
+CEF_LOCALES="$APPDIR/usr/lib/sion-client/locales"
+if [ -d "$CEF_LOCALES" ]; then
+    echo "  Pruning unused CEF locales..."
+    find "$CEF_LOCALES" -maxdepth 1 -type f -name "*.pak" \
+        ! -name "en-US.pak" ! -name "fr.pak" -delete 2>/dev/null || true
+fi
+
+# Build the AppImage with zstd compression — ~20% smaller than gzip default,
+# same decompression speed (no perceptible startup cost). xz would gain more
+# but local mksquashfs may not support it.
 mkdir -p "$OUTPUT_DIR"
-ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT_DIR/Sion_Client-${VERSION}-x86_64.AppImage"
+ARCH=x86_64 "$APPIMAGETOOL" --comp zstd "$APPDIR" "$OUTPUT_DIR/Sion_Client-${VERSION}-x86_64.AppImage"
 
 # --- Result ---
 echo ""
