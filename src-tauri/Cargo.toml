@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "0.9.8"
+version = "1.0.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -21,6 +21,11 @@ tauri-build = { version = "2", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Raw bytes ↔ f32 slice reinterpretation for the denoise IPC path — keeps
+# audio frames out of JSON serde (which plateaued the pipeline below real-time).
+# `extern_crate_alloc` exposes `pod_collect_to_vec` for the aligned bulk copy
+# from the 1-byte-aligned `Vec<u8>` delivered by Tauri into a `Vec<f32>`.
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-log = "2"
@@ -37,8 +42,37 @@ tauri-plugin-notification = "2.3.3"
 tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf", default-features = false, optional = true }
 cef = { version = "=144.1.0", default-features = false, optional = true }
 tauri-plugin-global-shortcut = "2"
+# Persists window position/size/maximised/fullscreen state across launches
+# (desktop only — mobile windows are fullscreen and managed by the OS).
+tauri-plugin-window-state = "2"
 tungstenite = "0.24"
 cpal = "0.15"
+
+# Native cursor-overlay window: the Tauri-CEF fork doesn't propagate
+# `transparent: true` to child webviews on Linux, so we bypass webview
+# entirely and paint a transparent, click-through window ourselves.
+# - `winit` creates the window (ARGB, always-on-top, no decorations, no
+#   hittest), `with_any_thread(true)` lets us spawn the event loop off the
+#   main thread so it coexists with Tauri's own runtime.
+# - `tiny-skia` does the 2D rasterisation (cursor arrows + click ripples)
+#   in pure software — no GL context, ~50-200 µs per frame for 10 cursors.
+# - `softbuffer` blits the pixmap into the native window surface.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle", "rwh_06"] }
+tiny-skia = "0.11"
+softbuffer = "0.4"
+raw-window-handle = "0.6"
+# Glyph rasteriser for the cursor name pill. Pulled in once per overlay
+# session — DejaVu Sans Bold (~700 KB) is embedded via include_bytes! so
+# we don't depend on the host having any specific font installed.
+ab_glyph = "0.2"
+
+# Noise suppression: pure-Rust RNNoise port (Jean-Marc Valin's model). Tiny
+# (~100 KB of model weights linked into the binary, no ONNX runtime), runs at
+# well under 1 ms per 10 ms frame, and preserves voice substantially better
+# than DFN3-LL's aggressive attenuation. Expects samples in i16 range
+# ([-32768, 32767] as f32) — we scale in/out of the [-1, 1] WebCodecs range
+# inside the worker.
+nnnoiseless = "0.5"
 
 # Linux-only dependencies (rdev for evdev keyboard capture)
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -51,6 +85,17 @@ jni = "0.21"
 default = ["cef"]
 cef = ["tauri/cef", "tauri-runtime-cef", "dep:cef"]
 
+# Compile denoise hot path in release mode even during `cargo run`. nnnoiseless
+# itself is tiny, but its transitive `rustfft` dominates per-frame cost and
+# drops ~10× in debug builds. serde_json is used on other IPC commands and
+# benefits from the same treatment.
+[profile.dev.package.nnnoiseless]
+opt-level = 3
+[profile.dev.package.rustfft]
+opt-level = 3
+[profile.dev.package.serde_json]
+opt-level = 3
+
 # Patches CEF — nécessaire pour le build desktop
 # Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive le CEF
 [patch.crates-io]
@@ -61,3 +106,10 @@ tauri-runtime = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
 tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
 tauri-utils = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
 tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "a9525cf" }
+
+# Vendored softbuffer with the Wayland buffer format patched from
+# `Xrgb8888` to `Argb8888`. Without this, the cursor-overlay window
+# appears as an opaque black rectangle on KDE/GNOME Wayland because the
+# compositor discards the alpha bits softbuffer writes. See
+# vendor-softbuffer/src/backends/wayland/buffer.rs for the 2-line diff.
+softbuffer = { path = "vendor-softbuffer" }

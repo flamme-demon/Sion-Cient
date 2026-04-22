@@ -711,7 +711,8 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
         maxWidth: '70%',
         minWidth: 0,
       }}>
-        {/* Nom + heure */}
+        {/* Nom seul (Telegram-style: l'heure est rendue à l'intérieur de
+            chaque bulle, pas en tête de groupe). */}
         {showHeader && (
           <div style={{
             display: 'flex',
@@ -730,7 +731,6 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
                 {message.user}
               </span>
             </span>
-            <span style={{ fontSize: 10, color: 'var(--color-outline)' }}>{message.time}</span>
           </div>
         )}
 
@@ -741,7 +741,11 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
           borderRadius: isOwnMessage
             ? (showHeader ? '20px 20px 4px 20px' : '20px 4px 4px 20px')
             : (showHeader ? '20px 20px 20px 4px' : '4px 20px 20px 4px'),
-          padding: message.replyTo ? '8px 8px 10px 8px' : '10px 16px',
+          // Extra bottom padding reserves a quiet band for the absolute-
+          // positioned timestamp below. Horizontal padding is untouched so
+          // text still ends at the normal right edge — the timestamp sits
+          // below in the dedicated 20px strip and never overlaps content.
+          padding: message.replyTo ? '8px 8px 20px 8px' : '10px 16px 20px 16px',
           fontSize: 14,
           lineHeight: 1.55,
           wordBreak: 'break-word' as const,
@@ -749,6 +753,7 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
           maxWidth: '100%',
           boxSizing: 'border-box' as const,
           overflow: 'hidden',
+          position: 'relative',
         }}>
           {/* Reply quote — Telegram-style, inside bubble */}
           {message.replyTo && (() => {
@@ -845,6 +850,22 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
             </div>
           )}
           </div>
+          {/* Telegram-style in-bubble timestamp: absolute bottom-right, in
+              the padding band reserved above. `pointerEvents: none` keeps
+              the timestamp from interfering with clicks on the bubble. */}
+          <span style={{
+            position: 'absolute',
+            bottom: 4,
+            right: 10,
+            fontSize: 10,
+            color: isOwnMessage ? 'var(--color-on-primary-container)' : 'var(--color-outline)',
+            opacity: 0.65,
+            userSelect: 'none',
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+          }}>
+            {message.time}
+          </span>
         </div>
 
         {/* Reactions display */}

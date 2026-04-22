@@ -1,5 +1,6 @@
 import { getMatrixClient, findSoundboardRoom, uploadFile } from "./matrixService";
-import { getCurrentRoom } from "./livekitService";
+import { getCurrentRoom, setPlayingSound } from "./livekitService";
+import { useAppStore } from "../stores/useAppStore";
 
 export interface SoundEntry {
   eventId: string;
@@ -314,7 +315,6 @@ export async function playSoundLocal(mxcUrl: string): Promise<void> {
   // Respect the deafen state — if the user is sourdine, they don't want to
   // hear anything, including their own soundboard triggers. Broadcast still
   // happens independently so other participants hear it.
-  const { useAppStore } = await import("../stores/useAppStore");
   if (useAppStore.getState().isDeafened) return;
 
   const url = await resolveBlobUrl(mxcUrl);
@@ -344,12 +344,25 @@ const afkDecoder = new TextDecoder();
  * Broadcasts a play command to all participants in the currently connected
  * LiveKit voice channel. Does nothing if not connected.
  * Remote peers decide whether to play based on their own settings.
+ *
+ * The payload carries the emoji (fallback "🔊") and duration so receivers can
+ * render a "now playing" badge on the sender's avatar without having to
+ * resolve the sound from their local soundboard cache first.
  */
-export function broadcastSound(mxcUrl: string): void {
+export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs: number | null): void {
   const room = getCurrentRoom();
   if (!room) return;
+  const resolvedEmoji = emoji || "🔊";
+  const resolvedDuration = durationMs ?? 3000;
+  // Local "now playing" badge on own avatar — mirrors what remote peers will
+  // show when they receive the broadcast.
+  setPlayingSound(room.localParticipant.identity, resolvedEmoji, resolvedDuration);
   try {
-    const payload = afkEncoder.encode(JSON.stringify({ mxc: mxcUrl }));
+    const payload = afkEncoder.encode(JSON.stringify({
+      mxc: mxcUrl,
+      emoji: resolvedEmoji,
+      duration: resolvedDuration,
+    }));
     room.localParticipant.publishData(payload, { reliable: true, topic: AFK_LIKE_TOPIC }).catch((err) => {
       console.warn("[Sion] soundboard broadcast failed:", err);
     });
@@ -364,10 +377,13 @@ export const SOUNDBOARD_TOPIC = AFK_LIKE_TOPIC;
  * Handles a data-channel payload for the soundboard topic. Called by the
  * LiveKit DataReceived listener in livekitService.
  */
-export async function handleRemoteBroadcast(payload: Uint8Array): Promise<void> {
+export async function handleRemoteBroadcast(payload: Uint8Array, senderIdentity: string): Promise<void> {
   try {
-    const data = JSON.parse(afkDecoder.decode(payload)) as { mxc?: string };
+    const data = JSON.parse(afkDecoder.decode(payload)) as { mxc?: string; emoji?: string; duration?: number };
     if (!data.mxc) return;
+    // Badge always renders (independent of soundboardEnabled) — receivers
+    // who disabled the soundboard still want to see who's triggering sounds.
+    setPlayingSound(senderIdentity, data.emoji || "🔊", data.duration ?? 3000);
     const { useSettingsStore } = await import("../stores/useSettingsStore");
     if (!useSettingsStore.getState().soundboardEnabled) return;
     await playSoundLocal(data.mxc);
@@ -380,6 +396,7 @@ export async function handleRemoteBroadcast(payload: Uint8Array): Promise<void> 
  * Plays a short error buzzer (used when a sound has been redacted).
  */
 export function playErrorBuzzer(): void {
+  if (useAppStore.getState().isDeafened) return;
   try {
     const ctx = new AudioContext();
     const now = ctx.currentTime;

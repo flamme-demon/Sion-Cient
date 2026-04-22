@@ -6,9 +6,13 @@ import "./index.css";
 import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
 import { installCefAudioShim } from "./services/cefAudioShim";
+import { installDenoiseShim } from "./services/denoiseShim";
 
-// Override enumerateDevices/getUserMedia in CEF so WebRTC sees real devices
-installCefAudioShim().catch(() => {});
+// Override enumerateDevices/getUserMedia in CEF so WebRTC sees real devices.
+// Denoise shim wraps getUserMedia *after* cefAudioShim so both chains compose.
+installCefAudioShim().catch(() => {}).finally(() => {
+  installDenoiseShim();
+});
 
 // Intercept all clicks on external links to open in default browser (Tauri/CEF)
 document.addEventListener("click", (e) => {

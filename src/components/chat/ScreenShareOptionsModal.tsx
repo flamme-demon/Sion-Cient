@@ -29,9 +29,11 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
   const resolution = useSettingsStore((s) => s.screenShareResolution);
   const framerate = useSettingsStore((s) => s.screenShareFramerate);
   const audio = useSettingsStore((s) => s.screenShareAudio);
+  const cursorOverlay = useSettingsStore((s) => s.screenShareCursorOverlay);
   const setResolution = useSettingsStore((s) => s.setScreenShareResolution);
   const setFramerate = useSettingsStore((s) => s.setScreenShareFramerate);
   const setAudio = useSettingsStore((s) => s.setScreenShareAudio);
+  const setCursorOverlay = useSettingsStore((s) => s.setScreenShareCursorOverlay);
 
   return (
     <div
@@ -122,6 +124,28 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
             onChange={(e) => setAudio(e.target.checked)}
           />
           {t("screenShare.audio")}
+        </label>
+
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 10px',
+          background: 'var(--color-surface-container-high)',
+          borderRadius: 10,
+          cursor: 'pointer',
+          fontSize: 13,
+          color: 'var(--color-on-surface)',
+        }}>
+          <input
+            type="checkbox"
+            checked={cursorOverlay}
+            onChange={(e) => setCursorOverlay(e.target.checked)}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span>{t("screenShare.cursorOverlay", { defaultValue: "Voir les curseurs des viewers" })}</span>
+            <span style={{ fontSize: 11, color: 'var(--color-outline)' }}>
+              {t("screenShare.cursorOverlayDesc", { defaultValue: "Affiche les curseurs/clics des viewers sur ton écran. Activable même en cours de partage." })}
+            </span>
+          </div>
         </label>
 
         <div style={{ fontSize: 11, color: 'var(--color-outline)', lineHeight: 1.4 }}>

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as livekitService from "../services/livekitService";
+import * as matrixService from "../services/matrixService";
 import { playMute, playUnmute, playDeafen, playUndeafen } from "../services/soundService";
 
 // Timestamp at which the app session started. Used as a cutoff for unread
@@ -32,6 +33,11 @@ interface AppState {
   isMuted: boolean;
   isDeafened: boolean;
   isScreenSharing: boolean;
+  /** Set to true when the user requested "Share audio" but the native OS
+   *  picker didn't attach an audio track (they unchecked the box, or the
+   *  platform can't capture system audio for that source — macOS whole-screen,
+   *  Firefox, etc.). Rendered as an inline banner next to the Stop button. */
+  screenShareAudioWarning: boolean;
   showAdmin: boolean;
   showSettings: boolean;
   showAccountPanel: boolean;
@@ -96,6 +102,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isMuted: false,
   isDeafened: false,
   isScreenSharing: false,
+  screenShareAudioWarning: false,
   showAdmin: false,
   showSettings: false,
   showAccountPanel: false,
@@ -124,6 +131,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });
     newMuted ? playMute() : playUnmute();
+    // Mirror into the call.member state event so clients in other voice
+    // channels see our mute indicator. Fire-and-forget — the publish is
+    // debounced and a failure is purely cosmetic for those other clients.
+    matrixService.publishLocalVoiceState({ muted: newMuted });
     try {
       await livekitService.toggleMicrophone(!newMuted);
     } catch (err) {
@@ -135,6 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isDeafened: newDeafened });
     newDeafened ? playDeafen() : playUndeafen();
     livekitService.setDeafened(newDeafened);
+    matrixService.publishLocalVoiceState({ deafened: newDeafened });
     // Deafen also mutes the mic
     if (newDeafened && !get().isMuted) {
       get().toggleMute();
@@ -154,7 +166,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings, showAdmin: s.showSettings ? s.showAdmin : false })),
   toggleAccountPanel: () => set((s) => ({ showAccountPanel: !s.showAccountPanel })),
   toggleMemberPanel: () => set((s) => ({ showMemberPanel: !s.showMemberPanel, showSoundboardPanel: false })),
-  toggleSoundboardPanel: () => set((s) => ({ showSoundboardPanel: !s.showSoundboardPanel, showMemberPanel: false })),
+  toggleSoundboardPanel: () => set((s) => {
+    const nextOpen = !s.showSoundboardPanel;
+    // Persist the open/closed state so the panel restores on relaunch.
+    // Lazy import keeps useAppStore free of the persisted-settings module.
+    import("./useSettingsStore").then(({ useSettingsStore }) => {
+      useSettingsStore.getState().setSoundboardOpenAtLaunch(nextOpen);
+    }).catch(() => { /* ignore */ });
+    return { showSoundboardPanel: nextOpen, showMemberPanel: false };
+  }),
   fileError: null,
   kickMessage: null,
   kickedFromRoom: null,

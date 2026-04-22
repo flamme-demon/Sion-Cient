@@ -77,7 +77,12 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
 
   return (
     <div
-      onClick={onClose}
+      // Backdrop is non-dismissive: users have complained that the upload
+      // / edit dialog vanished the moment they clicked slightly outside —
+      // especially disruptive when dragging a file, selecting text in the
+      // category field, or interacting with native file pickers that fire
+      // click events on their dismiss. The close button inside the modal
+      // stays available for intentional cancellation.
       style={{
         position: 'fixed',
         inset: 0,

@@ -3,7 +3,17 @@
  * Pas de fichiers audio externes nécessaires.
  */
 
+import { useAppStore } from "../stores/useAppStore";
+
 let audioCtx: AudioContext | null = null;
+
+// Notification tones (incoming messages, pokes, remote join/leave) are
+// suppressed when the user is deafened. Action-feedback tones
+// (mute/unmute/deafen/undeafen toggles) always play — they confirm the user's
+// own action.
+function isDeafened(): boolean {
+  return useAppStore.getState().isDeafened;
+}
 
 function getCtx(): AudioContext {
   if (!audioCtx) {
@@ -65,6 +75,7 @@ export function playUndeafen() {
 
 /** Son de message reçu — "blop" court et doux */
 export function playMessageReceived() {
+  if (isDeafened()) return;
   playTone(800, 0.08, 0.08, "sine");
   setTimeout(() => playTone(1000, 0.06, 0.06, "sine"), 50);
 }
@@ -72,6 +83,7 @@ export function playMessageReceived() {
 /** Son de poke — mini fanfare "tada !" style trompette (arpège do-mi-sol).
  *  Sawtooth pour un timbre cuivré sans échantillon audio. */
 export function playPoke() {
+  if (isDeafened()) return;
   const vol = 0.08;
   playTone(523, 0.10, vol, "sawtooth");                             // C5 — ta
   setTimeout(() => playTone(659, 0.10, vol, "sawtooth"), 90);       // E5 — da
@@ -80,6 +92,7 @@ export function playPoke() {
 
 /** Son de connexion vocale — accord montant */
 export function playVoiceJoin() {
+  if (isDeafened()) return;
   playTone(440, 0.12, 0.1);
   setTimeout(() => playTone(554, 0.12, 0.1), 80);
   setTimeout(() => playTone(659, 0.15, 0.1), 160);
@@ -87,6 +100,7 @@ export function playVoiceJoin() {
 
 /** Son de déconnexion vocale — accord descendant */
 export function playVoiceLeave() {
+  if (isDeafened()) return;
   playTone(659, 0.12, 0.1);
   setTimeout(() => playTone(554, 0.12, 0.1), 80);
   setTimeout(() => playTone(440, 0.15, 0.1), 160);

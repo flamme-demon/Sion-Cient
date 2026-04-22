@@ -528,6 +528,62 @@ export async function leaveRoom(roomId: string) {
   return matrixClient.leave(roomId);
 }
 
+// Tracks the rooms where we're actively in a voice call, with the
+// parameters needed to rewrite the call.member state event when our
+// mute/deafen state changes. Sion can only be connected to one voice room
+// at a time (the join flow tears down any previous session), but the Map
+// keeps this correct if that invariant ever changes.
+const callMemberCache = new Map<string, { livekitServiceUrl: string; livekitAlias: string }>();
+
+// Local mute/deafen snapshot, embedded into every call.member write so
+// other clients (including ours, in different rooms) can display it in
+// their sidebar without a LiveKit data-channel connection to us. This is
+// the cross-channel visibility path — the LK data-channel path still
+// exists and remains canonical for peers inside the same voice room.
+let localVoiceState: { muted: boolean; deafened: boolean } = { muted: false, deafened: false };
+
+// Debounce the state-event rewrite so a user mashing M doesn't get
+// rate-limited by the homeserver. Synapse/Continuwuity's per-room state
+// event write cap is low (a few per minute) — 400 ms absorbs any human
+// burst while keeping the UI feel responsive.
+const PUBLISH_DEBOUNCE_MS = 400;
+let publishTimer: ReturnType<typeof setTimeout> | null = null;
+
+function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: string, deviceId: string) {
+  return {
+    application: "m.call",
+    call_id: "",
+    scope: "m.room",
+    device_id: deviceId,
+    expires: 7200000,
+    focus_active: { type: "livekit", focus_selection: "oldest_membership" },
+    foci_preferred: [
+      { livekit_alias: livekitAlias, livekit_service_url: livekitServiceUrl, type: "livekit" },
+    ],
+    "m.call.intent": "audio",
+    // Sion-specific: broadcast the user's current mute/deafen state via the
+    // already-always-visible call.member state event. Other clients in ANY
+    // room read this to show mute/deafen on users who are in a different
+    // voice channel than them. Unknown fields are preserved under Matrix
+    // spec rules and ignored by MatrixRTC-only clients (Element Call etc.).
+    sion_muted: localVoiceState.muted,
+    sion_deafened: localVoiceState.deafened,
+  };
+}
+
+async function writeCallMember(roomId: string): Promise<void> {
+  if (!matrixClient) return;
+  const cache = callMemberCache.get(roomId);
+  if (!cache) return;
+  const userId = matrixClient.getUserId();
+  const deviceId = matrixClient.getDeviceId() || "";
+  if (!userId) return;
+  const stateKey = `_${userId}_${deviceId}_m.call`;
+  const content = buildCallMemberContent(cache.livekitServiceUrl, cache.livekitAlias, deviceId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendStateEvent(roomId, "org.matrix.msc3401.call.member" as any, content, stateKey);
+}
+
 /**
  * Announce presence in a MatrixRTC call by sending a call.member state event (MSC4143 per-device format).
  * Element does this before connecting to LiveKit so other clients see us in the call.
@@ -539,25 +595,10 @@ export async function sendCallMemberEvent(
 ): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const userId = matrixClient.getUserId();
-  const deviceId = matrixClient.getDeviceId() || "";
   if (!userId) throw new Error("No user ID");
 
-  const stateKey = `_${userId}_${deviceId}_m.call`;
-  const content = {
-    application: "m.call",
-    call_id: "",
-    scope: "m.room",
-    device_id: deviceId,
-    expires: 7200000,
-    focus_active: { type: "livekit", focus_selection: "oldest_membership" },
-    foci_preferred: [
-      { livekit_alias: livekitAlias, livekit_service_url: livekitServiceUrl, type: "livekit" },
-    ],
-    "m.call.intent": "audio",
-  };
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await matrixClient.sendStateEvent(roomId, "org.matrix.msc3401.call.member" as any, content, stateKey);
+  callMemberCache.set(roomId, { livekitServiceUrl, livekitAlias });
+  await writeCallMember(roomId);
 }
 
 /**
@@ -569,9 +610,46 @@ export async function removeCallMemberEvent(roomId: string): Promise<void> {
   const deviceId = matrixClient.getDeviceId() || "";
   if (!userId) throw new Error("No user ID");
 
+  // Drop the cache first so any pending debounced write-on-mute triggered
+  // during the leave path becomes a no-op (the timer's writeCallMember call
+  // early-returns when the entry is missing).
+  callMemberCache.delete(roomId);
+  // Reset local snapshot so a reconnect starts fresh, not with stale bits
+  // from the previous session.
+  localVoiceState = { muted: false, deafened: false };
+
   const stateKey = `_${userId}_${deviceId}_m.call`;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendStateEvent(roomId, "org.matrix.msc3401.call.member" as any, {}, stateKey);
+}
+
+/**
+ * Publish a change to the local user's mute/deafen state so clients in
+ * *other* voice channels (or none at all) can still show the correct
+ * indicator in their sidebar. Debounced to avoid state-event rate limits
+ * on rapid toggles. No-op when we're not currently in a voice call — the
+ * write only happens against rooms in `callMemberCache`.
+ */
+export function publishLocalVoiceState(state: { muted?: boolean; deafened?: boolean }): void {
+  let changed = false;
+  if (state.muted !== undefined && state.muted !== localVoiceState.muted) {
+    localVoiceState.muted = state.muted;
+    changed = true;
+  }
+  if (state.deafened !== undefined && state.deafened !== localVoiceState.deafened) {
+    localVoiceState.deafened = state.deafened;
+    changed = true;
+  }
+  if (!changed) return;
+  if (publishTimer) clearTimeout(publishTimer);
+  publishTimer = setTimeout(() => {
+    publishTimer = null;
+    for (const roomId of callMemberCache.keys()) {
+      writeCallMember(roomId).catch((err) => {
+        console.warn("[Sion] publishLocalVoiceState failed:", err);
+      });
+    }
+  }, PUBLISH_DEBOUNCE_MS);
 }
 
 export async function sendTextMessage(roomId: string, body: string) {
@@ -1133,22 +1211,52 @@ export function getServerAdminUserIds(): string[] {
 
 export const SOUNDBOARD_ALIAS_LOCAL = "soundboard";
 
+// Module-level cache: room aliases never change once resolved, so we hold
+// the result for the lifetime of the session. Without this, callers like
+// SoundboardPanel's `Room.timeline` listener fire `/directory/room/...`
+// once per inbound timeline event — easily 1000+ requests during initial
+// scrollback in voice-heavy rooms, which saturates CEF's connection pool
+// (`ERR_INSUFFICIENT_RESOURCES`). Cached by `domain` so a homeserver
+// switch invalidates correctly.
+let soundboardRoomCache: { domain: string; roomId: string | null } | null = null;
+let soundboardLookupInflight: Promise<string | null> | null = null;
+
 /**
  * Returns the soundboard room id if the alias resolves, otherwise null.
- * Uses the current homeserver's domain so we never hardcode a host.
+ * Uses the current homeserver's domain so we never hardcode a host. Result
+ * is cached for the session and de-duplicated across concurrent callers.
  */
 export async function findSoundboardRoom(): Promise<string | null> {
   if (!matrixClient) return null;
   const domain = matrixClient.getDomain();
   if (!domain) return null;
-  const alias = `#${SOUNDBOARD_ALIAS_LOCAL}:${domain}`;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res: any = await matrixClient.getRoomIdForAlias(alias);
-    return res?.room_id ?? null;
-  } catch {
-    return null;
+  if (soundboardRoomCache && soundboardRoomCache.domain === domain) {
+    return soundboardRoomCache.roomId;
   }
+  if (soundboardLookupInflight) return soundboardLookupInflight;
+  const alias = `#${SOUNDBOARD_ALIAS_LOCAL}:${domain}`;
+  soundboardLookupInflight = (async () => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res: any = await matrixClient!.getRoomIdForAlias(alias);
+      const roomId = res?.room_id ?? null;
+      soundboardRoomCache = { domain, roomId };
+      return roomId;
+    } catch {
+      // Don't cache transient failures (network, rate-limit) — we want the
+      // next call to retry. Only persist on success or known-not-found.
+      return null;
+    } finally {
+      soundboardLookupInflight = null;
+    }
+  })();
+  return soundboardLookupInflight;
+}
+
+/** Drop the cached lookup — call when the soundboard room is created so
+ *  the next `findSoundboardRoom()` re-resolves. */
+export function invalidateSoundboardRoomCache(): void {
+  soundboardRoomCache = null;
 }
 
 export interface SoundboardCreationResult {
@@ -1204,6 +1312,7 @@ export async function createOrSyncSoundboardRoom(): Promise<SoundboardCreationRe
     } as never,
   });
 
+  invalidateSoundboardRoomCache();
   const invited = await inviteAllServerUsers(room_id);
   return { roomId: room_id, alreadyExisted: false, invitedCount: invited };
 }

@@ -149,6 +149,11 @@ body {
   50% { box-shadow: 0 0 8px 3px rgba(125, 220, 135, 0.12); }
 }
 
+@keyframes sound-badge-pop {
+  from { transform: scale(0.2); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }

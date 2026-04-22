@@ -1,6 +1,12 @@
 #[cfg(target_os = "linux")]
 use rdev::Key;
 use tauri::Emitter;
+
+mod denoise;
+#[cfg(not(target_os = "android"))]
+mod cursor_overlay;
+#[cfg(not(target_os = "android"))]
+mod system_audio;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 use serde::Serialize;
@@ -987,14 +993,21 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, start_voice_service, stop_voice_service]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, exit_app, start_voice_service, stop_voice_service]);
+        .invoke_handler(tauri::generate_handler![open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, exit_app, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix]);
 
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    // Persist window position/size/maximised/fullscreen across app launches.
+    // Desktop only — Android windows are OS-managed fullscreen views, the
+    // plugin has nothing to persist there. The plugin hooks Tauri's window
+    // events under the hood; no JS glue needed for the default behaviour.
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 
     let builder = builder
             .plugin(tauri_plugin_notification::init())
@@ -1094,6 +1107,15 @@ pub fn run() {
     // handler is gated to non-Android targets.
     #[cfg(not(target_os = "android"))]
     let builder = builder.on_window_event(|window, event| {
+        // Only the main window needs the graceful-shutdown dance. Secondary
+        // windows (e.g. the cursor-overlay created by the JS side) must be
+        // allowed to close immediately — delaying them here blocks the
+        // JS-side `closeCursorOverlay()` path and emitting
+        // `sion-graceful-shutdown` from any window close would also tear
+        // down the voice session just because the overlay was closed.
+        if window.label() != "main" {
+            return;
+        }
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let win = window.clone();

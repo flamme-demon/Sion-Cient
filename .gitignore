@@ -29,3 +29,10 @@ Thumbs.db
 sion-release.keystore
 keystore.properties
 package-for-windows.sh
+
+# DeepFilterNet models (fetched via ./build-scripts/fetch-dfn-models.sh)
+src-tauri/resources/denoise/
+src-tauri/android/libonnxruntime/
+
+# ONNX Runtime native libs (fetched via ./build-scripts/fetch-onnxruntime-desktop.sh)
+src-tauri/lib/

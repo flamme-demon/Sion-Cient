@@ -9,6 +9,7 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import { useClickOutside } from "../../hooks/useClickOutside";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
+import { getRawUserMedia } from "../../services/denoiseShim";
 
 
 type SettingsTab = "general" | "audio" | "chat" | "shortcuts" | "advanced";
@@ -30,9 +31,12 @@ export function SettingsPanel() {
   const muteShortcut = useSettingsStore((s) => s.muteShortcut);
   const deafenShortcut = useSettingsStore((s) => s.deafenShortcut);
   const linkPreviews = useSettingsStore((s) => s.linkPreviews);
-  const noiseSuppression = useSettingsStore((s) => s.noiseSuppression);
   const echoCancellation = useSettingsStore((s) => s.echoCancellation);
   const autoGainControl = useSettingsStore((s) => s.autoGainControl);
+  const aiNoiseSuppression = useSettingsStore((s) => s.aiNoiseSuppression);
+  const setAiNoiseSuppression = useSettingsStore((s) => s.setAiNoiseSuppression);
+  const aiNoiseSuppressionMix = useSettingsStore((s) => s.aiNoiseSuppressionMix);
+  const setAiNoiseSuppressionMix = useSettingsStore((s) => s.setAiNoiseSuppressionMix);
   const audioQuality = useSettingsStore((s) => s.audioQuality);
   const setMutedSpeakAlert = useSettingsStore((s) => s.setMutedSpeakAlert);
   const setMicThreshold = useSettingsStore((s) => s.setMicThreshold);
@@ -40,7 +44,6 @@ export function SettingsPanel() {
   const setMuteShortcut = useSettingsStore((s) => s.setMuteShortcut);
   const setDeafenShortcut = useSettingsStore((s) => s.setDeafenShortcut);
   const setLinkPreviews = useSettingsStore((s) => s.setLinkPreviews);
-  const setNoiseSuppression = useSettingsStore((s) => s.setNoiseSuppression);
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
@@ -88,9 +91,13 @@ export function SettingsPanel() {
   const startMicTest = useCallback(async () => {
     stopMicTest();
     try {
-      // CefAudioShim handles PulseAudio device IDs transparently in getUserMedia
+      // CefAudioShim handles PulseAudio device IDs transparently in getUserMedia.
+      // `getRawUserMedia` skips the denoise wrapping so the analyser sees the
+      // real microphone track (a MediaStreamTrackGenerator doesn't reliably
+      // feed Web Audio's AnalyserNode, and wrapping would also cancel the
+      // active LiveKit denoise pump as a side-effect).
       const constraints: MediaStreamConstraints = { audio: audioInputDevice ? { deviceId: { exact: audioInputDevice } } : true };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await getRawUserMedia(constraints);
       micStreamRef.current = stream;
       const ctx = new AudioContext();
       micCtxRef.current = ctx;
@@ -453,12 +460,40 @@ export function SettingsPanel() {
             <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               {t("settings.audioProcessing")}
             </div>
+            {/* Noise suppression toggle + its strength slider, grouped
+                together so the slider sits directly under its toggle. */}
+            <div style={{ ...rowStyle, marginBottom: 14 }}>
+              <div style={{ marginRight: 12 }}>
+                <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.noiseSuppression")}</div>
+                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.noiseSuppressionDesc")}</div>
+              </div>
+              <button onClick={() => setAiNoiseSuppression(!aiNoiseSuppression)} style={toggleStyle(aiNoiseSuppression)}><div style={toggleDotStyle(aiNoiseSuppression)} /></button>
+            </div>
+            {aiNoiseSuppression && (
+              <div style={{ marginBottom: 14, paddingLeft: 12, borderLeft: '2px solid var(--color-outline-variant)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.aiNoiseSuppressionMix")}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{Math.round(aiNoiseSuppressionMix * 100)}%</div>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round(aiNoiseSuppressionMix * 100)}
+                  onChange={(e) => setAiNoiseSuppressionMix(parseInt(e.target.value, 10) / 100)}
+                  style={{ width: '100%' }}
+                />
+                <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 4 }}>
+                  {t("settings.aiNoiseSuppressionMixDesc")}
+                </div>
+              </div>
+            )}
             {[
-              { label: t("settings.noiseSuppression"), desc: t("settings.noiseSuppressionDesc"), value: noiseSuppression, toggle: () => { setNoiseSuppression(!noiseSuppression); livekitService.updateAudioProcessing({ noiseSuppression: !noiseSuppression }); } },
               { label: t("settings.echoCancellation"), desc: t("settings.echoCancellationDesc"), value: echoCancellation, toggle: () => { setEchoCancellation(!echoCancellation); livekitService.updateAudioProcessing({ echoCancellation: !echoCancellation }); } },
               { label: t("settings.autoGainControl"), desc: t("settings.autoGainControlDesc"), value: autoGainControl, toggle: () => { setAutoGainControl(!autoGainControl); livekitService.updateAudioProcessing({ autoGainControl: !autoGainControl }); } },
-            ].map((item, i) => (
-              <div key={i} style={{ ...rowStyle, marginBottom: i < 2 ? 14 : 0 }}>
+            ].map((item, i, arr) => (
+              <div key={i} style={{ ...rowStyle, marginBottom: i < arr.length - 1 ? 14 : 0 }}>
                 <div style={{ marginRight: 12 }}>
                   <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{item.label}</div>
                   <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{item.desc}</div>

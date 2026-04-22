@@ -98,6 +98,7 @@ export function ChatHeader() {
   const activeChannel = useAppStore((s) => s.activeChannel);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const isScreenSharing = useAppStore((s) => s.isScreenSharing);
+  const screenShareAudioWarning = useAppStore((s) => s.screenShareAudioWarning);
   const toggleScreenShare = useAppStore((s) => s.toggleScreenShare);
   const setMobileView = useAppStore((s) => s.setMobileView);
   const channels = useMatrixStore((s) => s.channels);
@@ -295,6 +296,22 @@ export function ChatHeader() {
         </div>
         {connectedVoice && !isMobile && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {isScreenSharing && screenShareAudioWarning && (
+              <span
+                title={t("screenShare.audioNotCaptured", { defaultValue: "Le son du partage n'a pas été capturé (case 'Partager le son' décochée ou plateforme non supportée)." })}
+                style={{
+                  fontSize: 12,
+                  padding: '4px 10px',
+                  borderRadius: 12,
+                  background: 'var(--color-error-container)',
+                  color: 'var(--color-error)',
+                  cursor: 'help',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >⚠ {t("screenShare.noAudio", { defaultValue: "Sans son" })}</span>
+            )}
             {isScreenSharing && (
               <button
                 onClick={() => setShowScreenShareOptions(true)}

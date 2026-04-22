@@ -39,6 +39,13 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
   const lastAlertRef = useRef(0);
   const onSpeakRef = useRef(onSpeakWhileMuted);
   onSpeakRef.current = onSpeakWhileMuted;
+  // Ref mirror of the threshold so the rAF loop picks up slider changes
+  // without tearing down getUserMedia/AudioContext. Dragging the slider
+  // previously re-ran the whole effect (stop tracks → ctx.close() → new
+  // getUserMedia), taking ~200–500 ms each tick and making the setting
+  // feel "ignored until reload".
+  const micThresholdRef = useRef(micThreshold);
+  micThresholdRef.current = micThreshold;
 
   const triggerAlert = useCallback(() => {
     const now = Date.now();
@@ -76,7 +83,7 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
             sum += dataArray[i] * dataArray[i];
           }
           const rms = Math.sqrt(sum / dataArray.length);
-          if (rms > micThreshold) {
+          if (rms > micThresholdRef.current) {
             triggerAlert();
           }
           animId = requestAnimationFrame(check);
@@ -94,5 +101,8 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
       if (stream) stream.getTracks().forEach((t) => t.stop());
       if (audioCtx) audioCtx.close();
     };
-  }, [isMuted, isDeafened, connectedVoice, mutedSpeakAlert, micThreshold, triggerAlert]);
+    // `micThreshold` intentionally omitted — the ref above carries live
+    // updates without re-running the whole capture.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMuted, isDeafened, connectedVoice, mutedSpeakAlert, triggerAlert]);
 }

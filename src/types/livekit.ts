@@ -16,4 +16,7 @@ export interface ParticipantInfo {
   isDeafened: boolean;
   audioLevel: number;
   connectionQuality: ConnectionQuality;
+  /** Emoji currently displayed on the avatar while a soundboard sound plays.
+   *  Falls back to 🔊 when the sound has no emoji. Undefined when idle. */
+  playingSoundEmoji?: string;
 }

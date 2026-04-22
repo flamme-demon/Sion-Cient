@@ -136,14 +136,22 @@ export function ChatInput() {
     };
   }, [showEmojiPicker]);
 
+  const autoGrow = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, []);
+
   // Pre-fill input when editing a message
   useEffect(() => {
     if (editingMessage) {
       setInputText(editingMessage.text);
       setHistoryIndex(-1);
       textareaRef.current?.focus();
+      requestAnimationFrame(() => autoGrow());
     }
-  }, [editingMessage]);
+  }, [editingMessage, autoGrow]);
 
   // Focus textarea when replying to a message
   useEffect(() => {
@@ -151,13 +159,6 @@ export function ChatInput() {
       textareaRef.current?.focus();
     }
   }, [replyingTo]);
-
-  const autoGrow = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, []);
 
   const handleSend = async () => {
     if (!inputText.trim() && pendingFiles.length === 0) return;

@@ -196,6 +196,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           muted,
           deafened,
           connectionQuality: p.connectionQuality,
+          playingSoundEmoji: p.playingSoundEmoji,
         };
       });
   }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened, matrixConnected]);
@@ -320,7 +321,7 @@ export function ChannelItem({ channel }: { channel: Channel }) {
                   cursor: 'default',
                 }}
               >
-                <UserAvatar name={u.name} speaking={isConnectedChannel && u.speaking} size="sm" avatarUrl={u.avatarUrl || undefined} />
+                <UserAvatar name={u.name} speaking={isConnectedChannel && u.speaking} size="sm" avatarUrl={u.avatarUrl || undefined} playingSoundEmoji={isConnectedChannel ? u.playingSoundEmoji : undefined} />
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, color: roleColor(u.role), fontWeight: u.role !== "user" ? 600 : 400, opacity: u.deafened ? 0.55 : 0.8 }}>
                   {u.name}
                 </span>

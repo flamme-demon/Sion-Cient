@@ -6,14 +6,18 @@
  * at a fixed interval and applies hysteresis to avoid flickering.
  */
 
-const POLL_INTERVAL_MS = 50;
+const POLL_INTERVAL_MS = 30;
 const FFT_SIZE = 512;
 
-// RMS thresholds with hysteresis. Calibrated for LiveKit-processed audio
-// (noise suppression + AGC), which compresses voice samples to ~0.001-0.01
-// even at normal speaking volume. Empirical from production logs.
-const RMS_START = 0.003;
-const RMS_SILENCE = 0.0015;
+// RMS thresholds with hysteresis. Tuned empirically for a mix of
+// configurations: AGC-on voices compress to ~0.005-0.01, but raw (no-AGC)
+// voices at moderate speaking volume land around 0.002-0.005 and whispers
+// can dip to ~0.001. The previous 0.003 start threshold missed the softer
+// remote speakers entirely — you'd hear them clearly but their halo never
+// lit up. Lowered while keeping a wide hysteresis gap so ambient noise
+// (fans, hum, keyboard clicks ~0.0005) still doesn't latch "speaking".
+const RMS_START = 0.0018;
+const RMS_SILENCE = 0.0008;
 
 // Require N consecutive ticks above/below threshold before flipping state.
 // 1 tick + hysteresis is enough to filter clicks while staying snappy.
@@ -55,7 +59,10 @@ export class SpeakingDetector {
       this.source = this.audioCtx.createMediaStreamSource(this.stream);
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = FFT_SIZE;
-      this.analyser.smoothingTimeConstant = 0.2;
+      // Lower smoothing = faster halo reaction. Hysteresis and the poll
+      // cadence already filter clicks, so we don't need the analyser's
+      // long-window averaging — it was just adding ~200 ms of lag.
+      this.analyser.smoothingTimeConstant = 0.05;
 
       // Chromium quirk: a MediaStreamAudioSourceNode built from a REMOTE track
       // (RTCPeerConnection) won't pump samples into the graph unless the chain

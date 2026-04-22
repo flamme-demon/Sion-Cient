@@ -202,6 +202,16 @@ export default function App() {
     }
   }, [credentials, connectionStatus, initSync]);
 
+  // Restore the soundboard panel open/closed state from the previous
+  // session. Fires once on mount; subsequent toggles are already synced
+  // to the persisted setting inside `useAppStore.toggleSoundboardPanel`.
+  useEffect(() => {
+    if (useSettingsStore.getState().soundboardOpenAtLaunch && !useAppStore.getState().showSoundboardPanel) {
+      useAppStore.getState().toggleSoundboardPanel();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Register push notifications when connected + sync room names for Android
   useEffect(() => {
     if (connectionStatus !== "connected" || !credentials) return;

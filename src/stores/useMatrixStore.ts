@@ -200,14 +200,22 @@ function extractVoiceUsers(room: any, client: MatrixClient | null): VoiceChannel
     if (!userId || seenUserIds.has(userId)) continue;
     seenUserIds.add(userId);
 
+    // Sion embeds the user's mute/deafen state inside the call.member
+    // content (fields `sion_muted` / `sion_deafened`) so this
+    // information is visible in the sidebar for voice channels the local
+    // user hasn't joined — the LiveKit data-channel path only reaches
+    // peers in the same room. Missing fields default to false (remote
+    // is not a Sion client, or hasn't toggled since connecting).
+    const sionMuted = content?.sion_muted === true;
+    const sionDeafened = content?.sion_deafened === true;
     users.push({
       id: userId,
       name: getDisplayName(userId, room, client),
       role: "user",
       avatarUrl: getAvatarFromSender(userId, room, client),
       speaking: false,
-      muted: false,
-      deafened: false,
+      muted: sionMuted,
+      deafened: sionDeafened,
     });
   }
 
@@ -349,11 +357,18 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
   const msgs: ChatMessage[] = [];
   for (const evt of events) {
     const type = evt.getType?.();
+    const content = evt.getContent?.();
 
-    // Show failed-to-decrypt messages as placeholders.
-    // Skip still-encrypted events (type "m.room.encrypted") — they may be signaling events
-    // (call.member, encryption_keys) not chat messages. They'll either decrypt later or
-    // show as isDecryptionFailure once the SDK processes them.
+    // Detect messages robustly. matrix-js-sdk can leave getType() stale at
+    // "m.room.encrypted" even after a backward-paginated event has been
+    // decrypted — its cleartext content (with msgtype) is the authoritative
+    // signal for whether it's a displayable message. Without this, rooms
+    // with lots of paginated history show only the most-recently-synced
+    // message on first open.
+    const isMessage = type === "m.room.message" || !!content?.msgtype;
+
+    // Show failed-to-decrypt messages as placeholders (getType already
+    // correctly reads "m.room.message" for these, so no ambiguity).
     if (type === "m.room.message" && evt.isDecryptionFailure?.()) {
       const evtId = evt.getId?.() || String(Date.now());
       const senderId = evt.getSender?.() || "unknown";
@@ -365,8 +380,7 @@ function extractMessagesFromEvents(events: any[], room: any, client: any): ChatM
       continue;
     }
 
-    if (type !== "m.room.message") continue;
-    const content = evt.getContent?.();
+    if (!isMessage) continue;
     if (!content?.msgtype) continue;
 
     const msgtype: string = content.msgtype;
@@ -644,6 +658,32 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
             }
           }
         }
+
+        // Angle 2 of the MSC4268 coverage (see the shareHistoryWithUser
+        // block below): sweep every joined room × joined member and push
+        // shareable history keys to everyone. This is the retry path for
+        // reload scenarios — the newcomer already has membership so no
+        // RoomMemberEvent.Membership fires, but their crypto store may be
+        // missing sessions. The 2 s delay lets crypto finish bootstrap and
+        // the initial device-list sync settle before we start encrypting
+        // to-device events. Fire-and-forget; per-call failures are logged
+        // by shareHistoryWithUser.
+        setTimeout(() => {
+          const myUserId = client.getUserId();
+          if (!myUserId) return;
+          const joined = getJoinedRooms(client);
+          let planned = 0;
+          for (const room of joined) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const members = (room as any).getJoinedMembers?.() || [];
+            for (const m of members) {
+              if (m.userId === myUserId) continue;
+              shareHistoryWithUser(room.roomId, m.userId, "startup-sync");
+              planned++;
+            }
+          }
+          if (planned > 0) console.info(`[Sion][e2ee] startup reshare planned for ${planned} (room, user) pairs`);
+        }, 2000);
 
       } else if (state === "SYNCING") {
         const rooms = getJoinedRooms(client);
@@ -1268,30 +1308,84 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       set({ channels });
     });
 
-    // When a user joins a room we're already in, proactively share our
-    // shareable historic Megolm keys with them (MSC4268). All existing
-    // members do this in parallel, so the newcomer accumulates keys from
-    // multiple senders — maximum coverage without any admin action.
+    // Historic Megolm key sharing (MSC4268). Key-sharing needs to fire from
+    // three angles to actually cover reload + late-device + offline-at-join
+    // scenarios:
     //
-    // Silently no-ops on clients/crypto stores that don't support MSC4268,
-    // and on non-E2EE rooms (no Megolm sessions to share).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    client.on(RoomMemberEvent.Membership, async (_event: any, member: any) => {
-      if (member.membership !== "join") return;
+    //  1. On membership change (RoomMemberEvent.Membership == "join")
+    //     — the canonical path: all current members push their shareable
+    //     history keys to the newcomer.
+    //  2. On client startup (after PREPARED sync) — catches users who joined
+    //     while we were offline, and re-runs for reload scenarios where the
+    //     newcomer already has membership but their crypto store is missing
+    //     sessions. This is the case flamme kept hitting with flammemob
+    //     (reload doesn't fire a Membership event).
+    //  3. On CryptoEvent.DevicesUpdated for a recent joiner — catches the
+    //     race where `shareRoomHistoryWithUser` runs before the newcomer's
+    //     device keys are published, targeting 0 devices. A second pass
+    //     once the device list updates delivers to the real device.
+    //
+    // The helper logs counts so we can tell from devtools whether shares
+    // actually reach the wire. Both `shareRoomHistoryWithUser` and the
+    // backing to-device sends silently no-op on clients/crypto stores that
+    // don't support MSC4268 and on non-E2EE rooms.
+    const recentJoinTs = new Map<string, number>(); // `${roomId}:${userId}` → ts
+    const RECENT_JOIN_WINDOW_MS = 2 * 60 * 1000; // 2 min
+
+    const shareHistoryWithUser = async (roomId: string, userId: string, reason: string) => {
       const myUserId = client.getUserId();
-      if (!myUserId || member.userId === myUserId) return; // skip our own join
-      const roomId = member.roomId;
-      if (!roomId) return;
+      if (!myUserId || userId === myUserId) return;
       const room = client.getRoom(roomId);
       if (!room || room.getMyMembership() !== "join") return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const crypto = (client as any).getCrypto?.();
-      if (!crypto?.shareRoomHistoryWithUser) return;
+      if (!crypto?.shareRoomHistoryWithUser) {
+        console.debug(`[Sion][e2ee] shareRoomHistoryWithUser unsupported — reason=${reason}`);
+        return;
+      }
       try {
-        await crypto.shareRoomHistoryWithUser(roomId, member.userId);
-      } catch {
-        // Non-fatal — the member just won't see the messages whose keys we
-        // had. Other members' clients do the same share in parallel.
+        await crypto.shareRoomHistoryWithUser(roomId, userId);
+        console.info(`[Sion][e2ee] shared history to ${userId} in ${roomId} (${reason})`);
+      } catch (err) {
+        console.warn(`[Sion][e2ee] share failed for ${userId} in ${roomId} (${reason}):`, err);
+      }
+    };
+
+    // Angle 1: membership join event.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.on(RoomMemberEvent.Membership, async (_event: any, member: any) => {
+      if (member.membership !== "join") return;
+      const myUserId = client.getUserId();
+      if (!myUserId || member.userId === myUserId) return;
+      const roomId = member.roomId;
+      if (!roomId) return;
+      recentJoinTs.set(`${roomId}:${member.userId}`, Date.now());
+      shareHistoryWithUser(roomId, member.userId, "join-event");
+    });
+
+    // Angle 3: devices updated for a recent joiner. The SDK emits
+    // CryptoEvent.DevicesUpdated with an array of userIds whose device list
+    // has changed. We filter to users flagged as "recently joined" and
+    // re-share for every room they're in with us. This is the fix for the
+    // "newcomer's device keys uploaded after our initial share" race.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    client.on(CryptoEvent.DevicesUpdated, async (userIds: string[]) => {
+      if (!userIds || userIds.length === 0) return;
+      const myUserId = client.getUserId();
+      if (!myUserId) return;
+      const now = Date.now();
+      for (const userId of userIds) {
+        if (userId === myUserId) continue;
+        // Sweep the recent-join map for this user across all rooms.
+        for (const [key, ts] of recentJoinTs) {
+          if (now - ts > RECENT_JOIN_WINDOW_MS) {
+            recentJoinTs.delete(key);
+            continue;
+          }
+          if (!key.endsWith(`:${userId}`)) continue;
+          const roomId = key.slice(0, -(`:${userId}`.length));
+          shareHistoryWithUser(roomId, userId, "devices-updated-after-join");
+        }
       }
     });
 
@@ -1552,20 +1646,53 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // how many non-message events (state, call memberships) are in
       // between.
       const MESSAGES_PER_CALL = 30;
-      const MAX_ITERATIONS = 10;
-      const countMessages = () => room.getLiveTimeline().getEvents()
-        .filter((e: { getType: () => string }) => e.getType?.() === "m.room.message").length;
-      const startMessages = countMessages();
-      const target = startMessages + MESSAGES_PER_CALL;
-      let lastEventCount = room.getLiveTimeline().getEvents().length;
+      // Voice-heavy rooms can pack 1000+ call.member / encryption_keys /
+      // m.reaction events between consecutive text messages. With the old
+      // cap of 10 × 200 = 2000 events, we'd bail before reaching the first
+      // text message and the UI showed "1 message" on entry. 50 × 200 =
+      // 10000 events is enough to traverse the busiest voice rooms we
+      // have in the wild, bounded so a truly empty room can't spin forever.
+      const MAX_ITERATIONS = 50;
+      // Count displayable messages. matrix-js-sdk has a subtle quirk: events
+      // fetched via backward pagination (`scrollback`) sometimes keep
+      // `getType() === "m.room.encrypted"` even after successful decryption,
+      // while their `getContent()` correctly returns the cleartext body
+      // with `msgtype`. Filtering on getType alone undercounts — sometimes
+      // by two orders of magnitude in voice-heavy rooms — and the loop
+      // bails thinking the room is empty.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const isMessageEvent = (e: any) => {
+        if (e.getType?.() === "m.room.message") return true;
+        const content = e.getContent?.();
+        return !!content?.msgtype;
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const countMessages = () => room.getLiveTimeline().getEvents().filter((e: any) => isMessageEvent(e)).length;
+      const target = countMessages() + MESSAGES_PER_CALL;
       for (let i = 0; i < MAX_ITERATIONS; i++) {
         if (countMessages() >= target) break;
+        const before = room.getLiveTimeline().getEvents().length;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (client as any).scrollback(room, 200);
-        const newCount = room.getLiveTimeline().getEvents().length;
+        const afterScroll = room.getLiveTimeline().getEvents().length;
         // No new events → we're at the start of history.
-        if (newCount === lastEventCount) break;
-        lastEventCount = newCount;
+        if (afterScroll === before) break;
+        // Decrypt newly-backfilled events INLINE before the next iteration's
+        // count. `scrollback()` resolves when the HTTP fetch completes, but
+        // matrix-js-sdk queues decryption to a separate worker — if we count
+        // immediately, the freshly-fetched Megolm payloads still look like
+        // `m.room.encrypted` with no cleartext, and `countMessages()` returns
+        // 0 even when the batch contains dozens of messages. Awaiting
+        // `decryptEventIfNeeded` per event is idempotent (fast no-op when
+        // already decrypted) and catches up the queue before we decide
+        // whether to keep paginating.
+        const events = room.getLiveTimeline().getEvents();
+        await Promise.all(events.map((evt: { isEncrypted: () => boolean; getClearContent: () => unknown }) =>
+          evt.isEncrypted() && !evt.getClearContent()
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ? (client as any).decryptEventIfNeeded(evt).catch(() => { /* leave as failure placeholder */ })
+            : Promise.resolve(),
+        ));
       }
 
       // Decrypt any encrypted events that were backfilled

@@ -46,11 +46,15 @@ function TreeNodeView({
   node,
   selected,
   onSelect,
+  hiddenCategories,
+  onToggleHide,
   depth = 0,
 }: {
   node: TreeNode;
   selected: string | null;
   onSelect: (path: string | null) => void;
+  hiddenCategories: Set<string>;
+  onToggleHide: (path: string) => void;
   depth?: number;
 }) {
   const [open, setOpen] = useState(depth < 1);
@@ -59,14 +63,22 @@ function TreeNodeView({
     return (
       <>
         {children.map((c) => (
-          <TreeNodeView key={c.fullPath} node={c} selected={selected} onSelect={onSelect} depth={0} />
+          <TreeNodeView key={c.fullPath} node={c} selected={selected} onSelect={onSelect} hiddenCategories={hiddenCategories} onToggleHide={onToggleHide} depth={0} />
         ))}
       </>
     );
   }
+  // A category is hidden either explicitly, or because an ancestor is
+  // hidden (child categories inherit the parent's hidden state).
+  const isExplicitlyHidden = hiddenCategories.has(node.fullPath);
+  const hasHiddenAncestor = Array.from(hiddenCategories).some(
+    (p) => p !== node.fullPath && node.fullPath.startsWith(p + "/"),
+  );
+  const isHidden = isExplicitlyHidden || hasHiddenAncestor;
   return (
     <div>
       <div
+        className="soundboard-tree-node"
         onClick={() => onSelect(selected === node.fullPath ? null : node.fullPath)}
         onDoubleClick={() => setOpen((o) => !o)}
         style={{
@@ -79,6 +91,7 @@ function TreeNodeView({
           borderRadius: 6,
           background: selected === node.fullPath ? 'var(--color-primary-container)' : 'transparent',
           color: selected === node.fullPath ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
+          opacity: isHidden ? 0.55 : 1,
         }}
       >
         {children.length > 0 ? (
@@ -87,10 +100,51 @@ function TreeNodeView({
             style={{ cursor: 'pointer', width: 10, display: 'inline-block', fontSize: 10 }}
           >{open ? '▾' : '▸'}</span>
         ) : <span style={{ width: 10 }} />}
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+        <span
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            textDecoration: isHidden ? 'line-through' : 'none',
+          }}
+        >{node.name}</span>
+        {/* Explicit hidden marker: always visible when self-hidden, so the
+            user knows it's them who hid this category (vs inherited from
+            parent). Inherited-hidden stays greyed/strikethrough but no icon. */}
+        {isExplicitlyHidden && (
+          <span
+            title="Cette catégorie est masquée"
+            style={{ fontSize: 10, opacity: 0.8 }}
+          >🙈</span>
+        )}
+        {/* Hide/unhide toggle — visible on hover via CSS. Click stops
+            propagation so selecting the category isn't a side-effect. */}
+        <button
+          className="soundboard-tree-hide-btn"
+          onClick={(e) => { e.stopPropagation(); onToggleHide(node.fullPath); }}
+          title={isExplicitlyHidden ? "Ré-afficher cette catégorie" : hasHiddenAncestor ? "Parent masqué — impossible de ré-afficher individuellement" : "Masquer cette catégorie"}
+          disabled={hasHiddenAncestor && !isExplicitlyHidden}
+          style={{
+            display: isExplicitlyHidden ? 'flex' : 'none',
+            width: 18,
+            height: 18,
+            borderRadius: 9,
+            border: 'none',
+            background: 'var(--color-surface-container-high)',
+            color: 'var(--color-on-surface-variant)',
+            fontSize: 10,
+            cursor: hasHiddenAncestor && !isExplicitlyHidden ? 'not-allowed' : 'pointer',
+            alignItems: 'center',
+            justifyContent: 'center',
+            lineHeight: 1,
+            padding: 0,
+            opacity: hasHiddenAncestor && !isExplicitlyHidden ? 0.4 : 1,
+          }}
+        >{isExplicitlyHidden ? '👁' : '🙈'}</button>
       </div>
       {open && children.map((c) => (
-        <TreeNodeView key={c.fullPath} node={c} selected={selected} onSelect={onSelect} depth={depth + 1} />
+        <TreeNodeView key={c.fullPath} node={c} selected={selected} onSelect={onSelect} hiddenCategories={hiddenCategories} onToggleHide={onToggleHide} depth={depth + 1} />
       ))}
     </div>
   );
@@ -115,6 +169,8 @@ export function SoundboardPanel() {
   const setVolume = useSettingsStore((s) => s.setSoundboardVolume);
   const enabled = useSettingsStore((s) => s.soundboardEnabled);
   const setEnabled = useSettingsStore((s) => s.setSoundboardEnabled);
+  const hiddenCategories = useSettingsStore((s) => s.hiddenCategories);
+  const toggleCategoryHidden = useSettingsStore((s) => s.toggleCategoryHidden);
   const refreshRef = useRef<() => void>(() => {});
 
   // Apply volume on first render so receivers pick it up
@@ -137,13 +193,26 @@ export function SoundboardPanel() {
 
   const hotkeys = useMemo(() => { void hotkeysTick; return loadHotkeys(); }, [hotkeysTick]);
 
-  // Refresh sound list on demand + when soundboard room timeline changes
+  // Refresh sound list on demand + when soundboard room timeline changes.
+  //
+  // The Matrix `Room.timeline` event fires for *every* room — text channels,
+  // voice signaling rooms, scrollback batches, the lot. We MUST filter on
+  // the soundboard room id, otherwise every inbound event triggers a
+  // `findSoundboardRoom()` + `listSounds()` cycle. During initial scrollback
+  // of a busy voice room that's 1000+ alias resolutions in a burst, which
+  // saturates CEF's connection pool (`ERR_INSUFFICIENT_RESOURCES`). The
+  // refresh is also debounced (200 ms) so a burst of edits/redactions in
+  // the soundboard itself coalesces into a single re-list.
   useEffect(() => {
     if (!show) return;
     let cancelled = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let cachedRoomId: string | null = null;
+
     const refresh = async () => {
       const rid = await getSoundboardRoomId();
       if (cancelled) return;
+      cachedRoomId = rid;
       setRoomId(rid);
       const list = await listSounds();
       if (!cancelled) setSounds(list);
@@ -153,15 +222,31 @@ export function SoundboardPanel() {
 
     const client = getMatrixClient();
     if (!client) return;
-    const onTimeline = async () => { await refresh(); };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onTimeline = (_event: any, room: any) => {
+      if (!room || !cachedRoomId || room.roomId !== cachedRoomId) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => { void refresh(); }, 200);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onRedaction = (event: any, room: any) => {
+      if (!room || !cachedRoomId || room.roomId !== cachedRoomId) {
+        // matrix-js-sdk also fires `Room.redaction` with (event, room)
+        // where `room` may be undefined for older sdk paths — bail safely.
+        if (event?.getRoomId?.() !== cachedRoomId) return;
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => { void refresh(); }, 200);
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cl = client as any;
     cl.on("Room.timeline", onTimeline);
-    cl.on("Room.redaction", onTimeline);
+    cl.on("Room.redaction", onRedaction);
     return () => {
       cancelled = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
       cl.off("Room.timeline", onTimeline);
-      cl.off("Room.redaction", onTimeline);
+      cl.off("Room.redaction", onRedaction);
     };
   }, [show]);
 
@@ -202,14 +287,41 @@ export function SoundboardPanel() {
     }
   };
 
+  const hiddenCategoriesSet = useMemo(() => new Set(hiddenCategories), [hiddenCategories]);
+
+  // A sound is hidden if its category (or any ancestor path) is in the
+  // hidden list. E.g. hiding "Films" hides "Films/Kamelott/*" too.
+  const isCategoryHidden = (cat: string): boolean => {
+    if (hiddenCategoriesSet.has(cat)) return true;
+    const parts = cat.split("/").filter(Boolean);
+    let path = "";
+    for (const p of parts) {
+      path = path ? `${path}/${p}` : p;
+      if (hiddenCategoriesSet.has(path)) return true;
+    }
+    return false;
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return sounds.filter((s) => {
       if (selectedCat && !s.category.startsWith(selectedCat)) return false;
+      // When a specific hidden category is selected, show its sounds (so
+      // the user can still browse/play/unhide them). Otherwise skip.
+      if (isCategoryHidden(s.category)) {
+        if (!selectedCat || !s.category.startsWith(selectedCat)) return false;
+        // Further: only show if the selected category itself is the hidden one
+        // (or an ancestor) — we're in "inspect the hidden branch" mode.
+        const selectedIsOrInHidden = Array.from(hiddenCategoriesSet).some(
+          (h) => selectedCat === h || selectedCat.startsWith(h + "/"),
+        );
+        if (!selectedIsOrInHidden) return false;
+      }
       if (!q) return true;
       return s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
     });
-  }, [sounds, search, selectedCat]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sounds, search, selectedCat, hiddenCategoriesSet]);
 
   const tree = useMemo(() => buildTree(Array.from(new Set(sounds.map((s) => s.category)))), [sounds]);
 
@@ -220,7 +332,7 @@ export function SoundboardPanel() {
     if (!enabled) return;
     try {
       await playSoundLocal(s.mxcUrl);
-      if (connectedVoice) broadcastSound(s.mxcUrl);
+      if (connectedVoice) broadcastSound(s.mxcUrl, s.emoji, s.duration);
     } catch (err) {
       console.warn("[Sion] play failed:", err);
       playErrorBuzzer();
@@ -258,6 +370,10 @@ export function SoundboardPanel() {
       <style>{`
         .sound-card:hover .sound-delete-btn { display: flex !important; }
         .sound-card:hover .sound-edit-btn { display: flex !important; }
+        /* Hide/unhide toggle on category rows — visible on hover. When a
+           category is already hidden, the button stays visible (see inline
+           style) so the user can always recover. */
+        .soundboard-tree-node:hover .soundboard-tree-hide-btn { display: flex !important; }
       `}</style>
       <div style={{
         display: 'flex',
@@ -447,7 +563,7 @@ export function SoundboardPanel() {
                   color: selectedCat === null ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
                 }}
               >{t("soundboard.allCategories")}</div>
-              <TreeNodeView node={tree} selected={selectedCat} onSelect={setSelectedCat} />
+              <TreeNodeView node={tree} selected={selectedCat} onSelect={setSelectedCat} hiddenCategories={hiddenCategoriesSet} onToggleHide={toggleCategoryHidden} />
             </div>
 
             <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
@@ -463,6 +579,7 @@ export function SoundboardPanel() {
                 }}>
                   {filtered.map((s) => {
                     const hotkey = hotkeys[s.eventId] || null;
+                    const inHiddenBranch = isCategoryHidden(s.category);
                     return (
                     <div
                       key={s.eventId}
@@ -472,10 +589,10 @@ export function SoundboardPanel() {
                         ev.preventDefault();
                         setHotkeyTarget(s);
                       }}
-                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: hotkey })}` : ""}`}
+                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: hotkey })}` : ""}${inHiddenBranch ? "\n(catégorie masquée — visible parce que tu l'as sélectionnée)" : ""}`}
                       style={{
                         position: 'relative',
-                        opacity: enabled ? 1 : 0.4,
+                        opacity: !enabled ? 0.4 : (inHiddenBranch ? 0.5 : 1),
                         pointerEvents: enabled ? 'auto' : 'none',
                         display: 'flex',
                         flexDirection: 'column',
@@ -483,7 +600,9 @@ export function SoundboardPanel() {
                         justifyContent: 'center',
                         padding: '10px 4px',
                         borderRadius: 10,
-                        border: '1px solid var(--color-outline-variant)',
+                        border: inHiddenBranch
+                          ? '1px dashed var(--color-outline-variant)'
+                          : '1px solid var(--color-outline-variant)',
                         background: 'var(--color-surface-container)',
                         color: 'var(--color-on-surface)',
                         cursor: 'pointer',
