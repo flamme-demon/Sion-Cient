@@ -2,6 +2,7 @@
 use rdev::Key;
 use tauri::Emitter;
 
+#[cfg(not(target_os = "android"))]
 mod denoise;
 #[cfg(not(target_os = "android"))]
 mod cursor_overlay;
@@ -997,7 +998,7 @@ pub fn run() {
 
     #[cfg(target_os = "android")]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, exit_app, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix]);
+        .invoke_handler(tauri::generate_handler![open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, exit_app, start_voice_service, stop_voice_service]);
 
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
