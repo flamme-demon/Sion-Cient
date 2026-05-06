@@ -1,6 +1,15 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { uploadSound, editSound, type SoundEntry } from "../../services/soundboardService";
+import {
+  uploadSound,
+  editSound,
+  playSoundLocal,
+  previewSoundFile,
+  SOUND_GAIN_MIN,
+  SOUND_GAIN_MAX,
+  SOUND_GAIN_DEFAULT,
+  type SoundEntry,
+} from "../../services/soundboardService";
 import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
 
 interface Props {
@@ -18,6 +27,8 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
   const [label, setLabel] = useState(editing?.label || "");
   const [category, setCategory] = useState(editing?.category || "");
   const [emoji, setEmoji] = useState(editing?.emoji || "");
+  const [gain, setGain] = useState<number>(editing?.gain ?? SOUND_GAIN_DEFAULT);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -63,9 +74,9 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
     setError(null);
     try {
       if (editing) {
-        await editSound(editing, label.trim(), category.trim() || "Autre", emoji.trim() || null);
+        await editSound(editing, label.trim(), category.trim() || "Autre", emoji.trim() || null, gain);
       } else if (file) {
-        await uploadSound(file, label.trim(), category.trim() || "Autre", emoji.trim() || null);
+        await uploadSound(file, label.trim(), category.trim() || "Autre", emoji.trim() || null, gain);
       }
       onUploaded();
     } catch (err) {
@@ -306,6 +317,60 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
               </div>
             </div>
           )}
+        </div>
+
+        <label style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>{t("soundboard.gain.label")}</span>
+          <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--color-on-surface)' }}>
+            {Math.round(gain * 100)}%
+          </span>
+        </label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="range"
+            min={SOUND_GAIN_MIN}
+            max={SOUND_GAIN_MAX}
+            step={0.05}
+            value={gain}
+            onChange={(e) => setGain(parseFloat(e.target.value))}
+            style={{ flex: 1, accentColor: 'var(--color-primary)' }}
+          />
+          <button
+            type="button"
+            disabled={previewBusy || (!editing && !file)}
+            onClick={async () => {
+              if (previewBusy) return;
+              setPreviewBusy(true);
+              try {
+                if (editing) {
+                  await playSoundLocal(editing.mxcUrl, gain);
+                } else if (file) {
+                  await previewSoundFile(file, gain);
+                }
+              } catch (err) {
+                console.warn("[Sion] preview failed:", err);
+              } finally {
+                // Re-enable quickly — playback is non-blocking; the button
+                // mostly debounces accidental rapid clicks.
+                setTimeout(() => setPreviewBusy(false), 200);
+              }
+            }}
+            title={t("soundboard.gain.test")}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 12,
+              border: 'none',
+              cursor: (previewBusy || (!editing && !file)) ? 'not-allowed' : 'pointer',
+              background: 'var(--color-surface-container-high)',
+              color: 'var(--color-on-surface)',
+              fontSize: 12,
+              fontFamily: 'inherit',
+              opacity: (previewBusy || (!editing && !file)) ? 0.5 : 1,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ▶ {t("soundboard.gain.test")}
+          </button>
         </div>
 
         {error && (

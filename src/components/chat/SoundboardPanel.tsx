@@ -331,8 +331,8 @@ export function SoundboardPanel() {
     // dans le canal vocal non plus.
     if (!enabled) return;
     try {
-      await playSoundLocal(s.mxcUrl);
-      if (connectedVoice) broadcastSound(s.mxcUrl, s.emoji, s.duration);
+      await playSoundLocal(s.mxcUrl, s.gain);
+      if (connectedVoice) broadcastSound(s.mxcUrl, s.emoji, s.duration, s.gain);
     } catch (err) {
       console.warn("[Sion] play failed:", err);
       playErrorBuzzer();

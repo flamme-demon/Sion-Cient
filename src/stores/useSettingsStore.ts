@@ -102,7 +102,7 @@ export const useSettingsStore = create<SettingsState>()(
       echoCancellation: true,
       autoGainControl: true,
       aiNoiseSuppression: true,
-      aiNoiseSuppressionMix: 0.8,
+      aiNoiseSuppressionMix: 1.0,
       audioQuality: "voiceHD",
       linkPreviews: true,
       audioInputDevice: "",

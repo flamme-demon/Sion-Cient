@@ -8,14 +8,14 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 - **Text channels** with Markdown, file attachments, reactions, replies, message editing
 - **Video/audio playback** in chat with automatic ffmpeg transcoding for H.264 compatibility
 - **Screen sharing** in voice channels with dedicated viewer, configurable resolution/framerate/audio
-- **Soundboard** — shared server-wide sound library with per-sound category/emoji/hotkey, LiveKit broadcast to voice participants
+- **Soundboard** — shared server-wide sound library with per-sound category/emoji/hotkey/gain, LiveKit broadcast to voice participants
 - **Link previews** with OG metadata extraction (YouTube oEmbed, GitHub, etc.)
 - **End-to-end encryption** (E2EE) for both text and voice via Matrix Rust Crypto + LiveKit E2EE
 - **Cross-device verification** (emoji comparison, recovery key)
 - **Global keyboard shortcuts** for mute/deafen/soundboard (via rdev + tauri-plugin-global-shortcut)
 - **Member panel** per room with inline promote/demote (moderator ↔ user)
 - **User context menus** (profile, invite, kick, ban, power levels)
-- **Admin panel** for Continuwuity server management
+- **Admin panel** for Continuwuity server management — pending users + registration tokens
 - **AFK indicator** — sourdine propagated to peers via LiveKit data channel
 - **Internationalization** (French default, English available)
 - **Dark theme** with Material Design 3 inspired UI

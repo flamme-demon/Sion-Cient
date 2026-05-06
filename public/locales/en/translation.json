@@ -82,6 +82,7 @@
     "replyingTo": "Replying to",
     "sendDM": "Send a direct message",
     "searchEmoji": "Search emoji...",
+    "recentEmojis": "Recently used",
     "searchGif": "Search GIF...",
     "gifDisabled": "GIFs are disabled. Enable them in settings to send GIFs.",
     "loading": "Loading..."
@@ -92,6 +93,7 @@
   },
   "screenShare": {
     "title": "Screen share options",
+    "sharedBy": "{{name}} is sharing their screen",
     "resolution": "Resolution",
     "framerate": "Framerate",
     "audio": "Share audio",
@@ -138,7 +140,11 @@
     "deleteHint": "Delete",
     "editHint": "Edit",
     "editTitle": "Edit sound",
-    "editBtn": "Save"
+    "editBtn": "Save",
+    "gain": {
+      "label": "Sound volume",
+      "test": "Test"
+    }
   },
   "hotkey": {
     "title": "Hotkey for '{{label}}'",
@@ -274,6 +280,7 @@
     "joinMutedDesc": "Auto-mute microphone when joining a channel",
     "screenShareAudio": "Share system audio",
     "screenShareAudioDesc": "Include audio when sharing your screen (depends on OS/compositor — unreliable on KDE Wayland)",
+    "screenShareTitle": "Screen share options",
     "audioProcessing": "Audio Processing",
     "noiseSuppression": "Noise Suppression",
     "noiseSuppressionDesc": "Cuts background noise (keyboard, fan, mouse clicks) via RNNoise. Lightweight (~5% of a core), preserves voice.",
@@ -388,7 +395,16 @@
       "none": "No pending registrations",
       "refresh": "Refresh",
       "approve": "Approve",
-      "reject": "Reject"
+      "reject": "Reject",
+      "badgeSuspended": "Suspended",
+      "badgeToken": "Token"
+    },
+    "tokens": {
+      "title": "Registration tokens",
+      "refresh": "Refresh",
+      "error": "Error",
+      "limitedBanner": "Registration is restricted: a token is required to create an account as long as at least one active token exists.",
+      "openBanner": "Registration is open — no token required."
     },
     "activeUsers": {
       "title": "Active users",

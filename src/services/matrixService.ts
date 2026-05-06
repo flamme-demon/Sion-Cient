@@ -111,7 +111,13 @@ export async function getRegistrationFlows(homeserver: string): Promise<Registra
   }
 }
 
-/** Register a user, handling UIA flows (dummy, token, recaptcha) */
+/** Register a user, handling UIA flows (dummy, token, recaptcha).
+ *
+ * UIA contract: each POST /register returns either 200 (account created,
+ * all stages complete) or 401 (more stages needed, carries a new session).
+ * Crucially, as soon as a 200 lands, any further POST would hit
+ * M_USER_IN_USE on the just-created username — so each step must short-
+ * circuit on success instead of blindly running the next stage. */
 export async function registerUser(
   homeserver: string,
   username: string,
@@ -121,68 +127,58 @@ export async function registerUser(
   captchaResponse?: string,
 ): Promise<void> {
   const client = sdk.createClient({ baseUrl: homeserver });
-
-  // Step 1: initiate registration to get session
-  let session = "";
-  try {
-    await client.registerRequest({
-      username,
-      password,
-      initial_device_display_name: getDeviceDisplayName(),
-    });
-    // If this succeeds directly, we're done (very open server)
-    return;
-  } catch (err: unknown) {
-    const e = err as { data?: { session?: string; flows?: RegistrationFlow[] } };
-    if (e.data?.session) {
-      session = e.data.session;
-    } else {
-      throw err;
-    }
-  }
-
-  // Step 2: complete stages
-  if (token) {
-    // Complete token stage
-    await client.registerRequest({
-      username,
-      password,
-      initial_device_display_name: getDeviceDisplayName(),
-      auth: { type: "m.login.registration_token", token, session },
-    }).catch((err: unknown) => {
-      const e = err as { data?: { session?: string; completed?: string[] }; httpStatus?: number };
-      if (e.httpStatus === 401 && e.data?.session) {
-        session = e.data.session;
-      } else {
-        throw err;
-      }
-    });
-  }
-
-  if (captchaResponse) {
-    // Complete recaptcha stage
-    await client.registerRequest({
-      username,
-      password,
-      initial_device_display_name: getDeviceDisplayName(),
-      auth: { type: "m.login.recaptcha", response: captchaResponse, session },
-    }).catch((err: unknown) => {
-      const e = err as { data?: { session?: string; completed?: string[] }; httpStatus?: number };
-      if (e.httpStatus === 401 && e.data?.session) {
-        session = e.data.session;
-      } else {
-        throw err;
-      }
-    });
-  }
-
-  // Final: complete with dummy if needed (or finalize)
-  await client.registerRequest({
+  const baseBody = {
     username,
     password,
     initial_device_display_name: getDeviceDisplayName(),
-    auth: { type: "m.login.dummy", session },
-  });
+  };
+
+  // Attempt a register step. Returns {done:true} if the server accepted
+  // (200) → registration complete, account exists. Returns {done:false,
+  // session} if we got a UIA 401 that advances the flow to a new session.
+  // Any other error (M_USER_IN_USE, permission denied, malformed request,
+  // server down, etc.) is re-thrown so the UI surfaces it.
+  const step = async (auth?: Record<string, unknown>): Promise<{ done: boolean; session?: string }> => {
+    try {
+      await client.registerRequest(auth ? { ...baseBody, auth } : baseBody);
+      return { done: true };
+    } catch (err: unknown) {
+      const e = err as { data?: { session?: string; flows?: RegistrationFlow[] }; httpStatus?: number };
+      if (e.httpStatus === 401 && e.data?.session) {
+        return { done: false, session: e.data.session };
+      }
+      throw err;
+    }
+  };
+
+  // Step 1: initiate registration with no auth. Open servers 200 straight
+  // away, gated servers return 401 + session + flows to guide next steps.
+  const first = await step();
+  if (first.done) return;
+  let session = first.session!;
+
+  // Step 2: token stage, if provided.
+  if (token) {
+    const r = await step({ type: "m.login.registration_token", token, session });
+    if (r.done) return;
+    session = r.session!;
+  }
+
+  // Step 3: recaptcha stage, if provided.
+  if (captchaResponse) {
+    const r = await step({ type: "m.login.recaptcha", response: captchaResponse, session });
+    if (r.done) return;
+    session = r.session!;
+  }
+
+  // Step 4 (final): dummy stage. Some flows require an explicit completion
+  // step even after all gated stages are done (matrix spec allows this).
+  const last = await step({ type: "m.login.dummy", session });
+  if (!last.done) {
+    // Server still expects more stages — this means our stage plan
+    // doesn't match the advertised flows. Surface it rather than loop.
+    throw new Error("Registration UIA flow incomplete — unexpected stages required");
+  }
 }
 
 export function mxcToHttp(mxcUrl: string): string | null {
@@ -549,13 +545,17 @@ let localVoiceState: { muted: boolean; deafened: boolean } = { muted: false, dea
 const PUBLISH_DEBOUNCE_MS = 400;
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
 
-function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: string, deviceId: string) {
+function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: string, deviceId: string, userId: string) {
   return {
     application: "m.call",
     call_id: "",
     scope: "m.room",
     device_id: deviceId,
-    expires: 7200000,
+    // Match MembershipManager.makeMyMembership so our fast-path writes and
+    // the SDK's scheduled renewals produce events that parse identically on
+    // peers (same membershipID default, same expiry horizon).
+    membershipID: `${userId}:${deviceId}`,
+    expires: 3_600_000,
     focus_active: { type: "livekit", focus_selection: "oldest_membership" },
     foci_preferred: [
       { livekit_alias: livekitAlias, livekit_service_url: livekitServiceUrl, type: "livekit" },
@@ -566,6 +566,10 @@ function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: string,
     // room read this to show mute/deafen on users who are in a different
     // voice channel than them. Unknown fields are preserved under Matrix
     // spec rules and ignored by MatrixRTC-only clients (Element Call etc.).
+    // The monkey-patch on MembershipManager.makeMyMembership in
+    // useVoiceChannel.ts ensures SDK-scheduled renewals carry these same
+    // two fields — so between our fast-path write and the SDK's next
+    // renewal the peer view of our mute/deafen is continuous.
     sion_muted: localVoiceState.muted,
     sion_deafened: localVoiceState.deafened,
   };
@@ -579,48 +583,48 @@ async function writeCallMember(roomId: string): Promise<void> {
   const deviceId = matrixClient.getDeviceId() || "";
   if (!userId) return;
   const stateKey = `_${userId}_${deviceId}_m.call`;
-  const content = buildCallMemberContent(cache.livekitServiceUrl, cache.livekitAlias, deviceId);
+  const content = buildCallMemberContent(cache.livekitServiceUrl, cache.livekitAlias, deviceId, userId);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendStateEvent(roomId, "org.matrix.msc3401.call.member" as any, content, stateKey);
 }
 
 /**
- * Announce presence in a MatrixRTC call by sending a call.member state event (MSC4143 per-device format).
- * Element does this before connecting to LiveKit so other clients see us in the call.
+ * Register a voice room so subsequent mute/deafen toggles propagate into
+ * the call.member state event for cross-channel visibility. Does NOT
+ * itself send the initial call.member — matrix-js-sdk's MembershipManager
+ * owns that write (via `session.joinRoomSession()`), and useVoiceChannel
+ * monkey-patches its content generator to include our custom fields so
+ * every SDK-scheduled renewal carries them for free. This function only
+ * populates the cache so the fast-path `publishLocalVoiceState` has
+ * somewhere to target when the user toggles between renewals.
  */
-export async function sendCallMemberEvent(
+export function sendCallMemberEvent(
   roomId: string,
   livekitServiceUrl: string,
   livekitAlias: string,
-): Promise<void> {
+): void {
   if (!matrixClient) throw new Error("Matrix client not initialized");
-  const userId = matrixClient.getUserId();
-  if (!userId) throw new Error("No user ID");
-
   callMemberCache.set(roomId, { livekitServiceUrl, livekitAlias });
-  await writeCallMember(roomId);
 }
 
 /**
- * Remove presence from a MatrixRTC call by sending an empty call.member state event.
+ * Unregister a voice room. Does NOT send the empty call.member write —
+ * the SDK's `leaveRoomSession()` already does that as part of its own
+ * tear-down path. This function just clears Sion's cache and resets the
+ * local mute/deafen snapshot so the next join starts fresh.
  */
-export async function removeCallMemberEvent(roomId: string): Promise<void> {
-  if (!matrixClient) throw new Error("Matrix client not initialized");
-  const userId = matrixClient.getUserId();
-  const deviceId = matrixClient.getDeviceId() || "";
-  if (!userId) throw new Error("No user ID");
-
-  // Drop the cache first so any pending debounced write-on-mute triggered
-  // during the leave path becomes a no-op (the timer's writeCallMember call
-  // early-returns when the entry is missing).
+export function removeCallMemberEvent(roomId: string): void {
   callMemberCache.delete(roomId);
-  // Reset local snapshot so a reconnect starts fresh, not with stale bits
-  // from the previous session.
   localVoiceState = { muted: false, deafened: false };
+}
 
-  const stateKey = `_${userId}_${deviceId}_m.call`;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await matrixClient.sendStateEvent(roomId, "org.matrix.msc3401.call.member" as any, {}, stateKey);
+/**
+ * Read-only accessor for the local mute/deafen snapshot. Used by the
+ * MembershipManager monkey-patch in useVoiceChannel so each SDK-scheduled
+ * renewal reads the current state at send time.
+ */
+export function getLocalVoiceState(): { muted: boolean; deafened: boolean } {
+  return { muted: localVoiceState.muted, deafened: localVoiceState.deafened };
 }
 
 /**

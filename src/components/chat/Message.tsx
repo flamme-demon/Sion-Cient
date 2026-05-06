@@ -282,6 +282,16 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   const isVideo = attachment.mimeType.startsWith("video/");
   const resolvedUrl = useResolvedUrl(attachment);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  // Hoisted above any early return: the downstream image/audio/video
+  // branches used to return before this line, and the plain-file branch
+  // called it conditionally. React's hook-call rule requires identical
+  // call order every render, so if an attachment's mimeType ever flips
+  // between "file" and "image" across renders (e.g. late metadata arrival
+  // or a new event replacing the placeholder payload), hook count would
+  // diverge and throw React #300. Keeping it at the top makes the hook
+  // unconditional and costs us nothing for the branches that don't
+  // consume `isDownloaded`.
+  const isDownloaded = useAppStore((s) => attachment.url ? s.downloadedFiles.has(attachment.url) : false);
 
   if (isImage) {
     if (!resolvedUrl) {
@@ -334,8 +344,6 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
     if (!attachment.url) return;
     openFileWithDefaultApp(attachment.url, attachment.name);
   };
-
-  const isDownloaded = useAppStore((s) => attachment.url ? s.downloadedFiles.has(attachment.url) : false);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -421,6 +429,14 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
   const addRecentEmoji = useRecentEmojisStore((s) => s.add);
   const [reactionPickerGroup, setReactionPickerGroup] = useState<number>(0);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
+  /** Anchor side chosen dynamically at open time based on available space
+   *  between the reaction button and the viewport edges. "left" means the
+   *  picker's left edge pins to the button's left edge (picker extends
+   *  rightward); "right" is the mirror. Picked statically from
+   *  `isOwnMessage` was a blind guess that broke in narrow layouts and for
+   *  short messages where the button's actual position didn't track the
+   *  bubble's side — measure the DOM instead. */
+  const [reactionPickerSide, setReactionPickerSide] = useState<"left" | "right">(isOwnMessage ? "right" : "left");
   const [showUserPopover, setShowUserPopover] = useState(false);
   const userPopoverRef = useRef<HTMLDivElement>(null);
 
@@ -924,7 +940,37 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
           {/* Reaction emoji button + picker */}
           <div ref={reactionPickerRef} style={{ position: 'relative', display: 'flex' }}>
             <button
-              onMouseDown={(e) => { e.preventDefault(); setShowReactionPicker((v) => !v); setReactionPickerSearch(""); setReactionPickerGroup(0); }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const willOpen = !showReactionPicker;
+                if (willOpen) {
+                  // Decide anchor side from actual viewport geometry rather
+                  // than the isOwnMessage proxy: 320 px picker needs to fit
+                  // to one side of the button. Prefer rightward expansion
+                  // when it fits; fall back to leftward otherwise.
+                  const anchor = reactionPickerRef.current;
+                  const PICKER_WIDTH = 320;
+                  const EDGE_MARGIN = 8; // small breathing room from the edge
+                  if (anchor) {
+                    const rect = anchor.getBoundingClientRect();
+                    const spaceRight = window.innerWidth - rect.left - EDGE_MARGIN;
+                    const spaceLeft = rect.right - EDGE_MARGIN;
+                    if (spaceRight >= PICKER_WIDTH) {
+                      setReactionPickerSide("left");   // extend right
+                    } else if (spaceLeft >= PICKER_WIDTH) {
+                      setReactionPickerSide("right");  // extend left
+                    } else {
+                      // Neither side has enough space → pick the side with
+                      // more room; picker will clip slightly but stay as in-
+                      // view as possible. Extremely narrow windows only.
+                      setReactionPickerSide(spaceRight >= spaceLeft ? "left" : "right");
+                    }
+                  }
+                }
+                setShowReactionPicker((v) => !v);
+                setReactionPickerSearch("");
+                setReactionPickerGroup(0);
+              }}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
               onMouseLeave={(e) => { if (!showReactionPicker) e.currentTarget.style.background = 'transparent'; }}
               style={{ ...actionButtonStyle, background: showReactionPicker ? 'var(--color-secondary-container)' : 'transparent' }}
@@ -936,8 +982,8 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
               <div style={{
                 position: 'absolute',
                 bottom: '100%',
-                left: isOwnMessage ? undefined : 0,
-                right: isOwnMessage ? 0 : undefined,
+                left: reactionPickerSide === "left" ? 0 : undefined,
+                right: reactionPickerSide === "right" ? 0 : undefined,
                 marginBottom: 4,
                 width: 320,
                 height: 360,

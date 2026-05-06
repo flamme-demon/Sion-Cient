@@ -14,6 +14,10 @@ export interface SoundEntry {
   duration: number | null;
   senderId: string;
   timestamp: number;
+  /** Per-sound gain multiplier (1.0 = original level, 2.0 = +6 dB, etc.).
+   *  Stored in the Matrix metadata so every viewer applies the same boost.
+   *  Defaults to 1.0 for sounds uploaded before this field existed. */
+  gain: number;
 }
 
 export const SOUNDBOARD_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -28,7 +32,7 @@ type RawContent = {
   body?: string;
   url?: string;
   info?: { size?: number; mimetype?: string; duration?: number };
-  [SB_NAMESPACE]?: { label?: string; category?: string; emoji?: string };
+  [SB_NAMESPACE]?: { label?: string; category?: string; emoji?: string; gain?: number };
 };
 
 function stripExtension(name: string): string {
@@ -55,6 +59,10 @@ function parseSound(ev: {
   if (!url || !url.startsWith("mxc://")) return null;
   const meta = content[SB_NAMESPACE] || {};
   const body = content.body || "sound";
+  // Clamp gain to a sane range — the slider exposes 0–3 but rogue events
+  // could carry anything. NaN/missing falls back to 1.0 (no change).
+  const rawGain = typeof meta.gain === "number" && Number.isFinite(meta.gain) ? meta.gain : 1.0;
+  const gain = Math.max(0, Math.min(5, rawGain));
   return {
     eventId: id,
     mxcUrl: url,
@@ -67,6 +75,7 @@ function parseSound(ev: {
     duration: content.info?.duration ?? null,
     senderId: ev.getSender() || "",
     timestamp: ev.getTs() || 0,
+    gain,
   };
 }
 
@@ -139,6 +148,18 @@ export async function listSounds(): Promise<SoundEntry[]> {
     if (edit.meta?.label) s.label = edit.meta.label;
     if (edit.meta?.category) s.category = normalizeCategory(edit.meta.category);
     if (edit.meta && "emoji" in edit.meta) s.emoji = edit.meta.emoji || null;
+    // Apply gain edits too — without this, editing a sound to gain=3.0
+    // sends the m.replace correctly but the next listSounds() drops back
+    // to the original event's value (typically 1.0), so the boost never
+    // reaches playback. Treat absent `gain` as "reset to 1.0" so removing
+    // the boost in a later edit also propagates.
+    if (edit.meta && "gain" in edit.meta) {
+      const g = typeof edit.meta.gain === "number" && Number.isFinite(edit.meta.gain) ? edit.meta.gain : 1.0;
+      s.gain = Math.max(0, Math.min(5, g));
+    } else if (edit.meta) {
+      // Edit present but `gain` field absent → user reset to default.
+      s.gain = 1.0;
+    }
   }
 
   return sounds.sort((a, b) => b.timestamp - a.timestamp);
@@ -157,6 +178,7 @@ export async function uploadSound(
   label: string,
   category: string,
   emoji: string | null,
+  gain: number = 1.0,
 ): Promise<string> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
@@ -186,6 +208,10 @@ export async function uploadSound(
       label: label.trim().slice(0, 60) || stripExtension(file.name),
       category: normalizeCategory(category),
       ...(emoji ? { emoji } : {}),
+      // Only persist the gain if it deviates from default — keeps legacy
+      // payloads bit-identical and avoids polluting the event with no-op
+      // fields. parseSound falls back to 1.0 when the field is absent.
+      ...(gain !== 1.0 ? { gain: clampGain(gain) } : {}),
     },
   };
   const res = await client.sendMessage(roomId, content as never);
@@ -253,16 +279,19 @@ export async function editSound(
   label: string,
   category: string,
   emoji: string | null,
+  gain: number = original.gain,
 ): Promise<void> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();
   if (!roomId) throw new Error("Soundboard room not created");
 
+  const clamped = clampGain(gain);
   const newMeta = {
     label: label.trim().slice(0, 60) || original.label,
     category: normalizeCategory(category),
     ...(emoji ? { emoji } : {}),
+    ...(clamped !== 1.0 ? { gain: clamped } : {}),
   };
 
   // m.replace edit — keep the same url/info/body, only patch the com.sion field.
@@ -310,8 +339,85 @@ export function setPlaybackVolume(v: number) {
   playbackVolume = Math.max(0, Math.min(1, v));
 }
 
-/** Plays the sound locally. Returns a promise that resolves when playback starts. */
-export async function playSoundLocal(mxcUrl: string): Promise<void> {
+/** Allowed range for the per-sound gain multiplier. 0–3 covers "mute" up to
+ *  +9.5 dB, which is enough headroom for very quiet uploads while staying
+ *  safe with the limiter behind it. */
+export const SOUND_GAIN_MIN = 0;
+export const SOUND_GAIN_MAX = 3;
+export const SOUND_GAIN_DEFAULT = 1;
+function clampGain(v: number): number {
+  if (!Number.isFinite(v)) return SOUND_GAIN_DEFAULT;
+  return Math.max(SOUND_GAIN_MIN, Math.min(SOUND_GAIN_MAX, v));
+}
+
+// Lazy-created shared AudioContext. Browsers cap the number of concurrent
+// AudioContexts (~6) so we reuse one across every soundboard play. Created
+// on first playback (after a user gesture) so autoplay policy is satisfied.
+let sharedAudioContext: AudioContext | null = null;
+function getSharedAudioContext(): AudioContext {
+  if (!sharedAudioContext || sharedAudioContext.state === "closed") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Ctor = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
+    sharedAudioContext = new Ctor();
+  }
+  return sharedAudioContext;
+}
+
+/** Build the playback chain for one HTMLAudioElement and start playback.
+ *  Web Audio is needed (vs `audio.volume`) because element volume is
+ *  capped at 1.0 — boosting beyond that requires a GainNode. The
+ *  DynamicsCompressor at the tail prevents loud clipping when a user pushes
+ *  the gain too high. Cleanup is wired to `ended`/`error` of the element. */
+async function playElementWithGain(audio: HTMLAudioElement, gain: number, onCleanup?: () => void): Promise<void> {
+  const ctx = getSharedAudioContext();
+  if (ctx.state === "suspended") {
+    try { await ctx.resume(); } catch { /* fine — first play after gesture will resume */ }
+  }
+  let source: MediaElementAudioSourceNode;
+  try {
+    source = ctx.createMediaElementSource(audio);
+  } catch (err) {
+    // createMediaElementSource throws if called twice on the same element —
+    // we always pass a freshly-created element, so this signals a real error.
+    audio.remove();
+    onCleanup?.();
+    throw err;
+  }
+  const gainNode = ctx.createGain();
+  gainNode.gain.value = playbackVolume * clampGain(gain);
+  // Soft brick-wall to keep loud peaks from blowing out viewers' ears when
+  // someone pushes the slider to 300 % on an already-loud sample.
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -3;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.001;
+  limiter.release.value = 0.05;
+  source.connect(gainNode);
+  gainNode.connect(limiter);
+  limiter.connect(ctx.destination);
+
+  const cleanup = () => {
+    try { source.disconnect(); } catch { /* */ }
+    try { gainNode.disconnect(); } catch { /* */ }
+    try { limiter.disconnect(); } catch { /* */ }
+    audio.remove();
+    onCleanup?.();
+  };
+  audio.addEventListener("ended", cleanup, { once: true });
+  audio.addEventListener("error", cleanup, { once: true });
+
+  try {
+    await audio.play();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
+
+/** Plays the sound locally with the per-sound gain applied. Used both for
+ *  user-initiated plays and for handling remote broadcasts. */
+export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promise<void> {
   // Respect the deafen state — if the user is sourdine, they don't want to
   // hear anything, including their own soundboard triggers. Broadcast still
   // happens independently so other participants hear it.
@@ -322,19 +428,25 @@ export async function playSoundLocal(mxcUrl: string): Promise<void> {
   // manifests as AbortError: "media was removed from the document").
   const audio = document.createElement("audio");
   audio.src = url;
-  audio.volume = playbackVolume;
   audio.style.display = "none";
   audio.preload = "auto";
   document.body.appendChild(audio);
-  const remove = () => { audio.remove(); };
-  audio.addEventListener("ended", remove, { once: true });
-  audio.addEventListener("error", remove, { once: true });
-  try {
-    await audio.play();
-  } catch (err) {
-    audio.remove();
-    throw err;
-  }
+  await playElementWithGain(audio, gain);
+}
+
+/** Preview a sound from a local File (during upload) with the given gain.
+ *  Used by the upload modal so the user can audition the effect of the
+ *  gain slider before committing the upload. The blob URL is revoked on
+ *  cleanup so we don't accumulate revoked-but-referenced blobs. */
+export async function previewSoundFile(file: File, gain: number = 1.0): Promise<void> {
+  if (useAppStore.getState().isDeafened) return;
+  const url = URL.createObjectURL(file);
+  const audio = document.createElement("audio");
+  audio.src = url;
+  audio.style.display = "none";
+  audio.preload = "auto";
+  document.body.appendChild(audio);
+  await playElementWithGain(audio, gain, () => URL.revokeObjectURL(url));
 }
 
 const afkEncoder = new TextEncoder();
@@ -349,7 +461,7 @@ const afkDecoder = new TextDecoder();
  * render a "now playing" badge on the sender's avatar without having to
  * resolve the sound from their local soundboard cache first.
  */
-export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs: number | null): void {
+export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs: number | null, gain: number = 1.0): void {
   const room = getCurrentRoom();
   if (!room) return;
   const resolvedEmoji = emoji || "🔊";
@@ -362,6 +474,11 @@ export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs:
       mxc: mxcUrl,
       emoji: resolvedEmoji,
       duration: resolvedDuration,
+      // Sender ships the gain so receivers don't need to look up the sound
+      // metadata locally (avoids a race where the receiver hasn't synced
+      // the latest m.replace edit yet). Defaults sender-side to the
+      // SoundEntry.gain for the played sound.
+      gain,
     }));
     room.localParticipant.publishData(payload, { reliable: true, topic: AFK_LIKE_TOPIC }).catch((err) => {
       console.warn("[Sion] soundboard broadcast failed:", err);
@@ -379,14 +496,15 @@ export const SOUNDBOARD_TOPIC = AFK_LIKE_TOPIC;
  */
 export async function handleRemoteBroadcast(payload: Uint8Array, senderIdentity: string): Promise<void> {
   try {
-    const data = JSON.parse(afkDecoder.decode(payload)) as { mxc?: string; emoji?: string; duration?: number };
+    const data = JSON.parse(afkDecoder.decode(payload)) as { mxc?: string; emoji?: string; duration?: number; gain?: number };
     if (!data.mxc) return;
     // Badge always renders (independent of soundboardEnabled) — receivers
     // who disabled the soundboard still want to see who's triggering sounds.
     setPlayingSound(senderIdentity, data.emoji || "🔊", data.duration ?? 3000);
     const { useSettingsStore } = await import("../stores/useSettingsStore");
     if (!useSettingsStore.getState().soundboardEnabled) return;
-    await playSoundLocal(data.mxc);
+    // Older senders may not include `gain` — default to 1.0 (no boost).
+    await playSoundLocal(data.mxc, typeof data.gain === "number" ? data.gain : 1.0);
   } catch (err) {
     console.warn("[Sion] soundboard remote play failed:", err);
   }

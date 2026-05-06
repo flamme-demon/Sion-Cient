@@ -30,6 +30,9 @@ sion-release.keystore
 keystore.properties
 package-for-windows.sh
 
+# Claude Code workspace (project-local skills, settings, etc.)
+.claude/
+
 # DeepFilterNet models (fetched via ./build-scripts/fetch-dfn-models.sh)
 src-tauri/resources/denoise/
 src-tauri/android/libonnxruntime/

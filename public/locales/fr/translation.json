@@ -82,6 +82,7 @@
     "replyingTo": "Réponse à",
     "sendDM": "Envoyer un message privé",
     "searchEmoji": "Rechercher un emoji...",
+    "recentEmojis": "Récemment utilisés",
     "searchGif": "Rechercher un GIF...",
     "gifDisabled": "Les GIFs sont désactivés. Activez-les dans les paramètres pour pouvoir en envoyer.",
     "loading": "Chargement..."
@@ -92,6 +93,7 @@
   },
   "screenShare": {
     "title": "Options de partage d'écran",
+    "sharedBy": "{{name}} partage son écran",
     "resolution": "Résolution",
     "framerate": "Fréquence",
     "audio": "Partager l'audio",
@@ -138,7 +140,11 @@
     "deleteHint": "Supprimer",
     "editHint": "Éditer",
     "editTitle": "Éditer le son",
-    "editBtn": "Enregistrer"
+    "editBtn": "Enregistrer",
+    "gain": {
+      "label": "Volume du son",
+      "test": "Tester"
+    }
   },
   "hotkey": {
     "title": "Raccourci pour « {{label}} »",
@@ -389,7 +395,16 @@
       "none": "Aucune inscription en attente",
       "refresh": "Actualiser",
       "approve": "Approuver",
-      "reject": "Rejeter"
+      "reject": "Rejeter",
+      "badgeSuspended": "Suspendu",
+      "badgeToken": "Token"
+    },
+    "tokens": {
+      "title": "Tokens d'inscription",
+      "refresh": "Actualiser",
+      "error": "Erreur",
+      "limitedBanner": "Inscription limitée : un token est requis pour créer un compte tant qu'au moins un token actif existe.",
+      "openBanner": "Inscription ouverte — aucun token n'est requis."
     },
     "activeUsers": {
       "title": "Utilisateurs actifs",

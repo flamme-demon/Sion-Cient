@@ -133,22 +133,48 @@ export async function unregisterPusher(): Promise<void> {
 
 /** Subscribe to ntfy topic and handle incoming notifications */
 let eventSource: EventSource | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+let cancelled = false;
 
 export function subscribeToPush(
   onNotification: (data: { roomId?: string; eventId?: string; sender?: string; body?: string }) => void,
 ): () => void {
-  const topicId = getTopicId();
-  if (!topicId) return () => {};
+  cancelled = false;
+  reconnectAttempt = 0;
+  open(onNotification);
+  return () => {
+    cancelled = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+  };
+}
 
-  // Close existing subscription
+function open(
+  onNotification: (data: { roomId?: string; eventId?: string; sender?: string; body?: string }) => void,
+): void {
+  if (cancelled) return;
+  const topicId = getTopicId();
+  if (!topicId) return;
+
   if (eventSource) {
     eventSource.close();
     eventSource = null;
   }
 
   const url = `${NTFY_BASE_URL}/${topicId}/sse`;
-
   eventSource = new EventSource(url);
+
+  eventSource.addEventListener("open", () => {
+    // Reset backoff once we've successfully reconnected.
+    reconnectAttempt = 0;
+  });
 
   eventSource.addEventListener("message", (event) => {
     try {
@@ -184,11 +210,22 @@ export function subscribeToPush(
   });
 
   eventSource.onerror = () => {
-    console.warn("[Sion] Push SSE connection error, will reconnect");
-  };
-
-  return () => {
-    eventSource?.close();
-    eventSource = null;
+    if (cancelled) return;
+    // The browser keeps EventSource alive in the background and retries on
+    // its own, but it doesn't back off — under repeated server failure
+    // it'll hammer at 1 Hz. Force-close it and use our own backoff so we
+    // don't burn the server (and our laptop battery) on a sustained outage.
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    reconnectAttempt += 1;
+    const delay = Math.min(60_000, 1000 * 2 ** Math.min(reconnectAttempt - 1, 6));
+    console.warn(`[Sion] Push SSE error — reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      open(onNotification);
+    }, delay);
   };
 }

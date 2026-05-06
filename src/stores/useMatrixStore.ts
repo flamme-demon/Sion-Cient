@@ -493,6 +493,23 @@ function extractMessagesFromRoom(room: any): ChatMessage[] {
   return extractMessagesFromEvents(timeline, room, client);
 }
 
+// Events `initSync` attaches handlers for. Without an explicit purge before
+// re-attaching, every disconnect→connect cycle stacks fresh closures onto the
+// same client (handlers capture rooms/events → memory grows linearly with
+// reconnects, ~6.7 GB after 31h was traced to this).
+const TRACKED_CLIENT_EVENTS: ReadonlyArray<string> = [
+  HttpApiEvent.SessionLoggedOut,
+  ClientEvent.Sync,
+  ClientEvent.Room,
+  RoomEvent.Timeline,
+  RoomStateEvent.Events,
+  RoomMemberEvent.Membership,
+  CryptoEvent.KeyBackupDecryptionKeyCached,
+  CryptoEvent.VerificationRequestReceived,
+  CryptoEvent.DevicesUpdated,
+  MatrixEventEvent.Decrypted,
+];
+
 export const useMatrixStore = create<MatrixState>((set, get) => ({
   channels: [],
   messages: {},
@@ -528,6 +545,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
   initSync: (client: MatrixClient) => {
     set({ connectionStatus: "connecting", currentUserId: client.getUserId() || null });
+
+    for (const evt of TRACKED_CLIENT_EVENTS) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      try { client.removeAllListeners(evt as any); } catch { /* no listeners */ }
+    }
 
     // Detect token invalidation (e.g. revoked from another client)
     client.on(HttpApiEvent.SessionLoggedOut, () => {
@@ -1715,6 +1737,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const missingPinnedIds = pinnedIds.filter((id) => !loadedIds.has(id));
 
       if (missingPinnedIds.length > 0) {
+        let appendedPinned = false;
         for (const eventId of missingPinnedIds) {
           try {
             const res = await fetch(
@@ -1728,8 +1751,18 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               try { await client.decryptEventIfNeeded(evt); } catch { /* skip */ }
             }
             const pinnedMsgs = extractMessagesFromEvents([evt], room, client);
-            if (pinnedMsgs.length > 0) merged.push(pinnedMsgs[0]);
+            if (pinnedMsgs.length > 0) {
+              merged.push(pinnedMsgs[0]);
+              appendedPinned = true;
+            }
           } catch { /* skip unavailable pinned messages */ }
+        }
+        // Pinned messages fetched out-of-band carry their original ts but
+        // were `push`ed after the chronologically-sorted timeline above —
+        // without this re-sort they render at the bottom of the chat,
+        // jumbling the day separators.
+        if (appendedPinned) {
+          merged.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
         }
       }
 

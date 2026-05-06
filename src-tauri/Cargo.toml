@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "1.0.0"
+version = "1.1.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -77,6 +77,14 @@ nnnoiseless = "0.5"
 # Linux-only dependencies (rdev for evdev keyboard capture)
 [target.'cfg(target_os = "linux")'.dependencies]
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
+# NOTE: `pipewire = "0.9"` was added here for the screen-share-audio
+# exclusion path (commit 2a) but removed because libpipewire's static
+# constructors (run before main()) conflict with CEF's GLib/Wayland init
+# order — the process segfaults inside libcef.so's `OnWebContentsAttached`
+# before any of our code runs. Future re-introduction needs lazy loading
+# via `libloading` (dlopen at first capture call, not at process start)
+# or — simpler — switch the enumeration path to a `pw-cli ls Node`
+# subprocess parse, mirroring how we already use `pactl` elsewhere.
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

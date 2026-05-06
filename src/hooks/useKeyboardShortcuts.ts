@@ -95,9 +95,9 @@ export function useKeyboardShortcuts() {
               const sound = sounds.find((s) => s.eventId === eventId);
               if (!sound) return;
               try {
-                await playSoundLocal(sound.mxcUrl);
+                await playSoundLocal(sound.mxcUrl, sound.gain);
                 const { useAppStore } = await import("../stores/useAppStore");
-                if (useAppStore.getState().connectedVoiceChannel) broadcastSound(sound.mxcUrl, sound.emoji, sound.duration);
+                if (useAppStore.getState().connectedVoiceChannel) broadcastSound(sound.mxcUrl, sound.emoji, sound.duration, sound.gain);
               } catch (err) {
                 console.warn("[Sion] soundboard hotkey play failed:", err);
               }

@@ -32,6 +32,12 @@ export function AdminStats() {
   const voiceCount = channels.filter((c) => c.hasVoice).length;
   const textCount = channels.filter((c) => !c.hasVoice).length;
 
+  // `channels` isn't read inside the memo — it's used as a poor man's
+  // "matrix state changed" trigger so the count refreshes when room
+  // membership shuffles (which usually coincides with presence changes).
+  // Cleaner would be a presence-event listener, but that'd add more
+  // wiring than this admin-only stat warrants.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const onlineCount = useMemo(() => {
     const client = getMatrixClient();
     if (!client) return null;

@@ -14,16 +14,14 @@ const failureCache = new Map<string, number>();
 const MAX_CACHE_SIZE = 200;
 
 function trimCache<V>(cache: Map<string, V>) {
-  if (cache.size > MAX_CACHE_SIZE) {
-    const it = cache.keys();
-    for (let i = cache.size - MAX_CACHE_SIZE; i > 0; i--) it.next();
-    // Delete oldest entries
-    const keysToDelete: string[] = [];
-    const iter = cache.keys();
-    for (let i = 0; i < cache.size - MAX_CACHE_SIZE; i++) {
-      keysToDelete.push(iter.next().value!);
-    }
-    for (const k of keysToDelete) cache.delete(k);
+  if (cache.size <= MAX_CACHE_SIZE) return;
+  // Map iteration order is insertion order, so the first N keys are the
+  // oldest. Drop them down to the size cap. (Earlier revision walked the
+  // iterator twice for no reason — first walk was dead code.)
+  const overflow = cache.size - MAX_CACHE_SIZE;
+  const it = cache.keys();
+  for (let i = 0; i < overflow; i++) {
+    cache.delete(it.next().value!);
   }
 }
 const FAILURE_TTL_MS = 10_000;
@@ -106,6 +104,7 @@ async function fetchPreview(url: string): Promise<LinkPreviewData | null> {
         }
         // No usable data — not a transient error, give up
         failureCache.set(url, Date.now());
+        trimCache(failureCache);
         return null;
       } catch (err) {
         lastError = err;
@@ -117,9 +116,11 @@ async function fetchPreview(url: string): Promise<LinkPreviewData | null> {
     if (isPermanentHttpError(lastError)) {
       // Silent — sites like LeBonCoin, Amazon block bot requests; nothing we can do.
       failureCache.set(url, Date.now() + PERMANENT_FAILURE_TTL_MS - FAILURE_TTL_MS);
+      trimCache(failureCache);
     } else {
       console.warn("[Sion][LinkPreview] fetch failed after retries", url, lastError);
       failureCache.set(url, Date.now());
+      trimCache(failureCache);
     }
     return null;
   } finally {

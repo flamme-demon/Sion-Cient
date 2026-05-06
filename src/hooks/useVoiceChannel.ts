@@ -6,7 +6,7 @@ import { useAuthStore } from "../stores/useAuthStore";
 import { useMatrixStore } from "../stores/useMatrixStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitTokenService";
-import { getMatrixClient } from "../services/matrixService";
+import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMemberEvent } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
 import { getCurrentRoom, setReemitKeysCallback } from "../services/livekitService";
@@ -17,6 +17,11 @@ import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 // Module-level tracking — survives component unmount/remount
 let activeRTCSession: MatrixRTCSession | null = null;
 let activeKeyProvider: MatrixKeyProvider | null = null;
+// Room id of the MatrixRTC session currently active, used by cleanup to
+// target the matching matrixService callMemberCache entry. Mirrors
+// `activeRTCSession.room.roomId` but stays readable after we null the
+// session out during cleanup.
+let activeRTCRoomId: string | null = null;
 // Track E2EE reemit resources for cleanup.
 // The old "fire-every-3s-for-15s" interval has been replaced by on-demand
 // reemit driven by MissingKey errors in livekitService (see setReemitKeysCallback).
@@ -55,6 +60,10 @@ function gracefulVoiceShutdown(_reason: string) {
       try { room.disconnect(true); } catch { /* ignore */ }
     }
   }).catch(() => {});
+  if (activeRTCRoomId) {
+    removeCallMemberEvent(activeRTCRoomId);
+    activeRTCRoomId = null;
+  }
   if (activeRTCSession) {
     activeRTCSession.leaveRoomSession(2000).catch(() => {});
     activeRTCSession = null;
@@ -102,6 +111,15 @@ async function cleanupActiveSession() {
   if (reemitMembershipHandler && activeRTCSession) {
     activeRTCSession.off(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
     reemitMembershipHandler = null;
+  }
+
+  // Drop the matrixService cache entry before leaveRoomSession so any
+  // in-flight debounced publishLocalVoiceState during the leave transition
+  // hits an empty cache and no-ops — we don't want a stale rewrite to
+  // race leaveRoomSession's empty-state write.
+  if (activeRTCRoomId) {
+    removeCallMemberEvent(activeRTCRoomId);
+    activeRTCRoomId = null;
   }
 
   if (activeRTCSession) {
@@ -241,7 +259,38 @@ export function useVoiceChannel() {
               ...(isEncrypted ? { manageMediaKeys: true } : {}),
             });
 
+            // MSC4143 `call.member` content piggyback for cross-channel
+            // mute/deafen visibility. matrix-js-sdk v41 doesn't expose a
+            // public hook to inject fields into MembershipManager's content
+            // generator, but `makeMyMembership` is `protected` and
+            // monkey-patchable on the session's MembershipManager instance.
+            // Wrapping it here makes every SDK-scheduled renewal (kept alive
+            // by the ActionScheduler at ~expiry/2) carry our two Sion
+            // fields. Between renewals, `publishLocalVoiceState` in
+            // matrixService writes directly so toggles stay reactive. The
+            // patch is instance-scoped — it dies with the session when we
+            // null out `activeRTCSession` in cleanup.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const mm = (session as any).membershipManager;
+            if (mm && typeof mm.makeMyMembership === "function") {
+              const original = mm.makeMyMembership.bind(mm);
+              mm.makeMyMembership = (expires: number) => {
+                const base = original(expires);
+                const vs = getLocalVoiceState();
+                return { ...base, sion_muted: vs.muted, sion_deafened: vs.deafened };
+              };
+            } else {
+              console.warn("[Sion] MembershipManager.makeMyMembership not found — cross-channel voice state limited to fast-path only; SDK renewals will clobber");
+            }
+
+            // Register the room in matrixService so `publishLocalVoiceState`
+            // (mute/deafen toggles) has a target to rewrite. The initial
+            // call.member write is handled by `joinRoomSession` above — we
+            // only populate the cache here.
+            sendCallMemberEvent(matrixRoomId, rtcResult.serviceUrl, rtcResult.livekitAlias);
+
             activeRTCSession = session;
+            activeRTCRoomId = matrixRoomId;
             activeKeyProvider = keyProvider || null;
 
             // We deliberately do NOT register an E2EE recovery callback.

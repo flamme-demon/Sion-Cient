@@ -3,11 +3,16 @@ import { useTranslation } from "react-i18next";
 import { checkUserSuspended, suspendUser, getRoomsList } from "../../services/adminService";
 import { getMatrixClient } from "../../services/matrixService";
 import { sendAdminCommand, findAdminRoom } from "../../services/adminCommandService";
-import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
+import {
+  usePendingUsersStore,
+  getPublicRoomIds,
+  isInAnyPublicRoom,
+} from "../../stores/usePendingUsersStore";
 
 interface UserEntry {
   userId: string;
   suspended: boolean;
+  isolated: boolean;
 }
 
 function usePendingUsers() {
@@ -15,25 +20,28 @@ function usePendingUsers() {
   const [activeUsers, setActiveUsers] = useState<UserEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const knownUserIds = usePendingUsersStore((s) => s._knownUserIds);
+  const fullDiscover = usePendingUsersStore((s) => s.fullDiscover);
 
-  const refresh = useCallback(async () => {
+  const checkAll = useCallback(async () => {
     if (knownUserIds.size === 0) return;
 
-    setLoading(true);
-
+    // Compute the public-room set once per pass instead of walking the
+    // room graph for every user.
+    const publicRoomIds = getPublicRoomIds();
     const pending: UserEntry[] = [];
     const active: UserEntry[] = [];
 
     for (const userId of knownUserIds) {
+      let suspended = false;
       try {
         const result = await checkUserSuspended(userId);
-        if (result.suspended) {
-          pending.push({ userId, suspended: true });
-        } else {
-          active.push({ userId, suspended: false });
-        }
-      } catch {
-        active.push({ userId, suspended: false });
+        suspended = result.suspended;
+      } catch { /* assume not suspended on error */ }
+      const isolated = !isInAnyPublicRoom(userId, publicRoomIds);
+      if (suspended || isolated) {
+        pending.push({ userId, suspended, isolated });
+      } else {
+        active.push({ userId, suspended: false, isolated: false });
       }
     }
 
@@ -42,12 +50,24 @@ function usePendingUsers() {
 
     setPendingUsers(pending);
     setActiveUsers(active);
-    setLoading(false);
   }, [knownUserIds]);
 
+  // User-triggered refresh: full re-discovery (catches new registrations
+  // that haven't joined any room yet), then per-user suspension check.
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      await fullDiscover();
+      await checkAll();
+    } finally {
+      setLoading(false);
+    }
+  }, [fullDiscover, checkAll]);
+
+  // React to knownUserIds changes (fullDiscover updates the store).
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    checkAll();
+  }, [checkAll]);
 
   return { pendingUsers, activeUsers, loading, refresh };
 }
@@ -228,8 +248,42 @@ export function PendingUsers() {
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
                   }}>
-                    {extractName(user.userId)}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {extractName(user.userId)}
+                    </span>
+                    {user.suspended ? (
+                      <span style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        background: 'var(--color-error-container)',
+                        color: 'var(--color-error)',
+                        borderRadius: 6,
+                        padding: '1px 6px',
+                        flexShrink: 0,
+                      }}>
+                        {t("admin.pending.badgeSuspended")}
+                      </span>
+                    ) : user.isolated ? (
+                      <span style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        background: 'var(--color-tertiary-container)',
+                        color: 'var(--color-on-tertiary-container)',
+                        borderRadius: 6,
+                        padding: '1px 6px',
+                        flexShrink: 0,
+                      }}>
+                        {t("admin.pending.badgeToken")}
+                      </span>
+                    ) : null}
                   </div>
                   <div style={{
                     fontSize: 10,

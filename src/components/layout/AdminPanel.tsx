@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { SettingsIcon, ArrowLeftIcon } from "../icons";
 import { AdminStats } from "../admin/AdminStats";
 import { PendingUsers } from "../admin/PendingUsers";
+import { RegistrationTokens } from "../admin/RegistrationTokens";
 import { AdminActions } from "../admin/AdminActions";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useAppStore } from "../../stores/useAppStore";
@@ -54,6 +55,7 @@ export function AdminPanel() {
         <div style={{ display: 'flex', flexDirection: 'column', padding: '0 12px', gap: 8 }}>
           <AdminActions />
           <PendingUsers />
+          <RegistrationTokens />
           <AdminStats />
         </div>
       </div>

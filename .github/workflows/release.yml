@@ -1,0 +1,169 @@
+name: Release
+
+# Triggered when we push a `v*` tag (e.g. `v1.1.0`). Builds Linux AppImage
+# and Windows MSI in parallel, then publishes a GitHub Release with both
+# artifacts attached. The version string is derived from the tag itself
+# so we don't have to keep the workflow in sync with package.json.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.1.0). For dry runs.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # needed to create a GitHub Release
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Linux AppImage. Uses the existing build-scripts/build-appimage.sh which
+  # downloads linuxdeploy on demand, so the workflow only has to install
+  # bun + rust + a handful of system libs that CEF (and FUSE for AppImage
+  # mounting) need at build time.
+  # -------------------------------------------------------------------------
+  build-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config curl wget file zstd squashfs-tools \
+            libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
+            libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 \
+            libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
+            libgtk-3-0t64 libfuse2t64
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.83'    # matches the rust-version floor in Cargo.toml
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          # Cargo.lock pinpoints the exact dependency graph; bust the cache
+          # when it changes so we don't keep stale build outputs around.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build AppImage
+        run: ./build-scripts/build-appimage.sh
+
+      - name: Upload AppImage as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist-appimage/*.AppImage
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Windows MSI. Tauri's bundler downloads WiX on first run; we let it do
+  # so rather than pre-installing, since the cache makes subsequent runs
+  # fast. We invoke `tauri build --bundles msi` directly instead of the
+  # PowerShell helper script — the helper does dev-machine setup that's
+  # unnecessary on a fresh GHA runner.
+  # -------------------------------------------------------------------------
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.83'
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install tauri-cli
+        # Pin to a known-good major to avoid silent breakage on bumps.
+        # WiX (MSI bundler) is downloaded by tauri-cli on first invocation.
+        run: cargo install tauri-cli --version '^2.0' --locked
+
+      - name: Build Tauri MSI
+        # `--features cef` matches the local dev path — the CEF runtime
+        # crate fetches its prebuilt binaries during this step.
+        run: cargo tauri build --bundles msi --features cef
+        env:
+          # MSI signing is not configured on CI — we ship unsigned for
+          # now. Users see the SmartScreen warning on first run.
+          TAURI_SIGNING_PRIVATE_KEY: ''
+
+      - name: Upload MSI as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msi
+          path: src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Aggregate the per-OS artifacts into a single GitHub Release. Body is
+  # generated from commits since the previous tag; users can edit the
+  # release post-publish to add a curated changelog.
+  # -------------------------------------------------------------------------
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history to compute "since previous tag"
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-appimage
+          path: ./artifacts
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-msi
+          path: ./artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          # Auto-generate notes from commit history since previous tag.
+          # `gh release create --generate-notes` does this server-side.
+          gh release create "$TAG" \
+            --title "Sion Client $TAG" \
+            --generate-notes \
+            ./artifacts/*.AppImage \
+            ./artifacts/*.msi

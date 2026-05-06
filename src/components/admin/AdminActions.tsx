@@ -131,7 +131,7 @@ export function AdminActions() {
       // requests return 404/403, so filter them out upfront.
       const promoteClient = getMatrixClient();
       const myUserId = promoteClient?.getUserId() || "";
-      let targetRoomIds: string[] = [];
+      const targetRoomIds: string[] = [];
       if (promoteClient) {
         for (const room of promoteClient.getRooms()) {
           if (room.roomId === adminRoomId) continue;

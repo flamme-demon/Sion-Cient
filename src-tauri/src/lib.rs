@@ -986,6 +986,13 @@ pub fn run() {
     #[cfg(all(feature = "cef", target_os = "linux"))]
     cef_args.push(("--enable-features".to_string(), Some("WebRtcPipeWireCapturer".to_string())));
 
+    // NOTE: a `--disable-features=WaylandPerSurfaceScale,WaylandWpColorManagementV1`
+    // flag was added here to fix the Chromium color-manager SIGILL but it
+    // breaks CEF webview attachment at startup on this build (segfault in
+    // libcef.so OnWebContentsAttached → GetForExtraction). Removed pending
+    // a more surgical workaround for the color-manager crash that doesn't
+    // disable a feature CEF still expects to be on internally.
+
     #[cfg(feature = "cef")]
     let builder = builder.command_line_args(cef_args);
 

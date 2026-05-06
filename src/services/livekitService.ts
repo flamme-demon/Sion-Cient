@@ -58,18 +58,6 @@ const CURSOR_TOPIC = "sion-cursor";
 const CURSOR_CLICK_TOPIC = "sion-cursor-click";
 const CURSOR_TTL_MS = 2000;
 
-// Diagnostic for cursor receive — lightweight per-peer counter that logs
-// the first packet (so we know broadcasts are arriving) and a pulse every
-// 200 packets thereafter (~7s of 30Hz traffic). Removed once the overlay
-// flow is verified end-to-end.
-const cursorRecvCounts = new Map<string, number>();
-function cursorRecvDiag(identity: string, localIsSharing: boolean) {
-  const next = (cursorRecvCounts.get(identity) || 0) + 1;
-  cursorRecvCounts.set(identity, next);
-  if (next === 1 || next % 200 === 0) {
-    console.log(`[Sion][CursorRecv] ${identity} count=${next} sharing=${localIsSharing}`);
-  }
-}
 /** Expiry for click ripples — the effect itself animates for ~600 ms, so
  *  beyond 800 ms the stored entry is just stale state. */
 const CLICK_TTL_MS = 800;
@@ -530,6 +518,7 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   // let a residual audio quantum (~10–20ms) through on some Chromium builds.
   el.muted = isCurrentlyDeafened;
   if (isCurrentlyDeafened) el.setAttribute("muted", "");
+  console.log(`[Sion][deafen] attachAudioTrack pid=${participant.identity} sid=${sid} src=${publication.source} → muted=${el.muted} (isCurrentlyDeafened=${isCurrentlyDeafened})`);
   // Always start at 0: a short fade-in (below) protects listeners from a
   // loud noise burst while E2EE key exchange completes. When flamme rejoins
   // a room where picsou is already connected, the Opus frames land over UDP
@@ -618,7 +607,14 @@ function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
     el.remove();
     audioElements.delete(sid);
   }
-  stopSpeakingDetector(participant.identity);
+  // The SpeakingDetector is keyed by participant.identity and was only ever
+  // attached to the Microphone track (the attach path skips ScreenShareAudio).
+  // Unsubscribing a ScreenShareAudio track must NOT kill the mic's detector —
+  // otherwise the remote's halo stays dark after they stop screen-share-with-audio
+  // until they republish their mic.
+  if (publication.source !== Track.Source.ScreenShareAudio) {
+    stopSpeakingDetector(participant.identity);
+  }
 }
 
 function detachAllAudio() {
@@ -692,9 +688,18 @@ export async function connectToRoom(
   // unmute can't silently flip a locally muted peer back to audible.
   room.on(RoomEvent.TrackUnmuted, (publication: TrackPublication, participant: Participant) => {
     if (publication.kind !== Track.Kind.Audio) return;
+    const sid = (publication as RemoteTrackPublication).trackSid;
+    const el = sid ? audioElements.get(sid) : undefined;
+    console.log(`[Sion][deafen] TrackUnmuted pid=${participant.identity} sid=${sid} src=${publication.source} — isCurrentlyDeafened=${isCurrentlyDeafened} elMuted=${el?.muted} elVol=${el?.volume}`);
     if (!locallyMutedIdentities.has(participant.identity)) return;
     const mst = (publication as RemoteTrackPublication).track?.mediaStreamTrack;
     if (mst) mst.enabled = false;
+  });
+  room.on(RoomEvent.TrackMuted, (publication: TrackPublication, participant: Participant) => {
+    if (publication.kind !== Track.Kind.Audio) return;
+    const sid = (publication as RemoteTrackPublication).trackSid;
+    const el = sid ? audioElements.get(sid) : undefined;
+    console.log(`[Sion][deafen] TrackMuted   pid=${participant.identity} sid=${sid} src=${publication.source} — isCurrentlyDeafened=${isCurrentlyDeafened} elMuted=${el?.muted} elVol=${el?.volume}`);
   });
 
   // Force-subscribe to every published audio track. In theory LiveKit
@@ -833,22 +838,36 @@ export async function connectToRoom(
   room.on(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
   room.on(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
 
-  // Connection state — propagated to useLiveKitStore for the global banner
-  room.on(RoomEvent.Reconnecting, () => {
+  // Connection state — propagated to useLiveKitStore for the global banner.
+  // RoomEvent.Reconnecting only fires when the SDK escalates to a full
+  // reconnect; the signal-resume phase (which is what happens first on a
+  // server restart, and often the only phase needed when the outage is
+  // brief) is silent. ConnectionStateChanged fires on EVERY transition,
+  // including signal-resume drops, so it's the only path that surfaces a
+  // 5-second LiveKit restart to the user. We keep the explicit Reconnecting/
+  // Reconnected/Disconnected handlers as a belt-and-suspenders fallback in
+  // case ConnectionStateChanged emits race below the room state being settled.
+  const propagateConnectionState = () => {
     import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
-      useLiveKitStore.getState().setConnectionState("reconnecting");
+      // ConnectionState enum values from livekit-client: "disconnected",
+      // "connecting", "connected", "reconnecting", "signal_reconnecting".
+      // We collapse "connecting" and "signal_reconnecting" into our 3-state
+      // model: anything not "connected" or "disconnected" is shown as
+      // "reconnecting" in the banner.
+      const state = room.state as string;
+      if (state === "connected") {
+        useLiveKitStore.getState().setConnectionState("connected");
+      } else if (state === "disconnected") {
+        useLiveKitStore.getState().setConnectionState("disconnected");
+      } else {
+        useLiveKitStore.getState().setConnectionState("reconnecting");
+      }
     });
-  });
-  room.on(RoomEvent.Reconnected, () => {
-    import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
-      useLiveKitStore.getState().setConnectionState("connected");
-    });
-  });
-  room.on(RoomEvent.Disconnected, () => {
-    import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
-      useLiveKitStore.getState().setConnectionState("disconnected");
-    });
-  });
+  };
+  room.on(RoomEvent.ConnectionStateChanged, propagateConnectionState);
+  room.on(RoomEvent.Reconnecting, propagateConnectionState);
+  room.on(RoomEvent.Reconnected, propagateConnectionState);
+  room.on(RoomEvent.Disconnected, propagateConnectionState);
 
   await room.connect(url, token);
   currentRoom = room;
@@ -975,8 +994,14 @@ export async function disconnectFromRoom() {
     currentRoom.off(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
     currentRoom.off(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
     currentRoom.off(EncryptionEvent.EncryptionError, onE2EEError);
+    // Tell the UI there's no active share now — but keep the callback
+    // registered. ScreenShareView is mounted in MainArea and is NOT tied to
+    // voice-connection state; its useEffect runs once and never re-fires,
+    // so nulling the global ref here would orphan it forever and silently
+    // break the next voice session's screen share. The cleanup that
+    // ScreenShareView's own unmount returns is the only path allowed to
+    // null this — it fires when the user logs out / leaves the app.
     screenShareCallback?.(null);
-    screenShareCallback = null;
     resetAllE2EEState();
     pendingTimerCleanup?.();
     pendingTimerCleanup = null;
@@ -1049,15 +1074,18 @@ export async function switchAudioOutput(deviceId: string) {
 }
 
 export function setDeafened(deafened: boolean) {
+  const prev = isCurrentlyDeafened;
   isCurrentlyDeafened = deafened;
+  console.log(`[Sion][deafen] setDeafened(${deafened}) — was=${prev}, elements=${audioElements.size}`);
   // Mute/unmute all existing audio elements. Mirror the attach-time
   // suppression (property + attribute + volume) so runtime toggles match
   // the guarantees applied at track-attach time.
-  audioElements.forEach((el) => {
+  audioElements.forEach((el, sid) => {
     el.muted = deafened;
     if (deafened) el.setAttribute("muted", "");
     else el.removeAttribute("muted");
     el.volume = deafened ? 0 : 1;
+    console.log(`[Sion][deafen]   → sid=${sid} pid=${el.dataset.participantId} src=${el.dataset.trackSource} muted=${el.muted} vol=${el.volume}`);
   });
   broadcastAfk();
 }
@@ -1127,7 +1155,13 @@ export function onCursorsChange(callback: (cursors: RemoteCursor[]) => void): ()
   }
   callback(Array.from(remoteCursors.values()));
   return () => {
-    if (cursorCallback === callback) cursorCallback = null;
+    if (cursorCallback === callback) {
+      cursorCallback = null;
+      if (cursorSweepTimer) {
+        clearInterval(cursorSweepTimer);
+        cursorSweepTimer = null;
+      }
+    }
   };
 }
 
@@ -1174,15 +1208,39 @@ export async function updateAudioProcessing(options: {
 }
 
 /** Re-capture the microphone so the denoise shim re-wraps the track (or
- *  stops wrapping) based on the current aiNoiseSuppression setting. Same
- *  mechanism as updateAudioProcessing — unpublish + republish forces a
- *  fresh getUserMedia that our shim intercepts. */
+ *  stops wrapping) based on the current aiNoiseSuppression setting.
+ *
+ *  Why not `setMicrophoneEnabled(false)` → `(true)` like updateAudioProcessing?
+ *  That works only when `audioCaptureDefaults` changed first — LK uses the
+ *  diff to decide whether to invoke getUserMedia again. Toggling AI denoise
+ *  doesn't change any Chromium-level constraint (the wrap happens in JS via
+ *  our cefAudioShim hook on getUserMedia), so LK's cached track is reused
+ *  and getUserMedia is never re-called → the shim never re-wraps → RNNoise
+ *  stays passthrough. Confirmed in prod by identical track UUIDs across the
+ *  toggle cycle.
+ *
+ *  Force the issue: explicitly `unpublishTrack(track, stopOnUnpublish=true)`,
+ *  which actually stops the underlying MediaStreamTrack and frees the
+ *  device. Then `createLocalAudioTrack` invokes getUserMedia from scratch,
+ *  the shim runs, and `publishTrack` sends the fresh track up. The
+ *  generator's `ended` event from the stop cascades into the previous
+ *  denoise pump's `cancel()` (safety net landed in v1.0.0), so no pump
+ *  leak. */
 export async function refreshMicrophoneForDenoise() {
   if (!currentRoom) return;
-  if (!currentRoom.localParticipant.isMicrophoneEnabled) return;
+  const lp = currentRoom.localParticipant;
+  if (!lp.isMicrophoneEnabled) return;
   try {
-    await currentRoom.localParticipant.setMicrophoneEnabled(false);
-    await currentRoom.localParticipant.setMicrophoneEnabled(true);
+    const micPub = lp.getTrackPublication(Track.Source.Microphone);
+    if (micPub?.track) {
+      await lp.unpublishTrack(micPub.track, true);
+    }
+    const { createLocalAudioTrack } = await import("livekit-client");
+    const newTrack = await createLocalAudioTrack(currentRoom.options.audioCaptureDefaults);
+    await lp.publishTrack(newTrack, {
+      source: Track.Source.Microphone,
+      audioPreset: currentRoom.options.publishDefaults?.audioPreset,
+    });
     logAudioProcessingSettings("refreshMicrophoneForDenoise");
   } catch (err) {
     console.warn("[Sion] Failed to refresh microphone for denoise:", err);
@@ -1474,7 +1532,15 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     if (topic === AFK_TOPIC) {
       try {
         const parsed = JSON.parse(afkDecoder.decode(payload)) as { deafened?: boolean };
-        remoteDeafenState.set(participant.identity, parsed.deafened === true);
+        const remoteDeaf = parsed.deafened === true;
+        remoteDeafenState.set(participant.identity, remoteDeaf);
+        let snapshot = "";
+        for (const [sid, el] of audioElements) {
+          if (el.dataset.participantId === participant.identity) {
+            snapshot += ` [sid=${sid} src=${el.dataset.trackSource} muted=${el.muted} vol=${el.volume}]`;
+          }
+        }
+        console.log(`[Sion][deafen] AFK rx pid=${participant.identity} remoteDeafened=${remoteDeaf} — selfDeafened=${isCurrentlyDeafened} elements:${snapshot || " (none)"}`);
         update();
       } catch { /* ignore malformed */ }
       return;
@@ -1508,9 +1574,6 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
         // Tauri overlay so the cursor appears on our real display (captured
         // by getDisplayMedia → all viewers see where everyone points).
         const localIsSharing = currentRoom?.localParticipant.isScreenShareEnabled === true;
-        // Diag: log first CURSOR_TOPIC arrival from each peer + a periodic
-        // pulse so we can see in the log whether broadcasts are coming in.
-        cursorRecvDiag(participant.identity, localIsSharing);
         if (parsed.expire) {
           if (remoteCursors.delete(participant.identity)) {
             cursorCallback?.(Array.from(remoteCursors.values()));

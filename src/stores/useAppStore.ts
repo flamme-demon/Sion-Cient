@@ -143,6 +143,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   toggleDeafen: () => {
     const newDeafened = !get().isDeafened;
+    console.log(`[Sion][deafen] toggleDeafen() store: ${get().isDeafened} → ${newDeafened}`);
     set({ isDeafened: newDeafened });
     newDeafened ? playDeafen() : playUndeafen();
     livekitService.setDeafened(newDeafened);
