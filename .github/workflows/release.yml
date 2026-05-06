@@ -34,8 +34,16 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
+          # Tauri's standard Ubuntu prereqs (gtk/soup/webkit -dev) — we don't
+          # use webkit at runtime (CEF) but tauri-runtime-cef transitively
+          # depends on glib-rs/gtk-rs whose `*-sys` build scripts call
+          # pkg-config and need the .pc files those -dev packages provide.
+          # Plus the CEF runtime libs (nss, gbm, xss, drm…) needed at build
+          # for the linker to resolve, and AppImage tooling (zstd, fuse2).
           sudo apt-get install -y \
             build-essential pkg-config curl wget file zstd squashfs-tools \
+            libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libglib2.0-dev \
             libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
             libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 \
             libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
