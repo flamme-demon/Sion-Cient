@@ -47,7 +47,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.83'    # matches the rust-version floor in Cargo.toml
+          # tauri-runtime-cef rev a9525cf pulls in tauri-cli which requires
+          # edition 2024 (Rust ≥ 1.85). Cargo parses every workspace member
+          # of the git dep, not just the one we use, so even though we don't
+          # build the CLI ourselves we still need a recent toolchain.
+          toolchain: 'stable'
           targets: x86_64-unknown-linux-gnu
 
       - name: Cache cargo registry + build artifacts
@@ -93,7 +97,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.83'
+          toolchain: 'stable'
           targets: x86_64-pc-windows-msvc
 
       - name: Cache cargo registry + build artifacts
