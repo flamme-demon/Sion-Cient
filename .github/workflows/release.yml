@@ -124,25 +124,87 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install tauri-cli
-        # Pin to a known-good major to avoid silent breakage on bumps.
-        # WiX (MSI bundler) is downloaded by tauri-cli on first invocation.
-        run: cargo install tauri-cli --version '^2.0' --locked
+      - name: Compile Rust binary (CEF runtime)
+        # We do `cargo build` first instead of going straight to
+        # `tauri build`, because we need access to the CEF binaries that
+        # the `cef` crate downloads during this step before we can stage
+        # them into the bundle.
+        working-directory: src-tauri
+        run: cargo build --release --features cef
 
-      - name: Build Tauri MSI
-        # `--features cef` matches the local dev path — the CEF runtime
-        # crate fetches its prebuilt binaries during this step.
-        run: cargo tauri build --bundles msi --features cef
+      - name: Stage CEF libs + patch tauri.conf.json
+        # The default `tauri build --bundles nsis` doesn't know about CEF —
+        # it would ship a 7 MB installer with just the binary, missing
+        # libcef.dll and the locales/ folder. We mirror what
+        # build-scripts/build-windows.ps1 does locally: copy the CEF
+        # output into src-tauri/cef-dist/, then inject a `bundle.resources`
+        # mapping into tauri.conf.json so the bundler picks them up. The
+        # original config is backed up and restored after the build.
+        shell: pwsh
+        run: |
+          $cefFiles = @(
+            "libcef.dll","chrome_elf.dll","d3dcompiler_47.dll",
+            "libEGL.dll","libGLESv2.dll","vulkan-1.dll","vk_swiftshader.dll",
+            "chrome_100_percent.pak","chrome_200_percent.pak","resources.pak",
+            "icudtl.dat","v8_context_snapshot.bin","snapshot_blob.bin","vk_swiftshader_icd.json"
+          )
+          $cefDir = Get-ChildItem -Path src-tauri/target/release/build -Recurse -Directory -Filter "cef_win*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cefDir) {
+            $cefDir = Get-ChildItem -Path src-tauri/target/release/build -Recurse -Directory -Filter "cef_windows*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $cefDir) {
+            Write-Error "CEF directory not found under src-tauri/target/release/build/"
+            exit 1
+          }
+          $cefDist = "src-tauri/cef-dist"
+          if (Test-Path $cefDist) { Remove-Item -Recurse -Force $cefDist }
+          New-Item -ItemType Directory -Force -Path $cefDist | Out-Null
+          foreach ($f in $cefFiles) {
+            $src = Join-Path $cefDir.FullName $f
+            if (Test-Path $src) { Copy-Item $src "$cefDist/" }
+          }
+          $localesDir = Join-Path $cefDir.FullName "locales"
+          if (Test-Path $localesDir) {
+            New-Item -ItemType Directory -Force -Path "$cefDist/locales" | Out-Null
+            Copy-Item "$localesDir/*" "$cefDist/locales/" -Force
+          }
+          Write-Host "CEF staged from $($cefDir.FullName)"
+
+          Copy-Item "src-tauri/tauri.conf.json" "src-tauri/tauri.conf.json.bak"
+          $conf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $conf.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
+            "cef-dist/*.dll" = "./"
+            "cef-dist/*.pak" = "./"
+            "cef-dist/*.dat" = "./"
+            "cef-dist/*.bin" = "./"
+            "cef-dist/*.json" = "./"
+            "cef-dist/locales/*" = "./locales/"
+          } -Force
+          [System.IO.File]::WriteAllText("$PWD/src-tauri/tauri.conf.json", ($conf | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
+
+      - name: Build Tauri NSIS installer (.exe)
+        # `bun run tauri` uses @tauri-apps/cli (already in devDependencies)
+        # so we don't have to recompile tauri-cli from source. NSIS is
+        # downloaded automatically on first invocation.
+        run: bun run tauri build --bundles nsis -- --features cef
         env:
-          # MSI signing is not configured on CI — we ship unsigned for
-          # now. Users see the SmartScreen warning on first run.
           TAURI_SIGNING_PRIVATE_KEY: ''
 
-      - name: Upload MSI as artifact
+      - name: Restore tauri.conf.json
+        # Always run, even on previous-step failure, so a re-run starts
+        # from a clean config.
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "src-tauri/tauri.conf.json.bak") {
+            Move-Item -Force "src-tauri/tauri.conf.json.bak" "src-tauri/tauri.conf.json"
+          }
+
+      - name: Upload NSIS installer as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-msi
-          path: src-tauri/target/release/bundle/msi/*.msi
+          name: windows-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
@@ -167,7 +229,7 @@ jobs:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: windows-msi
+          name: windows-nsis
           path: ./artifacts
 
       - name: Create GitHub Release
@@ -181,4 +243,4 @@ jobs:
             --title "Sion Client $TAG" \
             --generate-notes \
             ./artifacts/*.AppImage \
-            ./artifacts/*.msi
+            ./artifacts/*.exe
