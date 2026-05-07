@@ -44,6 +44,9 @@ jobs:
             build-essential pkg-config curl wget file zstd squashfs-tools \
             libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev libglib2.0-dev \
+            libasound2-dev libudev-dev libpulse-dev libxcb1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libwayland-dev \
             libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
             libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 \
             libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
