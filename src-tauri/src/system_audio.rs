@@ -152,6 +152,12 @@ mod linux_impl {
     struct ParsedSinkInput {
         binary: String,
         node_name: String,
+        /// PipeWire node `object.id` — unique even when several sink-inputs
+        /// share the same `node.name` (Firefox creates one node per tab/
+        /// content engine, all named "Firefox"; only `object.id` lets us
+        /// distinguish them). Also what we pass to `pw-link` so it
+        /// connects the right node when names collide.
+        object_id: u32,
     }
 
     static PORT: AtomicU16 = AtomicU16::new(0);
@@ -163,10 +169,11 @@ mod linux_impl {
     static VIRTUAL_SINK_MODULE_ID: std::sync::LazyLock<Mutex<Option<u32>>> =
         std::sync::LazyLock::new(|| Mutex::new(None));
 
-    /// Tracks which non-Sion node names we've already linked to the virtual
-    /// sink, so the polling watcher doesn't re-issue `pw-link` calls every
-    /// 500 ms for nodes that are already wired up.
-    static LINKED_NODES: std::sync::LazyLock<Mutex<HashSet<String>>> =
+    /// Tracks which non-Sion PipeWire nodes (by `object.id`) we've already
+    /// logged a link for. The polling watcher re-issues `pw-link` every
+    /// 500 ms unconditionally (pw-link is a no-op on duplicate links), but
+    /// we only log on first sighting so the journal isn't flooded.
+    static LINKED_NODES: std::sync::LazyLock<Mutex<HashSet<u32>>> =
         std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
 
     static LINK_WATCHER_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -263,22 +270,28 @@ mod linux_impl {
         let mut result = Vec::new();
         let mut binary: Option<String> = None;
         let mut node_name: Option<String> = None;
+        let mut object_id: Option<u32> = None;
 
         let flush = |bin: &mut Option<String>,
                      node: &mut Option<String>,
+                     oid: &mut Option<u32>,
                      acc: &mut Vec<ParsedSinkInput>| {
-            if let (Some(b), Some(n)) = (bin.take(), node.take()) {
-                acc.push(ParsedSinkInput { binary: b, node_name: n });
+            // Need all three to identify and link a node. node.name alone
+            // can collide (Firefox has one node per tab); we key the link
+            // and dedup off object.id, which is unique server-side.
+            if let (Some(b), Some(n), Some(id)) = (bin.take(), node.take(), oid.take()) {
+                acc.push(ParsedSinkInput { binary: b, node_name: n, object_id: id });
             } else {
                 bin.take();
                 node.take();
+                oid.take();
             }
         };
 
         for line in text.lines() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("Sink Input #") {
-                flush(&mut binary, &mut node_name, &mut result);
+                flush(&mut binary, &mut node_name, &mut object_id, &mut result);
             } else if let Some(rest) = trimmed.strip_prefix("application.process.binary = \"") {
                 if let Some(end) = rest.rfind('"') {
                     binary = Some(rest[..end].to_string());
@@ -287,9 +300,13 @@ mod linux_impl {
                 if let Some(end) = rest.rfind('"') {
                     node_name = Some(rest[..end].to_string());
                 }
+            } else if let Some(rest) = trimmed.strip_prefix("object.id = \"") {
+                if let Some(end) = rest.rfind('"') {
+                    object_id = rest[..end].parse::<u32>().ok();
+                }
             }
         }
-        flush(&mut binary, &mut node_name, &mut result);
+        flush(&mut binary, &mut node_name, &mut object_id, &mut result);
         result
     }
 
@@ -384,8 +401,11 @@ mod linux_impl {
     /// mono apps have `output_MONO`. We try them all; `pw-link` exits
     /// non-zero when the port doesn't exist OR the link already exists,
     /// which is fine — at least one combination will succeed for any real
-    /// audio source. Returns true if at least one attempt was issued.
-    fn link_node_to_virtual_sink(node_name: &str) {
+    /// audio source. We pass the numeric `object.id` instead of
+    /// `node.name` because names collide (Firefox = one node per tab,
+    /// every node named "Firefox") — pw-link with a bare name picks one
+    /// arbitrary node, which is wrong when several share the name.
+    fn link_node_to_virtual_sink(object_id: u32) {
         const ATTEMPTS: &[(&str, &str)] = &[
             ("output_FL", "playback_FL"),
             ("output_FR", "playback_FR"),
@@ -395,7 +415,7 @@ mod linux_impl {
             ("output_MONO", "playback_FR"),
         ];
         for (out_port, in_port) in ATTEMPTS {
-            let from = format!("{node_name}:{out_port}");
+            let from = format!("{object_id}:{out_port}");
             let to = format!("{VIRTUAL_SINK_NAME}:{in_port}");
             let _ = Command::new("pw-link")
                 .args([&from, &to])
@@ -405,73 +425,33 @@ mod linux_impl {
         }
     }
 
-    /// Read `pw-link -l` and return the set of node names that already have
-    /// at least one link into our virtual sink. We need this because
-    /// pw-link exits non-zero both when "port doesn't exist" and "link
-    /// already exists" — there's no reliable way to tell from exit codes
-    /// whether a link attempt actually succeeded. Verifying via the live
-    /// graph is the only robust way to know.
-    fn currently_linked_nodes() -> HashSet<String> {
-        let mut result = HashSet::new();
-        let Ok(out) = Command::new("pw-link").arg("-l").output() else {
-            return result;
-        };
-        if !out.status.success() {
-            return result;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        // pw-link -l format is per-block:
-        //   <node>:<port>
-        //     |-> <other_node>:<port>          (output node followed by its sinks)
-        //     |<- <other_node>:<port>          (input node followed by its sources)
-        // We're interested in blocks where the header is "<source>:<port>"
-        // and one of the |-> targets is "<VIRTUAL_SINK_NAME>:playback_*".
-        let target_prefix = format!("-> {VIRTUAL_SINK_NAME}:playback");
-        let mut current_node: Option<String> = None;
-        for raw in text.lines() {
-            let trimmed = raw.trim_start();
-            if !raw.starts_with(' ') && !raw.starts_with('\t') && !trimmed.starts_with('|') {
-                // New block header. Extract node name (everything before ':').
-                current_node = trimmed.split(':').next().map(|s| s.to_string());
-                continue;
-            }
-            if let Some(ref node) = current_node {
-                if trimmed.starts_with("|") && trimmed.contains(&target_prefix) {
-                    result.insert(node.clone());
-                }
-            }
-        }
-        result
-    }
-
-    /// Re-scan sink-inputs and (re)link non-Sion nodes whose link is
-    /// missing from the live PipeWire graph. Querying the graph each tick
-    /// catches the case where an earlier `pw-link` invocation silently
-    /// failed (race with the node's port enumeration just after spawn) —
-    /// without this, `LINKED_NODES` would mark the node as "done" and
-    /// never retry.
+    /// Re-scan sink-inputs and re-issue `pw-link` for every non-Sion node
+    /// each tick. `pw-link` is a no-op on duplicate links (returns
+    /// non-zero, harmless), so retrying is cheap and recovers from any
+    /// silent failure on first attempt (race with node port enumeration).
+    /// We only log on first sighting per `object.id` to keep the journal
+    /// readable. `object.id` is the right key here: `node.name` collides
+    /// across multiple sink-inputs of the same app (Firefox = one node
+    /// per tab, all named "Firefox"), so name-based dedup would skip the
+    /// 2nd-Nth tab and they'd never reach the capture sink.
     fn refresh_sink_input_links() {
         let inputs = list_pa_sink_inputs();
-        let live_links = currently_linked_nodes();
-        let mut linked = LINKED_NODES.lock().unwrap();
+        let mut already_seen = LINKED_NODES.lock().unwrap();
         for input in &inputs {
             if input.binary == SION_BINARY_NAME {
                 continue;
             }
-            // Re-link if either (a) we never linked, or (b) we did but the
-            // link is no longer present in the live graph.
-            if linked.contains(&input.node_name) && live_links.contains(&input.node_name) {
-                continue;
+            if !already_seen.contains(&input.object_id) {
+                log::info!(
+                    "[Sion][sysaudio] linking '{}' (binary={} object_id={}) → {VIRTUAL_SINK_NAME}",
+                    input.node_name, input.binary, input.object_id
+                );
+                already_seen.insert(input.object_id);
             }
-            log::info!(
-                "[Sion][sysaudio] linking '{}' (binary={}) → {VIRTUAL_SINK_NAME}",
-                input.node_name, input.binary
-            );
-            link_node_to_virtual_sink(&input.node_name);
-            linked.insert(input.node_name.clone());
+            link_node_to_virtual_sink(input.object_id);
         }
-        let live: HashSet<String> = inputs.into_iter().map(|i| i.node_name).collect();
-        linked.retain(|n| live.contains(n));
+        let live: HashSet<u32> = inputs.into_iter().map(|i| i.object_id).collect();
+        already_seen.retain(|id| live.contains(id));
     }
 
     fn spawn_link_watcher() {
@@ -805,25 +785,391 @@ mod linux_impl {
 }
 
 // ============================================================================
-// Windows implementation — skeleton only at this point. The real WASAPI
-// `AUDCLNT_PROCESSLOOPBACK_EXCLUDE` loopback lands in a subsequent commit
-// along with the `windows` crate dependency; this stub lets the top-level
-// command dispatch compile on Windows targets without `cfg(not(linux))`
-// gymnastics in the JS wiring.
+// Windows implementation — WASAPI process-loopback with target-process-tree
+// exclusion (AUDCLNT_PROCESSLOOPBACK_EXCLUDE_TARGET_PROCESS_TREE). Captures
+// every other application's render output to the default endpoint while
+// leaving Sion (and all its CEF child processes, which share the parent
+// PID's tree) out of the mix — same end result as the Linux virtual sink
+// path, but using the native API stack instead of a graph trick.
+//
+// Requires Windows 10 build 20348 (Server 2022) or Windows 11 — the
+// PROCESS_LOOPBACK activation type was introduced in that build. On older
+// systems we report an error and the JS side falls back to Chromium's
+// native screen-share audio (which captures everything, including Sion).
 // ============================================================================
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
+    use super::{CHANNELS, FRAME_BYTES, SAMPLE_RATE};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+    use tungstenite::Message;
+
+    use windows::core::{implement, Interface, Result as WResult, HSTRING, PCWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows::Win32::Media::Audio::{
+        eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+        IActivateAudioInterfaceCompletionHandler,
+        IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
+        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+        AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+        AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+        PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+        WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_EXTENSIBLE,
+    };
+    use windows::Win32::Media::KernelStreaming::{KSAUDIO_SPEAKER_STEREO, WAVE_FORMAT_EXTENSIBLE as KS_WAVE_FORMAT_EXTENSIBLE};
+    use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+    use windows::Win32::System::Threading::{
+        CreateEventW, GetCurrentProcessId, WaitForSingleObject, INFINITE,
+    };
+    use windows::Win32::System::Variant::VT_BLOB;
+
+    /// Magic device name passed to `ActivateAudioInterfaceAsync` to request
+    /// the process-loopback virtual device. Documented at
+    /// learn.microsoft.com/en-us/windows/win32/coreaudio/loopback-recording.
+    const VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK: &str = "VAD\\Process_Loopback";
+
+    /// Minimum Windows build number that exposes the process-loopback
+    /// activation type. Earlier builds reject the activation with E_NOTIMPL.
+    const MIN_BUILD_FOR_PROCESS_LOOPBACK: u32 = 20348;
+
+    static PORT: AtomicU16 = AtomicU16::new(0);
+    static CAPTURE_RUNNING: AtomicBool = AtomicBool::new(false);
+
+    struct Senders(Vec<std::sync::mpsc::Sender<Vec<u8>>>);
+    static WS_SENDERS: std::sync::LazyLock<Mutex<Senders>> =
+        std::sync::LazyLock::new(|| Mutex::new(Senders(Vec::new())));
+
+    fn ensure_ws_server() {
+        if PORT.load(Ordering::Relaxed) != 0 {
+            return;
+        }
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(l) => l,
+            Err(e) => {
+                log::error!("[Sion][sysaudio] WS bind failed: {e}");
+                return;
+            }
+        };
+        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+        PORT.store(port, Ordering::Relaxed);
+        log::info!("[Sion][sysaudio] WS server on 127.0.0.1:{port}");
+
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let _ = stream.set_nodelay(true);
+                let Ok(mut ws) = tungstenite::accept(stream) else { continue };
+                let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+                WS_SENDERS.lock().unwrap().0.push(tx);
+                log::info!("[Sion][sysaudio] WS client connected");
+
+                thread::spawn(move || {
+                    let _ = ws
+                        .get_ref()
+                        .set_read_timeout(Some(Duration::from_millis(20)));
+                    loop {
+                        while let Ok(frame) = rx.try_recv() {
+                            if ws.send(Message::Binary(frame.into())).is_err() {
+                                return;
+                            }
+                        }
+                        match ws.read() {
+                            Ok(Message::Ping(d)) => {
+                                let _ = ws.send(Message::Pong(d));
+                            }
+                            Ok(Message::Close(_)) => return,
+                            Err(tungstenite::Error::Io(ref e))
+                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                            Err(_) => return,
+                            _ => {}
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    fn broadcast(buf: &[u8]) {
+        let mut senders = WS_SENDERS.lock().unwrap();
+        senders.0.retain(|tx| tx.send(buf.to_vec()).is_ok());
+    }
+
+    /// Returns true if the OS exposes the AUDCLNT process-loopback API.
+    fn supports_process_loopback() -> bool {
+        // Use RtlGetVersion to bypass GetVersion's manifest-gated lies.
+        // Implemented via a direct ntdll lookup since the `windows` crate
+        // doesn't always expose RtlGetVersion in stable features.
+        unsafe {
+            let mut info = OSVERSIONINFOW {
+                dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+                ..Default::default()
+            };
+            #[allow(non_snake_case)]
+            type RtlGetVersionFn =
+                unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
+            let ntdll = windows::Win32::System::LibraryLoader::GetModuleHandleW(
+                windows::core::w!("ntdll.dll"),
+            );
+            let Ok(handle) = ntdll else { return false };
+            let proc = windows::Win32::System::LibraryLoader::GetProcAddress(
+                handle,
+                windows::core::s!("RtlGetVersion"),
+            );
+            let Some(addr) = proc else { return false };
+            let f: RtlGetVersionFn = std::mem::transmute(addr);
+            if f(&mut info as *mut _) != 0 {
+                return false;
+            }
+            info.dwBuildNumber >= MIN_BUILD_FOR_PROCESS_LOOPBACK
+        }
+    }
+
+    /// Holds the result of `ActivateAudioInterfaceAsync` and signals an event
+    /// when the asynchronous activation completes. Bridges the COM async
+    /// callback model to a simple wait-on-event from the caller thread.
+    #[implement(IActivateAudioInterfaceCompletionHandler)]
+    struct CompletionHandler {
+        event: HANDLE,
+        result: Arc<Mutex<Option<WResult<IAudioClient>>>>,
+    }
+
+    impl IActivateAudioInterfaceCompletionHandler_Impl for CompletionHandler_Impl {
+        fn ActivateCompleted(
+            &self,
+            op: Option<&IActivateAudioInterfaceAsyncOperation>,
+        ) -> WResult<()> {
+            let outcome: WResult<IAudioClient> = unsafe {
+                let mut hr = windows::core::HRESULT(0);
+                let mut iface: Option<windows::core::IUnknown> = None;
+                op.unwrap()
+                    .GetActivateResult(&mut hr, &mut iface as *mut _)?;
+                hr.ok()?;
+                iface
+                    .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_FAIL))?
+                    .cast::<IAudioClient>()
+            };
+            *self.result.lock().unwrap() = Some(outcome);
+            unsafe {
+                let _ = windows::Win32::System::Threading::SetEvent(self.event);
+            }
+            Ok(())
+        }
+    }
+
+    /// Drives the entire WASAPI capture session: COM init, async activation,
+    /// stream init, and the buffer pump. Runs on its own thread; exits when
+    /// CAPTURE_RUNNING flips to false. Errors are logged and cause an early
+    /// return — `start()` has already returned the WS port to the JS side
+    /// at that point so silent capture failure is the worst case.
+    unsafe fn capture_thread() {
+        if let Err(e) = capture_thread_inner() {
+            log::error!("[Sion][sysaudio] WASAPI loopback capture failed: {e:?}");
+        }
+        CAPTURE_RUNNING.store(false, Ordering::Release);
+        log::info!("[Sion][sysaudio] capture thread exited");
+    }
+
+    unsafe fn capture_thread_inner() -> WResult<()> {
+        // STA vs MTA: WASAPI is content with MTA and we don't pump messages
+        // here. Initializing once per thread is safe — `RPC_E_CHANGED_MODE`
+        // would mean someone else on this thread already set a different
+        // mode, but we own the thread.
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+        let _com_guard = ComGuard;
+
+        // Activation params: target the *current* PID and exclude its whole
+        // process tree (CEF children inherit the launcher PID as parent).
+        let mut activation = AUDIOCLIENT_ACTIVATION_PARAMS {
+            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+            Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                    TargetProcessId: GetCurrentProcessId(),
+                    ProcessLoopbackMode:
+                        PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+                },
+            },
+        };
+
+        // Wrap the params in a PROPVARIANT/VT_BLOB. The PROPVARIANT layout
+        // here is documented in the loopback-recording sample on MSDN; we
+        // build it by hand because `windows` doesn't ship a high-level
+        // helper for VT_BLOB.
+        let mut prop = PROPVARIANT::default();
+        let prop_inner =
+            &mut *(prop.as_raw() as *mut windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0);
+        prop_inner.Anonymous.Anonymous.vt = VT_BLOB.0;
+        prop_inner.Anonymous.Anonymous.Anonymous.blob.cbSize =
+            std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
+        prop_inner.Anonymous.Anonymous.Anonymous.blob.pBlobData =
+            &mut activation as *mut _ as *mut u8;
+
+        let event_done = CreateEventW(None, false, false, None)?;
+        let result_slot: Arc<Mutex<Option<WResult<IAudioClient>>>> =
+            Arc::new(Mutex::new(None));
+        let handler = CompletionHandler {
+            event: event_done,
+            result: result_slot.clone(),
+        };
+        let handler_iface: IActivateAudioInterfaceCompletionHandler = handler.into();
+
+        let device_name: HSTRING = VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK.into();
+        let _op: IActivateAudioInterfaceAsyncOperation = ActivateAudioInterfaceAsync(
+            PCWSTR::from_raw(device_name.as_ptr()),
+            &IAudioClient::IID,
+            Some(&prop),
+            &handler_iface,
+        )?;
+        WaitForSingleObject(event_done, INFINITE);
+        let _ = CloseHandle(event_done);
+
+        let audio_client: IAudioClient = result_slot
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_UNEXPECTED))??;
+
+        // Build a WAVEFORMATEXTENSIBLE for f32 stereo at our sample rate.
+        // The activation device only honours formats it can consume, but in
+        // practice every modern endpoint accepts 48 kHz f32 stereo.
+        let mut format = WAVEFORMATEXTENSIBLE {
+            Format: WAVEFORMATEX {
+                wFormatTag: WAVE_FORMAT_EXTENSIBLE as u16,
+                nChannels: CHANNELS as u16,
+                nSamplesPerSec: SAMPLE_RATE,
+                nAvgBytesPerSec: SAMPLE_RATE * CHANNELS * 4,
+                nBlockAlign: (CHANNELS * 4) as u16,
+                wBitsPerSample: 32,
+                cbSize: 22,
+            },
+            Samples: WAVEFORMATEXTENSIBLE_0 {
+                wValidBitsPerSample: 32,
+            },
+            dwChannelMask: KSAUDIO_SPEAKER_STEREO,
+            SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
+        };
+
+        // 20 ms buffer to align with our FRAME_BYTES (also matches Linux).
+        const ONE_SECOND_100NS: i64 = 10_000_000;
+        let buf_dur_100ns: i64 = ONE_SECOND_100NS / 50;
+
+        audio_client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
+            buf_dur_100ns,
+            0,
+            &format.Format as *const _,
+            None,
+        )?;
+
+        let capture_client: IAudioCaptureClient = audio_client.GetService()?;
+
+        audio_client.Start()?;
+
+        // Pump samples into a rolling buffer; emit FRAME_BYTES every time we
+        // accumulate enough. WASAPI hands us packets aligned to the device
+        // period, not to our fixed 20 ms granularity, so the rebuffer is
+        // necessary to keep the WS frame size constant.
+        let mut staging: Vec<u8> = Vec::with_capacity(FRAME_BYTES * 2);
+        while CAPTURE_RUNNING.load(Ordering::Acquire) {
+            // No event handle (activation API doesn't pair with one for
+            // process-loopback in shared mode), so we poll at a sub-period
+            // cadence.
+            thread::sleep(Duration::from_millis(5));
+            loop {
+                let mut packet_size: u32 = 0;
+                if capture_client
+                    .GetNextPacketSize(&mut packet_size as *mut _)
+                    .is_err()
+                    || packet_size == 0
+                {
+                    break;
+                }
+                let mut data: *mut u8 = std::ptr::null_mut();
+                let mut frames: u32 = 0;
+                let mut flags: u32 = 0;
+                if capture_client
+                    .GetBuffer(
+                        &mut data as *mut _,
+                        &mut frames as *mut _,
+                        &mut flags as *mut _,
+                        None,
+                        None,
+                    )
+                    .is_err()
+                {
+                    break;
+                }
+                let byte_len = frames as usize * CHANNELS as usize * 4;
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0 {
+                    // Silence period — append zero-filled bytes rather than
+                    // reading garbage from the (potentially undefined) data
+                    // pointer.
+                    staging.resize(staging.len() + byte_len, 0);
+                } else if !data.is_null() && byte_len > 0 {
+                    let slice = std::slice::from_raw_parts(data, byte_len);
+                    staging.extend_from_slice(slice);
+                }
+                let _ = capture_client.ReleaseBuffer(frames);
+
+                while staging.len() >= FRAME_BYTES {
+                    let frame: Vec<u8> = staging.drain(..FRAME_BYTES).collect();
+                    if !WS_SENDERS.lock().unwrap().0.is_empty() {
+                        broadcast(&frame);
+                    }
+                }
+            }
+        }
+
+        let _ = audio_client.Stop();
+        Ok(())
+    }
+
+    /// RAII wrapper to call CoUninitialize on drop. Avoids leaking the COM
+    /// apartment if we exit via `?`.
+    struct ComGuard;
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
+    }
+
     pub fn start() -> Result<u16, String> {
-        log::warn!("[Sion][sysaudio] windows capture not yet implemented — returning error so JS falls back to Chromium systemAudio path");
-        Err("windows system-audio capture not implemented yet".to_string())
+        ensure_ws_server();
+        if !supports_process_loopback() {
+            return Err(format!(
+                "WASAPI process-loopback requires Windows build {} or newer (Server 2022 / Windows 11). Older Windows: ask the user to uncheck \"share audio\" — Sion's voice will otherwise echo back through the screen-share track.",
+                MIN_BUILD_FOR_PROCESS_LOOPBACK
+            ));
+        }
+        // Stop any previous capture before starting a new one.
+        stop_internal();
+        CAPTURE_RUNNING.store(true, Ordering::Release);
+        thread::spawn(|| unsafe { capture_thread() });
+        Ok(PORT.load(Ordering::Relaxed))
+    }
+
+    fn stop_internal() {
+        CAPTURE_RUNNING.store(false, Ordering::Release);
+        // The capture thread polls the flag every 5 ms, so it'll wind down
+        // shortly. We don't join here to keep `stop()` synchronous-cheap;
+        // the next start() also calls stop_internal first which serialises
+        // against any zombie capture loop via the atomic flag.
     }
 
     pub fn stop() {
-        // Nothing to tear down until start() is implemented.
+        log::info!("[Sion][sysaudio] stop requested");
+        stop_internal();
     }
 
     pub fn ws_port() -> u16 {
-        0
+        PORT.load(Ordering::Relaxed)
     }
 }

@@ -32,7 +32,20 @@ type RawContent = {
   body?: string;
   url?: string;
   info?: { size?: number; mimetype?: string; duration?: number };
-  [SB_NAMESPACE]?: { label?: string; category?: string; emoji?: string; gain?: number };
+  [SB_NAMESPACE]?: {
+    label?: string;
+    category?: string;
+    emoji?: string;
+    /** New format: gain stored as integer percentage (e.g. 240 = 2.40×).
+     *  Required because Matrix enforces js_int on event values; a float
+     *  multiplier (2.4) gets rejected with M_BAD_JSON. */
+    gain_pct?: number;
+    /** Legacy field from the v1.1.0 initial release — multiplier (1, 2, 3).
+     *  Only round integer values landed (Matrix rejected floats), so when
+     *  reading we treat any value here as a multiplier and prefer
+     *  `gain_pct` if both are present. */
+    gain?: number;
+  };
 };
 
 function stripExtension(name: string): string {
@@ -59,10 +72,16 @@ function parseSound(ev: {
   if (!url || !url.startsWith("mxc://")) return null;
   const meta = content[SB_NAMESPACE] || {};
   const body = content.body || "sound";
-  // Clamp gain to a sane range — the slider exposes 0–3 but rogue events
-  // could carry anything. NaN/missing falls back to 1.0 (no change).
-  const rawGain = typeof meta.gain === "number" && Number.isFinite(meta.gain) ? meta.gain : 1.0;
-  const gain = Math.max(0, Math.min(5, rawGain));
+  // Read gain — prefer the new `gain_pct` (int %) field, fall back to the
+  // legacy `gain` multiplier from v1.1.0 for sounds uploaded before the
+  // float-rejection fix.
+  let gain = 1.0;
+  if (typeof meta.gain_pct === "number" && Number.isFinite(meta.gain_pct)) {
+    gain = meta.gain_pct / 100;
+  } else if (typeof meta.gain === "number" && Number.isFinite(meta.gain)) {
+    gain = meta.gain;
+  }
+  gain = Math.max(0, Math.min(5, gain));
   return {
     eventId: id,
     mxcUrl: url,
@@ -148,16 +167,15 @@ export async function listSounds(): Promise<SoundEntry[]> {
     if (edit.meta?.label) s.label = edit.meta.label;
     if (edit.meta?.category) s.category = normalizeCategory(edit.meta.category);
     if (edit.meta && "emoji" in edit.meta) s.emoji = edit.meta.emoji || null;
-    // Apply gain edits too — without this, editing a sound to gain=3.0
-    // sends the m.replace correctly but the next listSounds() drops back
-    // to the original event's value (typically 1.0), so the boost never
-    // reaches playback. Treat absent `gain` as "reset to 1.0" so removing
-    // the boost in a later edit also propagates.
-    if (edit.meta && "gain" in edit.meta) {
+    // Gain overlay — same prefer-new-fallback-legacy logic as parseSound.
+    // An edit that omits both fields means the user reset to default 1.0.
+    if (edit.meta && "gain_pct" in edit.meta) {
+      const g = typeof edit.meta.gain_pct === "number" && Number.isFinite(edit.meta.gain_pct) ? edit.meta.gain_pct / 100 : 1.0;
+      s.gain = Math.max(0, Math.min(5, g));
+    } else if (edit.meta && "gain" in edit.meta) {
       const g = typeof edit.meta.gain === "number" && Number.isFinite(edit.meta.gain) ? edit.meta.gain : 1.0;
       s.gain = Math.max(0, Math.min(5, g));
     } else if (edit.meta) {
-      // Edit present but `gain` field absent → user reset to default.
       s.gain = 1.0;
     }
   }
@@ -208,10 +226,10 @@ export async function uploadSound(
       label: label.trim().slice(0, 60) || stripExtension(file.name),
       category: normalizeCategory(category),
       ...(emoji ? { emoji } : {}),
-      // Only persist the gain if it deviates from default — keeps legacy
-      // payloads bit-identical and avoids polluting the event with no-op
-      // fields. parseSound falls back to 1.0 when the field is absent.
-      ...(gain !== 1.0 ? { gain: clampGain(gain) } : {}),
+      // Persist gain only when it deviates from default. Stored as integer
+      // percentage to satisfy Matrix's js_int constraint — a float gets
+      // rejected with M_BAD_JSON.
+      ...(gain !== 1.0 ? { gain_pct: Math.round(clampGain(gain) * 100) } : {}),
     },
   };
   const res = await client.sendMessage(roomId, content as never);
@@ -291,7 +309,9 @@ export async function editSound(
     label: label.trim().slice(0, 60) || original.label,
     category: normalizeCategory(category),
     ...(emoji ? { emoji } : {}),
-    ...(clamped !== 1.0 ? { gain: clamped } : {}),
+    // See uploadSound: gain_pct is an integer percentage to comply with
+    // Matrix's js_int validation.
+    ...(clamped !== 1.0 ? { gain_pct: Math.round(clamped * 100) } : {}),
   };
 
   // m.replace edit — keep the same url/info/body, only patch the com.sion field.

@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "1.1.0"
+version = "1.1.1"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -88,6 +88,21 @@ rdev = { git = "https://github.com/rustdesk-org/rdev" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+
+# Windows-only dependencies (WASAPI process-loopback exclude for screen-share
+# audio that excludes Sion's own output — Windows 11 / Server 2022 build
+# 20348+ via AUDCLNT_PROCESSLOOPBACK_EXCLUDE_TARGET_PROCESS_TREE).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_System_SystemInformation",
+    "Win32_Foundation",
+    "implement",
+] }
 
 [features]
 default = ["cef"]
