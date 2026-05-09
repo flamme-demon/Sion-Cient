@@ -1396,6 +1396,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const myUserId = client.getUserId();
       if (!myUserId) return;
       const now = Date.now();
+      const crypto = client.getCrypto();
       for (const userId of userIds) {
         if (userId === myUserId) continue;
         // Sweep the recent-join map for this user across all rooms.
@@ -1407,6 +1408,23 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           if (!key.endsWith(`:${userId}`)) continue;
           const roomId = key.slice(0, -(`:${userId}`.length));
           shareHistoryWithUser(roomId, userId, "devices-updated-after-join");
+        }
+        // Device change on an existing member (reinstall / new device without room leave).
+        // Call prepareToEncrypt so we establish an Olm session with the new device and
+        // share our current Megolm key with it. This Olm session is then reused when
+        // the reinstalled device tries to share ITS own Megolm key back to us — no OTK
+        // claim needed on our side, the session already exists.
+        if (crypto) {
+          const sharedRooms = client.getRooms().filter(
+            (r) => r.hasMembershipState(userId, "join") && r.getMyMembership() === "join"
+          );
+          for (const room of sharedRooms) {
+            try {
+              await crypto.prepareToEncrypt(room);
+              console.info(`[Sion][e2ee] prepareToEncrypt after device change for ${userId} in ${room.roomId}`);
+            } catch { /* ignore */ }
+            shareHistoryWithUser(room.roomId, userId, "devices-updated-reinstall");
+          }
         }
       }
     });

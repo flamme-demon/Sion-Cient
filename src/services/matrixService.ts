@@ -324,6 +324,7 @@ export function getMatrixClient(): MatrixClient | null {
   return matrixClient;
 }
 
+
 export async function startSync() {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.startClient({ initialSyncLimit: 20 });
