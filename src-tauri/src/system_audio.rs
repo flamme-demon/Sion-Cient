@@ -819,9 +819,15 @@ mod windows_impl {
         AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
         AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
         PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
-        WAVEFORMATEXTENSIBLE_0, WAVE_FORMAT_EXTENSIBLE,
+        WAVEFORMATEXTENSIBLE_0,
     };
-    use windows::Win32::Media::KernelStreaming::{KSAUDIO_SPEAKER_STEREO, WAVE_FORMAT_EXTENSIBLE as KS_WAVE_FORMAT_EXTENSIBLE};
+    // WAVE_FORMAT_EXTENSIBLE moved out of Win32::Media::Audio in windows-rs 0.58
+    // and KSAUDIO_SPEAKER_STEREO is no longer generated — define it locally as
+    // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT (the C macro definition).
+    use windows::Win32::Media::KernelStreaming::{
+        SPEAKER_FRONT_LEFT, SPEAKER_FRONT_RIGHT, WAVE_FORMAT_EXTENSIBLE,
+    };
+    const KSAUDIO_SPEAKER_STEREO: u32 = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
     use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
     // PROPVARIANT moved to windows::core in 0.58 (was in
@@ -1092,12 +1098,13 @@ mod windows_impl {
             // cadence.
             thread::sleep(Duration::from_millis(5));
             loop {
-                let mut packet_size: u32 = 0;
-                if capture_client
-                    .GetNextPacketSize(&mut packet_size as *mut _)
-                    .is_err()
-                    || packet_size == 0
-                {
+                // GetNextPacketSize signature changed in windows-rs 0.58 — it
+                // now returns Result<u32> directly instead of taking a out param.
+                let packet_size = match capture_client.GetNextPacketSize() {
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                if packet_size == 0 {
                     break;
                 }
                 let mut data: *mut u8 = std::ptr::null_mut();
