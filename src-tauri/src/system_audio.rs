@@ -1011,14 +1011,13 @@ mod windows_impl {
         // build it by hand because `windows` doesn't ship a high-level
         // helper for VT_BLOB.
         let mut prop = PROPVARIANT::default();
-        // The raw inner type of PROPVARIANT lives in windows::core::imp in 0.58.
-        // The original cast was named `PROPVARIANT_0` because that was the type
-        // name in older windows-rs versions; in 0.58 that same struct is just
-        // called `PROPVARIANT` inside the `imp` module. Field access path
-        // (Anonymous.Anonymous.vt, Anonymous.Anonymous.Anonymous.blob) is
-        // unchanged.
+        // PROPVARIANT is #[repr(transparent)] over windows::core::imp::PROPVARIANT
+        // in 0.58, so casting &mut PROPVARIANT directly to *mut imp::PROPVARIANT
+        // is sound (avoids the UB of going through as_raw()'s &T reference).
+        // Field access path (Anonymous.Anonymous.vt, Anonymous.Anonymous.Anonymous.blob)
+        // is unchanged from the older windows-rs PROPVARIANT_0 layout.
         let prop_inner =
-            &mut *(prop.as_raw() as *const _ as *mut windows::core::imp::PROPVARIANT);
+            &mut *(&mut prop as *mut PROPVARIANT as *mut windows::core::imp::PROPVARIANT);
         prop_inner.Anonymous.Anonymous.vt = VT_BLOB.0;
         prop_inner.Anonymous.Anonymous.Anonymous.blob.cbSize =
             std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
