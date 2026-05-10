@@ -824,7 +824,9 @@ mod windows_impl {
     use windows::Win32::Media::KernelStreaming::{KSAUDIO_SPEAKER_STEREO, WAVE_FORMAT_EXTENSIBLE as KS_WAVE_FORMAT_EXTENSIBLE};
     use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
-    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    // PROPVARIANT moved to windows::core in 0.58 (was in
+    // windows::Win32::System::Com::StructuredStorage in earlier versions).
+    use windows::core::PROPVARIANT;
     use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
     use windows::Win32::System::Threading::{
         CreateEventW, GetCurrentProcessId, WaitForSingleObject, INFINITE,
@@ -1003,8 +1005,14 @@ mod windows_impl {
         // build it by hand because `windows` doesn't ship a high-level
         // helper for VT_BLOB.
         let mut prop = PROPVARIANT::default();
+        // The raw inner type of PROPVARIANT lives in windows::core::imp in 0.58.
+        // The original cast was named `PROPVARIANT_0` because that was the type
+        // name in older windows-rs versions; in 0.58 that same struct is just
+        // called `PROPVARIANT` inside the `imp` module. Field access path
+        // (Anonymous.Anonymous.vt, Anonymous.Anonymous.Anonymous.blob) is
+        // unchanged.
         let prop_inner =
-            &mut *(prop.as_raw() as *mut windows::Win32::System::Com::StructuredStorage::PROPVARIANT_0);
+            &mut *(prop.as_raw() as *const _ as *mut windows::core::imp::PROPVARIANT);
         prop_inner.Anonymous.Anonymous.vt = VT_BLOB.0;
         prop_inner.Anonymous.Anonymous.Anonymous.blob.cbSize =
             std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32;
