@@ -963,7 +963,7 @@ export function getRoomMembers(roomId: string): { userId: string; displayName: s
   }));
 }
 
-export async function createChannel(name: string, isVoice: boolean, isPublic = true): Promise<string> {
+export async function createChannel(name: string, isVoice: boolean, isPublic = true, encrypted = false): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
 
   // Pre-populate the power_levels users map with all current server admins so
@@ -981,7 +981,6 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const initialState: any[] = [
-    { type: "m.room.encryption", state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } },
     { type: "m.room.join_rules", state_key: "", content: { join_rule: isPublic ? "public" : "invite" } },
     // Explicitly set history_visibility so users who join AFTER messages have
     // been posted still see that history. The public_chat preset is supposed
@@ -993,6 +992,15 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
   if (isVoice) {
     initialState.push({ type: "m.room.type", state_key: "", content: { type: "m.voice_channel" } });
     initialState.push({ type: "m.room.topic", state_key: "", content: { topic: "voice" } });
+  }
+  // E2EE is opt-in per channel; plaintext is the default for group channels.
+  // On a self-hosted server the admin can already read messages, and plaintext
+  // gives reliable shared history for late joiners / new devices / reconnects —
+  // megolm forward secrecy cannot (keys are per-device-at-send-time, not in a
+  // joiner's backup). Matrix encryption is a one-way switch, so this choice is
+  // fixed at creation. Encrypted channels carry a UI warning about history.
+  if (encrypted) {
+    initialState.unshift({ type: "m.room.encryption", state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } });
   }
   const { room_id } = await matrixClient.createRoom({
     name,

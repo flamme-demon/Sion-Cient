@@ -12,6 +12,7 @@ export function AdminActions() {
   const [newChannelName, setNewChannelName] = useState("");
   const [newChannelIsVoice, setNewChannelIsVoice] = useState(false);
   const [newChannelIsPublic, setNewChannelIsPublic] = useState(true);
+  const [newChannelEncrypted, setNewChannelEncrypted] = useState(false);
   const [creating, setCreating] = useState(false);
   const channels = useMatrixStore((s) => s.channels);
   const [showRoomManager, setShowRoomManager] = useState(false);
@@ -233,11 +234,12 @@ export function AdminActions() {
     if (!newChannelName.trim() || creating) return;
     setCreating(true);
     try {
-      await matrixService.createChannel(newChannelName.trim(), newChannelIsVoice, newChannelIsPublic);
+      await matrixService.createChannel(newChannelName.trim(), newChannelIsVoice, newChannelIsPublic, newChannelEncrypted);
       setShowCreateModal(false);
       setNewChannelName("");
       setNewChannelIsVoice(false);
       setNewChannelIsPublic(true);
+      setNewChannelEncrypted(false);
     } catch (err) {
       console.error("[Sion] Failed to create channel:", err);
     } finally {
@@ -654,6 +656,57 @@ export function AdminActions() {
                 {t("channels.accessInvite")}
               </button>
             </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: newChannelEncrypted ? 8 : 20 }}>
+              <button
+                onClick={() => setNewChannelEncrypted(false)}
+                style={{
+                  flex: 1,
+                  padding: '10px 16px',
+                  borderRadius: 20,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                  background: !newChannelEncrypted ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                  color: !newChannelEncrypted ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
+                  transition: 'all 200ms',
+                }}
+              >
+                Clair
+              </button>
+              <button
+                onClick={() => setNewChannelEncrypted(true)}
+                style={{
+                  flex: 1,
+                  padding: '10px 16px',
+                  borderRadius: 20,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  fontFamily: 'inherit',
+                  background: newChannelEncrypted ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                  color: newChannelEncrypted ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
+                  transition: 'all 200ms',
+                }}
+              >
+                🔒 Chiffré
+              </button>
+            </div>
+            {newChannelEncrypted && (
+              <div style={{
+                marginBottom: 20,
+                padding: '8px 12px',
+                borderRadius: 12,
+                background: 'var(--color-surface-container-high)',
+                fontSize: 11,
+                color: 'var(--color-on-surface-variant)',
+                lineHeight: 1.4,
+              }}>
+                ⚠️ Chiffré : l'historique peut ne pas être visible par tout le monde. Les membres qui rejoignent plus tard, changent d'appareil ou se reconnectent risquent de ne pas pouvoir déchiffrer les anciens messages. Ce choix est définitif (un salon Matrix ne peut pas être déchiffré après coup).
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
                 onClick={() => { setShowCreateModal(false); setNewChannelName(""); }}
