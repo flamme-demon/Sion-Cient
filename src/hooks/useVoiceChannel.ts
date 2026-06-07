@@ -255,7 +255,9 @@ export function useVoiceChannel() {
               // Short TTL: if app crashes/reloads, membership expires in 60s
               // The MembershipManager will re-publish before expiry to keep it alive
               membershipEventExpiryMs: 3_600_000, // 1 hour — avoid frequent renewals that disrupt audio in background
-              useExperimentalToDeviceTransport: true,
+              // NB: to-device key transport is the default (and only) path since
+              // matrix-js-sdk 41.6.0 — the former `useExperimentalToDeviceTransport`
+              // opt-in was removed, ToDeviceKeyTransport is now wired unconditionally.
               ...(isEncrypted ? { manageMediaKeys: true } : {}),
             });
 
