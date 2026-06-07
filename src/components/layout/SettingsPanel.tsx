@@ -595,11 +595,25 @@ export function SettingsPanel() {
                 if (window.confirm(t("settings.purgeCacheConfirm"))) {
                   const creds = localStorage.getItem("sion_auth_credentials");
                   const deviceId = localStorage.getItem("sion_device_id");
+                  const userId = localStorage.getItem("sion_user_id");
                   localStorage.clear();
                   if (creds) localStorage.setItem("sion_auth_credentials", creds);
                   if (deviceId) localStorage.setItem("sion_device_id", deviceId);
+                  if (userId) localStorage.setItem("sion_user_id", userId);
                   indexedDB.databases().then((dbs) => {
-                    for (const db of dbs) { if (db.name) indexedDB.deleteDatabase(db.name); }
+                    for (const db of dbs) {
+                      if (!db.name) continue;
+                      // NEVER wipe the E2EE crypto store here: this purge keeps the
+                      // same device_id, so deleting the crypto store would make Rust
+                      // crypto regenerate fresh identity keys under that same id —
+                      // un-verifying the device, dropping every received room key, and
+                      // breaking decryption for us AND everyone who cached our old
+                      // keys. Only the regenerable sync/app caches get cleared.
+                      // (Resetting crypto is done separately, on device mismatch /
+                      // logout, via clearCryptoStores().)
+                      if (db.name.includes("crypto") || db.name.includes("rust-sdk")) continue;
+                      indexedDB.deleteDatabase(db.name);
+                    }
                   }).finally(() => { window.location.reload(); });
                 }
               }}
