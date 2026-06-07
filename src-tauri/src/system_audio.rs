@@ -401,11 +401,13 @@ mod linux_impl {
     /// mono apps have `output_MONO`. We try them all; `pw-link` exits
     /// non-zero when the port doesn't exist OR the link already exists,
     /// which is fine — at least one combination will succeed for any real
-    /// audio source. We pass the numeric `object.id` instead of
-    /// `node.name` because names collide (Firefox = one node per tab,
-    /// every node named "Firefox") — pw-link with a bare name picks one
-    /// arbitrary node, which is wrong when several share the name.
-    fn link_node_to_virtual_sink(object_id: u32) {
+    /// audio source. We address ports by `node.name`, NOT `object.id`:
+    /// `pw-link` parses the part before `:` as a node *name*, so a numeric
+    /// id never resolves and every link silently fails. Using the name is
+    /// also correct for apps with several nodes of the same name (Firefox =
+    /// one node per tab): pw-link links the matching port on *every* node
+    /// sharing that name, so all tabs reach the capture sink.
+    fn link_node_to_virtual_sink(node_name: &str) {
         const ATTEMPTS: &[(&str, &str)] = &[
             ("output_FL", "playback_FL"),
             ("output_FR", "playback_FR"),
@@ -415,7 +417,7 @@ mod linux_impl {
             ("output_MONO", "playback_FR"),
         ];
         for (out_port, in_port) in ATTEMPTS {
-            let from = format!("{object_id}:{out_port}");
+            let from = format!("{node_name}:{out_port}");
             let to = format!("{VIRTUAL_SINK_NAME}:{in_port}");
             let _ = Command::new("pw-link")
                 .args([&from, &to])
@@ -430,10 +432,12 @@ mod linux_impl {
     /// non-zero, harmless), so retrying is cheap and recovers from any
     /// silent failure on first attempt (race with node port enumeration).
     /// We only log on first sighting per `object.id` to keep the journal
-    /// readable. `object.id` is the right key here: `node.name` collides
-    /// across multiple sink-inputs of the same app (Firefox = one node
-    /// per tab, all named "Firefox"), so name-based dedup would skip the
-    /// 2nd-Nth tab and they'd never reach the capture sink.
+    /// readable — `object.id` is unique server-side, whereas `node.name`
+    /// collides across multiple sink-inputs of the same app (Firefox = one
+    /// node per tab, all named "Firefox"). The link itself is issued by
+    /// `node.name` (see `link_node_to_virtual_sink`), which covers every
+    /// node sharing that name in one call; the per-`object.id` dedup here
+    /// only governs logging.
     fn refresh_sink_input_links() {
         let inputs = list_pa_sink_inputs();
         let mut already_seen = LINKED_NODES.lock().unwrap();
@@ -448,7 +452,7 @@ mod linux_impl {
                 );
                 already_seen.insert(input.object_id);
             }
-            link_node_to_virtual_sink(input.object_id);
+            link_node_to_virtual_sink(&input.node_name);
         }
         let live: HashSet<u32> = inputs.into_iter().map(|i| i.object_id).collect();
         already_seen.retain(|id| live.contains(id));
