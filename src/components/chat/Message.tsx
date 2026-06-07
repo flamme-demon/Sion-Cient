@@ -844,11 +844,6 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
           })()}
           <div style={message.replyTo ? { padding: '0 8px' } : undefined}>
           <MarkdownRenderer content={message.text} formattedBody={message.formattedBody} msgtype={message.msgtype} />
-          {message.msgtype === "m.encrypted" && (
-            <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2, fontStyle: 'italic' }}>
-              Demande à l'expéditeur d'aller dans Paramètres → Avancé → Réinitialiser le chiffrement.
-            </div>
-          )}
           {(() => {
             // Strip code blocks and inline code before searching for URLs
             const textWithoutCode = message.text

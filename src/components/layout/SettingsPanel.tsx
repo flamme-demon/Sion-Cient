@@ -10,76 +10,9 @@ import { useClickOutside } from "../../hooks/useClickOutside";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
-import { getMatrixClient } from "../../services/matrixService";
 
 
 type SettingsTab = "general" | "audio" | "chat" | "shortcuts" | "advanced";
-
-function EncryptionResetButton() {
-  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
-  const activeChannel = useAppStore((s) => s.activeChannel);
-
-  const handleReset = async () => {
-    setStatus("loading");
-    try {
-      const client = getMatrixClient();
-      const crypto = client?.getCrypto();
-      const rooms = activeChannel
-        ? [client?.getRoom(activeChannel)].filter(Boolean)
-        : client?.getRooms().filter((r) => r.getMyMembership() === "join") ?? [];
-      if (crypto) {
-        for (const room of rooms) {
-          if (!room) continue;
-          await crypto.forceDiscardSession(room.roomId);
-          await crypto.prepareToEncrypt(room);
-        }
-      }
-      setStatus("done");
-      setTimeout(() => setStatus("idle"), 4000);
-    } catch (err) {
-      console.error("[Sion] Encryption reset failed:", err);
-      setStatus("error");
-      setTimeout(() => setStatus("idle"), 3000);
-    }
-  };
-
-  return (
-    <div>
-      <div style={{ fontSize: 11, color: 'var(--color-outline)', marginBottom: 6 }}>
-        Chiffrement E2EE
-      </div>
-      <button
-        onClick={handleReset}
-        disabled={status === "loading"}
-        style={{
-          width: '100%', padding: '10px 16px', borderRadius: 20, border: 'none',
-          cursor: status === "loading" ? 'not-allowed' : 'pointer',
-          fontSize: 13, fontWeight: 500, fontFamily: 'inherit',
-          background: status === "done"
-            ? 'var(--color-primary-container)'
-            : status === "error"
-            ? 'var(--color-error-container)'
-            : 'var(--color-surface-container-high)',
-          color: status === "done"
-            ? 'var(--color-primary)'
-            : status === "error"
-            ? 'var(--color-error)'
-            : 'var(--color-on-surface)',
-          opacity: status === "loading" ? 0.6 : 1,
-          transition: 'all 200ms',
-        }}
-      >
-        {status === "loading" ? "Réinitialisation…"
-          : status === "done" ? "✓ Session réinitialisée"
-          : status === "error" ? "Erreur — réessaie"
-          : "🔑 Réinitialiser le chiffrement"}
-      </button>
-      <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 6, lineHeight: 1.4 }}>
-        À utiliser si tes messages apparaissent chiffrés pour les autres. Force une nouvelle session Megolm.
-      </div>
-    </div>
-  );
-}
 
 export function SettingsPanel() {
   const { t } = useTranslation();
@@ -657,8 +590,6 @@ export function SettingsPanel() {
         {/* === ADVANCED === */}
         {activeTab === "advanced" && (
           <div style={{ padding: '8px 0' }}>
-            <EncryptionResetButton />
-            <div style={{ height: 12 }} />
             <button
               onClick={() => {
                 if (window.confirm(t("settings.purgeCacheConfirm"))) {
