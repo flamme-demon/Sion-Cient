@@ -1,5 +1,20 @@
 # Experiment: screen-share source picker on Windows (CEF 148)
 
+## STATUS: wired in-repo, ready to build & test on Windows
+The patch is already applied — `src-tauri/vendor/tauri-runtime-cef/` is a vendored
+copy of the crate (rev 7372c8ee) with the handler patch, and `src-tauri/Cargo.toml`
+redirects the git crate to it via `[patch."https://github.com/tauri-apps/tauri"]`.
+Verified on Linux: builds, runs, no regression (Linux uses the portal, unaffected).
+**To test: run `./package-for-windows.sh` as usual, build on Windows, start a screen
+share, and report (a) the `[Sion-cef] … requested_permissions=0x…` log line and (b)
+whether a window/screen source picker now appears.** No manual patching needed — the
+vendored crate travels in the package (it's tiny, ~400 KB) and Windows cargo compiles it.
+
+If the experiment FAILS (no picker), revert with: delete `src-tauri/vendor/`, restore
+the original `tauri-runtime-cef` git dep on Cargo.toml line ~42, and remove the
+`[patch."https://github.com/tauri-apps/tauri"]` block. If it SUCCEEDS, keep it (or
+move to a proper upstream fork later).
+
 ## Problem
 On Windows, Sion's screen share can only capture the **whole primary screen** —
 no picker to choose a window / app / single monitor / region. On Linux it works

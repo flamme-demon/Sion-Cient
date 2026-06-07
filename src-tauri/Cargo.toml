@@ -137,6 +137,15 @@ tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8
 tauri-utils = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
 tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
 
+# Redirect the git-sourced tauri-runtime-cef (pulled both directly AND via the
+# `tauri/cef` feature) to our vendored, patched copy — without this patch the
+# unpatched git crate would also be compiled and would be the one whose CEF
+# client/handler runs. The vendored crate's own tauri-runtime/tauri-utils deps
+# point at the same rev, so everything unifies on one instance. See
+# vendor/tauri-runtime-cef + patches/cef-desktop-media-picker.md.
+[patch."https://github.com/tauri-apps/tauri"]
+tauri-runtime-cef = { path = "vendor/tauri-runtime-cef" }
+
 # Vendored softbuffer with the Wayland buffer format patched from
 # `Xrgb8888` to `Argb8888`. Without this, the cursor-overlay window
 # appears as an opaque black rectangle on KDE/GNOME Wayland because the

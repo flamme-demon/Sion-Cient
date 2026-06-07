@@ -5793,6 +5793,8 @@ dependencies = [
 [[package]]
 name = "softbuffer"
 version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3"
 dependencies = [
  "as-raw-xcb-connection",
  "bytemuck",
@@ -6310,7 +6312,6 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-cef"
 version = "0.1.0"
-source = "git+https://github.com/tauri-apps/tauri?rev=7372c8ee#7372c8ee97fe590046aca95388895d7cf6b7d807"
 dependencies = [
  "base64 0.22.1",
  "cef",
@@ -8655,3 +8656,7 @@ dependencies = [
  "syn 2.0.117",
  "winnow 1.0.3",
 ]
+
+[[patch.unused]]
+name = "softbuffer"
+version = "0.4.8"
