@@ -28,6 +28,16 @@ export class SpeakingDetector {
   private source: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private silentGain: GainNode | null = null;
+  // Terminal sink. The graph MUST terminate at a running endpoint or Chromium
+  // won't pump samples from a remote (RTCPeerConnection) track. We use a
+  // MediaStreamAudioDestinationNode — NOT audioCtx.destination — so the engine
+  // pulls data for the analyser WITHOUT ever routing it to the speakers. This
+  // makes deafen leak-proof: routing to audioCtx.destination behind a 0-gain
+  // node was observed to still leak the remote mic on CEF/Chromium 148 (the
+  // track plays via the context while the <audio> element is muted), so a
+  // deafened listener heard voices (but not soundboard — that track has no
+  // detector). A non-audible sink can never leak regardless of gain.
+  private sink: MediaStreamAudioDestinationNode | null = null;
   // tsconfig has erasableSyntaxOnly enabled, so we can't use parameter
   // properties — declare the fields explicitly. The Float32Array is also
   // explicitly typed against ArrayBuffer (not ArrayBufferLike) to keep
@@ -66,13 +76,16 @@ export class SpeakingDetector {
 
       // Chromium quirk: a MediaStreamAudioSourceNode built from a REMOTE track
       // (RTCPeerConnection) won't pump samples into the graph unless the chain
-      // terminates at audioCtx.destination. We route through a 0-gain node so
-      // the engine pulls data without doubling the playback.
+      // terminates at a running endpoint. We terminate at a MediaStream sink
+      // (never the speakers) so the engine pulls data without any chance of
+      // routing the remote audio to output. The 0-gain node is kept as belt-
+      // and-suspenders. See `sink` field for why audioCtx.destination is unsafe.
       this.silentGain = this.audioCtx.createGain();
       this.silentGain.gain.value = 0;
+      this.sink = this.audioCtx.createMediaStreamDestination();
       this.source.connect(this.analyser);
       this.analyser.connect(this.silentGain);
-      this.silentGain.connect(this.audioCtx.destination);
+      this.silentGain.connect(this.sink);
 
       this.intervalId = setInterval(() => this.tick(), POLL_INTERVAL_MS);
     } catch (err) {
@@ -122,12 +135,16 @@ export class SpeakingDetector {
     try {
       this.silentGain?.disconnect();
     } catch { /* ignore */ }
+    try {
+      this.sink?.disconnect();
+    } catch { /* ignore */ }
     if (this.audioCtx && this.audioCtx.state !== "closed") {
       this.audioCtx.close().catch(() => { /* ignore */ });
     }
     this.source = null;
     this.analyser = null;
     this.silentGain = null;
+    this.sink = null;
     this.audioCtx = null;
     if (this.currentSpeaking) {
       this.currentSpeaking = false;
