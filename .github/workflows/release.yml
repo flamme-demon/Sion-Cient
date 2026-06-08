@@ -132,6 +132,15 @@ jobs:
         working-directory: src-tauri
         run: cargo build --release --features cef
 
+      - name: Swap in standard libcef (H.264/AAC codecs)
+        # The `cef` crate downloads the MINIMAL build (no proprietary codecs)
+        # → MP4/H.264 videos won't play natively. Replace libcef.dll with the
+        # standard build's before staging so <video> works without ffmpeg.
+        # Idempotent (marker file), so a restored cargo cache skips the ~1 GB
+        # download.
+        shell: pwsh
+        run: ./build-scripts/fetch-cef-codecs.ps1
+
       - name: Stage CEF libs + patch tauri.conf.json
         # The default `tauri build --bundles nsis` doesn't know about CEF —
         # it would ship a 7 MB installer with just the binary, missing

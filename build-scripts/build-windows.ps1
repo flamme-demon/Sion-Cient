@@ -216,6 +216,9 @@ Write-Host "[9/10] Staging des libs CEF pour le bundler..." -ForegroundColor Yel
 
 $cefDir = Find-CefDir
 if ($cefDir) {
+    # Swap in the standard libcef.dll (H.264/AAC codecs) so videos play
+    # natively, before staging. Idempotent + cached via a marker file.
+    & "$ScriptDir\fetch-cef-codecs.ps1" -CefDir $cefDir.FullName
     Stage-CefLibs $cefDir
 } else {
     Write-Host "  ATTENTION: Libs CEF non trouvees dans target/release/build/" -ForegroundColor Yellow

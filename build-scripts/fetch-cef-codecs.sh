@@ -1,57 +1,52 @@
 #!/bin/bash
-# Télécharge le build CEF standard (avec codecs H.264/AAC) et remplace libcef.so
-# Le build "minimal" par défaut n'inclut pas les codecs propriétaires.
-# Ce script ne télécharge que libcef.so du build standard (~870 Mo compressé, une seule fois).
-
+# Swap the minimal libcef.so (no proprietary codecs) for the STANDARD build's
+# (with H.264/AAC) so <video> plays MP4 natively. The `cef` crate downloads the
+# minimal distribution; we only fetch the standard libcef.so (~870 MB archive,
+# once) and overwrite it in every cef build dir matching the current version.
+#
+# Version MUST match what cef-dll-sys downloads — read it from the build's
+# archive.json (e.g. cef_binary_147.0.10+gd58e84d+chromium-147.0.7727.118).
 set -e
 
-CEF_VERSION="144.0.7"
-CEF_BUILD="cef_binary_${CEF_VERSION}+g03bd3db+chromium-144.0.7559.97_linux64"
-CEF_URL="https://cef-builds.spotifycdn.com/${CEF_BUILD}.tar.bz2"
-CEF_DIR="$(dirname "$0")/../src-tauri/target/debug/build/cef-dll-sys-*/out/cef_linux_x86_64"
+# Keep in sync with the `cef` crate version in src-tauri/Cargo.toml.
+CEF_BUILD="cef_binary_147.0.10+gd58e84d+chromium-147.0.7727.118_linux64"
+CEF_URL="https://cef-builds.spotifycdn.com/${CEF_BUILD// /}.tar.bz2"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION_TAG="147.0.10"
 
-# Résoudre le glob
-CEF_DIR_RESOLVED=$(echo $CEF_DIR)
-if [ ! -d "$CEF_DIR_RESOLVED" ]; then
-    echo "❌ Répertoire CEF non trouvé. Lancez 'cargo build' d'abord."
+# All cef build dirs (debug + release) whose archive.json matches the version.
+mapfile -t CEF_DIRS < <(find "$ROOT/src-tauri/target" -type f -path "*cef_linux_x86_64/archive.json" \
+  -exec grep -l "$VERSION_TAG" {} \; 2>/dev/null | xargs -r -n1 dirname)
+
+if [ ${#CEF_DIRS[@]} -eq 0 ]; then
+    echo "❌ Aucun dossier CEF $VERSION_TAG trouvé. Lancez 'cargo build' d'abord."
     exit 1
 fi
 
-LIBCEF="$CEF_DIR_RESOLVED/libcef.so"
-LIBCEF_BACKUP="$CEF_DIR_RESOLVED/libcef.so.minimal.bak"
-
-if [ -f "$LIBCEF_BACKUP" ]; then
-    echo "✅ libcef.so standard déjà installé (backup minimal existe)"
-    exit 0
-fi
-
+# Download + extract libcef.so once.
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
-
-echo "⬇️  Téléchargement du build CEF standard (~870 Mo)..."
-echo "   URL: $CEF_URL"
-curl -L --progress-bar -o "$TMPDIR/cef_standard.tar.bz2" "$CEF_URL"
-
+echo "⬇️  Téléchargement du build CEF standard $VERSION_TAG (~870 Mo)..."
+echo "   $CEF_URL"
+# %2B-encode the '+' in the path.
+ENC_URL="${CEF_URL//+/%2B}"
+curl -L --progress-bar -o "$TMPDIR/cef_standard.tar.bz2" "$ENC_URL"
 echo "📦 Extraction de libcef.so..."
-# Extraire seulement libcef.so du tarball
 tar -xjf "$TMPDIR/cef_standard.tar.bz2" -C "$TMPDIR" --wildcards "*/Release/libcef.so" --strip-components=2
-
 if [ ! -f "$TMPDIR/libcef.so" ]; then
     echo "❌ libcef.so non trouvé dans l'archive standard"
     exit 1
 fi
 
-echo "🔄 Remplacement de libcef.so..."
-cp "$LIBCEF" "$LIBCEF_BACKUP"
-cp "$TMPDIR/libcef.so" "$LIBCEF"
+# Swap into each matching cef dir (backup the minimal once) + the run dirs.
+for d in "${CEF_DIRS[@]}"; do
+    [ -f "$d/libcef.so" ] || continue
+    [ -f "$d/libcef.so.minimal.bak" ] || cp "$d/libcef.so" "$d/libcef.so.minimal.bak"
+    cp "$TMPDIR/libcef.so" "$d/libcef.so"
+    echo "   → $d/libcef.so"
+done
+for run in "$ROOT/src-tauri/target/debug/libcef.so" "$ROOT/src-tauri/target/release/libcef.so"; do
+    [ -f "$run" ] && cp "$TMPDIR/libcef.so" "$run" && echo "   → $run"
+done
 
-# Copier aussi dans target/debug/ si présent
-TARGET_DEBUG="$(dirname "$0")/../src-tauri/target/debug"
-if [ -f "$TARGET_DEBUG/libcef.so" ]; then
-    cp "$TMPDIR/libcef.so" "$TARGET_DEBUG/libcef.so"
-    echo "   → Copié aussi dans target/debug/"
-fi
-
-echo "✅ libcef.so standard installé (codecs H.264/AAC activés)"
-echo "   Backup minimal: $LIBCEF_BACKUP"
-echo "   Relancez l'application pour appliquer."
+echo "✅ libcef.so standard installé (codecs H.264/AAC). Relancez l'application."
