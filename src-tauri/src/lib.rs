@@ -776,16 +776,10 @@ fn cleanup_old_transcodes() {
 #[tauri::command]
 async fn transcode_video(url: String, ffmpeg_path: Option<String>) -> Result<String, String> {
     use base64::Engine;
-    // Use the user-configured ffmpeg path (Settings → Advanced) if set,
-    // otherwise fall back to `ffmpeg` on PATH. Lets Windows users (no system
-    // ffmpeg, minimal CEF without H.264) point at an ffmpeg.exe to enable the
-    // transcode-to-webm fallback.
-    let ffmpeg_bin = ffmpeg_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .unwrap_or("ffmpeg")
-        .to_string();
+    // Resolve the ffmpeg binary: user-configured path (Settings → Advanced) →
+    // common install locations → `ffmpeg` on PATH. Lets the transcode work
+    // out-of-box when ffmpeg is installed but not on PATH (common on Windows).
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref());
 
     // Clean up old temp files on each transcode call
     cleanup_old_transcodes();
@@ -837,6 +831,60 @@ async fn transcode_video(url: String, ffmpeg_path: Option<String>) -> Result<Str
     let webm_bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&webm_bytes);
     Ok(b64)
+}
+
+/// Resolve which ffmpeg binary to invoke: a user-configured path wins;
+/// otherwise probe common install locations (so it works without PATH, the
+/// usual Windows case); finally fall back to bare `ffmpeg` (PATH lookup).
+fn resolve_ffmpeg(configured: Option<&str>) -> String {
+    if let Some(p) = configured {
+        let p = p.trim();
+        if !p.is_empty() {
+            return p.to_string();
+        }
+    }
+    #[cfg(target_os = "windows")]
+    let candidates: Vec<String> = {
+        let mut c = vec![
+            r"C:\ffmpeg\bin\ffmpeg.exe".to_string(),
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe".to_string(),
+            r"C:\ProgramData\chocolatey\bin\ffmpeg.exe".to_string(),
+        ];
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            c.push(format!(r"{home}\scoop\shims\ffmpeg.exe"));
+        }
+        if let Ok(la) = std::env::var("LOCALAPPDATA") {
+            c.push(format!(r"{la}\Microsoft\WinGet\Links\ffmpeg.exe"));
+        }
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let candidates: Vec<String> = vec![
+        "/usr/bin/ffmpeg".to_string(),
+        "/usr/local/bin/ffmpeg".to_string(),
+        "/opt/homebrew/bin/ffmpeg".to_string(),
+    ];
+    for c in &candidates {
+        if std::path::Path::new(c).exists() {
+            return c.clone();
+        }
+    }
+    "ffmpeg".to_string()
+}
+
+/// Report the ffmpeg the app would use (resolved path), verifying it actually
+/// runs (`-version`). Returns None if ffmpeg can't be found/run. Used by
+/// Settings → Advanced to show whether the transcode fallback is available.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn detect_ffmpeg() -> Option<String> {
+    let bin = resolve_ffmpeg(None);
+    let ok = std::process::Command::new(&bin)
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok { Some(bin) } else { None }
 }
 
 /// Register global shortcuts via plugin + update rdev state (Linux).
@@ -1045,7 +1093,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, detect_ffmpeg, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder

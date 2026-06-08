@@ -46,6 +46,16 @@ export function SettingsPanel() {
   const setLinkPreviews = useSettingsStore((s) => s.setLinkPreviews);
   const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
   const setFfmpegPath = useSettingsStore((s) => s.setFfmpegPath);
+  // undefined = checking, null = not found, string = resolved ffmpeg path.
+  const [ffmpegDetected, setFfmpegDetected] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string | null>("detect_ffmpeg"))
+      .then((p) => { if (!cancelled) setFfmpegDetected(p ?? null); })
+      .catch(() => { if (!cancelled) setFfmpegDetected(null); });
+    return () => { cancelled = true; };
+  }, [ffmpegPath]);
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
@@ -618,8 +628,13 @@ export function SettingsPanel() {
                 </button>
               </div>
               <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
-                Permet de lire les vidéos dont le codec n'est pas géré nativement (transcodage en WebM). Laisse vide pour utiliser le ffmpeg du PATH.
+                Permet de lire les vidéos dont le codec n'est pas géré nativement (transcodage en WebM). Laisse vide pour la détection auto / le ffmpeg du PATH.
               </div>
+              {ffmpegDetected !== undefined && (
+                <div style={{ fontSize: 11, marginTop: 4, color: ffmpegDetected ? 'var(--color-green)' : 'var(--color-error)', wordBreak: 'break-all' }}>
+                  {ffmpegDetected ? `✓ ffmpeg détecté : ${ffmpegDetected}` : "✗ ffmpeg introuvable — renseigne le chemin ci-dessus ou installe ffmpeg"}
+                </div>
+              )}
             </div>
             <button
               onClick={() => {
