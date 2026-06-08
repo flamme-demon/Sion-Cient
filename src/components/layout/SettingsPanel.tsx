@@ -594,14 +594,29 @@ export function SettingsPanel() {
           <div style={{ padding: '8px 0' }}>
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 4 }}>Chemin ffmpeg (optionnel)</div>
-              <input
-                type="text"
-                value={ffmpegPath}
-                onChange={(e) => setFfmpegPath(e.target.value)}
-                placeholder="ex : C:\\ffmpeg\\bin\\ffmpeg.exe"
-                spellCheck={false}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-outline)', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
-              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  value={ffmpegPath}
+                  onChange={(e) => setFfmpegPath(e.target.value)}
+                  placeholder={"ex : C:\\ffmpeg\\bin\\ffmpeg.exe"}
+                  spellCheck={false}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-outline)', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { invoke } = await import("@tauri-apps/api/core");
+                      const p = await invoke<string | null>("pick_ffmpeg_path");
+                      if (p) setFfmpegPath(p);
+                    } catch { /* not in Tauri, or cancelled */ }
+                  }}
+                  style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  Parcourir…
+                </button>
+              </div>
               <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
                 Permet de lire les vidéos dont le codec n'est pas géré nativement (transcodage en WebM). Laisse vide pour utiliser le ffmpeg du PATH.
               </div>

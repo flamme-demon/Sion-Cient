@@ -45,6 +45,10 @@ tauri-plugin-global-shortcut = "2"
 # Persists window position/size/maximised/fullscreen state across launches
 # (desktop only — mobile windows are fullscreen and managed by the OS).
 tauri-plugin-window-state = "2"
+# Native file picker — used by the "Parcourir" button to select an ffmpeg.exe.
+# (tauri-plugin-dialog can't be used: it pulls tauri-plugin-fs on schemars 0.8
+# while the CEF fork uses schemars 1.0 → build conflict.)
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 tungstenite = "0.24"
 cpal = "0.15"
 

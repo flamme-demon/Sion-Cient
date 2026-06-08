@@ -729,6 +729,19 @@ fn load_session(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
     Ok(std::fs::read_to_string(dir.join("session.json")).unwrap_or_default())
 }
 
+/// Native file picker for the Settings → Advanced "Parcourir" button (select an
+/// ffmpeg executable). Desktop only (rfd, async via the xdg-portal/native
+/// backend). Returns the absolute path, or None if cancelled.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn pick_ffmpeg_path() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Sélectionner ffmpeg")
+        .pick_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string())
+}
+
 #[tauri::command]
 fn start_voice_service(_channel_name: String, _is_muted: bool, _is_deafened: bool) {
     // On Android, the JS calls window.__SION__.startVoiceService() directly via JavascriptInterface
@@ -1032,7 +1045,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder
