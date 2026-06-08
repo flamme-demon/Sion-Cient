@@ -2107,15 +2107,32 @@ impl<T: UserEvent> CefRuntime<T> {
       cache_path: cache_path.to_string_lossy().to_string().as_str().into(),
       ..Default::default()
     };
-    assert_eq!(
-      cef::initialize(
+    // [Sion patch] cef::initialize transiently returns 0 (failure) on a first
+    // launch when a stale CEF process still holds the profile/cache lock —
+    // observed on Windows after the CEF 144→148 upgrade (and on Linux under a
+    // double launch): the app crashed at this assert, then started fine on
+    // relaunch. Retry a few times with a short delay so the transient lock can
+    // clear instead of taking the whole process down on the first failure. We
+    // only re-call after a 0 (not-initialized) return, so this never
+    // double-initializes CEF. The final assert still fires on a genuine,
+    // persistent failure so it remains debuggable.
+    let mut init_ret = 0;
+    for attempt in 1..=8 {
+      init_ret = cef::initialize(
         Some(args.as_main_args()),
         Some(&settings),
         Some(&mut app),
-        std::ptr::null_mut()
-      ),
-      1
-    );
+        std::ptr::null_mut(),
+      );
+      if init_ret == 1 {
+        break;
+      }
+      log::warn!(
+        "[Sion][cef] cef::initialize returned {init_ret} (attempt {attempt}/8) — retrying in 400ms"
+      );
+      std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+    assert_eq!(init_ret, 1, "cef::initialize failed after 8 attempts");
 
     // Install our `NSApplication` delegate *after* `cef::initialize`: CEF's
     // Chrome runtime installs its own `AppController` as `NSApp.delegate`
