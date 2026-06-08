@@ -108,17 +108,43 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   const [transcodedUrl, setTranscodedUrl] = useState<string | null>(null);
   const [transcoding, setTranscoding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // true when the transcode failed because ffmpeg isn't installed → offer to
+  // install it right from the card. number = install progress %.
+  const [ffmpegMissing, setFfmpegMissing] = useState(false);
+  const [installing, setInstalling] = useState<number | null>(null);
   const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
 
-  const handleError = async () => {
+  const handleError = () => {
     // Native playback failed — transcode to WebM via ffmpeg
     if (transcoding || transcodedUrl || error) return;
     if (!attachment.url) { setError("URL manquante"); return; }
+    runTranscode();
+  };
 
+  const runTranscode = async () => {
+    setError(null);
     setTranscoding(true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const b64: string = await invoke("transcode_video", { url: attachment.url, ffmpegPath });
+      // Feed ffmpeg the bytes the renderer already resolved — resolvedUrl is a
+      // blob that has gone through E2EE decryption + Matrix media auth. Letting
+      // Rust re-download attachment.url would have neither (401 on authed media,
+      // ciphertext on encrypted channels). Fall back to URL download if the
+      // blob can't be read for some reason.
+      let dataB64: string | undefined;
+      try {
+        const buf = await (await fetch(resolvedUrl)).arrayBuffer();
+        const u8 = new Uint8Array(buf);
+        let binary = "";
+        const CHUNK = 0x8000;
+        for (let i = 0; i < u8.length; i += CHUNK) {
+          binary += String.fromCharCode(...u8.subarray(i, i + CHUNK));
+        }
+        dataB64 = btoa(binary);
+      } catch (e) {
+        console.warn("[Sion] Lecture du blob pour transcodage échouée, fallback download:", e);
+      }
+      const b64: string = await invoke("transcode_video", { url: attachment.url, ffmpegPath, dataB64 });
       const raw = atob(b64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
@@ -128,8 +154,28 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     } catch (err) {
       console.error("[Sion] Transcodage échoué:", err);
       setError(String(err));
+      // Surface an "install ffmpeg" affordance on the card if it's missing.
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const p = await invoke<string | null>("detect_ffmpeg");
+        setFfmpegMissing(!p);
+      } catch { /* not in Tauri */ }
     } finally {
       setTranscoding(false);
+    }
+  };
+
+  const handleInstallFfmpeg = async () => {
+    setInstalling(0);
+    try {
+      const { installFfmpeg } = await import("../../services/ffmpegInstall");
+      await installFfmpeg((pct) => setInstalling(pct));
+      setInstalling(null);
+      setFfmpegMissing(false);
+      runTranscode(); // retry now that ffmpeg is available
+    } catch (err) {
+      console.error("[Sion] Installation ffmpeg échouée:", err);
+      setInstalling(null);
     }
   };
 
@@ -166,20 +212,38 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
             {attachment.name}
           </div>
           <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
-            {formatFileSize(attachment.size)} — Lecture impossible
+            {ffmpegMissing
+              ? `${formatFileSize(attachment.size)} — ffmpeg requis pour lire ce format`
+              : `${formatFileSize(attachment.size)} — Lecture impossible`}
           </div>
         </div>
-        <button
-          onClick={handleDownload}
-          style={{
-            padding: '8px 16px', borderRadius: 20, border: 'none',
-            background: 'var(--color-primary)', color: 'var(--color-on-primary)',
-            fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-            whiteSpace: 'nowrap', flexShrink: 0,
-          }}
-        >
-          Télécharger
-        </button>
+        {ffmpegMissing ? (
+          <button
+            onClick={handleInstallFfmpeg}
+            disabled={installing !== null}
+            style={{
+              padding: '8px 16px', borderRadius: 20, border: 'none',
+              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+              fontSize: 12, fontWeight: 600, cursor: installing !== null ? 'default' : 'pointer',
+              fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
+              opacity: installing !== null ? 0.6 : 1,
+            }}
+          >
+            {installing !== null ? `Installation… ${installing}%` : "Installer ffmpeg (~80 Mo)"}
+          </button>
+        ) : (
+          <button
+            onClick={handleDownload}
+            style={{
+              padding: '8px 16px', borderRadius: 20, border: 'none',
+              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+          >
+            Télécharger
+          </button>
+        )}
       </div>
     );
   }

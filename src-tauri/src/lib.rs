@@ -774,12 +774,23 @@ fn cleanup_old_transcodes() {
 /// Transcode a video URL to WebM (VP9+Opus) using system ffmpeg.
 /// Returns base64-encoded WebM data.
 #[tauri::command]
-async fn transcode_video(url: String, ffmpeg_path: Option<String>) -> Result<String, String> {
+async fn transcode_video(
+    app: tauri::AppHandle<TauriRuntime>,
+    url: String,
+    ffmpeg_path: Option<String>,
+    data_b64: Option<String>,
+) -> Result<String, String> {
     use base64::Engine;
     // Resolve the ffmpeg binary: user-configured path (Settings → Advanced) →
-    // common install locations → `ffmpeg` on PATH. Lets the transcode work
-    // out-of-box when ffmpeg is installed but not on PATH (common on Windows).
-    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref());
+    // app-managed download → common install locations → `ffmpeg` on PATH. Lets
+    // the transcode work out-of-box when ffmpeg is installed but not on PATH
+    // (common on Windows) or after the in-app "Installer ffmpeg" button.
+    #[cfg(not(target_os = "android"))]
+    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    #[cfg(target_os = "android")]
+    let managed: Option<String> = None;
+    let _ = &app;
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed.as_deref());
 
     // Clean up old temp files on each transcode call
     cleanup_old_transcodes();
@@ -799,14 +810,26 @@ async fn transcode_video(url: String, ffmpeg_path: Option<String>) -> Result<Str
         return Ok(b64);
     }
 
-    // Download video
-    let client = build_client().map_err(|e| e.to_string())?;
-    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    // Obtain the source bytes. Prefer the bytes the renderer already resolved
+    // (it has handled E2EE decryption + Matrix media auth) and passed in as
+    // base64 — re-downloading the URL here would have NO access token and NO
+    // decryption, so it fails on authenticated-media servers (401) and on
+    // encrypted channels (we'd fetch ciphertext that ffmpeg can't decode).
+    // Fall back to downloading the URL only when no bytes were provided.
+    if let Some(b64) = data_b64.filter(|s| !s.is_empty()) {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|e| format!("base64 decode: {}", e))?;
+        std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
+    } else {
+        let client = build_client().map_err(|e| e.to_string())?;
+        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
     }
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-    std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
 
     // Transcode with ffmpeg (fast preset)
     let output = std::process::Command::new(&ffmpeg_bin)
@@ -833,14 +856,41 @@ async fn transcode_video(url: String, ffmpeg_path: Option<String>) -> Result<Str
     Ok(b64)
 }
 
-/// Resolve which ffmpeg binary to invoke: a user-configured path wins;
-/// otherwise probe common install locations (so it works without PATH, the
-/// usual Windows case); finally fall back to bare `ffmpeg` (PATH lookup).
-fn resolve_ffmpeg(configured: Option<&str>) -> String {
+/// Path where the in-app "Installer ffmpeg" button stores the downloaded
+/// binary: `<app-data>/bin/ffmpeg[.exe]`. Survives CEF upgrades (app-data is
+/// outside the Chromium profile). None if the app-data dir can't be resolved.
+#[cfg(not(target_os = "android"))]
+fn managed_ffmpeg_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    let name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    Some(dir.join("bin").join(name))
+}
+
+/// Resolve which ffmpeg binary to invoke: a user-configured path wins; then the
+/// app-managed download (`<app-data>/bin/ffmpeg`); otherwise probe common
+/// install locations (so it works without PATH, the usual Windows case);
+/// finally fall back to bare `ffmpeg` (PATH lookup).
+fn resolve_ffmpeg(configured: Option<&str>, managed: Option<&str>) -> String {
     if let Some(p) = configured {
         let p = p.trim();
         if !p.is_empty() {
             return p.to_string();
+        }
+    }
+    if let Some(p) = managed {
+        if !p.is_empty() && std::path::Path::new(p).exists() {
+            return p.to_string();
+        }
+    }
+    // Next to the app executable (portable install, or an ffmpeg dropped into
+    // the Windows install dir by the NSIS option).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+            let sibling = dir.join(name);
+            if sibling.exists() {
+                return sibling.to_string_lossy().into_owned();
+            }
         }
     }
     #[cfg(target_os = "windows")]
@@ -877,14 +927,115 @@ fn resolve_ffmpeg(configured: Option<&str>) -> String {
 /// Settings → Advanced to show whether the transcode fallback is available.
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-fn detect_ffmpeg() -> Option<String> {
-    let bin = resolve_ffmpeg(None);
+fn detect_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Option<String> {
+    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let bin = resolve_ffmpeg(None, managed.as_deref());
     let ok = std::process::Command::new(&bin)
         .arg("-version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if ok { Some(bin) } else { None }
+}
+
+/// Download a static ffmpeg build into `<app-data>/bin/` so the video
+/// transcode fallback works without the user installing anything. Streams the
+/// archive (emitting `ffmpeg-install-progress` percent events), extracts the
+/// ffmpeg binary via the system `tar` (bsdtar on Win10+, GNU tar on Linux —
+/// both auto-detect zip/tar.xz), and marks it executable. Returns the path.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn download_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
+    use std::io::Write;
+    use tauri::Emitter;
+
+    let dest = managed_ffmpeg_path(&app).ok_or("app-data introuvable")?;
+    let bin_dir = dest.parent().ok_or("chemin invalide")?.to_path_buf();
+    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    // Reputable static-build hosts, stable "latest release" URLs.
+    #[cfg(target_os = "windows")]
+    let url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+    #[cfg(target_os = "macos")]
+    let url = "https://evermeet.cx/ffmpeg/getrelease/zip";
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+
+    let _ = app.emit("ffmpeg-install-progress", 0u64);
+
+    // Stream download to a temp archive, reporting progress.
+    let client = build_client().map_err(|e| e.to_string())?;
+    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let total = resp.content_length();
+    let tmp_dir = std::env::temp_dir();
+    let archive = tmp_dir.join("sion_ffmpeg_dl");
+    let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
+    let mut downloaded: u64 = 0;
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        if let Some(t) = total {
+            if t > 0 {
+                let _ = app.emit("ffmpeg-install-progress", downloaded * 95 / t);
+            }
+        }
+    }
+    drop(file);
+    let _ = app.emit("ffmpeg-install-progress", 96u64);
+
+    // Extract via system tar (auto-detects .zip / .tar.xz) into a temp dir.
+    let ext_dir = tmp_dir.join("sion_ffmpeg_ext");
+    let _ = std::fs::remove_dir_all(&ext_dir);
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    let out = std::process::Command::new("tar")
+        .arg("-xf").arg(&archive).arg("-C").arg(&ext_dir)
+        .output()
+        .map_err(|e| format!("tar introuvable: {}", e))?;
+    if !out.status.success() {
+        return Err(format!("extraction échouée: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+
+    // Locate the ffmpeg binary in the extracted tree.
+    let bin_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    let found = find_file(&ext_dir, bin_name).ok_or("binaire ffmpeg absent de l'archive")?;
+    std::fs::copy(&found, &dest).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
+    }
+
+    let _ = std::fs::remove_file(&archive);
+    let _ = std::fs::remove_dir_all(&ext_dir);
+    let _ = app.emit("ffmpeg-install-progress", 100u64);
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Recursively search `dir` for a file named `name`; first match wins.
+#[cfg(not(target_os = "android"))]
+fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            subdirs.push(path);
+        } else if path.file_name().map(|n| n == name).unwrap_or(false) {
+            return Some(path);
+        }
+    }
+    for sub in subdirs {
+        if let Some(found) = find_file(&sub, name) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Register global shortcuts via plugin + update rdev state (Linux).
@@ -1093,7 +1244,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, detect_ffmpeg, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, detect_ffmpeg, download_ffmpeg, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder

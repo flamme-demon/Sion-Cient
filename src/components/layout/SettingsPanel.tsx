@@ -48,6 +48,14 @@ export function SettingsPanel() {
   const setFfmpegPath = useSettingsStore((s) => s.setFfmpegPath);
   // undefined = checking, null = not found, string = resolved ffmpeg path.
   const [ffmpegDetected, setFfmpegDetected] = useState<string | null | undefined>(undefined);
+  // null = idle, number = install progress %, string = error message.
+  const [ffmpegInstall, setFfmpegInstall] = useState<number | string | null>(null);
+  const redetectFfmpeg = () => {
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string | null>("detect_ffmpeg"))
+      .then((p) => setFfmpegDetected(p ?? null))
+      .catch(() => setFfmpegDetected(null));
+  };
   useEffect(() => {
     let cancelled = false;
     import("@tauri-apps/api/core")
@@ -632,7 +640,32 @@ export function SettingsPanel() {
               </div>
               {ffmpegDetected !== undefined && (
                 <div style={{ fontSize: 11, marginTop: 4, color: ffmpegDetected ? 'var(--color-green)' : 'var(--color-error)', wordBreak: 'break-all' }}>
-                  {ffmpegDetected ? `✓ ffmpeg détecté : ${ffmpegDetected}` : "✗ ffmpeg introuvable — renseigne le chemin ci-dessus ou installe ffmpeg"}
+                  {ffmpegDetected ? `✓ ffmpeg détecté : ${ffmpegDetected}` : "✗ ffmpeg introuvable — renseigne le chemin ci-dessus ou installe-le ci-dessous"}
+                </div>
+              )}
+              {!ffmpegDetected && ffmpegDetected !== undefined && (
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    disabled={typeof ffmpegInstall === "number"}
+                    onClick={async () => {
+                      setFfmpegInstall(0);
+                      try {
+                        const { installFfmpeg } = await import("../../services/ffmpegInstall");
+                        await installFfmpeg((pct) => setFfmpegInstall(pct));
+                        setFfmpegInstall(null);
+                        redetectFfmpeg();
+                      } catch (err) {
+                        setFfmpegInstall(`Échec : ${String(err)}`);
+                      }
+                    }}
+                    style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: typeof ffmpegInstall === "number" ? 'default' : 'pointer', fontSize: 13, fontFamily: 'inherit', background: 'var(--color-primary)', color: 'var(--color-on-primary)', opacity: typeof ffmpegInstall === "number" ? 0.6 : 1 }}
+                  >
+                    {typeof ffmpegInstall === "number" ? `Installation… ${ffmpegInstall}%` : "Installer ffmpeg automatiquement (~80 Mo)"}
+                  </button>
+                  {typeof ffmpegInstall === "string" && (
+                    <div style={{ fontSize: 11, marginTop: 4, color: 'var(--color-error)' }}>{ffmpegInstall}</div>
+                  )}
                 </div>
               )}
             </div>
