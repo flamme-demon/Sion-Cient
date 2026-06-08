@@ -7,6 +7,7 @@ import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
 import { installCefAudioShim } from "./services/cefAudioShim";
 import { installDenoiseShim } from "./services/denoiseShim";
+import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 
 // Override enumerateDevices/getUserMedia in CEF so WebRTC sees real devices.
 // Denoise shim wraps getUserMedia *after* cefAudioShim so both chains compose.
@@ -57,8 +58,15 @@ window.addEventListener("keydown", (e) => {
   }
 }, { capture: true });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+// Re-hydrate the session from app-data BEFORE rendering, so the auth store's
+// restoreSession() (run from an App effect) sees the credentials/device_id even
+// if a CEF/Chromium upgrade reset localStorage. No-op (instant) on web.
+hydrateSessionFromAppData().finally(() => {
+  // Keep the settings snapshot in app-data fresh as the user changes them.
+  startSettingsMirror();
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+});

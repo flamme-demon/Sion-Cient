@@ -280,6 +280,9 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
       // Store current device/user ID for future checks
       if (currentDeviceId) localStorage.setItem("sion_device_id", currentDeviceId);
       if (currentUserId) localStorage.setItem("sion_user_id", currentUserId);
+      // Mirror outside the CEF profile so a Chromium-upgrade reset can't drop
+      // the device_id (which would create a NEW device on next login → churn).
+      void import("./sessionPersist").then((m) => m.mirrorSessionToAppData());
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1666,6 +1669,9 @@ export async function logout() {
   // Clear stored device/user ID to force crypto store reset on next login
   localStorage.removeItem("sion_device_id");
   localStorage.removeItem("sion_user_id");
+  // Clear the app-data mirror too, so logout doesn't leave a stale session
+  // that re-hydrates localStorage on next boot.
+  void import("./sessionPersist").then((m) => m.mirrorSessionToAppData());
   // Small delay to let IndexedDB connections close after stopClient()
   await new Promise((r) => setTimeout(r, 500));
   // Clear crypto stores (IndexedDB) to avoid conflicts on next login

@@ -4,6 +4,7 @@ import type { AuthCredentials } from "../types/auth";
 import * as matrixService from "../services/matrixService";
 import type { RegistrationFlowInfo } from "../services/matrixService";
 import { useAdminStore } from "./useAdminStore";
+import { mirrorSessionToAppData } from "../services/sessionPersist";
 
 const STORAGE_KEY = "sion_auth_credentials";
 
@@ -37,6 +38,9 @@ interface AuthState {
 
 function saveCredentials(credentials: AuthCredentials) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
+  // Mirror outside the CEF profile so a Chromium-upgrade localStorage reset
+  // doesn't force a re-login. Fire-and-forget; no-op on web.
+  void mirrorSessionToAppData();
 }
 
 function loadCredentials(): AuthCredentials | null {
@@ -51,6 +55,9 @@ function loadCredentials(): AuthCredentials | null {
 
 function clearCredentials() {
   localStorage.removeItem(STORAGE_KEY);
+  // Reflect the cleared state in the app-data mirror too (logout must not
+  // leave a stale session that re-hydrates on next boot).
+  void mirrorSessionToAppData();
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
