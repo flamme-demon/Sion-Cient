@@ -11,6 +11,15 @@ import {
   type SoundEntry,
 } from "../../services/soundboardService";
 import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
+import { AudioTrimmer } from "./AudioTrimmer";
+import { trimToClip } from "../../services/audioTrim";
+
+// Soundboard sounds are capped at 20s; the trimmer cuts longer files down to a
+// chosen ≤20s window + re-encodes to opus, so the input file can be large even
+// though the uploaded clip must stay under `maxSize`. Cap the input only to
+// avoid decoding absurdly large files into memory.
+const MAX_INPUT_SIZE = 30 * 1024 * 1024; // 30 MB
+const MAX_CLIP_SEC = 20;
 
 interface Props {
   existingCategories: string[];
@@ -36,6 +45,8 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
   const [emojiSearch, setEmojiSearch] = useState("");
   const [emojiGroup, setEmojiGroup] = useState<number>(EMOJI_GROUPS[0].id);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Current trim selection + decoded buffer, reported by <AudioTrimmer>.
+  const regionRef = useRef<{ start: number; end: number; buffer: AudioBuffer } | null>(null);
 
   // Revoke the preview blob URL when the modal unmounts — leaving it alive
   // holds the File in memory until GC, which never runs on inactive tabs.
@@ -57,10 +68,13 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
       setError(t("soundboard.errorNotAudio"));
       return;
     }
-    if (f.size > maxSize) {
-      setError(t("soundboard.errorTooBig", { max: Math.round(maxSize / 1024) }));
+    // The input can be larger than the upload cap — we trim + re-encode below.
+    // Only reject truly huge files to protect decodeAudioData's memory use.
+    if (f.size > MAX_INPUT_SIZE) {
+      setError(`Fichier trop lourd (max ${Math.round(MAX_INPUT_SIZE / 1024 / 1024)} MB)`);
       return;
     }
+    regionRef.current = null;
     setFile(f);
     if (!label) setLabel(f.name.replace(/\.[^.]+$/, "").slice(0, 60));
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -76,7 +90,19 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
       if (editing) {
         await editSound(editing, label.trim(), category.trim() || "Autre", emoji.trim() || null, gain);
       } else if (file) {
-        await uploadSound(file, label.trim(), category.trim() || "Autre", emoji.trim() || null, gain);
+        let toUpload = file;
+        const r = regionRef.current;
+        if (r) {
+          // Trim+re-encode unless the file is already a small, full-length
+          // ≤20s clip (then keep the original to preserve its quality/format).
+          const isFullFile = r.start <= 0.05 && Math.abs(r.end - r.buffer.duration) < 0.05;
+          const needsTrim = !isFullFile || r.buffer.duration > MAX_CLIP_SEC + 0.05 || file.size > maxSize;
+          if (needsTrim) {
+            const end = Math.min(r.end, r.start + MAX_CLIP_SEC);
+            toUpload = await trimToClip(r.buffer, r.start, end, file.name);
+          }
+        }
+        await uploadSound(toUpload, label.trim(), category.trim() || "Autre", emoji.trim() || null, gain);
       }
       onUploaded();
     } catch (err) {
@@ -146,8 +172,13 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
               style={{ display: 'none' }}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
             />
-            {previewUrl && (
-              <audio controls src={previewUrl} style={{ width: '100%', height: 32 }} />
+            {file && (
+              <AudioTrimmer
+                key={`${file.name}:${file.size}:${file.lastModified}`}
+                file={file}
+                maxSec={MAX_CLIP_SEC}
+                onChange={(start, end, buffer) => { regionRef.current = { start, end, buffer }; }}
+              />
             )}
           </>
         )}
