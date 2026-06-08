@@ -1295,6 +1295,44 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             start_ws_server();
 
+            // Re-apply the saved window size shortly after launch. Two CEF
+            // quirks force this manual path instead of the window-state
+            // plugin's own restore:
+            //   1. The plugin restores on `on_window_ready`, but the CEF window
+            //      has no `display()` yet → its SetSize handler silently
+            //      no-ops and the window opens at the config default.
+            //   2. The plugin restores via `PhysicalSize`, which the CEF
+            //      runtime mis-handles (the window stays at the default);
+            //      a `LogicalSize` set_size works (verified empirically).
+            // So we wait for the display to attach, read the saved size
+            // ourselves, and apply it as a LogicalSize. POSITION is omitted —
+            // on Wayland the compositor owns window placement.
+            #[cfg(not(target_os = "android"))]
+            {
+                use tauri::Manager;
+                let cfg_dir = app.path().app_config_dir().ok();
+                if let Some(win) = app.get_webview_window("main") {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(700));
+                        let Some(dir) = cfg_dir else { return };
+                        let path = dir.join(".window-state.json");
+                        let Ok(raw) = std::fs::read_to_string(&path) else { return };
+                        let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else { return };
+                        let main = &json["main"];
+                        let (w, h) = (main["width"].as_f64(), main["height"].as_f64());
+                        if let (Some(w), Some(h)) = (w, h) {
+                            if w > 0.0 && h > 0.0 {
+                                if main["maximized"].as_bool() == Some(true) {
+                                    let _ = win.maximize();
+                                } else if let Err(e) = win.set_size(tauri::LogicalSize::new(w, h)) {
+                                    log::warn!("[Sion] restore window size failed: {}", e);
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
             // rdev captures keyboard events at the evdev level — Linux only.
             // Works when focused (even on Wayland). The plugin handles background.
             #[cfg(target_os = "linux")]
@@ -1370,6 +1408,17 @@ pub fn run() {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             let win = window.clone();
+            // Persist size/position NOW, while the window is still alive. The
+            // window-state plugin only flushes to disk on RunEvent::Exit, and
+            // our prevent_close + delayed destroy() can race or be cut short
+            // (force-kill, crash) before that ever fires — so the file would
+            // never get written. An explicit save here guarantees it.
+            {
+                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+                if let Err(e) = window.app_handle().save_window_state(StateFlags::all()) {
+                    log::warn!("[Sion] save_window_state failed: {}", e);
+                }
+            }
             let _ = window.emit("sion-graceful-shutdown", ());
             // Give JS ~1.5s to flush the LiveKit WS leave + MatrixRTC
             // membership state event before forcing the close.
