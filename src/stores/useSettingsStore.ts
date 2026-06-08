@@ -31,6 +31,10 @@ interface SettingsState {
   linkPreviews: boolean;
   audioInputDevice: string;
   audioOutputDevice: string;
+  /** Optional path to an ffmpeg executable, used to transcode videos whose
+   *  codec CEF can't play natively (e.g. H.264 on the minimal CEF build,
+   *  notably Windows). Empty = use `ffmpeg` from PATH. */
+  ffmpegPath: string;
   defaultChannel: string;
   autoJoinVoice: boolean;
   enableGifs: boolean;
@@ -71,6 +75,7 @@ interface SettingsState {
   setAudioQuality: (v: AudioQualityPreset) => void;
   setLinkPreviews: (v: boolean) => void;
   setAudioInputDevice: (v: string) => void;
+  setFfmpegPath: (v: string) => void;
   setAudioOutputDevice: (v: string) => void;
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
@@ -106,6 +111,7 @@ export const useSettingsStore = create<SettingsState>()(
       audioQuality: "voiceHD",
       linkPreviews: true,
       audioInputDevice: "",
+      ffmpegPath: "",
       audioOutputDevice: "",
       defaultChannel: "",
       autoJoinVoice: false,
@@ -149,6 +155,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAudioQuality: (v) => set({ audioQuality: v }),
       setLinkPreviews: (v) => set({ linkPreviews: v }),
       setAudioInputDevice: (v) => set({ audioInputDevice: v }),
+      setFfmpegPath: (v) => set({ ffmpegPath: v.trim() }),
       setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),

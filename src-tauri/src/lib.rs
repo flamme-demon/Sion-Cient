@@ -761,8 +761,18 @@ fn cleanup_old_transcodes() {
 /// Transcode a video URL to WebM (VP9+Opus) using system ffmpeg.
 /// Returns base64-encoded WebM data.
 #[tauri::command]
-async fn transcode_video(url: String) -> Result<String, String> {
+async fn transcode_video(url: String, ffmpeg_path: Option<String>) -> Result<String, String> {
     use base64::Engine;
+    // Use the user-configured ffmpeg path (Settings → Advanced) if set,
+    // otherwise fall back to `ffmpeg` on PATH. Lets Windows users (no system
+    // ffmpeg, minimal CEF without H.264) point at an ffmpeg.exe to enable the
+    // transcode-to-webm fallback.
+    let ffmpeg_bin = ffmpeg_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or("ffmpeg")
+        .to_string();
 
     // Clean up old temp files on each transcode call
     cleanup_old_transcodes();
@@ -792,7 +802,7 @@ async fn transcode_video(url: String) -> Result<String, String> {
     std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
 
     // Transcode with ffmpeg (fast preset)
-    let output = std::process::Command::new("ffmpeg")
+    let output = std::process::Command::new(&ffmpeg_bin)
         .args(["-y", "-i"])
         .arg(&input_path)
         .args(["-c:v", "libvpx-vp9", "-crf", "35", "-b:v", "0",

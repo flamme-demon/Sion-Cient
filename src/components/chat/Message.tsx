@@ -4,6 +4,7 @@ import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, P
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { LinkPreview as LinkPreviewInner } from "./LinkPreview";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 
 // Lazy-load link previews: only fetch/render when visible in viewport
 function LinkPreview({ url }: { url: string }) {
@@ -107,6 +108,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   const [transcodedUrl, setTranscodedUrl] = useState<string | null>(null);
   const [transcoding, setTranscoding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
 
   const handleError = async () => {
     // Native playback failed — transcode to WebM via ffmpeg
@@ -116,7 +118,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     setTranscoding(true);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const b64: string = await invoke("transcode_video", { url: attachment.url });
+      const b64: string = await invoke("transcode_video", { url: attachment.url, ffmpegPath });
       const raw = atob(b64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);

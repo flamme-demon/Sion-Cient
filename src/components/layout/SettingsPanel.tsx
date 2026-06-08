@@ -44,6 +44,8 @@ export function SettingsPanel() {
   const setMuteShortcut = useSettingsStore((s) => s.setMuteShortcut);
   const setDeafenShortcut = useSettingsStore((s) => s.setDeafenShortcut);
   const setLinkPreviews = useSettingsStore((s) => s.setLinkPreviews);
+  const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
+  const setFfmpegPath = useSettingsStore((s) => s.setFfmpegPath);
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
@@ -590,6 +592,20 @@ export function SettingsPanel() {
         {/* === ADVANCED === */}
         {activeTab === "advanced" && (
           <div style={{ padding: '8px 0' }}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 4 }}>Chemin ffmpeg (optionnel)</div>
+              <input
+                type="text"
+                value={ffmpegPath}
+                onChange={(e) => setFfmpegPath(e.target.value)}
+                placeholder="ex : C:\\ffmpeg\\bin\\ffmpeg.exe"
+                spellCheck={false}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-outline)', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+              />
+              <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
+                Permet de lire les vidéos dont le codec n'est pas géré nativement (transcodage en WebM). Laisse vide pour utiliser le ffmpeg du PATH.
+              </div>
+            </div>
             <button
               onClick={() => {
                 if (window.confirm(t("settings.purgeCacheConfirm"))) {
