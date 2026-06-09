@@ -4,7 +4,7 @@ import { ClientEvent, MatrixEvent, MatrixEventEvent, RoomEvent, RoomMemberEvent,
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api";
 import type { VerificationRequest, ShowSasCallbacks } from "matrix-js-sdk/lib/crypto-api/verification";
 import { VerificationPhase, VerifierEvent, VerificationRequestEvent } from "matrix-js-sdk/lib/crypto-api/verification";
-import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser } from "../types/matrix";
+import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser, PollData } from "../types/matrix";
 import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
@@ -352,12 +352,70 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
   };
 }
 
+const POLL_START_TYPES = ["m.poll.start", "org.matrix.msc3381.poll.start"];
+const POLL_RESPONSE_TYPES = ["m.poll.response", "org.matrix.msc3381.poll.response"];
+const POLL_END_TYPES = ["m.poll.end", "org.matrix.msc3381.poll.end"];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readMText(node: any): string {
+  return node?.["m.text"] ?? node?.["org.matrix.msc1767.text"] ?? "";
+}
+/** Parse an m.poll.start event content (stable or unstable) into PollData. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parsePollStartContent(content: any): PollData | null {
+  const ps = content?.["m.poll.start"] ?? content?.["org.matrix.msc3381.poll.start"];
+  if (!ps || !Array.isArray(ps.answers)) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const answers = ps.answers.map((a: any, i: number) => ({ id: String(a?.id ?? i), text: readMText(a) || `Option ${i + 1}` }));
+  const endsRaw = content?.["app.sion.poll_ends_ts"];
+  return {
+    question: readMText(ps.question) || content?.["m.text"] || "Sondage",
+    kind: String(ps.kind || "").includes("undisclosed") ? "undisclosed" : "disclosed",
+    maxSelections: typeof ps.max_selections === "number" ? ps.max_selections : 1,
+    answers,
+    votes: {},
+    ended: false,
+    endsTs: typeof endsRaw === "number" ? endsRaw : undefined,
+  };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractMessagesFromEvents(events: any[], room: any, client: any): ChatMessage[] {
   const msgs: ChatMessage[] = [];
   for (const evt of events) {
     const type = evt.getType?.();
     const content = evt.getContent?.();
+
+    // --- Polls (MSC3381): start → poll message; response/end → aggregate ---
+    if (type && POLL_START_TYPES.includes(type)) {
+      const poll = parsePollStartContent(content);
+      if (poll) {
+        const evtId = evt.getId?.() || String(Date.now());
+        const senderId = evt.getSender?.() || "unknown";
+        const ts = evt.getTs?.() || Date.now();
+        msgs.push({
+          id: evtId, eventId: evtId, senderId, user: getDisplayName(senderId, room, client),
+          role: "user", time: new Date(ts).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+          ts, text: poll.question, msgtype: "m.poll", avatarUrl: getAvatarFromSender(senderId, room, client), poll,
+        });
+      }
+      continue;
+    }
+    if (type && POLL_RESPONSE_TYPES.includes(type)) {
+      const ref = content?.["m.relates_to"]?.event_id;
+      const sender = evt.getSender?.() || "";
+      const ans = (content?.["m.poll.response"] ?? content?.["org.matrix.msc3381.poll.response"])?.answers;
+      if (ref && sender && Array.isArray(ans)) {
+        const target = msgs.find((m) => m.id === ref && m.poll);
+        if (target?.poll && !target.poll.ended) target.poll.votes[sender] = ans;
+      }
+      continue;
+    }
+    if (type && POLL_END_TYPES.includes(type)) {
+      const ref = content?.["m.relates_to"]?.event_id;
+      const target = ref ? msgs.find((m) => m.id === ref && m.poll) : undefined;
+      if (target?.poll) target.poll.ended = true;
+      continue;
+    }
 
     // Detect messages robustly. matrix-js-sdk can leave getType() stale at
     // "m.room.encrypted" even after a backward-paginated event has been
@@ -916,6 +974,19 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       } catch (err) {
         console.warn("[Sion] localEcho id reconcile failed:", err);
       }
+    });
+
+    // Polls (MSC3381): re-extract the room when a poll start/response/end
+    // arrives so the card + live results update. Same source as the normal
+    // load (live timeline), so no history is lost; only rooms already loaded.
+    client.on(RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
+      if (toStartOfTimeline || !room) return;
+      const t = event.getType?.();
+      if (!t || (!POLL_START_TYPES.includes(t) && !POLL_RESPONSE_TYPES.includes(t) && !POLL_END_TYPES.includes(t))) return;
+      set((s) => {
+        if (!s.messages[room.roomId]) return s;
+        return { messages: { ...s.messages, [room.roomId]: extractMessagesFromRoom(room) } };
+      });
     });
 
     // Listen for new messages and reactions (real-time)

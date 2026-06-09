@@ -4,7 +4,6 @@ import {
   uploadSound,
   editSound,
   playSoundLocal,
-  previewSoundFile,
   SOUND_GAIN_MIN,
   SOUND_GAIN_MAX,
   SOUND_GAIN_DEFAULT,
@@ -12,6 +11,7 @@ import {
 } from "../../services/soundboardService";
 import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
 import { AudioTrimmer } from "./AudioTrimmer";
+import { ExternalAudioImport } from "./ExternalAudioImport";
 import { trimToClip } from "../../services/audioTrim";
 
 // Soundboard sounds are capped at 20s; the trimmer cuts longer files down to a
@@ -33,6 +33,7 @@ interface Props {
 export function SoundboardUploadModal({ existingCategories, maxSize, onClose, onUploaded, editing = null }: Props) {
   const { t } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
+  const [mode, setMode] = useState<"file" | "url">("file");
   const [label, setLabel] = useState(editing?.label || "");
   const [category, setCategory] = useState(editing?.category || "");
   const [emoji, setEmoji] = useState(editing?.emoji || "");
@@ -150,21 +151,41 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
 
         {!editing && (
           <>
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                padding: 16,
-                borderRadius: 12,
-                border: '2px dashed var(--color-outline-variant)',
-                textAlign: 'center',
-                cursor: 'pointer',
-                fontSize: 12,
-                color: 'var(--color-on-surface-variant)',
-                background: 'var(--color-surface-container-high)',
-              }}
-            >
-              {file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : t("soundboard.dropHint", { max: Math.round(maxSize / 1024) })}
+            {/* Source toggle: local file vs external-media URL (yt-dlp). */}
+            <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 12, background: 'var(--color-surface-container-high)' }}>
+              {(["file", "url"] as const).map((m) => (
+                <button key={m} type="button"
+                  onClick={() => { setMode(m); setError(null); }}
+                  style={{
+                    flex: 1, padding: '7px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
+                    fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+                    background: mode === m ? 'var(--color-primary-container)' : 'transparent',
+                    color: mode === m ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
+                  }}
+                >{m === "file" ? t("soundboard.modeFile") : t("soundboard.modeUrl")}</button>
+              ))}
             </div>
+
+            {mode === "file" && (
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  padding: 16,
+                  borderRadius: 12,
+                  border: '2px dashed var(--color-outline-variant)',
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  color: 'var(--color-on-surface-variant)',
+                  background: 'var(--color-surface-container-high)',
+                }}
+              >
+                {file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : t("soundboard.dropHint", { max: Math.round(maxSize / 1024) })}
+              </div>
+            )}
+            {mode === "url" && (
+              <ExternalAudioImport onImported={(f, title) => { handleFile(f); if (title && !label) setLabel(title); }} />
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -177,6 +198,7 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
                 key={`${file.name}:${file.size}:${file.lastModified}`}
                 file={file}
                 maxSec={MAX_CLIP_SEC}
+                gain={gain}
                 onChange={(start, end, buffer) => { regionRef.current = { start, end, buffer }; }}
               />
             )}
@@ -366,42 +388,41 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
             onChange={(e) => setGain(parseFloat(e.target.value))}
             style={{ flex: 1, accentColor: 'var(--color-primary)' }}
           />
-          <button
-            type="button"
-            disabled={previewBusy || (!editing && !file)}
-            onClick={async () => {
-              if (previewBusy) return;
-              setPreviewBusy(true);
-              try {
-                if (editing) {
+          {/* In add mode the trimmer's own "Écouter la sélection" button (which
+              now applies gain) is the single preview; only edit mode — which has
+              no trimmer — keeps a dedicated test button. */}
+          {editing && (
+            <button
+              type="button"
+              disabled={previewBusy}
+              onClick={async () => {
+                if (previewBusy) return;
+                setPreviewBusy(true);
+                try {
                   await playSoundLocal(editing.mxcUrl, gain);
-                } else if (file) {
-                  await previewSoundFile(file, gain);
+                } catch (err) {
+                  console.warn("[Sion] preview failed:", err);
+                } finally {
+                  setTimeout(() => setPreviewBusy(false), 200);
                 }
-              } catch (err) {
-                console.warn("[Sion] preview failed:", err);
-              } finally {
-                // Re-enable quickly — playback is non-blocking; the button
-                // mostly debounces accidental rapid clicks.
-                setTimeout(() => setPreviewBusy(false), 200);
-              }
-            }}
-            title={t("soundboard.gain.test")}
-            style={{
-              padding: '6px 12px',
-              borderRadius: 12,
-              border: 'none',
-              cursor: (previewBusy || (!editing && !file)) ? 'not-allowed' : 'pointer',
-              background: 'var(--color-surface-container-high)',
-              color: 'var(--color-on-surface)',
-              fontSize: 12,
-              fontFamily: 'inherit',
-              opacity: (previewBusy || (!editing && !file)) ? 0.5 : 1,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            ▶ {t("soundboard.gain.test")}
-          </button>
+              }}
+              title={t("soundboard.gain.test")}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 12,
+                border: 'none',
+                cursor: previewBusy ? 'not-allowed' : 'pointer',
+                background: 'var(--color-surface-container-high)',
+                color: 'var(--color-on-surface)',
+                fontSize: 12,
+                fontFamily: 'inherit',
+                opacity: previewBusy ? 0.5 : 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ▶ {t("soundboard.gain.test")}
+            </button>
+          )}
         </div>
 
         {error && (

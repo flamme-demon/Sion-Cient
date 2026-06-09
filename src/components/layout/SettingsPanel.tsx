@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import i18n from "../../i18n";
 import { useEffect, useState, useRef, useCallback } from "react";
-import { SettingsIcon, ArrowLeftIcon } from "../icons";
+import { SettingsIcon, ArrowLeftIcon, PaperclipIcon, FileIcon, DownloadIcon } from "../icons";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -11,6 +11,7 @@ import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
 import { VoiceCueEditor } from "../chat/VoiceCueEditor";
+import { ExternalAudioImport } from "../chat/ExternalAudioImport";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -58,6 +59,24 @@ export function SettingsPanel() {
       .catch(() => setFfmpegDetected(null));
   }, []);
   useEffect(() => { redetectFfmpeg(); }, [ffmpegPath, redetectFfmpeg]);
+  const ytdlpPath = useSettingsStore((s) => s.ytdlpPath);
+  const setYtdlpPath = useSettingsStore((s) => s.setYtdlpPath);
+  const [ytdlpDetected, setYtdlpDetected] = useState<string | null | undefined>(undefined);
+  const [ytdlpInstall, setYtdlpInstall] = useState<number | string | null>(null);
+  // { current, latest } yt-dlp versions (YYYY.MM.DD); null while loading.
+  const [ytdlpVer, setYtdlpVer] = useState<{ current: string | null; latest: string | null } | null>(null);
+  const redetectYtdlp = useCallback(() => {
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string | null>("detect_ytdlp"))
+      .then((p) => setYtdlpDetected(p ?? null))
+      .catch(() => setYtdlpDetected(null));
+    setYtdlpVer(null);
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string>("ytdlp_versions"))
+      .then((raw) => setYtdlpVer(JSON.parse(raw)))
+      .catch(() => setYtdlpVer(null));
+  }, []);
+  useEffect(() => { redetectYtdlp(); }, [ytdlpPath, redetectYtdlp]);
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
@@ -78,6 +97,21 @@ export function SettingsPanel() {
   const voiceSounds = useSettingsStore((s) => s.voiceSounds);
   const setVoiceSound = useSettingsStore((s) => s.setVoiceSound);
   const [cueEditor, setCueEditor] = useState<{ cue: "join" | "leave" | "timeout"; file: File; path: string; label: string } | null>(null);
+  const [cueUrlImport, setCueUrlImport] = useState<{ cue: "join" | "leave" | "timeout"; label: string } | null>(null);
+  const [cueMenu, setCueMenu] = useState<"join" | "leave" | "timeout" | null>(null);
+  const pickCueFile = useCallback(async (cue: "join" | "leave" | "timeout", label: string) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const p = await invoke<string | null>("pick_audio_file");
+      if (!p) return;
+      const b64 = await invoke<string>("read_file_b64", { path: p });
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const file = new File([bytes], p.split(/[/\\]/).pop() || "sound");
+      setCueEditor({ cue, file, path: p, label });
+    } catch { /* cancelled / not in Tauri */ }
+  }, []);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
@@ -631,25 +665,39 @@ export function SettingsPanel() {
                 >
                   ▶
                 </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const { invoke } = await import("@tauri-apps/api/core");
-                      const p = await invoke<string | null>("pick_audio_file");
-                      if (!p) return;
-                      const b64 = await invoke<string>("read_file_b64", { path: p });
-                      const bin = atob(b64);
-                      const bytes = new Uint8Array(bin.length);
-                      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-                      const file = new File([bytes], p.split(/[/\\]/).pop() || "sound");
-                      setCueEditor({ cue, file, path: p, label });
-                    } catch { /* cancelled / not in Tauri */ }
-                  }}
-                  style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', whiteSpace: 'nowrap', flexShrink: 0 }}
-                >
-                  {t("settings.cueBrowse")}
-                </button>
+                <div style={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
+                  <button
+                    type="button"
+                    title={t("settings.cueSource")}
+                    onClick={() => setCueMenu((c) => (c === cue ? null : cue))}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)' }}
+                  >
+                    <PaperclipIcon />
+                  </button>
+                  {cueMenu === cue && (
+                    <>
+                      <div onClick={() => setCueMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
+                      <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 51, background: 'var(--color-surface-container-high)', border: '1px solid var(--color-outline-variant)', borderRadius: 12, padding: 6, minWidth: 170, boxShadow: '0 6px 20px rgba(0,0,0,0.4)' }}>
+                        <button type="button"
+                          onClick={() => { setCueMenu(null); pickCueFile(cue, label); }}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', color: 'var(--color-on-surface)' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <FileIcon /> {t("soundboard.modeFile")}
+                        </button>
+                        <button type="button"
+                          onClick={() => { setCueMenu(null); setCueUrlImport({ cue, label }); }}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', color: 'var(--color-on-surface)' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          <DownloadIcon /> {t("soundboard.modeUrl")}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
                 {cfg && (
                   <button
                     type="button"
@@ -745,6 +793,86 @@ export function SettingsPanel() {
               )}
               </>)}
             </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 4 }}>Chemin yt-dlp (optionnel)</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  value={ytdlpPath}
+                  onChange={(e) => setYtdlpPath(e.target.value)}
+                  placeholder={"ex : C:\\Tools\\yt-dlp.exe"}
+                  spellCheck={false}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-outline)', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { invoke } = await import("@tauri-apps/api/core");
+                      const p = await invoke<string | null>("pick_ytdlp_path");
+                      if (p) setYtdlpPath(p);
+                    } catch { /* not in Tauri, or cancelled */ }
+                  }}
+                  style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  Parcourir…
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
+                Permet d'importer des sons (soundboard et sons de canal) depuis un lien YouTube ou autre. Laisse vide pour la détection auto / le yt-dlp du PATH.
+              </div>
+              {ytdlpDetected !== undefined && (() => {
+                const cur = ytdlpVer?.current || null;
+                const latest = ytdlpVer?.latest || null;
+                const upToDate = !!cur && !!latest && cur === latest;
+                const updateAvail = !!cur && !!latest && cur !== latest;
+                return (<>
+                <div style={{ fontSize: 11, marginTop: 4, color: ytdlpDetected ? 'var(--color-green)' : 'var(--color-error)', wordBreak: 'break-all' }}>
+                  {ytdlpDetected ? `✓ yt-dlp détecté : ${ytdlpDetected}` : "✗ yt-dlp introuvable — renseigne le chemin ci-dessus ou installe-le ci-dessous"}
+                </div>
+                {ytdlpDetected && (
+                  <div style={{ fontSize: 11, marginTop: 2, color: updateAvail ? 'var(--color-orange)' : 'var(--color-outline)' }}>
+                    {cur ? `Version ${cur}` : "Version inconnue"}
+                    {latest && (upToDate ? " — à jour" : updateAvail ? ` — ${latest} disponible` : "")}
+                    {!latest && cur && " — dernière version indisponible (hors-ligne ?)"}
+                  </div>
+                )}
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    disabled={typeof ytdlpInstall === "number" || upToDate}
+                    onClick={async () => {
+                      setYtdlpInstall(0);
+                      try {
+                        const { installYtdlp } = await import("../../services/ytdlpInstall");
+                        await installYtdlp((pct) => setYtdlpInstall(pct));
+                        setYtdlpInstall(null);
+                        redetectYtdlp();
+                      } catch (err) {
+                        setYtdlpInstall(`Échec : ${String(err)}`);
+                      }
+                    }}
+                    style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: (typeof ytdlpInstall === "number" || upToDate) ? 'default' : 'pointer', fontSize: 13, fontFamily: 'inherit', background: updateAvail ? 'var(--color-primary)' : 'var(--color-surface-container-high)', color: updateAvail ? 'var(--color-on-primary)' : 'var(--color-on-surface)', opacity: (typeof ytdlpInstall === "number" || upToDate) ? 0.6 : 1 }}
+                  >
+                    {typeof ytdlpInstall === "number"
+                      ? `Installation… ${ytdlpInstall}%`
+                      : !ytdlpDetected
+                        ? "Installer yt-dlp automatiquement (~30 Mo)"
+                        : upToDate
+                          ? "yt-dlp à jour"
+                          : updateAvail
+                            ? `Mettre à jour (${latest})`
+                            : "Mettre à jour yt-dlp"}
+                  </button>
+                  {typeof ytdlpInstall === "string" && (
+                    <div style={{ fontSize: 11, marginTop: 4, color: 'var(--color-error)' }}>{ytdlpInstall}</div>
+                  )}
+                </div>
+                </>);
+              })()}
+            </div>
+
             <button
               onClick={() => {
                 if (window.confirm(t("settings.purgeCacheConfirm"))) {
@@ -795,6 +923,37 @@ export function SettingsPanel() {
           onSave={(c) => setVoiceSound(cueEditor.cue, c)}
           onClose={() => setCueEditor(null)}
         />
+      )}
+
+      {cueUrlImport && (
+        <div
+          onClick={() => setCueUrlImport(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+        >
+          <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-container-high)', borderRadius: 16, padding: 20, width: 460, maxWidth: '90vw', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-on-surface)' }}>{cueUrlImport.label}</div>
+            <ExternalAudioImport
+              onImported={async (file, title) => {
+                try {
+                  // Cues replay from a local path → persist the imported clip.
+                  const { invoke } = await import("@tauri-apps/api/core");
+                  const buf = await file.arrayBuffer();
+                  let bin = "";
+                  const u8 = new Uint8Array(buf);
+                  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+                  const dataB64 = btoa(bin);
+                  const ext = file.name.split(".").pop() || "webm";
+                  const path = await invoke<string>("save_imported_audio", { dataB64, ext });
+                  const persisted = new File([u8], file.name, { type: file.type });
+                  setCueUrlImport(null);
+                  setCueEditor({ cue: cueUrlImport.cue, file: persisted, path, label: title || cueUrlImport.label });
+                } catch (err) {
+                  console.warn("[Sion] cue url import failed:", err);
+                }
+              }}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

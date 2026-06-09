@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { PollMessage } from "./PollMessage";
 import { LinkPreview as LinkPreviewInner } from "./LinkPreview";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
@@ -27,8 +28,7 @@ import { openFileWithDefaultApp, downloadFileToDownloads } from "../../utils/ope
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
-import { EMOJI_GROUPS, EMOJI_BY_GROUP, EMOJI_DATA } from "../../utils/emojiData";
-import { useRecentEmojisStore } from "../../stores/useRecentEmojisStore";
+import { EmojiGridPanel } from "./EmojiGridPanel";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -491,10 +491,6 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
   const [isHovered, setIsHovered] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [reactionPickerSearch, setReactionPickerSearch] = useState("");
-  const recentEmojis = useRecentEmojisStore((s) => s.recent);
-  const addRecentEmoji = useRecentEmojisStore((s) => s.add);
-  const [reactionPickerGroup, setReactionPickerGroup] = useState<number>(0);
   const reactionPickerRef = useRef<HTMLDivElement>(null);
   /** Anchor side chosen dynamically at open time based on available space
    *  between the reaction button and the viewport edges. "left" means the
@@ -513,7 +509,6 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
     const handleClick = (e: MouseEvent) => {
       if (showReactionPicker && reactionPickerRef.current && !reactionPickerRef.current.contains(e.target as Node)) {
         setShowReactionPicker(false);
-        setReactionPickerSearch("");
       }
       if (showUserPopover && userPopoverRef.current && !userPopoverRef.current.contains(e.target as Node)) {
         setShowUserPopover(false);
@@ -639,7 +634,6 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
   const handleReaction = async (emoji: string) => {
     const eventId = message.eventId || String(message.id);
     setShowReactionPicker(false);
-    setReactionPickerSearch("");
     try {
       // Check if we already reacted with this emoji — if so, remove it
       const reaction = message.reactions?.find((r) => r.emoji === emoji);
@@ -648,21 +642,11 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
         await matrixService.redactMessage(activeChannel, ownReactionEvtId);
       } else {
         await matrixService.sendReaction(activeChannel, eventId, emoji);
-        addRecentEmoji(emoji);
       }
     } catch (err) {
       console.error("[Sion] Failed to toggle reaction:", err);
     }
   };
-
-  const filteredReactionEmojis = reactionPickerSearch.length >= 2
-    ? (() => {
-        const q = reactionPickerSearch.toLowerCase();
-        const starts = EMOJI_DATA.filter((e) => e.shortcode.startsWith(q));
-        const contains = EMOJI_DATA.filter((e) => !e.shortcode.startsWith(q) && e.shortcode.includes(q));
-        return [...starts, ...contains];
-      })()
-    : (EMOJI_BY_GROUP.get(reactionPickerGroup) || []);
 
   const actionButtonStyle: React.CSSProperties = {
     padding: 6,
@@ -910,6 +894,15 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
             );
           })()}
           <div style={message.replyTo ? { padding: '0 8px' } : undefined}>
+          {message.poll ? (
+            <PollMessage
+              poll={message.poll}
+              pollEventId={message.eventId || String(message.id)}
+              roomId={activeChannel || ""}
+              currentUserId={currentUserId || ""}
+              canEnd={isOwnMessage || myPowerLevel >= 50}
+            />
+          ) : (<>
           <MarkdownRenderer content={message.text} formattedBody={message.formattedBody} msgtype={message.msgtype} />
           {(() => {
             // Strip code blocks and inline code before searching for URLs
@@ -924,6 +917,7 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
               ({t("chat.edited")})
             </span>
           )}
+          </>)}
           {/* Pièces jointes — inside the bubble */}
           {message.attachments && message.attachments.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 6, marginTop: 4 }}>
@@ -1035,8 +1029,6 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
                   }
                 }
                 setShowReactionPicker((v) => !v);
-                setReactionPickerSearch("");
-                setReactionPickerGroup(0);
               }}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
               onMouseLeave={(e) => { if (!showReactionPicker) e.currentTarget.style.background = 'transparent'; }}
@@ -1062,114 +1054,7 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
                 overflow: 'hidden',
                 zIndex: 200,
               }}>
-                <div style={{ padding: '10px 10px 6px 10px' }}>
-                  <input
-                    value={reactionPickerSearch}
-                    onChange={(e) => setReactionPickerSearch(e.target.value)}
-                    placeholder="Rechercher..."
-                    autoFocus
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      borderRadius: 12,
-                      border: '1px solid var(--color-outline-variant)',
-                      background: 'var(--color-surface-container-high)',
-                      color: 'var(--color-on-surface)',
-                      fontSize: 13,
-                      fontFamily: 'inherit',
-                      outline: 'none',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                </div>
-                {reactionPickerSearch.length < 2 && recentEmojis.length > 0 && (
-                  <div style={{
-                    display: 'flex', flexWrap: 'nowrap', gap: 2, padding: '4px 8px 6px 8px',
-                    overflowX: 'auto', borderBottom: '1px solid var(--color-outline-variant)',
-                  }}>
-                    {recentEmojis.map((emoji, i) => (
-                      <button
-                        key={`recent-${i}`}
-                        onMouseDown={(e) => { e.preventDefault(); handleReaction(emoji); }}
-                        title={t("chat.recentEmojis", { defaultValue: "Récemment utilisés" })}
-                        style={{
-                          width: 30, height: 30, flexShrink: 0,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 18, border: 'none', borderRadius: 6,
-                          background: 'transparent', cursor: 'pointer',
-                          transition: 'background 100ms', padding: 0,
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                      >{emoji}</button>
-                    ))}
-                  </div>
-                )}
-
-                {reactionPickerSearch.length < 2 && (
-                  <div style={{
-                    display: 'flex',
-                    gap: 0,
-                    padding: '0 6px',
-                    borderBottom: '1px solid var(--color-outline-variant)',
-                  }}>
-                    {EMOJI_GROUPS.map((g) => (
-                      <button
-                        key={g.id}
-                        onMouseDown={(e) => { e.preventDefault(); setReactionPickerGroup(g.id); }}
-                        title={g.label}
-                        style={{
-                          flex: 1,
-                          padding: '6px 0',
-                          border: 'none',
-                          background: 'transparent',
-                          fontSize: 14,
-                          cursor: 'pointer',
-                          borderBottom: reactionPickerGroup === g.id ? '2px solid var(--color-primary)' : '2px solid transparent',
-                          opacity: reactionPickerGroup === g.id ? 1 : 0.5,
-                          transition: 'all 150ms',
-                        }}
-                      >
-                        {g.icon}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div style={{
-                  flex: 1,
-                  overflowY: 'auto',
-                  padding: '4px 8px 8px 8px',
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 2,
-                  alignContent: 'flex-start',
-                }}>
-                  {filteredReactionEmojis.map((entry) => (
-                    <button
-                      key={entry.shortcode}
-                      onMouseDown={(e) => { e.preventDefault(); handleReaction(entry.emoji); }}
-                      title={`:${entry.shortcode}:`}
-                      style={{
-                        width: 34,
-                        height: 34,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 20,
-                        border: 'none',
-                        borderRadius: 8,
-                        background: 'transparent',
-                        cursor: 'pointer',
-                        transition: 'background 100ms',
-                        padding: 0,
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                    >
-                      {entry.emoji}
-                    </button>
-                  ))}
-                </div>
+                <EmojiGridPanel onPick={handleReaction} emojiSize={34} />
               </div>
             )}
           </div>

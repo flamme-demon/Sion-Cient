@@ -46,6 +46,9 @@ interface SettingsState {
    *  codec CEF can't play natively (e.g. H.264 on the minimal CEF build,
    *  notably Windows). Empty = use `ffmpeg` from PATH. */
   ffmpegPath: string;
+  /** Absolute path to a yt-dlp binary for importing audio from external-media
+   *  URLs (soundboard + voice cues). Empty = app-managed download / PATH. */
+  ytdlpPath: string;
   defaultChannel: string;
   autoJoinVoice: boolean;
   enableGifs: boolean;
@@ -93,6 +96,7 @@ interface SettingsState {
   setLinkPreviews: (v: boolean) => void;
   setAudioInputDevice: (v: string) => void;
   setFfmpegPath: (v: string) => void;
+  setYtdlpPath: (v: string) => void;
   setAudioOutputDevice: (v: string) => void;
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
@@ -131,6 +135,7 @@ export const useSettingsStore = create<SettingsState>()(
       linkPreviews: true,
       audioInputDevice: "",
       ffmpegPath: "",
+      ytdlpPath: "",
       audioOutputDevice: "",
       defaultChannel: "",
       autoJoinVoice: false,
@@ -176,6 +181,7 @@ export const useSettingsStore = create<SettingsState>()(
       setLinkPreviews: (v) => set({ linkPreviews: v }),
       setAudioInputDevice: (v) => set({ audioInputDevice: v }),
       setFfmpegPath: (v) => set({ ffmpegPath: v.trim() }),
+      setYtdlpPath: (v) => set({ ytdlpPath: v.trim() }),
       setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),

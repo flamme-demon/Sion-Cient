@@ -769,6 +769,33 @@ fn read_file_b64(path: String) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
+/// Persist base64 audio bytes into `<app-data>/cues/` and return the absolute
+/// path. Used for URL-imported voice-cue sounds: unlike soundboard clips (which
+/// live in Matrix), cues are replayed from a local path at runtime, so a
+/// yt-dlp import — whose temp file is deleted — must be saved somewhere stable.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn save_imported_audio(
+    app: tauri::AppHandle<TauriRuntime>,
+    data_b64: String,
+    ext: String,
+) -> Result<String, String> {
+    use base64::Engine;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("cues");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let safe_ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(5).collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dest = dir.join(format!("cue_{}.{}", stamp, if safe_ext.is_empty() { "webm".into() } else { safe_ext }));
+    std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn start_voice_service(_channel_name: String, _is_muted: bool, _is_deafened: bool) {
     // On Android, the JS calls window.__SION__.startVoiceService() directly via JavascriptInterface
@@ -1065,6 +1092,280 @@ fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// yt-dlp: download external-media audio (YouTube, etc.) for the soundboard
+// and voice-channel cues. Mirrors the ffmpeg model: a self-contained binary
+// downloaded on demand into <app-data>/bin, resolved at call time.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// `<app-data>/bin/yt-dlp[.exe]` — where the in-app installer drops the binary.
+#[cfg(not(target_os = "android"))]
+fn managed_ytdlp_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    let name = if cfg!(target_os = "windows") { "yt-dlp.exe" } else { "yt-dlp" };
+    Some(dir.join("bin").join(name))
+}
+
+/// Resolve which yt-dlp to invoke: user-configured path → app-managed download
+/// → bare `yt-dlp` on PATH.
+#[cfg(not(target_os = "android"))]
+fn resolve_ytdlp(configured: Option<&str>, managed: Option<&str>) -> String {
+    if let Some(p) = configured {
+        let p = p.trim();
+        if !p.is_empty() {
+            return p.to_string();
+        }
+    }
+    if let Some(p) = managed {
+        if !p.is_empty() && std::path::Path::new(p).exists() {
+            return p.to_string();
+        }
+    }
+    "yt-dlp".to_string()
+}
+
+/// Report the yt-dlp the app would use (verifying it runs `--version`). None if
+/// not found. Used by Settings → Advanced to show availability.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn detect_ytdlp(app: tauri::AppHandle<TauriRuntime>) -> Option<String> {
+    let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let bin = resolve_ytdlp(None, managed.as_deref());
+    let ok = std::process::Command::new(&bin)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok { Some(bin) } else { None }
+}
+
+/// Report the installed yt-dlp version (`--version`) and the latest released
+/// version (GitHub API). Returns JSON `{"current":<string|null>,"latest":<string|null>}`.
+/// Versions are `YYYY.MM.DD`, so a plain string compare tells if an update exists.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn ytdlp_versions(
+    app: tauri::AppHandle<TauriRuntime>,
+    ytdlp_path: Option<String>,
+) -> Result<String, String> {
+    let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
+
+    let current = std::process::Command::new(&bin)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Latest release tag from GitHub (build_client sends a User-Agent, which
+    // the GitHub API requires). Best-effort: None if offline / rate-limited.
+    let latest: Option<String> = async {
+        let client = build_client().ok()?;
+        let resp = client
+            .get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let json: serde_json::Value = resp.json().await.ok()?;
+        json.get("tag_name").and_then(|v| v.as_str()).map(|s| s.to_string())
+    }
+    .await;
+
+    Ok(serde_json::json!({ "current": current, "latest": latest }).to_string())
+}
+
+/// Native file picker for a custom yt-dlp binary. None if cancelled.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn pick_ytdlp_path() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Sélectionner yt-dlp")
+        .pick_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string())
+}
+
+/// Download the latest self-contained yt-dlp release into `<app-data>/bin/`.
+/// Unlike ffmpeg these are single executables (no archive), so we stream the
+/// file straight to the destination. Re-running updates yt-dlp (it breaks
+/// often when YouTube changes). Emits `ytdlp-install-progress` percent events.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn download_ytdlp(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
+    use std::io::Write;
+    use tauri::Emitter;
+
+    let dest = managed_ytdlp_path(&app).ok_or("app-data introuvable")?;
+    let bin_dir = dest.parent().ok_or("chemin invalide")?.to_path_buf();
+    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    // Official self-contained builds (no Python required) from GitHub releases.
+    #[cfg(target_os = "windows")]
+    let url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+    #[cfg(target_os = "macos")]
+    let url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+
+    let _ = app.emit("ytdlp-install-progress", 0u64);
+
+    // Dedicated client with a generous timeout — the binary is ~30 MB and the
+    // shared build_client() caps at 10 s, too short on slower links.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("Mozilla/5.0 (Sion yt-dlp installer)")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let total = resp.content_length();
+
+    // Stream to a temp file first, then move into place (avoids a half-written
+    // binary at the managed path if the download is interrupted).
+    let tmp = std::env::temp_dir().join("sion_ytdlp_dl");
+    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    let mut downloaded: u64 = 0;
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        if let Some(t) = total {
+            if t > 0 {
+                let _ = app.emit("ytdlp-install-progress", downloaded * 98 / t);
+            }
+        }
+    }
+    drop(file);
+
+    let _ = std::fs::remove_file(&dest);
+    std::fs::copy(&tmp, &dest).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&tmp);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
+    }
+
+    let _ = app.emit("ytdlp-install-progress", 100u64);
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Probe an external-media URL for its duration (seconds) and title WITHOUT
+/// downloading the stream. Returns JSON `{"duration":<u64>,"title":<string>}`.
+/// Lets the UI decide whether to require a time range (videos > 5 min).
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn probe_url_media(
+    app: tauri::AppHandle<TauriRuntime>,
+    url: String,
+    ytdlp_path: Option<String>,
+) -> Result<String, String> {
+    let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
+
+    let out = std::process::Command::new(&bin)
+        .args(["--no-playlist", "--skip-download", "--no-warnings",
+               "--print", "%(duration)s|%(title)s"])
+        .arg(&url)
+        .output()
+        .map_err(|e| format!("yt-dlp introuvable: {}", e))?;
+    if !out.status.success() {
+        return Err(format!("yt-dlp: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.lines().next().unwrap_or("").trim();
+    let (dur_str, title) = line.split_once('|').unwrap_or(("", line));
+    let duration = dur_str.trim().parse::<f64>().map(|f| f as u64).unwrap_or(0);
+    Ok(serde_json::json!({ "duration": duration, "title": title.trim() }).to_string())
+}
+
+/// Download audio from an external-media URL via yt-dlp and return it as base64.
+/// When `start_sec`/`end_sec` are given (videos > 5 min), only that section is
+/// fetched via `--download-sections` (requires ffmpeg). The temp file is never
+/// uploaded — the renderer feeds it to the trimmer and uploads only the clip.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn import_url_audio(
+    app: tauri::AppHandle<TauriRuntime>,
+    url: String,
+    ytdlp_path: Option<String>,
+    ffmpeg_path: Option<String>,
+    start_sec: Option<f64>,
+    end_sec: Option<f64>,
+) -> Result<String, String> {
+    use base64::Engine;
+
+    let managed_yt = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let ytdlp_bin = resolve_ytdlp(ytdlp_path.as_deref(), managed_yt.as_deref());
+    let managed_ff = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed_ff.as_deref());
+
+    // Unique temp dir per import; output ext is unknown (webm/m4a/opus), so we
+    // template it and scan the dir afterwards.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    if let Some(s) = start_sec { (s as u64).hash(&mut hasher); }
+    let work = std::env::temp_dir().join(format!("sion_yt_{:x}", hasher.finish()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let out_tmpl = work.join("audio.%(ext)s");
+
+    let mut cmd = std::process::Command::new(&ytdlp_bin);
+    cmd.arg(&url)
+        .args(["-f", "bestaudio/best", "--no-playlist", "--no-warnings", "--no-part"])
+        .arg("-o").arg(&out_tmpl)
+        .args(["--ffmpeg-location", &ffmpeg_bin]);
+
+    // Bounded section for long videos: cut precisely with keyframes.
+    if let (Some(s), Some(e)) = (start_sec, end_sec) {
+        if e > s {
+            cmd.args(["--download-sections", &format!("*{}-{}", s, e), "--force-keyframes-at-cuts"]);
+        }
+    }
+
+    let output = cmd.output().map_err(|e| format!("yt-dlp introuvable: {}", e))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(format!("yt-dlp: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    // Pick the produced audio file (first regular file in the work dir).
+    let produced = std::fs::read_dir(&work)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.is_file());
+    let Some(audio) = produced else {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err("yt-dlp n'a produit aucun fichier audio".into());
+    };
+
+    // Guard against decoding a huge file in the renderer (RAM blowup on the
+    // waveform). ~40 MB ≈ well over 20 min of compressed audio.
+    let meta = std::fs::metadata(&audio).map_err(|e| e.to_string())?;
+    if meta.len() > 40 * 1024 * 1024 {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err("Piste trop longue : indique une plage horaire ou un lien plus court.".into());
+    }
+
+    let bytes = std::fs::read(&audio).map_err(|e| e.to_string())?;
+    let ext = audio.extension().and_then(|e| e.to_str()).unwrap_or("webm").to_string();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let _ = std::fs::remove_dir_all(&work);
+    Ok(serde_json::json!({ "ext": ext, "data": b64 }).to_string())
+}
+
 /// Register global shortcuts via plugin + update rdev state (Linux).
 /// Shared logic extracted so both Linux and non-Linux entry points use it.
 #[cfg(not(target_os = "android"))]
@@ -1271,7 +1572,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder

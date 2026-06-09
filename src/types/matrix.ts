@@ -77,6 +77,22 @@ export interface ChatMessage {
   replyTo?: { eventId: string; senderId?: string; user?: string; text?: string; msgtype?: string; attachmentName?: string };
   /** Reactions on this message */
   reactions?: { emoji: string; count: number; userIds: string[]; eventIds: Record<string, string> }[];
+  /** Poll data (MSC3381) when this message is an m.poll.start event. */
+  poll?: PollData;
+}
+
+export interface PollData {
+  question: string;
+  /** "disclosed" = results visible before the poll ends; "undisclosed" = hidden until end. */
+  kind: "disclosed" | "undisclosed";
+  maxSelections: number;
+  answers: { id: string; text: string }[];
+  /** Latest vote per voter: senderId → selected answer ids. */
+  votes: Record<string, string[]>;
+  /** True once an explicit m.poll.end was received. */
+  ended: boolean;
+  /** Optional auto-close deadline (epoch ms). Clients close the poll locally past this. */
+  endsTs?: number;
 }
 
 export interface ServerData {

@@ -9,8 +9,8 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
-import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
-import { useRecentEmojisStore } from "../../stores/useRecentEmojisStore";
+import { EMOJI_DATA } from "../../utils/emojiData";
+import { EmojiGridPanel } from "./EmojiGridPanel";
 
 const TENOR_API_KEY = "LIVDSRZULELA";
 const TENOR_BASE = "https://g.tenor.com/v1";
@@ -52,10 +52,6 @@ export function ChatInput() {
   // Emoji/GIF picker panel
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [pickerTab, setPickerTab] = useState<"emoji" | "gif">("emoji");
-  const [emojiPickerSearch, setEmojiPickerSearch] = useState("");
-  const recentEmojis = useRecentEmojisStore((s) => s.recent);
-  const addRecentEmoji = useRecentEmojisStore((s) => s.add);
-  const [emojiPickerGroup, setEmojiPickerGroup] = useState<number>(0);
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
 
@@ -125,7 +121,6 @@ export function ChatInput() {
     const handleClick = (e: MouseEvent | TouchEvent) => {
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
         setShowEmojiPicker(false);
-        setEmojiPickerSearch("");
       }
     };
     window.addEventListener("mousedown", handleClick);
@@ -356,13 +351,11 @@ export function ChatInput() {
   };
 
   const pickEmoji = (emoji: string) => {
-    addRecentEmoji(emoji);
     const textarea = textareaRef.current;
     const cursorPos = textarea ? textarea.selectionStart : inputText.length;
     const newText = inputText.slice(0, cursorPos) + emoji + inputText.slice(cursorPos);
     setInputText(newText);
     setShowEmojiPicker(false);
-    setEmojiPickerSearch("");
     setTimeout(() => {
       if (textarea) {
         textarea.selectionStart = textarea.selectionEnd = cursorPos + emoji.length;
@@ -370,15 +363,6 @@ export function ChatInput() {
       }
     });
   };
-
-  const filteredPickerEmojis = emojiPickerSearch.length >= 2
-    ? (() => {
-        const q = emojiPickerSearch.toLowerCase();
-        const starts = EMOJI_DATA.filter((e) => e.shortcode.startsWith(q));
-        const contains = EMOJI_DATA.filter((e) => !e.shortcode.startsWith(q) && e.shortcode.includes(q));
-        return [...starts, ...contains];
-      })()
-    : (EMOJI_BY_GROUP.get(emojiPickerGroup) || []);
 
   const hasContent = inputText.trim().length > 0 || pendingFiles.length > 0;
 
@@ -597,39 +581,11 @@ export function ChatInput() {
         <FilePreview />
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, padding: '6px 8px 6px 4px' }}>
           {!editingMessage && <AttachButton />}
-          {!editingMessage && !isMobile && channels.some((c) => c.isSoundboard) && (
-            <button
-              type="button"
-              onClick={() => useAppStore.getState().toggleSoundboardPanel()}
-              title={t("soundboard.title")}
-              style={{
-                border: 'none',
-                cursor: 'pointer',
-                padding: 8,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                borderRadius: '50%',
-                background: 'transparent',
-                color: 'var(--color-on-surface-variant)',
-                transition: 'background 150ms',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-              </svg>
-            </button>
-          )}
           {!editingMessage && (
             <div ref={emojiPickerRef} style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
               <button
                 type="button"
-                onMouseDown={(e) => { e.preventDefault(); setShowEmojiPicker((v) => !v); setEmojiPickerSearch(""); setEmojiPickerGroup(0); }}
+                onMouseDown={(e) => { e.preventDefault(); setShowEmojiPicker((v) => !v); }}
                 style={{
                   border: 'none',
                   cursor: 'pointer',
@@ -691,72 +647,9 @@ export function ChatInput() {
                   </div>
 
                   {/* === EMOJI TAB === */}
-                  {pickerTab === "emoji" && (<>
-                    <div style={{ padding: '10px 10px 6px 10px' }}>
-                      <input
-                        value={emojiPickerSearch}
-                        onChange={(e) => setEmojiPickerSearch(e.target.value)}
-                        placeholder={t("chat.searchEmoji")}
-                        autoFocus={!isMobile}
-                        style={{
-                          width: '100%', padding: '8px 12px', borderRadius: 12,
-                          border: '1px solid var(--color-outline-variant)',
-                          background: 'var(--color-surface-container-high)',
-                          color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit',
-                          outline: 'none', boxSizing: 'border-box',
-                        }}
-                      />
-                    </div>
-
-                    {emojiPickerSearch.length < 2 && recentEmojis.length > 0 && (
-                      <div style={{
-                        display: 'flex', flexWrap: 'nowrap', gap: 2, padding: '4px 8px 6px 8px',
-                        overflowX: 'auto', borderBottom: '1px solid var(--color-outline-variant)',
-                      }}>
-                        {recentEmojis.map((emoji, i) => (
-                          <button
-                            key={`recent-${i}`}
-                            onMouseDown={(e) => { e.preventDefault(); pickEmoji(emoji); }}
-                            title={t("chat.recentEmojis", { defaultValue: "Récemment utilisés" })}
-                            style={{
-                              width: 32, height: 32, flexShrink: 0,
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              fontSize: 20, border: 'none', borderRadius: 6,
-                              background: 'transparent', cursor: 'pointer',
-                              transition: 'background 100ms', padding: 0,
-                            }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                          >{emoji}</button>
-                        ))}
-                      </div>
-                    )}
-
-                    {emojiPickerSearch.length < 2 && (
-                      <div style={{ display: 'flex', gap: 0, padding: '0 6px', borderBottom: '1px solid var(--color-outline-variant)' }}>
-                        {EMOJI_GROUPS.map((g) => (
-                          <button key={g.id} onMouseDown={(e) => { e.preventDefault(); setEmojiPickerGroup(g.id); }} title={g.label}
-                            style={{ flex: 1, padding: '6px 0', border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer',
-                              borderBottom: emojiPickerGroup === g.id ? '2px solid var(--color-primary)' : '2px solid transparent',
-                              opacity: emojiPickerGroup === g.id ? 1 : 0.5, transition: 'all 150ms',
-                            }}
-                          >{g.icon}</button>
-                        ))}
-                      </div>
-                    )}
-
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '4px 8px 8px 8px', display: 'flex', flexWrap: 'wrap', gap: 2, alignContent: 'flex-start' }}>
-                      {filteredPickerEmojis.map((entry) => (
-                        <button key={entry.shortcode} onMouseDown={(e) => { e.preventDefault(); pickEmoji(entry.emoji); }} title={`:${entry.shortcode}:`}
-                          style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22,
-                            border: 'none', borderRadius: 8, background: 'transparent', cursor: 'pointer', transition: 'background 100ms', padding: 0,
-                          }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        >{entry.emoji}</button>
-                      ))}
-                    </div>
-                  </>)}
+                  {pickerTab === "emoji" && (
+                    <EmojiGridPanel onPick={pickEmoji} emojiSize={36} autoFocusSearch={!isMobile} />
+                  )}
 
                   {/* === GIF TAB === */}
                   {pickerTab === "gif" && (<>

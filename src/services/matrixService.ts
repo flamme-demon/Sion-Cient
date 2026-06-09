@@ -1523,6 +1523,59 @@ export async function sendReaction(roomId: string, eventId: string, emoji: strin
   });
 }
 
+// ---- Polls (MSC3381) ----------------------------------------------------
+// Stable event types (Matrix 1.7+); parsing also accepts the unstable
+// org.matrix.msc3381.* namespaces for interop with older clients/Element.
+
+export async function createPoll(
+  roomId: string,
+  question: string,
+  options: string[],
+  kind: "disclosed" | "undisclosed" = "disclosed",
+  maxSelections = 1,
+  endsTs?: number,
+): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  const answers = options.map((text, i) => ({ id: `${i}`, "m.text": text }));
+  const fallback = `${question}\n${options.map((o, i) => `${i + 1}. ${o}`).join("\n")}`;
+  // Sion-specific deadline: every client closes the poll locally at this epoch-ms,
+  // so auto-end needs no client online to fire an explicit m.poll.end.
+  const content: Record<string, unknown> = {
+    "m.poll.start": {
+      question: { "m.text": question },
+      kind: `m.poll.${kind}`,
+      max_selections: maxSelections,
+      answers,
+    },
+    "m.text": fallback,
+  };
+  if (endsTs && endsTs > Date.now()) content["app.sion.poll_ends_ts"] = endsTs;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.poll.start" as any, content as any);
+}
+
+/** Cast a vote (replaces the voter's previous vote). Empty array = spoil/retract. */
+export async function votePoll(roomId: string, pollStartId: string, answerIds: string[]): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  const target = requireServerEventId(roomId, pollStartId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.poll.response" as any, {
+    "m.poll.response": { answers: answerIds },
+    "m.relates_to": { rel_type: "m.reference", event_id: target },
+  });
+}
+
+export async function endPoll(roomId: string, pollStartId: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  const target = requireServerEventId(roomId, pollStartId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.poll.end" as any, {
+    "m.poll.end": {},
+    "m.text": "Sondage terminé",
+    "m.relates_to": { rel_type: "m.reference", event_id: target },
+  });
+}
+
 export function getReactions(roomId: string, eventId: string): { emoji: string; count: number; userIds: string[] }[] {
   if (!matrixClient) return [];
   const room = matrixClient.getRoom(roomId);
