@@ -888,6 +888,36 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || room.roomId });
     });
 
+    // Reconcile a sent message's local-echo id ("~…") to its real server id
+    // ("$…") once the homeserver acks it. Without this, the store keeps the
+    // local id, so incoming edits/reactions/redactions (which target the real
+    // id) don't match the stored message → edit/react silently don't show.
+    // MUST be defensive: this fires inside the send path, so a throw here would
+    // abort the message send (oldEventId can be a non-string at runtime).
+    client.on(RoomEvent.LocalEchoUpdated, (event, room, oldEventId) => {
+      try {
+        if (!room || typeof oldEventId !== "string" || !oldEventId.startsWith("~")) return;
+        const realId = event.getId?.() || "";
+        if (!realId || realId === oldEventId || realId.startsWith("~")) return;
+        set((s) => {
+          const msgs = s.messages[room.roomId];
+          if (!msgs) return s;
+          let changed = false;
+          const updated = msgs.map((m) => {
+            if (m.id === oldEventId || m.eventId === oldEventId) {
+              changed = true;
+              return { ...m, id: realId, eventId: realId };
+            }
+            return m;
+          });
+          if (!changed) return s;
+          return { messages: { ...s.messages, [room.roomId]: updated } };
+        });
+      } catch (err) {
+        console.warn("[Sion] localEcho id reconcile failed:", err);
+      }
+    });
+
     // Listen for new messages and reactions (real-time)
     client.on(RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
       if (toStartOfTimeline) return;
@@ -1984,13 +2014,12 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
   deleteMessage: async (channelId, eventId) => {
     try {
-      // Can't redact local/pending events (ID starts with ~ instead of $)
-      if (!eventId.startsWith("$")) {
-        console.warn("[Sion] Cannot delete message with local ID:", eventId);
-        return;
-      }
+      // redactMessage resolves a local-echo id ("~…") to its server id (or
+      // throws if the message hasn't been acked yet), so deleting your own
+      // just-sent message works.
       await matrixService.redactMessage(channelId, eventId);
-      // Remove from local state immediately
+      // Remove from local state immediately (the store still holds it under the
+      // id the UI passed).
       set((s) => ({
         messages: {
           ...s.messages,

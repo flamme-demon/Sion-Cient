@@ -706,8 +706,50 @@ export async function uploadFile(file: File): Promise<string> {
   return response.content_uri || "";
 }
 
+/**
+ * Resolve a possibly-local-echo event id ("~<roomId>:<txnId>") to its real
+ * server id ("$…"). The store can hold the local id for a message just sent in
+ * this session (the SDK reconciles the event in place, but our cached copy may
+ * lag), which makes server ops like redact fail. We recover the real id from
+ * the SDK by the transaction id. Returns null if the event truly hasn't been
+ * sent yet (no server id), or the input unchanged if it's already a server id.
+ */
+export function resolveServerEventId(roomId: string, eventId: string): string | null {
+  if (!eventId.startsWith("~")) return eventId;
+  const room = matrixClient?.getRoom(roomId);
+  if (!room) return null;
+  const prefix = `~${roomId}:`;
+  const txnId = eventId.startsWith(prefix) ? eventId.slice(prefix.length) : null;
+  if (txnId) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const id = (room as any).getEventForTxnId?.(txnId)?.getId?.();
+    if (id && !id.startsWith("~")) return id;
+    // Fallback: scan the live timeline for the sent event carrying this txn.
+    for (const ev of room.getLiveTimeline().getEvents()) {
+      if (ev.getTxnId?.() === txnId) {
+        const evId = ev.getId?.();
+        if (evId && !evId.startsWith("~")) return evId;
+      }
+    }
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pid = (room as any).getPendingEvent?.(eventId)?.getId?.();
+  if (pid && !pid.startsWith("~")) return pid;
+  return null;
+}
+
+/** Resolve to a server event id or throw — for ops that target an existing
+ *  event (redact / edit / react / pin / reply). Throws if the event hasn't
+ *  been acked by the server yet (still a local echo). */
+function requireServerEventId(roomId: string, eventId: string): string {
+  const id = resolveServerEventId(roomId, eventId);
+  if (!id || !id.startsWith("$")) throw new Error("Message not yet sent to the server");
+  return id;
+}
+
 export async function redactMessage(roomId: string, eventId: string) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  eventId = requireServerEventId(roomId, eventId);
   // Use REST API directly to avoid SDK pendingEventOrdering bug
   const baseUrl = matrixClient.getHomeserverUrl();
   const token = matrixClient.getAccessToken();
@@ -898,6 +940,7 @@ export async function createOrGetDMRoom(userId: string): Promise<string> {
 
 export async function editMessage(roomId: string, originalEventId: string, newText: string) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  originalEventId = requireServerEventId(roomId, originalEventId);
   // Use REST API directly to avoid SDK pendingEventOrdering bug
   const baseUrl = matrixClient.getHomeserverUrl();
   const token = matrixClient.getAccessToken();
@@ -1457,6 +1500,7 @@ export function getPinnedEventIds(roomId: string): string[] {
 
 export async function pinMessage(roomId: string, eventId: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  eventId = requireServerEventId(roomId, eventId);
   const room = matrixClient.getRoom(roomId);
   const pinnedEvent = room?.currentState?.getStateEvents?.("m.room.pinned_events", "");
   const pinned: string[] = pinnedEvent?.getContent?.()?.pinned || [];
@@ -1468,6 +1512,7 @@ export async function pinMessage(roomId: string, eventId: string): Promise<void>
 
 export async function sendReaction(roomId: string, eventId: string, emoji: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  eventId = requireServerEventId(roomId, eventId);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendEvent(roomId, "m.reaction" as any, {
     "m.relates_to": {
@@ -1515,6 +1560,7 @@ export async function markRoomAsRead(roomId: string): Promise<void> {
 
 export async function sendReply(roomId: string, inReplyToEventId: string, body: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
+  inReplyToEventId = requireServerEventId(roomId, inReplyToEventId);
   const room = matrixClient.getRoom(roomId);
   const parsed = room ? parseMentions(body, room) : null;
 
