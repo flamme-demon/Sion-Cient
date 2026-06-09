@@ -28,10 +28,14 @@ let activeRTCRoomId: string | null = null;
 let reemitParticipantHandler: (() => void) | null = null;
 let reemitMembershipHandler: (() => void) | null = null;
 
-// Timestamp of the last `setConnectingVoice(roomId)` — lets the double-click
-// guard detect a stuck "connecting" state and force-clear it, instead of
-// refusing every subsequent join for the rest of the process lifetime.
-// Set to 0 when not connecting; updated when we post setConnectingVoice.
+// In-flight join tracking for the double-click guard. These are set ONLY when
+// joinVoiceChannel actually starts a join, and always together — so the age is
+// never Infinity. We deliberately do NOT key the guard off the store's
+// `connectingVoiceChannel`: the auto-join path (useMatrixStore) sets that as a
+// UI pre-marker before any real join, and keying off it made the genuine
+// pending join look like a stuck duplicate (logged as "stale … Infinityms").
+// `connectingRoomId` = the room a join is currently in flight for (null = none).
+let connectingRoomId: string | null = null;
 let connectingStartedAt = 0;
 /** Window during which a duplicate join attempt is swallowed. Longer than a
  *  legitimate join takes end-to-end (~3–8 s on a cold path with Matrix
@@ -188,15 +192,17 @@ export function useVoiceChannel() {
       // with SFU still holding the previous session open post-reload, etc.).
       // Refusing forever would mean the user has to reload to ever rejoin;
       // instead we force-clear and proceed so the retry can succeed.
-      const alreadyConnecting = useAppStore.getState().connectingVoiceChannel;
-      if (alreadyConnecting === matrixRoomId) {
-        const age = connectingStartedAt ? performance.now() - connectingStartedAt : Infinity;
+      // Duplicate-join guard keyed on a REAL in-flight join (not the store's
+      // UI marker). connectingRoomId/connectingStartedAt are always set
+      // together, so `age` is a real number — never Infinity.
+      if (connectingRoomId === matrixRoomId) {
+        const age = performance.now() - connectingStartedAt;
         if (age < CONNECTING_STALE_AFTER_MS) {
           console.warn(`[Sion] joinVoiceChannel called while already connecting (${Math.round(age)}ms ago) — ignoring duplicate`);
           return;
         }
-        console.warn(`[Sion] stale connecting state for ${Math.round(age)}ms — treating as failed and retrying`);
-        useAppStore.getState().setConnectingVoice(null);
+        console.warn(`[Sion] stale in-flight join for ${Math.round(age)}ms — treating as failed and retrying`);
+        connectingRoomId = null;
         connectingStartedAt = 0;
       }
 
@@ -211,6 +217,7 @@ export function useVoiceChannel() {
       }
 
       useAppStore.getState().setConnectingVoice(matrixRoomId);
+      connectingRoomId = matrixRoomId;
       connectingStartedAt = performance.now();
       try {
 
@@ -337,6 +344,7 @@ export function useVoiceChannel() {
           setConnectedVoice(matrixRoomId);
           useAppStore.getState().setConnectingVoice(null);
           connectingStartedAt = 0;
+          connectingRoomId = null;
           // Start Android foreground service
           const channelName = useMatrixStore.getState().channels.find(c => c.id === matrixRoomId)?.name || "Voice";
           startVoiceService(channelName, false, false);
@@ -357,6 +365,7 @@ export function useVoiceChannel() {
         console.warn("[Sion] Connexion vocale impossible : pas de MatrixRTC ni de credentials LiveKit configurés");
         useAppStore.getState().setConnectingVoice(null);
         connectingStartedAt = 0;
+        connectingRoomId = null;
         return;
       }
 
@@ -372,6 +381,7 @@ export function useVoiceChannel() {
       setConnectedVoice(matrixRoomId);
       useAppStore.getState().setConnectingVoice(null);
       connectingStartedAt = 0;
+      connectingRoomId = null;
       // Start Android foreground service
       const channelName2 = useMatrixStore.getState().channels.find(c => c.id === matrixRoomId)?.name || "Voice";
       startVoiceService(channelName2, false, false);
@@ -398,6 +408,7 @@ export function useVoiceChannel() {
         }
         useAppStore.getState().setConnectingVoice(null);
         connectingStartedAt = 0;
+        connectingRoomId = null;
         throw err;
       }
     },
