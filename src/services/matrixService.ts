@@ -1028,57 +1028,85 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
 }
 
 /**
- * Invite every known server user to a public channel so it appears in
- * their client (Discord-style). Matrix's "public" join_rule only means
- * "anyone *can* join" — without an explicit invite or a public-directory
- * entry, other clients never learn the channel exists. Our auto-accept
- * logic handles the invite on their side.
- *
- * "All server users" is approximated by the union of joined members
- * across every room the current user shares — that covers everyone the
- * client has ever seen. Users already joined or invited are skipped.
+ * The full list of human users on this homeserver, for fan-out invites/joins.
+ * Authoritative source is the admin API (`!admin users list-users`) so even
+ * users the current client has never shared a room with are included. Falls
+ * back to the weaker "union of joined members across rooms I share" heuristic
+ * only if the admin command fails (no rights / unsupported). Excludes the
+ * current user, server bots, and users on other homeservers.
+ */
+async function getServerUserIds(): Promise<string[]> {
+  if (!matrixClient) return [];
+  const client = matrixClient;
+  const serverName = client.getDomain() || "";
+  const myUserId = client.getUserId();
+  const isBot = (userId: string) => {
+    const local = userId.split(":")[0].toLowerCase();
+    return local === "@conduit" || local === "@conduwuit" || local === "@continuwuity" || local === "@server";
+  };
+  const keep = (userId: string | undefined): userId is string =>
+    !!userId && userId !== myUserId && userId.endsWith(`:${serverName}`) && !isBot(userId);
+
+  const ids = new Set<string>();
+  const { sendAdminCommand, parseUserList } = await import("./adminCommandService");
+  let source = "admin";
+  try {
+    const response = await sendAdminCommand("!admin users list-users");
+    for (const userId of parseUserList(response)) if (keep(userId)) ids.add(userId);
+  } catch (err) {
+    source = "room-discovery";
+    console.warn("[Sion] Admin list-users failed, falling back to room discovery:", err);
+    for (const room of client.getRooms()) {
+      for (const m of room.getJoinedMembers()) if (keep(m.userId)) ids.add(m.userId);
+    }
+  }
+  console.log(`[Sion] getServerUserIds: ${ids.size} server users (source=${source})`);
+  return [...ids];
+}
+
+/**
+ * Add every server user to a public channel so it shows up for everyone,
+ * Discord-style. Users are FORCE-JOINED via the admin bot (like the soundboard
+ * and the new-user approval flow) rather than merely invited — so offline users
+ * land in the channel immediately instead of sitting in "invite" state until
+ * they next open Sion. The user list comes from getServerUserIds (admin API).
+ * If force-join isn't possible (no admin rights), we fall back to a plain
+ * invite (their auto-accept handles it on next launch). Already-joined users
+ * are skipped.
  */
 async function fanOutPublicInvites(roomId: string): Promise<void> {
   if (!matrixClient) return;
   const client = matrixClient;
   try {
-    const serverName = client.getDomain() || "";
-    const myUserId = client.getUserId();
-    const isBot = (userId: string) => {
-      const local = userId.split(":")[0].toLowerCase();
-      return local === "@conduit" || local === "@conduwuit" || local === "@continuwuity" || local === "@server";
-    };
-
-    // Build the set of users already a member (joined or invited) of the
-    // target room so we don't re-invite them.
     const targetRoom = client.getRoom(roomId);
-    const alreadyMember = new Set<string>();
+    const alreadyJoined = new Set<string>();
     if (targetRoom) {
       for (const m of targetRoom.getMembers()) {
-        if (m.membership === "join" || m.membership === "invite") {
-          alreadyMember.add(m.userId);
-        }
+        if (m.membership === "join") alreadyJoined.add(m.userId);
       }
     }
 
-    const toInvite = new Set<string>();
-    for (const room of client.getRooms()) {
-      for (const m of room.getJoinedMembers()) {
-        const userId = m.userId;
-        if (!userId || userId === myUserId) continue;
-        if (!userId.endsWith(`:${serverName}`)) continue;
-        if (isBot(userId)) continue;
-        if (alreadyMember.has(userId)) continue;
-        toInvite.add(userId);
+    const users = (await getServerUserIds()).filter((u) => !alreadyJoined.has(u));
+    const { sendAdminCommand } = await import("./adminCommandService");
+    let joined = 0;
+    let fellBack = false;
+    for (const userId of users) {
+      if (fellBack) {
+        // Admin force-join already proved unavailable this run — just invite.
+        client.invite(roomId, userId).then(() => shareHistoricKeys(roomId, userId)).catch(() => {});
+        continue;
+      }
+      try {
+        await sendAdminCommand(`!admin users force-join-room ${userId} ${roomId}`);
+        joined += 1;
+        void shareHistoricKeys(roomId, userId);
+      } catch (err) {
+        fellBack = true;
+        console.warn("[Sion] force-join unavailable (not admin?), falling back to invite:", err);
+        client.invite(roomId, userId).then(() => shareHistoricKeys(roomId, userId)).catch(() => {});
       }
     }
-    for (const userId of toInvite) {
-      client.invite(roomId, userId)
-        .then(() => shareHistoricKeys(roomId, userId))
-        .catch((err: unknown) => {
-          console.warn("[Sion] Failed to invite user to public channel:", userId, err);
-        });
-    }
+    console.log(`[Sion] fanOutPublicInvites: ${joined} force-joined${fellBack ? " (then fell back to invite)" : ""} of ${users.length}`);
   } catch (err) {
     console.warn("[Sion] Failed to fan-out invites for public channel:", err);
   }
@@ -1342,12 +1370,6 @@ export async function createOrSyncSoundboardRoom(): Promise<SoundboardCreationRe
 async function inviteAllServerUsers(roomId: string): Promise<number> {
   if (!matrixClient) return 0;
   const client = matrixClient;
-  const serverName = client.getDomain() || "";
-  const myUserId = client.getUserId();
-  const isBot = (userId: string) => {
-    const local = userId.split(":")[0].toLowerCase();
-    return local === "@conduit" || local === "@conduwuit" || local === "@continuwuity" || local === "@server";
-  };
 
   const targetRoom = client.getRoom(roomId);
   // Only joined counts as "already in". Users stuck in "invite" or "leave"
@@ -1359,31 +1381,8 @@ async function inviteAllServerUsers(roomId: string): Promise<number> {
     }
   }
 
-  const { sendAdminCommand, parseUserList } = await import("./adminCommandService");
-
-  const toJoin = new Set<string>();
-  try {
-    const response = await sendAdminCommand("!admin users list-users");
-    for (const userId of parseUserList(response)) {
-      if (!userId || userId === myUserId) continue;
-      if (!userId.endsWith(`:${serverName}`)) continue;
-      if (isBot(userId)) continue;
-      if (alreadyJoined.has(userId)) continue;
-      toJoin.add(userId);
-    }
-  } catch (err) {
-    console.warn("[Sion] Admin list-users failed, falling back to room discovery:", err);
-    for (const room of client.getRooms()) {
-      for (const m of room.getJoinedMembers()) {
-        const userId = m.userId;
-        if (!userId || userId === myUserId) continue;
-        if (!userId.endsWith(`:${serverName}`)) continue;
-        if (isBot(userId)) continue;
-        if (alreadyJoined.has(userId)) continue;
-        toJoin.add(userId);
-      }
-    }
-  }
+  const toJoin = (await getServerUserIds()).filter((u) => !alreadyJoined.has(u));
+  const { sendAdminCommand } = await import("./adminCommandService");
 
   // Force-join each pending user via the admin bot. This bypasses the
   // invite/accept flow so users don't have to open Sion first to get the
