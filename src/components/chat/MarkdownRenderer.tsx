@@ -88,6 +88,16 @@ function CodeBlock({ children }: { children: ReactNode }) {
 
 const components: Components = {
   p: ({ children }) => <p style={{ margin: '2px 0' }}>{children}</p>,
+  // The global CSS reset (Tailwind preflight) strips heading sizes, list
+  // markers and hr borders — restore them so markdown actually looks like
+  // markdown in the chat.
+  h1: ({ children }) => <h1 style={{ fontSize: 20, fontWeight: 700, margin: '10px 0 4px' }}>{children}</h1>,
+  h2: ({ children }) => <h2 style={{ fontSize: 17, fontWeight: 700, margin: '10px 0 4px' }}>{children}</h2>,
+  h3: ({ children }) => <h3 style={{ fontSize: 15, fontWeight: 600, margin: '8px 0 4px' }}>{children}</h3>,
+  h4: ({ children }) => <h4 style={{ fontSize: 14, fontWeight: 600, margin: '6px 0 2px' }}>{children}</h4>,
+  h5: ({ children }) => <h5 style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 2px' }}>{children}</h5>,
+  h6: ({ children }) => <h6 style={{ fontSize: 12, fontWeight: 600, margin: '6px 0 2px', color: 'var(--color-on-surface-variant)' }}>{children}</h6>,
+  hr: () => <hr style={{ border: 'none', borderTop: '1px solid var(--color-outline)', margin: '10px 0' }} />,
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)', textDecoration: 'none' }}>
       {children}
@@ -111,8 +121,14 @@ const components: Components = {
     );
   },
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  ul: ({ children }) => <ul style={{ paddingLeft: 20, margin: '4px 0' }}>{children}</ul>,
-  ol: ({ children }) => <ol style={{ paddingLeft: 20, margin: '4px 0' }}>{children}</ol>,
+  ul: ({ children }) => <ul style={{ paddingLeft: 22, margin: '4px 0', listStyleType: 'disc' }}>{children}</ul>,
+  ol: ({ children }) => <ol style={{ paddingLeft: 22, margin: '4px 0', listStyleType: 'decimal' }}>{children}</ol>,
+  // Task-list items (- [ ] / - [x]) carry a checkbox — hide their bullet.
+  li: ({ children, className }) => (
+    <li className={className} style={{ margin: '2px 0', listStyleType: className?.includes('task-list-item') ? 'none' : undefined }}>
+      {children}
+    </li>
+  ),
   blockquote: ({ children }) => (
     <blockquote style={{
       borderLeft: '3px solid var(--color-primary)',
@@ -125,21 +141,33 @@ const components: Components = {
     </blockquote>
   ),
   table: ({ children }) => (
-    <div style={{ overflowX: 'auto' as const, margin: '8px 0', borderRadius: 12, border: '1px solid var(--color-outline-variant)' }}>
-      <table style={{ borderCollapse: 'collapse' as const, fontSize: 12, width: '100%' }}>{children}</table>
+    // Opaque light-grey body so cells/borders don't bleed through the (colored)
+    // message bubble and become unreadable. Header keeps its own shade.
+    <div style={{ overflowX: 'auto' as const, margin: '8px 0', borderRadius: 12, border: '1px solid var(--color-outline)', background: 'var(--color-surface-container-high)' }}>
+      <table className="md-table" style={{ borderCollapse: 'collapse' as const, fontSize: 12, width: '100%', color: 'var(--color-on-surface)' }}>{children}</table>
     </div>
   ),
   th: ({ children }) => (
-    <th style={{ borderBottom: '1px solid var(--color-outline-variant)', padding: '8px 12px', background: 'var(--color-surface-container)', textAlign: 'left' as const, fontWeight: 600, fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: '0.06em', color: 'var(--color-on-surface-variant)' }}>
+    <th style={{ borderBottom: '1px solid var(--color-outline)', padding: '8px 12px', background: 'var(--color-surface-container)', textAlign: 'left' as const, fontWeight: 600, fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: '0.06em', color: 'var(--color-on-surface-variant)' }}>
       {children}
     </th>
   ),
   td: ({ children }) => (
-    <td style={{ borderBottom: '1px solid var(--color-outline-variant)', padding: '8px 12px' }}>{children}</td>
+    <td style={{ borderBottom: '1px solid var(--color-outline)', padding: '8px 12px', color: 'var(--color-on-surface)' }}>{children}</td>
   ),
   strong: ({ children }) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
   em: ({ children }) => <em>{children}</em>,
   del: ({ children }) => <del style={{ color: 'var(--color-outline)' }}>{children}</del>,
+  // GFM task-list checkbox — make it visible (accent + size) on dark bubbles.
+  // NOT `disabled` (that greys it out and kills the accent color); readOnly +
+  // pointer-events:none keeps it display-only while staying full-opacity.
+  input: ({ type, checked }) =>
+    type === "checkbox" ? (
+      <input
+        type="checkbox" checked={!!checked} readOnly
+        style={{ accentColor: 'var(--color-primary)', width: 15, height: 15, marginRight: 6, verticalAlign: 'middle', pointerEvents: 'none' }}
+      />
+    ) : null,
   img: ({ src, alt }) => (
     <img src={src} alt={alt || ""} style={{ maxWidth: 400, borderRadius: 16, margin: '4px 0' }} loading="lazy" />
   ),

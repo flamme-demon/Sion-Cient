@@ -301,3 +301,11 @@ body {
     }
   }
 }
+
+/* Vertical column separators for chat markdown tables (react-markdown path).
+   Inline styles can't express :not(:last-child), so the right-edge column
+   doesn't get a line doubling the table border. */
+.md-table th:not(:last-child),
+.md-table td:not(:last-child) {
+  border-right: 1px solid var(--color-outline);
+}
