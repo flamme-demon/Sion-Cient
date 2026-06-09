@@ -4,8 +4,6 @@ use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg(not(target_os = "android"))]
-mod denoise;
-#[cfg(not(target_os = "android"))]
 mod cursor_overlay;
 #[cfg(not(target_os = "android"))]
 mod system_audio;
@@ -742,6 +740,35 @@ async fn pick_ffmpeg_path() -> Option<String> {
         .map(|h| h.path().to_string_lossy().to_string())
 }
 
+/// Native file picker for a custom voice-channel cue sound. Returns the
+/// absolute path, or None if cancelled.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn pick_audio_file() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Sélectionner un son")
+        .add_filter("Audio", &["ogg", "mp3", "wav", "m4a", "oga", "opus", "flac"])
+        .pick_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string())
+}
+
+/// Read an arbitrary local file as base64. Used to load a user-picked cue
+/// sound (outside the bundle) so the renderer can turn it into a blob URL —
+/// CEF can't `new Audio()` an arbitrary file:// path directly. Capped at 5 MB
+/// (cue sounds are tiny; this guards against picking a huge file by mistake).
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn read_file_b64(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > 5 * 1024 * 1024 {
+        return Err("Fichier trop volumineux (max 5 Mo)".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 #[tauri::command]
 fn start_voice_service(_channel_name: String, _is_muted: bool, _is_deafened: bool) {
     // On Android, the JS calls window.__SION__.startVoiceService() directly via JavascriptInterface
@@ -1244,7 +1271,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, detect_ffmpeg, download_ffmpeg, start_voice_service, stop_voice_service, denoise::denoise_enable, denoise::denoise_disable, denoise::denoise_process_frame, denoise::denoise_set_mix, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder

@@ -13,12 +13,19 @@ import {
   type BaseKeyProvider,
   type AudioPreset,
   type LocalTrackPublication,
+  setLogLevel,
 } from "livekit-client";
+
+// TEMP (ICE diagnosis): verbose LiveKit logs so the next join records the ICE
+// candidate pair selection + connection-state transitions. Revert to default
+// once we've pinpointed the connect→fail→resume drop.
+setLogLevel("debug");
 import type { ParticipantInfo, ConnectionQuality as SionConnectionQuality } from "../types/livekit";
 import { useSettingsStore, type AudioQualityPreset } from "../stores/useSettingsStore";
 import { useAppStore } from "../stores/useAppStore";
 import * as matrixService from "./matrixService";
 import { SpeakingDetector } from "./speakingDetector";
+import { playJoinCue, onParticipantLeft, noteConnectionLost, resetVoiceCues } from "./voiceChannelSounds";
 
 
 function getAudioPreset(quality: AudioQualityPreset): AudioPreset {
@@ -799,6 +806,8 @@ export async function connectToRoom(
   // tracks with "already ended". Clean up stale audio on disconnect, then
   // re-attach tracks on reconnect after a short delay.
   room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+    // TeamSpeak-style cue: leave vs timeout (inferred from prior ConnectionQuality).
+    onParticipantLeft(participant.identity);
     // Clean up all audio elements for this participant
     for (const [, pub] of participant.trackPublications) {
       if (pub.track && pub.track.kind === Track.Kind.Audio) {
@@ -806,7 +815,15 @@ export async function connectToRoom(
       }
     }
   });
+  // Track each remote peer's connection quality so a disconnect preceded by
+  // `lost` is treated as a timeout cue rather than a clean leave.
+  room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+    if (participant && !participant.isLocal) {
+      noteConnectionLost(participant.identity, String(quality) === "lost");
+    }
+  });
   room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
+    playJoinCue();
     // After a short delay, attach any audio tracks the SDK may have skipped
     setTimeout(() => {
       for (const [, pub] of participant.trackPublications) {
@@ -1008,6 +1025,7 @@ export async function disconnectFromRoom() {
     stopAllSpeakingDetectors();
     detachAllAudio();
     locallyMutedIdentities.clear();
+    resetVoiceCues();
     clearAllPlayingSounds();
     remoteCursors.clear();
     if (cursorSweepTimer) { clearInterval(cursorSweepTimer); cursorSweepTimer = null; }

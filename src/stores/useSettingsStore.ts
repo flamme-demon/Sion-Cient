@@ -41,6 +41,14 @@ interface SettingsState {
   language: string;
   soundboardEnabled: boolean;
   soundboardVolume: number;
+  /** Play short join/leave/timeout cues when a member enters or leaves the
+   *  voice channel the local user is currently in (TeamSpeak-style). */
+  voiceChannelSounds: boolean;
+  /** Optional custom sound file paths overriding the bundled defaults for each
+   *  cue. Empty string = use the bundled default. */
+  voiceSoundJoin: string;
+  voiceSoundLeave: string;
+  voiceSoundTimeout: string;
   /** Remember whether the soundboard panel was open when the app was last
    *  closed, so we can reopen it automatically on relaunch. Written
    *  whenever `useAppStore.toggleSoundboardPanel` fires; read at startup
@@ -82,6 +90,8 @@ interface SettingsState {
   setEnableGifs: (v: boolean) => void;
   setSoundboardEnabled: (v: boolean) => void;
   setSoundboardVolume: (v: number) => void;
+  setVoiceChannelSounds: (v: boolean) => void;
+  setVoiceSound: (cue: "join" | "leave" | "timeout", path: string) => void;
   setSoundboardOpenAtLaunch: (v: boolean) => void;
   toggleCategoryHidden: (categoryPath: string) => void;
   clearHiddenCategories: () => void;
@@ -119,6 +129,10 @@ export const useSettingsStore = create<SettingsState>()(
       language: "",
       soundboardEnabled: true,
       soundboardVolume: 0.2,
+      voiceChannelSounds: true,
+      voiceSoundJoin: "",
+      voiceSoundLeave: "",
+      voiceSoundTimeout: "",
       soundboardOpenAtLaunch: false,
       hiddenCategories: [],
       screenShareAudio: true,
@@ -148,9 +162,8 @@ export const useSettingsStore = create<SettingsState>()(
       setAiNoiseSuppressionMix: (v) => {
         const clamped = Math.max(0, Math.min(1, v));
         set({ aiNoiseSuppressionMix: clamped });
-        // Push live to Rust — no mic republish needed, the worker reads the
-        // atomic on every frame.
-        import("@tauri-apps/api/core").then(({ invoke }) => invoke("denoise_set_mix", { mix: clamped })).catch(() => {});
+        // Live wet/dry update on the active RNNoise worklet — no mic republish.
+        import("../services/denoiseService").then(({ setDenoiseMix }) => setDenoiseMix(clamped)).catch(() => {});
       },
       setAudioQuality: (v) => set({ audioQuality: v }),
       setLinkPreviews: (v) => set({ linkPreviews: v }),
@@ -160,6 +173,12 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
+      setVoiceChannelSounds: (v) => set({ voiceChannelSounds: v }),
+      setVoiceSound: (cue, path) => set(
+        cue === "join" ? { voiceSoundJoin: path }
+          : cue === "leave" ? { voiceSoundLeave: path }
+          : { voiceSoundTimeout: path },
+      ),
       setSoundboardEnabled: (v) => set({ soundboardEnabled: v }),
       setSoundboardVolume: (v) => {
         set({ soundboardVolume: v });

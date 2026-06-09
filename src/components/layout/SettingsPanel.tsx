@@ -12,7 +12,7 @@ import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
 
 
-type SettingsTab = "general" | "audio" | "chat" | "shortcuts" | "advanced";
+type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
 
 export function SettingsPanel() {
   const { t } = useTranslation();
@@ -79,6 +79,12 @@ export function SettingsPanel() {
   const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
   const screenShareAudio = useSettingsStore((s) => s.screenShareAudio);
   const setScreenShareAudio = useSettingsStore((s) => s.setScreenShareAudio);
+  const voiceChannelSounds = useSettingsStore((s) => s.voiceChannelSounds);
+  const setVoiceChannelSounds = useSettingsStore((s) => s.setVoiceChannelSounds);
+  const voiceSoundJoin = useSettingsStore((s) => s.voiceSoundJoin);
+  const voiceSoundLeave = useSettingsStore((s) => s.voiceSoundLeave);
+  const voiceSoundTimeout = useSettingsStore((s) => s.voiceSoundTimeout);
+  const setVoiceSound = useSettingsStore((s) => s.setVoiceSound);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
@@ -285,7 +291,7 @@ export function SettingsPanel() {
   const tabs: { id: SettingsTab; label: string; icon: string }[] = [
     { id: "general", label: t("settings.tabGeneral"), icon: "⚙" },
     { id: "audio", label: t("settings.tabAudio"), icon: "🎧" },
-    { id: "chat", label: t("settings.tabChat"), icon: "💬" },
+    { id: "channel", label: t("settings.tabChannel"), icon: "#" },
     ...(!isMobile ? [{ id: "shortcuts" as SettingsTab, label: t("settings.tabShortcuts"), icon: "⌨" }] : []),
     { id: "advanced", label: t("settings.tabAdvanced"), icon: "🔧" },
   ];
@@ -533,7 +539,11 @@ export function SettingsPanel() {
         </>)}
 
         {/* === CHAT (notifications + chat options) === */}
-        {activeTab === "chat" && (<>
+        {activeTab === "channel" && (<>
+          {/* ---- TEXTE ---- */}
+          <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--color-on-surface-variant)', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '0 4px 2px' }}>
+            {t("settings.channelTextSection")}
+          </div>
           {/* Notification slider */}
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -586,6 +596,72 @@ export function SettingsPanel() {
               </div>
               <button onClick={() => setEnableGifs(!enableGifs)} style={toggleStyle(enableGifs)}><div style={toggleDotStyle(enableGifs)} /></button>
             </div>
+          </div>
+
+          {/* ---- VOCAL ---- */}
+          <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--color-on-surface-variant)', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '8px 4px 2px' }}>
+            {t("settings.channelVoiceSection")}
+          </div>
+          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+            <div style={voiceChannelSounds ? { ...rowStyle, marginBottom: 8 } : rowStyle}>
+              <div style={{ marginRight: 12 }}>
+                <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.voiceChannelSounds")}</div>
+                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.voiceChannelSoundsDesc")}</div>
+              </div>
+              <button onClick={() => setVoiceChannelSounds(!voiceChannelSounds)} style={toggleStyle(voiceChannelSounds)}>
+                <div style={toggleDotStyle(voiceChannelSounds)} />
+              </button>
+            </div>
+
+            {voiceChannelSounds && ([
+              { cue: "join" as const, label: t("settings.cueJoin"), path: voiceSoundJoin },
+              { cue: "leave" as const, label: t("settings.cueLeave"), path: voiceSoundLeave },
+              { cue: "timeout" as const, label: t("settings.cueTimeout"), path: voiceSoundTimeout },
+            ]).map(({ cue, label, path }) => (
+              <div key={cue} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 0', borderTop: '1px solid var(--color-surface-container-highest)', marginTop: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{label}</div>
+                  <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {path ? path.split(/[/\\]/).pop() : t("settings.cueDefault")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  title={t("settings.cuePreview")}
+                  onClick={async () => {
+                    const { previewCue, invalidateSoundCache } = await import("../../services/voiceChannelSounds");
+                    if (path) invalidateSoundCache(path);
+                    previewCue(cue);
+                  }}
+                  style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', flexShrink: 0 }}
+                >
+                  ▶
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { invoke } = await import("@tauri-apps/api/core");
+                      const p = await invoke<string | null>("pick_audio_file");
+                      if (p) setVoiceSound(cue, p);
+                    } catch { /* cancelled / not in Tauri */ }
+                  }}
+                  style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  {t("settings.cueBrowse")}
+                </button>
+                {path && (
+                  <button
+                    type="button"
+                    title={t("settings.cueReset")}
+                    onClick={() => setVoiceSound(cue, "")}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface-variant)', flexShrink: 0 }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         </>)}
 
