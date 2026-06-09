@@ -110,6 +110,7 @@ export function MessageList() {
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
   // Start as null so the first render after mount (including a reload with
   // an already-restored activeChannel) is treated as a channel switch and
@@ -404,20 +405,24 @@ export function MessageList() {
     }
   }, [messages, scrollToBottom, markAsRead]);
 
-  // ResizeObserver — observe only the scroll container itself (not each child).
-  // This is much lighter than observing 150+ children individually.
+  // ResizeObserver — observe the inner CONTENT wrapper, not the scroll viewport.
+  // The viewport's box size is fixed, so observing it never fires when a child
+  // grows (e.g. a reaction chip added to the last message, an edit making it
+  // taller, an image finishing load). Observing the content wrapper catches
+  // those height changes; when pinned to the bottom we re-stick. Still one
+  // observer total, not 150+ per-child.
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    let lastHeight = el.scrollHeight;
+    const contentEl = contentRef.current;
+    if (!contentEl) return;
+    let lastHeight = contentEl.offsetHeight;
     const ro = new ResizeObserver(() => {
-      const currHeight = el.scrollHeight;
+      const currHeight = contentEl.offsetHeight;
       if (currHeight !== lastHeight) {
-        if (isAtBottomRef.current) scrollToBottom();
         lastHeight = currHeight;
+        if (isAtBottomRef.current) scrollToBottom();
       }
     });
-    ro.observe(el);
+    ro.observe(contentEl);
     return () => ro.disconnect();
   }, [scrollToBottom]);
 
@@ -505,6 +510,7 @@ export function MessageList() {
         className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 flex flex-col min-w-0"
         onScroll={handleScroll}
       >
+        <div ref={contentRef} className="flex flex-col min-w-0">
         {/* Top indicator */}
         {isLoading && (
           <div className="text-center text-text-muted text-sm py-3">Chargement...</div>
@@ -533,6 +539,7 @@ export function MessageList() {
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* Scroll to bottom button */}
