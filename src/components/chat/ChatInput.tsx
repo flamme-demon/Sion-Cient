@@ -196,6 +196,14 @@ export function ChatInput() {
     }
   };
 
+  // Cancel editing — clears the draft AND resets the auto-grown textarea height
+  // (setInputText("") alone doesn't shrink it back, so a long edit stayed tall).
+  const cancelEdit = () => {
+    clearEditingMessage();
+    setInputText("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+  };
+
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Autocomplete keyboard navigation
     if (mentionQuery !== null && mentionResults.length > 0) {
@@ -213,8 +221,7 @@ export function ChatInput() {
 
     if (e.key === "Escape" && editingMessage) {
       e.preventDefault();
-      clearEditingMessage();
-      setInputText("");
+      cancelEdit();
       return;
     }
 
@@ -474,7 +481,7 @@ export function ChatInput() {
         }}>
           <span>{t("chat.editing")}</span>
           <button
-            onClick={() => { clearEditingMessage(); setInputText(""); }}
+            onClick={cancelEdit}
             style={{
               border: 'none',
               background: 'transparent',
