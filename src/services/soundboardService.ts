@@ -1,4 +1,5 @@
 import { Filter, Direction } from "matrix-js-sdk";
+import { getSharedAudioContext } from "./audioContext";
 import { getMatrixClient, findSoundboardRoom, uploadFile } from "./matrixService";
 import { getCurrentRoom, setPlayingSound } from "./livekitService";
 import { useAppStore } from "../stores/useAppStore";
@@ -397,19 +398,6 @@ export const SOUND_GAIN_DEFAULT = 1;
 function clampGain(v: number): number {
   if (!Number.isFinite(v)) return SOUND_GAIN_DEFAULT;
   return Math.max(SOUND_GAIN_MIN, Math.min(SOUND_GAIN_MAX, v));
-}
-
-// Lazy-created shared AudioContext. Browsers cap the number of concurrent
-// AudioContexts (~6) so we reuse one across every soundboard play. Created
-// on first playback (after a user gesture) so autoplay policy is satisfied.
-let sharedAudioContext: AudioContext | null = null;
-function getSharedAudioContext(): AudioContext {
-  if (!sharedAudioContext || sharedAudioContext.state === "closed") {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const Ctor = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
-    sharedAudioContext = new Ctor();
-  }
-  return sharedAudioContext;
 }
 
 /** Build the playback chain for one HTMLAudioElement and start playback.

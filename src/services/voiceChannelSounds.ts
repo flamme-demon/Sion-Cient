@@ -15,6 +15,7 @@
 // via noteConnectionLost(); onParticipantLeft() reads + clears it.
 
 import { useSettingsStore, type VoiceSoundCfg } from "../stores/useSettingsStore";
+import { getSharedAudioContext } from "./audioContext";
 
 // User-supplied sound files, resolved at build time. Missing files are simply
 // absent from the map (no build error) — the synth fallback covers them.
@@ -38,8 +39,7 @@ const SYNTH_PEAK = 0.16;
 
 /** User override (custom file, trimmed + gain) for a cue, or null for default. */
 function overrideFor(cue: Cue): VoiceSoundCfg | null {
-  const s = useSettingsStore.getState();
-  const cfg = cue === "join" ? s.voiceSoundJoin : cue === "leave" ? s.voiceSoundLeave : s.voiceSoundTimeout;
+  const cfg = useSettingsStore.getState().voiceSounds[cue];
   return cfg && typeof cfg === "object" && cfg.path ? cfg : null;
 }
 
@@ -101,12 +101,11 @@ function playFile(url: string): boolean {
 
 // ---- synthesized fallback ------------------------------------------------
 
-let ctx: AudioContext | null = null;
 function audioCtx(): AudioContext | null {
   try {
-    if (!ctx) ctx = new AudioContext();
-    if (ctx.state === "suspended") void ctx.resume();
-    return ctx;
+    const ac = getSharedAudioContext();
+    if (ac.state === "suspended") void ac.resume();
+    return ac;
   } catch {
     return null;
   }
@@ -185,12 +184,6 @@ export function playJoinCue() {
  *  toggle so the preview matches what you'll actually hear. */
 export function previewCue(cue: Cue) {
   play(cue);
-}
-
-/** Drop a cached decoded buffer (call when the user changes/clears a cue so a
- *  re-picked file at the same path is reloaded). */
-export function invalidateSoundCache(path: string) {
-  bufferCache.delete(path);
 }
 
 export function onParticipantLeft(identity: string) {

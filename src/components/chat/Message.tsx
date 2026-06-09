@@ -217,33 +217,21 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
               : `${formatFileSize(attachment.size)} — Lecture impossible`}
           </div>
         </div>
-        {ffmpegMissing ? (
-          <button
-            onClick={handleInstallFfmpeg}
-            disabled={installing !== null}
-            style={{
-              padding: '8px 16px', borderRadius: 20, border: 'none',
-              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
-              fontSize: 12, fontWeight: 600, cursor: installing !== null ? 'default' : 'pointer',
-              fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
-              opacity: installing !== null ? 0.6 : 1,
-            }}
-          >
-            {installing !== null ? `Installation… ${installing}%` : "Installer ffmpeg (~80 Mo)"}
-          </button>
-        ) : (
-          <button
-            onClick={handleDownload}
-            style={{
-              padding: '8px 16px', borderRadius: 20, border: 'none',
-              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
-              fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-              whiteSpace: 'nowrap', flexShrink: 0,
-            }}
-          >
-            Télécharger
-          </button>
-        )}
+        <button
+          onClick={ffmpegMissing ? handleInstallFfmpeg : handleDownload}
+          disabled={ffmpegMissing && installing !== null}
+          style={{
+            padding: '8px 16px', borderRadius: 20, border: 'none',
+            background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+            fontSize: 12, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
+            cursor: ffmpegMissing && installing !== null ? 'default' : 'pointer',
+            opacity: ffmpegMissing && installing !== null ? 0.6 : 1,
+          }}
+        >
+          {ffmpegMissing
+            ? (installing !== null ? `Installation… ${installing}%` : "Installer ffmpeg (~80 Mo)")
+            : "Télécharger"}
+        </button>
       </div>
     );
   }

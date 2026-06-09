@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { decodeAudioFile, computePeaks, playSlice } from "../../services/audioTrim";
+
+const CANVAS_W = 600;
 
 interface Props {
   file: File;
@@ -49,6 +51,10 @@ export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
     };
   }, [file, maxSec]);
 
+  // Peaks are an O(samples) scan — compute once per decoded buffer, not on
+  // every playhead tick (the draw effect re-runs ~60×/s during preview).
+  const peaks = useMemo(() => (buffer ? computePeaks(buffer, CANVAS_W) : []), [buffer]);
+
   // Draw waveform + playhead.
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -57,7 +63,6 @@ export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
     const c = canvas.getContext("2d");
     if (!c) return;
     c.clearRect(0, 0, w, h);
-    const peaks = computePeaks(buffer, w);
     const mid = h / 2;
     c.fillStyle = "rgba(255,255,255,0.35)";
     for (let x = 0; x < peaks.length; x++) {
@@ -68,11 +73,10 @@ export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
     }
     if (playhead !== null && buffer.duration > 0) {
       const px = (playhead / buffer.duration) * w;
-      c.fillStyle = "var(--color-primary)";
       c.fillStyle = "#7dd3fc";
       c.fillRect(px, 0, 2, h);
     }
-  }, [buffer, playhead, region]);
+  }, [buffer, peaks, playhead, region]);
 
   const dur = buffer?.duration ?? 0;
 
@@ -90,7 +94,7 @@ export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
       const wrap = wrapRef.current;
       if (!wrap) return;
       const dSec = ((e.clientX - d.x0) / wrap.clientWidth) * buffer.duration;
-      let { start, end } = { start: d.s0, end: d.e0 };
+      let start = d.s0, end = d.e0;
       if (d.mode === "body") {
         let ns = d.s0 + dSec;
         ns = Math.max(0, Math.min(ns, buffer.duration - d.w));

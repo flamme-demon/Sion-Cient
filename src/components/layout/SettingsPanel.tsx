@@ -51,20 +51,13 @@ export function SettingsPanel() {
   const [ffmpegDetected, setFfmpegDetected] = useState<string | null | undefined>(undefined);
   // null = idle, number = install progress %, string = error message.
   const [ffmpegInstall, setFfmpegInstall] = useState<number | string | null>(null);
-  const redetectFfmpeg = () => {
+  const redetectFfmpeg = useCallback(() => {
     import("@tauri-apps/api/core")
       .then(({ invoke }) => invoke<string | null>("detect_ffmpeg"))
       .then((p) => setFfmpegDetected(p ?? null))
       .catch(() => setFfmpegDetected(null));
-  };
-  useEffect(() => {
-    let cancelled = false;
-    import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke<string | null>("detect_ffmpeg"))
-      .then((p) => { if (!cancelled) setFfmpegDetected(p ?? null); })
-      .catch(() => { if (!cancelled) setFfmpegDetected(null); });
-    return () => { cancelled = true; };
-  }, [ffmpegPath]);
+  }, []);
+  useEffect(() => { redetectFfmpeg(); }, [ffmpegPath, redetectFfmpeg]);
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
@@ -82,9 +75,7 @@ export function SettingsPanel() {
   const setScreenShareAudio = useSettingsStore((s) => s.setScreenShareAudio);
   const voiceChannelSounds = useSettingsStore((s) => s.voiceChannelSounds);
   const setVoiceChannelSounds = useSettingsStore((s) => s.setVoiceChannelSounds);
-  const voiceSoundJoin = useSettingsStore((s) => s.voiceSoundJoin);
-  const voiceSoundLeave = useSettingsStore((s) => s.voiceSoundLeave);
-  const voiceSoundTimeout = useSettingsStore((s) => s.voiceSoundTimeout);
+  const voiceSounds = useSettingsStore((s) => s.voiceSounds);
   const setVoiceSound = useSettingsStore((s) => s.setVoiceSound);
   const [cueEditor, setCueEditor] = useState<{ cue: "join" | "leave" | "timeout"; file: File; path: string; label: string } | null>(null);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
@@ -616,9 +607,9 @@ export function SettingsPanel() {
             </div>
 
             {voiceChannelSounds && ([
-              { cue: "join" as const, label: t("settings.cueJoin"), cfg: voiceSoundJoin },
-              { cue: "leave" as const, label: t("settings.cueLeave"), cfg: voiceSoundLeave },
-              { cue: "timeout" as const, label: t("settings.cueTimeout"), cfg: voiceSoundTimeout },
+              { cue: "join" as const, label: t("settings.cueJoin"), cfg: voiceSounds.join },
+              { cue: "leave" as const, label: t("settings.cueLeave"), cfg: voiceSounds.leave },
+              { cue: "timeout" as const, label: t("settings.cueTimeout"), cfg: voiceSounds.timeout },
             ]).map(({ cue, label, cfg }) => (
               <div key={cue} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 0', borderTop: '1px solid var(--color-surface-container-highest)', marginTop: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -633,8 +624,7 @@ export function SettingsPanel() {
                   type="button"
                   title={t("settings.cuePreview")}
                   onClick={async () => {
-                    const { previewCue, invalidateSoundCache } = await import("../../services/voiceChannelSounds");
-                    if (cfg) invalidateSoundCache(cfg.path);
+                    const { previewCue } = await import("../../services/voiceChannelSounds");
                     previewCue(cue);
                   }}
                   style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', flexShrink: 0 }}
@@ -724,12 +714,11 @@ export function SettingsPanel() {
               <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
                 Permet de lire les vidéos dont le codec n'est pas géré nativement (transcodage en WebM). Laisse vide pour la détection auto / le ffmpeg du PATH.
               </div>
-              {ffmpegDetected !== undefined && (
+              {ffmpegDetected !== undefined && (<>
                 <div style={{ fontSize: 11, marginTop: 4, color: ffmpegDetected ? 'var(--color-green)' : 'var(--color-error)', wordBreak: 'break-all' }}>
                   {ffmpegDetected ? `✓ ffmpeg détecté : ${ffmpegDetected}` : "✗ ffmpeg introuvable — renseigne le chemin ci-dessus ou installe-le ci-dessous"}
                 </div>
-              )}
-              {!ffmpegDetected && ffmpegDetected !== undefined && (
+              {!ffmpegDetected && (
                 <div style={{ marginTop: 8 }}>
                   <button
                     type="button"
@@ -754,6 +743,7 @@ export function SettingsPanel() {
                   )}
                 </div>
               )}
+              </>)}
             </div>
             <button
               onClick={() => {
