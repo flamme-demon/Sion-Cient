@@ -1,3 +1,4 @@
+import { Filter, Direction } from "matrix-js-sdk";
 import { getMatrixClient, findSoundboardRoom, uploadFile } from "./matrixService";
 import { getCurrentRoom, setPlayingSound } from "./livekitService";
 import { useAppStore } from "../stores/useAppStore";
@@ -98,12 +99,49 @@ function parseSound(ev: {
   };
 }
 
+// A reusable server-side filter that returns ONLY `m.room.message` events. The
+// soundboard room's raw timeline is bloated with `m.room.member` (it invites
+// every server user), `m.replace` edits and redactions — a plain
+// `scrollback(200)` is diluted by that noise and, past a few hundred events,
+// stops surfacing the oldest sounds. Paginating a FILTERED timeline fetches
+// just the audio (+ edit) messages server-side: fewer bytes, faster parse, and
+// complete regardless of how much membership churn the room has accumulated.
+let sbFilter: Filter | null = null;
+
+async function fetchSoundboardMessages(
+  client: NonNullable<ReturnType<typeof getMatrixClient>>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  room: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any[]> {
+  try {
+    if (!sbFilter) {
+      sbFilter = new Filter(client.getUserId() || "");
+      sbFilter.setDefinition({ room: { timeline: { types: ["m.room.message"], limit: 100 } } });
+    }
+    // Reusing the same Filter returns the same (cached) timeline set, so after
+    // the first full back-pagination later calls find the token exhausted and
+    // just re-read the accumulated events. New uploads arrive via sync.
+    const timelineSet = room.getOrCreateFilteredTimelineSet(sbFilter, { prepopulateTimeline: true });
+    const timeline = timelineSet.getLiveTimeline();
+    let guard = 0;
+    while (guard < 50 && timeline.getPaginationToken(Direction.Backward) !== null) {
+      const more = await client.paginateEventTimeline(timeline, { backwards: true, limit: 100 });
+      guard++;
+      if (!more) break;
+    }
+    return timeline.getEvents();
+  } catch (err) {
+    // Fallback for servers/SDK paths where filtered pagination isn't available.
+    console.warn("[Sion] soundboard filtered fetch failed, falling back to scrollback:", err);
+    try { await client.scrollback(room, 400); } catch { /* ignore */ }
+    return room.getLiveTimeline().getEvents();
+  }
+}
+
 /**
- * Returns all sound entries from the soundboard room. Because the soundboard
- * room is hidden from the sidebar and never "active", its timeline may only
- * contain recent sync events — older sounds won't be cached yet. We force a
- * `scrollback()` on first load to backfill the timeline with historical
- * `m.audio` messages.
+ * Returns all sound entries from the soundboard room, fetched via a
+ * message-only filtered pagination (see fetchSoundboardMessages).
  */
 export async function listSounds(): Promise<SoundEntry[]> {
   const client = getMatrixClient();
@@ -113,16 +151,7 @@ export async function listSounds(): Promise<SoundEntry[]> {
   const room = client.getRoom(roomId);
   if (!room) return [];
 
-  // Backfill older history (up to 200 events) so sounds uploaded before this
-  // session are surfaced too. scrollback is a no-op if we've already hit the
-  // start of the timeline.
-  try {
-    await client.scrollback(room, 200);
-  } catch (err) {
-    console.warn("[Sion] soundboard scrollback failed:", err);
-  }
-
-  const events = room.getLiveTimeline().getEvents();
+  const events = await fetchSoundboardMessages(client, room);
 
   // First pass — collect original m.audio events (not edits themselves).
   const sounds: SoundEntry[] = [];
