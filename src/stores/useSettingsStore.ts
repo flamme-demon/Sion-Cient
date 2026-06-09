@@ -6,6 +6,15 @@ export type SidebarView = "channels" | "dm";
 export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
 export type NotificationMode = "all" | "mentions" | "minimal";
 
+/** A custom voice-channel cue sound: a picked file, trimmed to [start,end]
+ *  seconds, played at `gain` (Web Audio). null = use the bundled default. */
+export interface VoiceSoundCfg {
+  path: string;
+  start: number;
+  end: number;
+  gain: number;
+}
+
 interface SettingsState {
   mutedSpeakAlert: boolean;
   joinMuted: boolean;
@@ -44,11 +53,11 @@ interface SettingsState {
   /** Play short join/leave/timeout cues when a member enters or leaves the
    *  voice channel the local user is currently in (TeamSpeak-style). */
   voiceChannelSounds: boolean;
-  /** Optional custom sound file paths overriding the bundled defaults for each
-   *  cue. Empty string = use the bundled default. */
-  voiceSoundJoin: string;
-  voiceSoundLeave: string;
-  voiceSoundTimeout: string;
+  /** Optional custom sound (trimmed + gain) overriding the bundled default for
+   *  each cue. null = use the bundled default. */
+  voiceSoundJoin: VoiceSoundCfg | null;
+  voiceSoundLeave: VoiceSoundCfg | null;
+  voiceSoundTimeout: VoiceSoundCfg | null;
   /** Remember whether the soundboard panel was open when the app was last
    *  closed, so we can reopen it automatically on relaunch. Written
    *  whenever `useAppStore.toggleSoundboardPanel` fires; read at startup
@@ -91,7 +100,7 @@ interface SettingsState {
   setSoundboardEnabled: (v: boolean) => void;
   setSoundboardVolume: (v: number) => void;
   setVoiceChannelSounds: (v: boolean) => void;
-  setVoiceSound: (cue: "join" | "leave" | "timeout", path: string) => void;
+  setVoiceSound: (cue: "join" | "leave" | "timeout", cfg: VoiceSoundCfg | null) => void;
   setSoundboardOpenAtLaunch: (v: boolean) => void;
   toggleCategoryHidden: (categoryPath: string) => void;
   clearHiddenCategories: () => void;
@@ -130,9 +139,9 @@ export const useSettingsStore = create<SettingsState>()(
       soundboardEnabled: true,
       soundboardVolume: 0.2,
       voiceChannelSounds: true,
-      voiceSoundJoin: "",
-      voiceSoundLeave: "",
-      voiceSoundTimeout: "",
+      voiceSoundJoin: null,
+      voiceSoundLeave: null,
+      voiceSoundTimeout: null,
       soundboardOpenAtLaunch: false,
       hiddenCategories: [],
       screenShareAudio: true,
@@ -174,10 +183,10 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
       setVoiceChannelSounds: (v) => set({ voiceChannelSounds: v }),
-      setVoiceSound: (cue, path) => set(
-        cue === "join" ? { voiceSoundJoin: path }
-          : cue === "leave" ? { voiceSoundLeave: path }
-          : { voiceSoundTimeout: path },
+      setVoiceSound: (cue, cfg) => set(
+        cue === "join" ? { voiceSoundJoin: cfg }
+          : cue === "leave" ? { voiceSoundLeave: cfg }
+          : { voiceSoundTimeout: cfg },
       ),
       setSoundboardEnabled: (v) => set({ soundboardEnabled: v }),
       setSoundboardVolume: (v) => {

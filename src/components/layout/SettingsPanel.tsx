@@ -10,6 +10,7 @@ import { useClickOutside } from "../../hooks/useClickOutside";
 import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
 import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
+import { VoiceCueEditor } from "../chat/VoiceCueEditor";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -85,6 +86,7 @@ export function SettingsPanel() {
   const voiceSoundLeave = useSettingsStore((s) => s.voiceSoundLeave);
   const voiceSoundTimeout = useSettingsStore((s) => s.voiceSoundTimeout);
   const setVoiceSound = useSettingsStore((s) => s.setVoiceSound);
+  const [cueEditor, setCueEditor] = useState<{ cue: "join" | "leave" | "timeout"; file: File; path: string; label: string } | null>(null);
   const notificationMode = useSettingsStore((s) => s.notificationMode);
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
@@ -614,15 +616,17 @@ export function SettingsPanel() {
             </div>
 
             {voiceChannelSounds && ([
-              { cue: "join" as const, label: t("settings.cueJoin"), path: voiceSoundJoin },
-              { cue: "leave" as const, label: t("settings.cueLeave"), path: voiceSoundLeave },
-              { cue: "timeout" as const, label: t("settings.cueTimeout"), path: voiceSoundTimeout },
-            ]).map(({ cue, label, path }) => (
+              { cue: "join" as const, label: t("settings.cueJoin"), cfg: voiceSoundJoin },
+              { cue: "leave" as const, label: t("settings.cueLeave"), cfg: voiceSoundLeave },
+              { cue: "timeout" as const, label: t("settings.cueTimeout"), cfg: voiceSoundTimeout },
+            ]).map(({ cue, label, cfg }) => (
               <div key={cue} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 0', borderTop: '1px solid var(--color-surface-container-highest)', marginTop: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{label}</div>
                   <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {path ? path.split(/[/\\]/).pop() : t("settings.cueDefault")}
+                    {cfg
+                      ? `${cfg.path.split(/[/\\]/).pop()} · ${(cfg.end - cfg.start).toFixed(1)}s · ${Math.round(cfg.gain * 100)}%`
+                      : t("settings.cueDefault")}
                   </div>
                 </div>
                 <button
@@ -630,7 +634,7 @@ export function SettingsPanel() {
                   title={t("settings.cuePreview")}
                   onClick={async () => {
                     const { previewCue, invalidateSoundCache } = await import("../../services/voiceChannelSounds");
-                    if (path) invalidateSoundCache(path);
+                    if (cfg) invalidateSoundCache(cfg.path);
                     previewCue(cue);
                   }}
                   style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', flexShrink: 0 }}
@@ -643,18 +647,24 @@ export function SettingsPanel() {
                     try {
                       const { invoke } = await import("@tauri-apps/api/core");
                       const p = await invoke<string | null>("pick_audio_file");
-                      if (p) setVoiceSound(cue, p);
+                      if (!p) return;
+                      const b64 = await invoke<string>("read_file_b64", { path: p });
+                      const bin = atob(b64);
+                      const bytes = new Uint8Array(bin.length);
+                      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                      const file = new File([bytes], p.split(/[/\\]/).pop() || "sound");
+                      setCueEditor({ cue, file, path: p, label });
                     } catch { /* cancelled / not in Tauri */ }
                   }}
                   style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', whiteSpace: 'nowrap', flexShrink: 0 }}
                 >
                   {t("settings.cueBrowse")}
                 </button>
-                {path && (
+                {cfg && (
                   <button
                     type="button"
                     title={t("settings.cueReset")}
-                    onClick={() => setVoiceSound(cue, "")}
+                    onClick={() => setVoiceSound(cue, null)}
                     style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface-variant)', flexShrink: 0 }}
                   >
                     ✕
@@ -786,6 +796,16 @@ export function SettingsPanel() {
           </div>
         )}
       </div>
+
+      {cueEditor && (
+        <VoiceCueEditor
+          file={cueEditor.file}
+          path={cueEditor.path}
+          title={cueEditor.label}
+          onSave={(c) => setVoiceSound(cueEditor.cue, c)}
+          onClose={() => setCueEditor(null)}
+        />
+      )}
     </div>
   );
 }

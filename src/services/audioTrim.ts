@@ -103,13 +103,21 @@ export function playSlice(
   endSec: number,
   onTime: (sec: number) => void,
   onEnd: () => void,
+  gain: number = 1,
 ): { stop: () => void } {
   const c = ctx();
   const start = Math.max(0, startSec);
   const dur = Math.max(0.05, Math.min(endSec, buffer.duration) - start);
   const src = c.createBufferSource();
   src.buffer = buffer;
-  src.connect(c.destination);
+  if (gain !== 1) {
+    const g = c.createGain();
+    g.gain.value = Math.max(0, gain);
+    src.connect(g);
+    g.connect(c.destination);
+  } else {
+    src.connect(c.destination);
+  }
   const t0 = c.currentTime;
   let raf = 0;
   const tick = () => {

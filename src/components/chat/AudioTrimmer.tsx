@@ -6,6 +6,8 @@ interface Props {
   maxSec: number;
   /** Reports the current selection + decoded buffer to the parent. */
   onChange: (startSec: number, endSec: number, buffer: AudioBuffer) => void;
+  /** Gain applied to the built-in preview so it matches the saved volume. */
+  gain?: number;
 }
 
 type DragMode = "body" | "left" | "right";
@@ -13,7 +15,7 @@ type DragMode = "body" | "left" | "right";
 const HEIGHT = 80;
 const MIN_WIN = 0.3; // seconds
 
-export function AudioTrimmer({ file, maxSec, onChange }: Props) {
+export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [region, setRegion] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -119,6 +121,7 @@ export function AudioTrimmer({ file, maxSec, onChange }: Props) {
       buffer, region.start, region.end,
       (t) => setPlayhead(t),
       () => { playerRef.current = null; setPlayhead(null); },
+      gain,
     );
   };
 

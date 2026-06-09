@@ -14,7 +14,7 @@
 // clean leave never passes through `lost`. livekitService feeds us that signal
 // via noteConnectionLost(); onParticipantLeft() reads + clears it.
 
-import { useSettingsStore } from "../stores/useSettingsStore";
+import { useSettingsStore, type VoiceSoundCfg } from "../stores/useSettingsStore";
 
 // User-supplied sound files, resolved at build time. Missing files are simply
 // absent from the map (no build error) — the synth fallback covers them.
@@ -36,34 +36,57 @@ const ENABLED = () => useSettingsStore.getState().voiceChannelSounds;
 const FILE_VOLUME = 0.7;
 const SYNTH_PEAK = 0.16;
 
-/** User override path for a cue (Settings → "Parcourir"), or "" if none. */
-function overrideFor(cue: Cue): string {
+/** User override (custom file, trimmed + gain) for a cue, or null for default. */
+function overrideFor(cue: Cue): VoiceSoundCfg | null {
   const s = useSettingsStore.getState();
-  return cue === "join" ? s.voiceSoundJoin : cue === "leave" ? s.voiceSoundLeave : s.voiceSoundTimeout;
+  const cfg = cue === "join" ? s.voiceSoundJoin : cue === "leave" ? s.voiceSoundLeave : s.voiceSoundTimeout;
+  return cfg && typeof cfg === "object" && cfg.path ? cfg : null;
 }
 
+// ---- custom cue (picked file, trimmed + gain) ----------------------------
+
 // Custom files live outside the bundle; CEF can't `new Audio()` a raw file://
-// path, so Rust reads the bytes (read_file_b64) and we cache a blob URL per
-// path. Tiny files → load once, reuse.
-const blobCache = new Map<string, string>();
-async function blobForPath(path: string): Promise<string | null> {
-  const cached = blobCache.get(path);
+// path, so Rust reads the bytes (read_file_b64) and we decode + cache an
+// AudioBuffer per path. Playback uses Web Audio so we can play just the
+// trimmed [start,end] region at the configured gain.
+const bufferCache = new Map<string, AudioBuffer>();
+async function bufferForPath(path: string): Promise<AudioBuffer | null> {
+  const cached = bufferCache.get(path);
   if (cached) return cached;
+  const ac = audioCtx();
+  if (!ac) return null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const b64 = await invoke<string>("read_file_b64", { path });
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([bytes]));
-    blobCache.set(path, url);
-    return url;
+    const buf = await ac.decodeAudioData(bytes.buffer);
+    bufferCache.set(path, buf);
+    return buf;
   } catch {
     return null;
   }
 }
 
-// ---- file playback -------------------------------------------------------
+async function playCustom(cfg: VoiceSoundCfg): Promise<boolean> {
+  const ac = audioCtx();
+  if (!ac) return false;
+  const buf = await bufferForPath(cfg.path);
+  if (!buf) return false;
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  const g = ac.createGain();
+  g.gain.value = Math.max(0, cfg.gain);
+  src.connect(g);
+  g.connect(ac.destination);
+  const start = Math.max(0, Math.min(cfg.start, buf.duration));
+  const dur = Math.max(0, Math.min(cfg.end, buf.duration) - start);
+  src.start(0, start, dur > 0 ? dur : undefined);
+  return true;
+}
+
+// ---- bundled default file playback ---------------------------------------
 
 function playFile(url: string): boolean {
   try {
@@ -134,9 +157,7 @@ function play(cue: Cue) {
   if (!ENABLED()) return;
   const custom = overrideFor(cue);
   if (custom) {
-    void blobForPath(custom).then((url) => {
-      if (!(url && playFile(url))) playDefault(cue); // custom failed → fall back
-    });
+    void playCustom(custom).then((ok) => { if (!ok) playDefault(cue); }); // custom failed → fall back
     return;
   }
   playDefault(cue);
@@ -166,11 +187,10 @@ export function previewCue(cue: Cue) {
   play(cue);
 }
 
-/** Drop a cached blob (call when the user changes/clears an override path so
- *  a re-picked file is reloaded). */
+/** Drop a cached decoded buffer (call when the user changes/clears a cue so a
+ *  re-picked file at the same path is reloaded). */
 export function invalidateSoundCache(path: string) {
-  const url = blobCache.get(path);
-  if (url) { URL.revokeObjectURL(url); blobCache.delete(path); }
+  bufferCache.delete(path);
 }
 
 export function onParticipantLeft(identity: string) {
