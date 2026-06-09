@@ -264,10 +264,21 @@ export async function wrapMicTrackWithDenoise(source: MediaStreamTrack): Promise
     }
   });
 
+  let cancelled = false;
   const cancel = () => {
+    // cancel fires from several signals (source "ended", generator "ended",
+    // and an explicit activePumpCancel from the next wrap) — run the teardown
+    // once. reader.cancel()/writer.close() return PROMISES: if the pump loop
+    // already closed the writer, a second close() REJECTS, and an un-awaited,
+    // un-caught rejection surfaces as "Uncaught (in promise) TypeError:
+    // Failed to execute 'close' on 'WritableStreamDefaultWriter'". The
+    // try/catch only swallows synchronous throws, so we must .catch() the
+    // promise too.
+    if (cancelled) return;
+    cancelled = true;
     stopped = true;
-    try { reader.cancel(); } catch { /* ignore */ }
-    try { writer.close(); } catch { /* ignore */ }
+    try { reader.cancel().catch(() => {}); } catch { /* ignore */ }
+    try { writer.close().catch(() => {}); } catch { /* ignore */ }
     // Stop the raw source too. LiveKit only stops the generator it holds,
     // so without this the underlying mic track stays alive forever and the
     // next toggle off→on leaves both the old pump's dangling source and
