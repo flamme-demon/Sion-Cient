@@ -13,13 +13,8 @@ import {
   type BaseKeyProvider,
   type AudioPreset,
   type LocalTrackPublication,
-  setLogLevel,
 } from "livekit-client";
 
-// TEMP (ICE diagnosis): verbose LiveKit logs so the next join records the ICE
-// candidate pair selection + connection-state transitions. Revert to default
-// once we've pinpointed the connect→fail→resume drop.
-setLogLevel("debug");
 import type { ParticipantInfo, ConnectionQuality as SionConnectionQuality } from "../types/livekit";
 import { useSettingsStore, type AudioQualityPreset } from "../stores/useSettingsStore";
 import { useAppStore } from "../stores/useAppStore";
