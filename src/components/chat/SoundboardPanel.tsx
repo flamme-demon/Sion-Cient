@@ -20,7 +20,8 @@ import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { loadHotkeys, onHotkeysChange, pruneHotkeys, resyncHotkeys } from "../../services/soundboardHotkeys";
 
-// Build a nested tree from "Films/Kamelott" paths
+// Build a nested tree from "Films/Kamelott" paths so the pill navigation can
+// list top-level categories and drill into sub-categories.
 type TreeNode = { name: string; fullPath: string; children: Map<string, TreeNode> };
 
 function buildTree(categories: string[]): TreeNode {
@@ -42,113 +43,27 @@ function buildTree(categories: string[]): TreeNode {
   return root;
 }
 
-function TreeNodeView({
-  node,
-  selected,
-  onSelect,
-  hiddenCategories,
-  onToggleHide,
-  depth = 0,
-}: {
-  node: TreeNode;
-  selected: string | null;
-  onSelect: (path: string | null) => void;
-  hiddenCategories: Set<string>;
-  onToggleHide: (path: string) => void;
-  depth?: number;
-}) {
-  const [open, setOpen] = useState(depth < 1);
-  const children = Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name));
-  if (node.name === "") {
-    return (
-      <>
-        {children.map((c) => (
-          <TreeNodeView key={c.fullPath} node={c} selected={selected} onSelect={onSelect} hiddenCategories={hiddenCategories} onToggleHide={onToggleHide} depth={0} />
-        ))}
-      </>
-    );
+/** Walk the tree to the node at `path` (null = root). */
+function findNode(root: TreeNode, path: string | null): TreeNode | null {
+  if (!path) return root;
+  let cur: TreeNode | undefined = root;
+  for (const p of path.split("/").filter(Boolean)) {
+    cur = cur?.children.get(p);
+    if (!cur) return null;
   }
-  // A category is hidden either explicitly, or because an ancestor is
-  // hidden (child categories inherit the parent's hidden state).
-  const isExplicitlyHidden = hiddenCategories.has(node.fullPath);
-  const hasHiddenAncestor = Array.from(hiddenCategories).some(
-    (p) => p !== node.fullPath && node.fullPath.startsWith(p + "/"),
-  );
-  const isHidden = isExplicitlyHidden || hasHiddenAncestor;
-  return (
-    <div>
-      <div
-        className="soundboard-tree-node"
-        onClick={() => onSelect(selected === node.fullPath ? null : node.fullPath)}
-        onDoubleClick={() => setOpen((o) => !o)}
-        style={{
-          padding: `4px 6px 4px ${6 + depth * 12}px`,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          fontSize: 12,
-          cursor: 'pointer',
-          borderRadius: 6,
-          background: selected === node.fullPath ? 'var(--color-primary-container)' : 'transparent',
-          color: selected === node.fullPath ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
-          opacity: isHidden ? 0.55 : 1,
-        }}
-      >
-        {children.length > 0 ? (
-          <span
-            onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-            style={{ cursor: 'pointer', width: 10, display: 'inline-block', fontSize: 10 }}
-          >{open ? '▾' : '▸'}</span>
-        ) : <span style={{ width: 10 }} />}
-        <span
-          style={{
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            textDecoration: isHidden ? 'line-through' : 'none',
-          }}
-        >{node.name}</span>
-        {/* Explicit hidden marker: always visible when self-hidden, so the
-            user knows it's them who hid this category (vs inherited from
-            parent). Inherited-hidden stays greyed/strikethrough but no icon. */}
-        {isExplicitlyHidden && (
-          <span
-            title="Cette catégorie est masquée"
-            style={{ fontSize: 10, opacity: 0.8 }}
-          >🙈</span>
-        )}
-        {/* Hide/unhide toggle — visible on hover via CSS. Click stops
-            propagation so selecting the category isn't a side-effect. */}
-        <button
-          className="soundboard-tree-hide-btn"
-          onClick={(e) => { e.stopPropagation(); onToggleHide(node.fullPath); }}
-          title={isExplicitlyHidden ? "Ré-afficher cette catégorie" : hasHiddenAncestor ? "Parent masqué — impossible de ré-afficher individuellement" : "Masquer cette catégorie"}
-          disabled={hasHiddenAncestor && !isExplicitlyHidden}
-          style={{
-            display: isExplicitlyHidden ? 'flex' : 'none',
-            width: 18,
-            height: 18,
-            borderRadius: 9,
-            border: 'none',
-            background: 'var(--color-surface-container-high)',
-            color: 'var(--color-on-surface-variant)',
-            fontSize: 10,
-            cursor: hasHiddenAncestor && !isExplicitlyHidden ? 'not-allowed' : 'pointer',
-            alignItems: 'center',
-            justifyContent: 'center',
-            lineHeight: 1,
-            padding: 0,
-            opacity: hasHiddenAncestor && !isExplicitlyHidden ? 0.4 : 1,
-          }}
-        >{isExplicitlyHidden ? '👁' : '🙈'}</button>
-      </div>
-      {open && children.map((c) => (
-        <TreeNodeView key={c.fullPath} node={c} selected={selected} onSelect={onSelect} hiddenCategories={hiddenCategories} onToggleHide={onToggleHide} depth={depth + 1} />
-      ))}
-    </div>
-  );
+  return cur || null;
 }
+
+const sortedChildren = (node: TreeNode | null) =>
+  node ? Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name)) : [];
+
+const parentPath = (path: string): string | null => {
+  const parts = path.split("/").filter(Boolean);
+  parts.pop();
+  return parts.length ? parts.join("/") : null;
+};
+
+type FilterMode = "all" | "favorites" | "top";
 
 export function SoundboardPanel() {
   const { t } = useTranslation();
@@ -158,7 +73,10 @@ export function SoundboardPanel() {
   const [sounds, setSounds] = useState<SoundEntry[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [selectedCat, setSelectedCat] = useState<string | null>(null);
+  // Restore the last active view (filter + category) from the persisted store.
+  const [selectedCat, setSelectedCat] = useState<string | null>(() => useSettingsStore.getState().soundboardView.category);
+  const [filterMode, setFilterMode] = useState<FilterMode>(() => useSettingsStore.getState().soundboardView.mode);
+  const setSoundboardView = useSettingsStore((s) => s.setSoundboardView);
   const [showUpload, setShowUpload] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [errorToast, setErrorToast] = useState<string | null>(null);
@@ -171,12 +89,21 @@ export function SoundboardPanel() {
   const setEnabled = useSettingsStore((s) => s.setSoundboardEnabled);
   const hiddenCategories = useSettingsStore((s) => s.hiddenCategories);
   const toggleCategoryHidden = useSettingsStore((s) => s.toggleCategoryHidden);
+  const favorites = useSettingsStore((s) => s.soundboardFavorites);
+  const toggleFavorite = useSettingsStore((s) => s.toggleSoundboardFavorite);
+  const playCounts = useSettingsStore((s) => s.soundboardPlayCounts);
+  const incrementPlay = useSettingsStore((s) => s.incrementSoundboardPlay);
   const refreshRef = useRef<() => void>(() => {});
 
   // Apply volume on first render so receivers pick it up
   useEffect(() => {
     setPlaybackVolume(volume);
   }, [volume]);
+
+  // Remember the active view so reopening the panel lands where you left off.
+  useEffect(() => {
+    setSoundboardView({ mode: filterMode, category: selectedCat });
+  }, [filterMode, selectedCat, setSoundboardView]);
 
   // Subscribe to hotkey changes so the badges re-render + resync on open
   useEffect(() => {
@@ -194,15 +121,8 @@ export function SoundboardPanel() {
   const hotkeys = useMemo(() => { void hotkeysTick; return loadHotkeys(); }, [hotkeysTick]);
 
   // Refresh sound list on demand + when soundboard room timeline changes.
-  //
-  // The Matrix `Room.timeline` event fires for *every* room — text channels,
-  // voice signaling rooms, scrollback batches, the lot. We MUST filter on
-  // the soundboard room id, otherwise every inbound event triggers a
-  // `findSoundboardRoom()` + `listSounds()` cycle. During initial scrollback
-  // of a busy voice room that's 1000+ alias resolutions in a burst, which
-  // saturates CEF's connection pool (`ERR_INSUFFICIENT_RESOURCES`). The
-  // refresh is also debounced (200 ms) so a burst of edits/redactions in
-  // the soundboard itself coalesces into a single re-list.
+  // (See the long comment history: must filter on the soundboard room id and
+  // debounce, or busy-room scrollback saturates CEF's connection pool.)
   useEffect(() => {
     if (!show) return;
     let cancelled = false;
@@ -231,8 +151,6 @@ export function SoundboardPanel() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const onRedaction = (event: any, room: any) => {
       if (!room || !cachedRoomId || room.roomId !== cachedRoomId) {
-        // matrix-js-sdk also fires `Room.redaction` with (event, room)
-        // where `room` may be undefined for older sdk paths — bail safely.
         if (event?.getRoomId?.() !== cachedRoomId) return;
       }
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -252,8 +170,6 @@ export function SoundboardPanel() {
 
   const canUpload = roomId ? canSendMessage(roomId) : false;
 
-  // Current user's PL in the soundboard room — admins (PL >= 100) can manage
-  // member roles (promote mods, demote users).
   const client = getMatrixClient();
   const myUserId = client?.getUserId() || "";
   const myPl = roomId && myUserId ? getMemberPowerLevel(roomId, myUserId) : 0;
@@ -288,9 +204,8 @@ export function SoundboardPanel() {
   };
 
   const hiddenCategoriesSet = useMemo(() => new Set(hiddenCategories), [hiddenCategories]);
+  const favoritesSet = useMemo(() => new Set(favorites), [favorites]);
 
-  // A sound is hidden if its category (or any ancestor path) is in the
-  // hidden list. E.g. hiding "Films" hides "Films/Kamelott/*" too.
   const isCategoryHidden = (cat: string): boolean => {
     if (hiddenCategoriesSet.has(cat)) return true;
     const parts = cat.split("/").filter(Boolean);
@@ -302,34 +217,51 @@ export function SoundboardPanel() {
     return false;
   };
 
+  const tree = useMemo(() => buildTree(Array.from(new Set(sounds.map((s) => s.category)))), [sounds]);
+  const topLevels = useMemo(() => sortedChildren(tree), [tree]);
+  // Sub-category row anchor: if the selected category has children, we're
+  // browsing *inside* it (show its children, "Tout X" active). If it's a leaf,
+  // anchor on its parent so the row keeps showing the siblings with the leaf
+  // highlighted — otherwise the row would vanish on clicking a leaf.
+  const selectedNode = filterMode === "all" ? findNode(tree, selectedCat) : null;
+  const anchorNode = !selectedCat
+    ? null
+    : (selectedNode && selectedNode.children.size > 0 ? selectedNode : findNode(tree, parentPath(selectedCat)));
+  const anchorChildren = sortedChildren(anchorNode);
+  const showSubRow = filterMode === "all" && !!anchorNode && anchorNode.name !== "" && anchorChildren.length > 0;
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const matchesQuery = (s: SoundEntry) =>
+      !q || s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
+
+    if (filterMode === "favorites") {
+      return sounds.filter((s) => favoritesSet.has(s.eventId) && matchesQuery(s));
+    }
+    if (filterMode === "top") {
+      // Most-played first; ties broken by label. Only sounds played at least once.
+      return sounds
+        .filter((s) => (playCounts[s.eventId] || 0) > 0 && matchesQuery(s))
+        .sort((a, b) => (playCounts[b.eventId] || 0) - (playCounts[a.eventId] || 0) || a.label.localeCompare(b.label));
+    }
+    // "all" mode: category drill-down + hidden-category handling.
     return sounds.filter((s) => {
       if (selectedCat && !s.category.startsWith(selectedCat)) return false;
-      // When a specific hidden category is selected, show its sounds (so
-      // the user can still browse/play/unhide them). Otherwise skip.
       if (isCategoryHidden(s.category)) {
         if (!selectedCat || !s.category.startsWith(selectedCat)) return false;
-        // Further: only show if the selected category itself is the hidden one
-        // (or an ancestor) — we're in "inspect the hidden branch" mode.
         const selectedIsOrInHidden = Array.from(hiddenCategoriesSet).some(
           (h) => selectedCat === h || selectedCat.startsWith(h + "/"),
         );
         if (!selectedIsOrInHidden) return false;
       }
-      if (!q) return true;
-      return s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
+      return matchesQuery(s);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sounds, search, selectedCat, hiddenCategoriesSet]);
-
-  const tree = useMemo(() => buildTree(Array.from(new Set(sounds.map((s) => s.category)))), [sounds]);
+  }, [sounds, search, selectedCat, filterMode, hiddenCategoriesSet, favoritesSet, playCounts]);
 
   const handlePlay = async (s: SoundEntry) => {
-    // Le toggle "Activé" désactive la soundboard complètement : on ne joue
-    // plus rien localement et on ne broadcast plus aux autres. Rien ne part
-    // dans le canal vocal non plus.
     if (!enabled) return;
+    incrementPlay(s.eventId);
     try {
       await playSoundLocal(s.mxcUrl, s.gain);
       if (connectedVoice) broadcastSound(s.mxcUrl, s.emoji, s.duration, s.gain);
@@ -357,9 +289,42 @@ export function SoundboardPanel() {
 
   if (!show) return null;
 
+  // Translate vertical wheel into horizontal scroll so the pill rows are
+  // navigable with a plain mouse wheel (no horizontal trackpad needed).
+  const onPillWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY !== 0) e.currentTarget.scrollLeft += e.deltaY;
+  };
+
+  // ── Reusable pill button ────────────────────────────────────────────────
+  const pill = (
+    key: string,
+    label: React.ReactNode,
+    active: boolean,
+    onClick: () => void,
+    opts?: { onContextMenu?: (e: React.MouseEvent) => void; dim?: boolean; title?: string },
+  ) => (
+    <button
+      key={key}
+      type="button"
+      onClick={onClick}
+      onContextMenu={opts?.onContextMenu}
+      title={opts?.title}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+        padding: '5px 12px', borderRadius: 999, cursor: 'pointer',
+        fontSize: 12, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
+        border: active ? '1px solid var(--color-primary)' : '1px solid var(--color-outline-variant)',
+        background: active ? 'var(--color-primary)' : 'transparent',
+        color: active ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
+        opacity: opts?.dim ? 0.5 : 1,
+        textDecoration: opts?.dim ? 'line-through' : 'none',
+      }}
+    >{label}</button>
+  );
+
   return (
     <aside style={{
-      width: 340,
+      width: 360,
       flexShrink: 0,
       background: 'var(--color-surface-container-low)',
       borderLeft: '1px solid var(--color-outline-variant)',
@@ -370,33 +335,24 @@ export function SoundboardPanel() {
       <style>{`
         .sound-card:hover .sound-delete-btn { display: flex !important; }
         .sound-card:hover .sound-edit-btn { display: flex !important; }
-        /* Hide/unhide toggle on category rows — visible on hover. When a
-           category is already hidden, the button stays visible (see inline
-           style) so the user can always recover. */
-        .soundboard-tree-node:hover .soundboard-tree-hide-btn { display: flex !important; }
+        /* Scrollbar masquée — navigation à la molette (onPillWheel). */
+        .sb-pills { scrollbar-width: none; -ms-overflow-style: none; }
+        .sb-pills::-webkit-scrollbar { height: 0; width: 0; }
       `}</style>
+
+      {/* Header */}
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '10px 14px',
-        borderBottom: '1px solid var(--color-outline-variant)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '14px 16px 10px',
       }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>
-          {t("soundboard.title")} ({sounds.length})
-        </span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)' }}>{t("soundboard.title")}</span>
+          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("soundboard.soundCount", { count: sounds.length })}</span>
+        </div>
         <button
           onClick={close}
           title={t("soundboard.close")}
-          style={{
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--color-on-surface-variant)',
-            cursor: 'pointer',
-            fontSize: 18,
-            padding: 2,
-            lineHeight: 1,
-          }}
+          style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 20, padding: 2, lineHeight: 1 }}
         >×</button>
       </div>
 
@@ -406,65 +362,43 @@ export function SoundboardPanel() {
         </div>
       )}
 
+      {/* Tabs */}
       {roomId && canManageMembers && (
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--color-outline-variant)' }}>
-          <button
-            onClick={() => setShowMembers(false)}
-            style={{
-              flex: 1,
-              padding: '8px 12px',
-              border: 'none',
-              borderBottom: !showMembers ? '2px solid var(--color-primary)' : '2px solid transparent',
-              background: 'transparent',
-              color: !showMembers ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
-          >{t("soundboard.tabSounds")}</button>
-          <button
-            onClick={() => setShowMembers(true)}
-            style={{
-              flex: 1,
-              padding: '8px 12px',
-              border: 'none',
-              borderBottom: showMembers ? '2px solid var(--color-primary)' : '2px solid transparent',
-              background: 'transparent',
-              color: showMembers ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
-          >{t("soundboard.tabMembers")} ({members.length})</button>
+        <div style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)' }}>
+          {([
+            { key: false, label: t("soundboard.tabSounds") },
+            { key: true, label: `${t("soundboard.tabMembers")} · ${members.length}` },
+          ] as const).map((tab) => (
+            <button
+              key={String(tab.key)}
+              onClick={() => setShowMembers(tab.key)}
+              style={{
+                padding: '8px 0', border: 'none', background: 'transparent', cursor: 'pointer',
+                fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                borderBottom: showMembers === tab.key ? '2px solid var(--color-primary)' : '2px solid transparent',
+                color: showMembers === tab.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+              }}
+            >{tab.label}</button>
+          ))}
         </div>
       )}
 
       {roomId && showMembers && canManageMembers && (
-        <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+        <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
           {members.map((m) => {
             const isMe = m.userId === myUserId;
             const role = m.pl >= 100 ? "admin" : m.pl >= 50 ? "mod" : "user";
             return (
               <div key={m.userId} style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: 6,
-                borderRadius: 8,
-                marginBottom: 4,
-                background: 'var(--color-surface-container)',
+                display: 'flex', alignItems: 'center', gap: 8, padding: 6,
+                borderRadius: 8, marginBottom: 4, background: 'var(--color-surface-container)',
               }}>
                 <UserAvatar name={m.name} size="sm" speaking={false} avatarUrl={m.avatarUrl || undefined} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{
-                    fontSize: 12,
-                    fontWeight: role !== "user" ? 600 : 400,
+                    fontSize: 12, fontWeight: role !== "user" ? 600 : 400,
                     color: role === "admin" ? 'var(--color-primary)' : role === "mod" ? 'var(--color-tertiary)' : 'var(--color-on-surface)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>{m.name} {isMe && "(vous)"}</div>
                   <div style={{ fontSize: 10, color: 'var(--color-outline)' }}>
                     {role === "admin" ? t("contextMenu.roleAdmin") : role === "mod" ? t("contextMenu.roleModerator") : t("contextMenu.roleUser")}
@@ -472,32 +406,12 @@ export function SoundboardPanel() {
                 </div>
                 {!isMe && role !== "admin" && (
                   role === "mod" ? (
-                    <button
-                      onClick={() => handleSetPl(m.userId, 0)}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: 11,
-                        borderRadius: 10,
-                        border: 'none',
-                        cursor: 'pointer',
-                        background: 'var(--color-error-container)',
-                        color: 'var(--color-error)',
-                        fontFamily: 'inherit',
-                      }}
+                    <button onClick={() => handleSetPl(m.userId, 0)}
+                      style={{ padding: '4px 10px', fontSize: 11, borderRadius: 10, border: 'none', cursor: 'pointer', background: 'var(--color-error-container)', color: 'var(--color-error)', fontFamily: 'inherit' }}
                     >{t("soundboard.demote")}</button>
                   ) : (
-                    <button
-                      onClick={() => handleSetPl(m.userId, 50)}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: 11,
-                        borderRadius: 10,
-                        border: 'none',
-                        cursor: 'pointer',
-                        background: 'var(--color-primary-container)',
-                        color: 'var(--color-on-primary-container)',
-                        fontFamily: 'inherit',
-                      }}
+                    <button onClick={() => handleSetPl(m.userId, 50)}
+                      style={{ padding: '4px 10px', fontSize: 11, borderRadius: 10, border: 'none', cursor: 'pointer', background: 'var(--color-primary-container)', color: 'var(--color-on-primary-container)', fontFamily: 'inherit' }}
                     >{t("soundboard.promote")}</button>
                   )
                 )}
@@ -509,136 +423,136 @@ export function SoundboardPanel() {
 
       {roomId && !showMembers && (
         <>
-          <div style={{ padding: '8px 12px', display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("soundboard.searchPlaceholder")}
-              style={{
-                flex: 1,
-                padding: '6px 10px',
-                borderRadius: 10,
-                border: '1px solid var(--color-outline-variant)',
-                background: 'var(--color-surface-container)',
-                color: 'var(--color-on-surface)',
-                fontSize: 12,
-                fontFamily: 'inherit',
-                outline: 'none',
-              }}
-            />
+          {/* Search + add */}
+          <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: 12, color: 'var(--color-on-surface-variant)', display: 'flex', pointerEvents: 'none' }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                </svg>
+              </span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("soundboard.searchPlaceholder")}
+                style={{
+                  flex: 1, padding: '9px 12px 9px 34px', borderRadius: 12,
+                  border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-container)',
+                  color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', outline: 'none',
+                }}
+              />
+            </div>
             {canUpload && (
               <button
                 onClick={() => setShowUpload(true)}
                 title={t("soundboard.upload")}
                 style={{
-                  padding: '6px 10px',
-                  borderRadius: 10,
-                  border: 'none',
-                  background: 'var(--color-primary)',
-                  color: 'var(--color-on-primary)',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  fontWeight: 600,
+                  width: 38, height: 38, flexShrink: 0, borderRadius: 12, border: 'none',
+                  background: 'var(--color-primary)', color: 'var(--color-on-primary)', cursor: 'pointer',
+                  fontSize: 20, fontWeight: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
                 }}
               >+</button>
             )}
           </div>
 
-          <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-            <div style={{
-              width: 120,
-              flexShrink: 0,
-              borderRight: '1px solid var(--color-outline-variant)',
-              overflow: 'auto',
-              padding: '4px 2px',
-            }}>
-              <div
-                onClick={() => setSelectedCat(null)}
-                style={{
-                  padding: '4px 6px',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  borderRadius: 6,
-                  background: selectedCat === null ? 'var(--color-primary-container)' : 'transparent',
-                  color: selectedCat === null ? 'var(--color-on-primary-container)' : 'var(--color-on-surface-variant)',
-                }}
-              >{t("soundboard.allCategories")}</div>
-              <TreeNodeView node={tree} selected={selectedCat} onSelect={setSelectedCat} hiddenCategories={hiddenCategoriesSet} onToggleHide={toggleCategoryHidden} />
-            </div>
+          {/* Quick-filter + top-level category pills */}
+          <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 8, padding: '4px 16px 8px', overflowX: 'auto' }}>
+            {pill("fav", <>⭐ {t("soundboard.favorites")}</>, filterMode === "favorites", () => { setFilterMode("favorites"); setSelectedCat(null); })}
+            {pill("top", <>🔥 {t("soundboard.top")}</>, filterMode === "top", () => { setFilterMode("top"); setSelectedCat(null); })}
+            {pill("all", t("soundboard.allCategories"), filterMode === "all" && selectedCat === null, () => { setFilterMode("all"); setSelectedCat(null); })}
+            {topLevels.map((c) => pill(
+              c.fullPath,
+              c.name,
+              filterMode === "all" && !!selectedCat && (selectedCat === c.fullPath || selectedCat.startsWith(c.fullPath + "/")),
+              () => { setFilterMode("all"); setSelectedCat(c.fullPath); },
+              {
+                dim: isCategoryHidden(c.fullPath),
+                title: isCategoryHidden(c.fullPath) ? t("soundboard.categoryHidden") : t("soundboard.rightClickHide"),
+                onContextMenu: (e) => { e.preventDefault(); toggleCategoryHidden(c.fullPath); },
+              },
+            ))}
+          </div>
 
-            <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
-              {filtered.length === 0 ? (
-                <div style={{ padding: 20, fontSize: 12, color: 'var(--color-outline)', textAlign: 'center' }}>
-                  {t("soundboard.empty")}
-                </div>
-              ) : (
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))',
-                  gap: 8,
-                }}>
-                  {filtered.map((s) => {
-                    const hotkey = hotkeys[s.eventId] || null;
-                    const inHiddenBranch = isCategoryHidden(s.category);
-                    return (
+          {/* Sub-category drill-down */}
+          {showSubRow && anchorNode && (
+            <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 8, padding: '0 16px 8px', overflowX: 'auto', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setSelectedCat(parentPath(anchorNode.fullPath))}
+                title={t("soundboard.back")}
+                style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 999, border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+              </button>
+              {pill("__all", t("soundboard.allOf", { name: anchorNode.name }), selectedCat === anchorNode.fullPath, () => setSelectedCat(anchorNode.fullPath))}
+              {anchorChildren.map((c) => pill(
+                c.fullPath,
+                c.name,
+                selectedCat === c.fullPath || (!!selectedCat && selectedCat.startsWith(c.fullPath + "/")),
+                () => setSelectedCat(c.fullPath),
+                {
+                  dim: isCategoryHidden(c.fullPath),
+                  onContextMenu: (e) => { e.preventDefault(); toggleCategoryHidden(c.fullPath); },
+                },
+              ))}
+            </div>
+          )}
+
+          {/* Sound cards */}
+          <div style={{ flex: 1, overflow: 'auto', padding: '4px 16px 12px' }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 24, fontSize: 12, color: 'var(--color-outline)', textAlign: 'center' }}>
+                {filterMode === "favorites" ? t("soundboard.noFavorites") : filterMode === "top" ? t("soundboard.noTop") : t("soundboard.empty")}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+                {filtered.map((s) => {
+                  const hotkey = hotkeys[s.eventId] || null;
+                  const isFav = favoritesSet.has(s.eventId);
+                  const subtitle = s.category.replace(/\//g, " · ");
+                  return (
                     <div
                       key={s.eventId}
                       className="sound-card"
                       onClick={() => handlePlay(s)}
-                      onContextMenu={(ev) => {
-                        ev.preventDefault();
-                        setHotkeyTarget(s);
-                      }}
-                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: hotkey })}` : ""}${inHiddenBranch ? "\n(catégorie masquée — visible parce que tu l'as sélectionnée)" : ""}`}
+                      onContextMenu={(ev) => { ev.preventDefault(); setHotkeyTarget(s); }}
+                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: hotkey })}` : ""}`}
                       style={{
-                        position: 'relative',
-                        opacity: !enabled ? 0.4 : (inHiddenBranch ? 0.5 : 1),
-                        pointerEvents: enabled ? 'auto' : 'none',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        padding: '10px 4px',
-                        borderRadius: 10,
-                        border: inHiddenBranch
-                          ? '1px dashed var(--color-outline-variant)'
-                          : '1px solid var(--color-outline-variant)',
+                        position: 'relative', display: 'flex', flexDirection: 'column', gap: 8,
+                        padding: 12, borderRadius: 14,
+                        border: '1px solid var(--color-outline-variant)',
                         background: 'var(--color-surface-container)',
-                        color: 'var(--color-on-surface)',
-                        cursor: 'pointer',
-                        fontSize: 11,
-                        fontFamily: 'inherit',
-                        gap: 4,
-                        aspectRatio: '1 / 1',
-                        transition: 'background 120ms',
+                        cursor: 'pointer', opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none',
+                        transition: 'background 120ms, border-color 120ms',
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-primary-container)'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-surface-container)'; }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; e.currentTarget.style.borderColor = 'var(--color-primary)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-surface-container)'; e.currentTarget.style.borderColor = 'var(--color-outline-variant)'; }}
                     >
-                      <span style={{ fontSize: 22, lineHeight: 1 }}>{s.emoji || '🔊'}</span>
-                      <span style={{
-                        fontSize: 10,
-                        lineHeight: 1.15,
-                        textAlign: 'center',
-                        overflow: 'hidden',
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        wordBreak: 'break-word',
-                      }}>{s.label}</span>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                        <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--color-surface-container-highest)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
+                          {s.emoji || '🔊'}
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleFavorite(s.eventId); }}
+                          title={isFav ? t("soundboard.unfavorite") : t("soundboard.favorite")}
+                          style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2, color: isFav ? 'var(--color-orange)' : 'var(--color-outline)', opacity: isFav ? 1 : 0.5 }}
+                        >{isFav ? '★' : '☆'}</button>
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>{s.label}</div>
+                        <div style={{
+                          fontSize: 11, color: 'var(--color-on-surface-variant)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>{subtitle}</div>
+                      </div>
                       {hotkey && (
                         <span style={{
-                          position: 'absolute',
-                          top: 3,
-                          right: 3,
-                          background: 'var(--color-primary)',
-                          color: 'var(--color-on-primary)',
-                          fontSize: 8,
-                          padding: '1px 4px',
-                          borderRadius: 4,
-                          fontWeight: 700,
-                          letterSpacing: '0.02em',
-                          pointerEvents: 'none',
+                          position: 'absolute', bottom: 8, right: 8,
+                          background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+                          fontSize: 9, padding: '1px 5px', borderRadius: 5, fontWeight: 700, letterSpacing: '0.02em', pointerEvents: 'none',
                         }}>{hotkey}</span>
                       )}
                       {canUpload && (
@@ -646,99 +560,69 @@ export function SoundboardPanel() {
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDelete(s); }}
                             title={t("soundboard.deleteHint")}
-                            style={{
-                              position: 'absolute',
-                              top: 2,
-                              left: 2,
-                              width: 16,
-                              height: 16,
-                              borderRadius: 8,
-                              border: 'none',
-                              background: 'var(--color-error-container)',
-                              color: 'var(--color-error)',
-                              fontSize: 10,
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                              display: 'none',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              lineHeight: 1,
-                              padding: 0,
-                            }}
                             className="sound-delete-btn"
+                            style={{ position: 'absolute', bottom: 8, left: 8, width: 22, height: 22, borderRadius: 11, border: 'none', background: 'var(--color-error-container)', color: 'var(--color-error)', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'none', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}
                           >×</button>
                           <button
                             onClick={(e) => { e.stopPropagation(); setEditTarget(s); }}
                             title={t("soundboard.editHint")}
-                            style={{
-                              position: 'absolute',
-                              bottom: 2,
-                              left: 2,
-                              width: 16,
-                              height: 16,
-                              borderRadius: 8,
-                              border: 'none',
-                              background: 'var(--color-secondary-container)',
-                              color: 'var(--color-on-secondary-container)',
-                              fontSize: 10,
-                              cursor: 'pointer',
-                              display: 'none',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              lineHeight: 1,
-                              padding: 0,
-                            }}
                             className="sound-edit-btn"
+                            style={{ position: 'absolute', bottom: 8, left: 34, width: 22, height: 22, borderRadius: 11, border: 'none', background: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)', fontSize: 11, cursor: 'pointer', display: 'none', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}
                           >✎</button>
                         </>
                       )}
                     </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
+          {/* Footer: enable + volume */}
           <div style={{
-            padding: '8px 12px',
-            borderTop: '1px solid var(--color-outline-variant)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 11,
-            color: 'var(--color-on-surface-variant)',
+            padding: '8px 16px', borderTop: '1px solid var(--color-outline-variant)',
+            display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--color-on-surface-variant)',
           }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-              {t("soundboard.enabled")}
-            </label>
+            <button
+              type="button"
+              onClick={() => setEnabled(!enabled)}
+              title={enabled ? t("soundboard.disableSb") : t("soundboard.enableSb")}
+              style={{
+                flexShrink: 0, border: 'none', background: 'transparent', cursor: 'pointer',
+                padding: 4, borderRadius: 8, display: 'flex',
+                color: enabled ? 'var(--color-on-surface)' : 'var(--color-error)',
+              }}
+            >
+              {enabled ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                  <line x1="23" y1="9" x2="17" y2="15" />
+                  <line x1="17" y1="9" x2="23" y2="15" />
+                </svg>
+              )}
+            </button>
             <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={volume}
+              type="range" min={0} max={1} step={0.05} value={volume}
+              disabled={!enabled}
               onChange={(e) => setVolume(parseFloat(e.target.value))}
-              style={{ flex: 1 }}
+              style={{ flex: 1, opacity: enabled ? 1 : 0.4, cursor: enabled ? 'pointer' : 'not-allowed' }}
               title={t("soundboard.volume")}
             />
-            <span style={{ minWidth: 30, textAlign: 'right' }}>{Math.round(volume * 100)}%</span>
+            <span style={{ minWidth: 30, textAlign: 'right', opacity: enabled ? 1 : 0.4 }}>{Math.round(volume * 100)}%</span>
           </div>
         </>
       )}
 
       {errorToast && (
         <div style={{
-          position: 'absolute',
-          bottom: 60,
-          right: 20,
-          padding: '8px 14px',
-          borderRadius: 10,
-          background: 'var(--color-error-container)',
-          color: 'var(--color-error)',
-          fontSize: 12,
-          maxWidth: 280,
+          position: 'absolute', bottom: 60, right: 20, padding: '8px 14px', borderRadius: 10,
+          background: 'var(--color-error-container)', color: 'var(--color-error)', fontSize: 12, maxWidth: 280,
         }}>{errorToast}</div>
       )}
 

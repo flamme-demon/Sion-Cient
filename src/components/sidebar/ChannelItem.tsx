@@ -84,6 +84,9 @@ export function ChannelItem({ channel }: { channel: Channel }) {
   const isMobile = useIsMobile();
   const openUserContextMenu = useAppStore((s) => s.openUserContextMenu);
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
+  // Detailed voice-user list is shown for the channel you're connected to;
+  // other channels collapse to just the stacked avatars (click them to peek).
+  const [expandedVoice, setExpandedVoice] = useState(false);
 
   const messages = useMatrixStore((s) => s.messages[channel.id]);
   const lastReadId = useAppStore((s) => s.lastReadMessageId[channel.id]);
@@ -279,17 +282,48 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           </span>
         )}
         {channel.hasVoice && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 5, color: isConnectedChannel ? 'var(--color-green)' : 'var(--color-outline)' }}>
-            <SpeakerIcon />
-            {voiceUsers.length > 0 && (
-              <span style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>{voiceUsers.length}</span>
-            )}
-          </span>
+          voiceUsers.length > 0 ? (
+            <span
+              onClick={(e) => { if (!isConnectedChannel) { e.stopPropagation(); setExpandedVoice((v) => !v); } }}
+              style={{ display: 'flex', alignItems: 'center', flexShrink: 0, cursor: isConnectedChannel ? 'inherit' : 'pointer' }}
+              title={isConnectedChannel ? voiceUsers.map((u) => u.name).join(", ") : (expandedVoice ? "Replier" : "Voir les membres")}
+            >
+              {voiceUsers.slice(0, 3).map((u, i) => (
+                <span
+                  key={u.id}
+                  style={{
+                    width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                    marginLeft: i === 0 ? 0 : -7,
+                    border: '2px solid var(--color-surface-container-low)',
+                    background: u.avatarUrl ? `center/cover no-repeat url(${u.avatarUrl})` : 'var(--color-surface-container-highest)',
+                    color: 'var(--color-on-surface)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 9, fontWeight: 700, overflow: 'hidden',
+                  }}
+                >
+                  {!u.avatarUrl && (Array.from(u.name)[0] || '?').toUpperCase()}
+                </span>
+              ))}
+              {voiceUsers.length > 3 && (
+                <span style={{
+                  height: 20, minWidth: 20, padding: '0 4px', borderRadius: 10, flexShrink: 0,
+                  marginLeft: -7, border: '2px solid var(--color-surface-container-low)',
+                  background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface-variant)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700,
+                }}>+{voiceUsers.length - 3}</span>
+              )}
+            </span>
+          ) : (
+            <span style={{ display: 'flex', flexShrink: 0, color: isConnectedChannel ? 'var(--color-green)' : 'var(--color-outline)' }}>
+              <SpeakerIcon />
+            </span>
+          )
         )}
       </button>
 
-      {/* Voice users */}
-      {channel.hasVoice && voiceUsers.length > 0 && (
+      {/* Voice users — full detail only for your connected channel, or when you
+          click the stacked avatars to peek at another channel. */}
+      {channel.hasVoice && voiceUsers.length > 0 && (isConnectedChannel || expandedVoice) && (
         <div style={{
           display: 'flex',
           flexDirection: 'column',

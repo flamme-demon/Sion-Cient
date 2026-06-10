@@ -72,6 +72,12 @@ interface SettingsState {
    *  / cosmetic — doesn't affect other users or the server. Store paths
    *  like "Films/Kamelott", so hiding a parent also hides its children. */
   hiddenCategories: string[];
+  /** Favorited soundboard sounds, by Matrix eventId. */
+  soundboardFavorites: string[];
+  /** Play count per soundboard sound (eventId → times played), for the "Top". */
+  soundboardPlayCounts: Record<string, number>;
+  /** Last active soundboard view (filter + category), restored on reopen. */
+  soundboardView: { mode: "all" | "favorites" | "top"; category: string | null };
   screenShareAudio: boolean;
   /** Transparent click-through overlay on the sharer's real screen that
    *  shows viewers' cursors. Off by default — it creates an extra Tauri
@@ -108,6 +114,9 @@ interface SettingsState {
   setSoundboardOpenAtLaunch: (v: boolean) => void;
   toggleCategoryHidden: (categoryPath: string) => void;
   clearHiddenCategories: () => void;
+  toggleSoundboardFavorite: (eventId: string) => void;
+  incrementSoundboardPlay: (eventId: string) => void;
+  setSoundboardView: (v: { mode: "all" | "favorites" | "top"; category: string | null }) => void;
   setScreenShareAudio: (v: boolean) => void;
   setScreenShareCursorOverlay: (v: boolean) => void;
   setScreenShareResolution: (v: "720p" | "1080p" | "1440p") => void;
@@ -147,6 +156,9 @@ export const useSettingsStore = create<SettingsState>()(
       voiceSounds: { join: null, leave: null, timeout: null },
       soundboardOpenAtLaunch: false,
       hiddenCategories: [],
+      soundboardFavorites: [],
+      soundboardPlayCounts: {},
+      soundboardView: { mode: "all", category: null },
       screenShareAudio: true,
       screenShareCursorOverlay: false,
       screenShareResolution: "1080p" as const,
@@ -201,6 +213,15 @@ export const useSettingsStore = create<SettingsState>()(
         return { hiddenCategories: next };
       }),
       clearHiddenCategories: () => set({ hiddenCategories: [] }),
+      toggleSoundboardFavorite: (eventId) => set((s) => ({
+        soundboardFavorites: s.soundboardFavorites.includes(eventId)
+          ? s.soundboardFavorites.filter((id) => id !== eventId)
+          : [...s.soundboardFavorites, eventId],
+      })),
+      incrementSoundboardPlay: (eventId) => set((s) => ({
+        soundboardPlayCounts: { ...s.soundboardPlayCounts, [eventId]: (s.soundboardPlayCounts[eventId] || 0) + 1 },
+      })),
+      setSoundboardView: (v) => set({ soundboardView: v }),
       setScreenShareAudio: (v) => set({ screenShareAudio: v }),
       setScreenShareCursorOverlay: (v) => {
         set({ screenShareCursorOverlay: v });

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useSettingsStore, type ChannelSortMode } from "../../stores/useSettingsStore";
-import { SortIcon } from "../icons";
+import { SortIcon, HashIcon, MessageBubbleIcon } from "../icons";
 import { ChannelItem } from "./ChannelItem";
 import { MatrixRain } from "./MatrixRain";
 import { findAdminRoom } from "../../services/adminCommandService";
@@ -103,11 +103,15 @@ export function ChannelList() {
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     flex: 1,
-    padding: '6px 8px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: '7px 8px',
     border: 'none',
-    borderRadius: 8,
+    borderRadius: 10,
     cursor: 'pointer',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: 600,
     fontFamily: 'inherit',
     letterSpacing: '0.02em',
@@ -121,6 +125,7 @@ export function ChannelList() {
       {/* Tabs + sort */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px 8px 12px' }}>
         <button onClick={() => setSidebarView("channels")} style={{ ...tabStyle(sidebarView === "channels"), position: 'relative' }}>
+          <HashIcon />
           {t("channels.tabChannels")}
           {sidebarView !== "channels" && unreadChannels > 0 && (
             <span style={{
@@ -171,6 +176,7 @@ export function ChannelList() {
           }}
           style={{ ...tabStyle(sidebarView === "dm"), position: 'relative' }}
         >
+          <MessageBubbleIcon />
           {t("channels.tabDM")}
           {sidebarView !== "dm" && unreadDMs > 0 && (
             <span style={{

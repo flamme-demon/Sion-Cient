@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {
   uploadSound,
@@ -9,9 +9,9 @@ import {
   SOUND_GAIN_DEFAULT,
   type SoundEntry,
 } from "../../services/soundboardService";
-import { EMOJI_DATA, EMOJI_GROUPS, EMOJI_BY_GROUP } from "../../utils/emojiData";
 import { AudioTrimmer } from "./AudioTrimmer";
 import { ExternalAudioImport } from "./ExternalAudioImport";
+import { EmojiGridPanel } from "./EmojiGridPanel";
 import { trimToClip } from "../../services/audioTrim";
 
 // Soundboard sounds are capped at 20s; the trimmer cuts longer files down to a
@@ -43,8 +43,6 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
   const [busy, setBusy] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [emojiSearch, setEmojiSearch] = useState("");
-  const [emojiGroup, setEmojiGroup] = useState<number>(EMOJI_GROUPS[0].id);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Current trim selection + decoded buffer, reported by <AudioTrimmer>.
   const regionRef = useRef<{ start: number; end: number; buffer: AudioBuffer } | null>(null);
@@ -54,14 +52,6 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
   useEffect(() => {
     return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
   }, [previewUrl]);
-
-  const emojiResults = useMemo(() => {
-    const q = emojiSearch.trim().toLowerCase();
-    if (q) {
-      return EMOJI_DATA.filter((e) => e.shortcode.includes(q)).slice(0, 200);
-    }
-    return EMOJI_BY_GROUP.get(emojiGroup) || [];
-  }, [emojiSearch, emojiGroup]);
 
   const handleFile = (f: File) => {
     setError(null);
@@ -288,87 +278,29 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
           </div>
 
           {showEmojiPicker && (
-            <div style={{
-              position: 'absolute',
-              top: 52,
-              left: 0,
-              right: 0,
-              maxHeight: 280,
-              background: 'var(--color-surface-container-high)',
-              border: '1px solid var(--color-outline-variant)',
-              borderRadius: 12,
-              zIndex: 10,
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-            }}>
-              <input
-                autoFocus
-                value={emojiSearch}
-                onChange={(e) => setEmojiSearch(e.target.value)}
-                placeholder={t("chat.searchEmoji")}
-                style={{
-                  margin: 6,
-                  padding: '6px 10px',
-                  borderRadius: 8,
-                  border: '1px solid var(--color-outline-variant)',
-                  background: 'var(--color-surface-container)',
-                  color: 'var(--color-on-surface)',
-                  fontSize: 12,
-                  fontFamily: 'inherit',
-                  outline: 'none',
-                }}
-              />
-              {!emojiSearch && (
-                <div style={{ display: 'flex', gap: 2, padding: '0 6px 6px', flexWrap: 'wrap' }}>
-                  {EMOJI_GROUPS.map((g) => (
-                    <button
-                      key={g.id}
-                      type="button"
-                      onClick={() => setEmojiGroup(g.id)}
-                      title={g.label}
-                      style={{
-                        width: 28, height: 28,
-                        borderRadius: 6,
-                        border: 'none',
-                        background: emojiGroup === g.id ? 'var(--color-primary-container)' : 'transparent',
-                        fontSize: 16,
-                        cursor: 'pointer',
-                      }}
-                    >{g.icon}</button>
-                  ))}
-                </div>
-              )}
+            <>
+              <div onClick={() => setShowEmojiPicker(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
               <div style={{
-                flex: 1,
-                overflowY: 'auto',
-                padding: '0 6px 6px',
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(32px, 1fr))',
-                gap: 2,
+                position: 'absolute',
+                top: 52,
+                left: 0,
+                right: 0,
+                height: 300,
+                background: 'var(--color-surface-container-high)',
+                border: '1px solid var(--color-outline-variant)',
+                borderRadius: 12,
+                zIndex: 10,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
               }}>
-                {emojiResults.map((e, i) => (
-                  <button
-                    key={`${e.shortcode}-${i}`}
-                    type="button"
-                    onClick={() => { setEmoji(e.emoji); setShowEmojiPicker(false); setEmojiSearch(""); }}
-                    title={`:${e.shortcode}:`}
-                    style={{
-                      width: 32, height: 32,
-                      borderRadius: 6,
-                      border: 'none',
-                      background: 'transparent',
-                      fontSize: 20,
-                      cursor: 'pointer',
-                      padding: 0,
-                    }}
-                    onMouseEnter={(ev) => { ev.currentTarget.style.background = 'var(--color-surface-container)'; }}
-                    onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
-                  >{e.emoji}</button>
-                ))}
+                <EmojiGridPanel
+                  emojiSize={32}
+                  onPick={(e) => { setEmoji(e); setShowEmojiPicker(false); }}
+                />
               </div>
-            </div>
+            </>
           )}
         </div>
 
