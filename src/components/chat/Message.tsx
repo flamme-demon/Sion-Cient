@@ -48,8 +48,10 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Résout l'URL affichable d'un attachment — décrypte si E2EE, charge en blob pour vidéo/audio. */
-function useResolvedUrl(attachment: FileAttachment): string | null {
+/** Résout l'URL affichable d'un attachment — décrypte si E2EE, charge en blob pour vidéo/audio.
+ *  `enabled` gates the (heavy) fetch/decrypt so off-screen media isn't downloaded
+ *  or transcoded until it's actually scrolled into view. */
+function useResolvedUrl(attachment: FileAttachment, enabled: boolean = true): string | null {
   const needsBlob = attachment.mimeType.startsWith("video/") || attachment.mimeType.startsWith("audio/");
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(
     (attachment.encryptedFile || needsBlob) ? null : (attachment.url || null),
@@ -57,6 +59,7 @@ function useResolvedUrl(attachment: FileAttachment): string | null {
 
   useEffect(() => {
     if (!attachment.url) return;
+    if (!enabled) return;
 
     // E2EE: decrypt to blob
     if (attachment.encryptedFile) {
@@ -99,7 +102,7 @@ function useResolvedUrl(attachment: FileAttachment): string | null {
 
     // Images and other files: use direct URL
     setResolvedUrl(attachment.url || null);
-  }, [attachment.url, attachment.encryptedFile, attachment.mimeType, needsBlob]);
+  }, [attachment.url, attachment.encryptedFile, attachment.mimeType, needsBlob, enabled]);
 
   return resolvedUrl;
 }
@@ -183,6 +186,22 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   useEffect(() => {
     return () => { if (transcodedUrl) URL.revokeObjectURL(transcodedUrl); };
   }, [transcodedUrl]);
+
+  // Proactive transcode: on desktop CEF the bundled Chromium has no H.264, so
+  // mp4/non-WebM video never plays natively (the element shows a frozen player
+  // and fires neither `onError` nor a usable `canplay`). Rather than rely on
+  // unreliable events, transcode any non-WebM video to WebM up front. WebM
+  // (VP9/Opus) plays natively, so it's left to the <video> + `onError`.
+  const isTauriDesktop = typeof window !== "undefined"
+    && !!window.__TAURI_INTERNALS__
+    && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  useEffect(() => {
+    if (!resolvedUrl || transcodedUrl || transcoding || error) return;
+    if (isTauriDesktop && !attachment.mimeType.includes("webm")) {
+      runTranscode();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedUrl]);
 
   if (error) {
     const handleDownload = () => {
@@ -347,7 +366,23 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   const isImage = attachment.mimeType.startsWith("image/");
   const isAudio = attachment.mimeType.startsWith("audio/");
   const isVideo = attachment.mimeType.startsWith("video/");
-  const resolvedUrl = useResolvedUrl(attachment);
+  // Videos are lazy: don't fetch the bytes or transcode until the card is
+  // scrolled into view, so opening a channel doesn't download + convert EVERY
+  // video at once (only the ones actually looked at).
+  const videoRef = useRef<HTMLDivElement>(null);
+  const [videoVisible, setVideoVisible] = useState(false);
+  useEffect(() => {
+    if (!isVideo) return;
+    const el = videoRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") { setVideoVisible(true); return; }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setVideoVisible(true); io.disconnect(); }
+    }, { rootMargin: "300px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [isVideo]);
+  const resolvedUrl = useResolvedUrl(attachment, isVideo ? videoVisible : true);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   // Hoisted above any early return: the downstream image/audio/video
   // branches used to return before this line, and the plain-file branch
@@ -398,8 +433,8 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   if (isVideo) {
     if (!resolvedUrl) {
       return (
-        <div style={{ marginTop: 6, padding: '8px 12px', borderRadius: 12, background: 'var(--color-surface-container-high)', color: 'var(--color-outline)', fontSize: 12 }}>
-          Chargement de la vidéo…
+        <div ref={videoRef} style={{ marginTop: 6, padding: '8px 12px', borderRadius: 12, background: 'var(--color-surface-container-high)', color: 'var(--color-outline)', fontSize: 12 }}>
+          {videoVisible ? "Chargement de la vidéo…" : `🎥 ${attachment.name} — ${formatFileSize(attachment.size)}`}
         </div>
       );
     }

@@ -1275,7 +1275,7 @@ async fn probe_url_media(
     let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
 
     let out = std::process::Command::new(&bin)
-        .args(["--no-playlist", "--skip-download", "--no-warnings",
+        .args(["--no-playlist", "--playlist-items", "1", "--skip-download", "--no-warnings",
                "--print", "%(duration)s|%(title)s"])
         .arg(&url)
         .output()
@@ -1323,7 +1323,7 @@ async fn import_url_audio(
 
     let mut cmd = std::process::Command::new(&ytdlp_bin);
     cmd.arg(&url)
-        .args(["-f", "bestaudio/best", "--no-playlist", "--no-warnings", "--no-part"])
+        .args(["-f", "bestaudio/best", "--no-playlist", "--playlist-items", "1", "--no-warnings", "--no-part"])
         .arg("-o").arg(&out_tmpl)
         .args(["--ffmpeg-location", &ffmpeg_bin]);
 
@@ -1364,6 +1364,343 @@ async fn import_url_audio(
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let _ = std::fs::remove_dir_all(&work);
     Ok(serde_json::json!({ "ext": ext, "data": b64 }).to_string())
+}
+
+/// Normalize a yt-dlp vcodec string to a short label.
+#[cfg(not(target_os = "android"))]
+fn vcodec_label(v: &str) -> &'static str {
+    if v.starts_with("vp9") || v.starts_with("vp09") { "VP9" }
+    else if v.starts_with("avc") || v.starts_with("h264") { "H.264" }
+    else if v.starts_with("av01") || v.starts_with("av1") { "AV1" }
+    else { "?" }
+}
+
+/// Codec preference for native CEF playback: VP9 (webm, plays natively) > H.264
+/// (mp4, needs transcode) > AV1 (uncertain). Lower = preferred.
+#[cfg(not(target_os = "android"))]
+fn vcodec_rank(label: &str) -> u8 {
+    match label { "VP9" => 0, "H.264" => 1, "AV1" => 2, _ => 3 }
+}
+
+/// Parse a yt-dlp `--newline` download line ("[download]  45.2% of ...") → percent.
+#[cfg(not(target_os = "android"))]
+fn parse_download_pct(line: &str) -> Option<f64> {
+    let l = line.trim_start();
+    if !l.starts_with("[download]") { return None; }
+    let pi = l.find('%')?;
+    let pre = &l[..pi];
+    let si = pre.rfind(' ')?;
+    pre[si..].trim().parse::<f64>().ok()
+}
+
+/// Parse an ffmpeg `-progress` line ("out_time=HH:MM:SS.micro") → elapsed seconds.
+#[cfg(not(target_os = "android"))]
+fn parse_ffmpeg_time_secs(line: &str) -> Option<f64> {
+    let rest = line.trim().strip_prefix("out_time=")?;
+    let mut parts = rest.split(':');
+    let h: f64 = parts.next()?.parse().ok()?;
+    let m: f64 = parts.next()?.parse().ok()?;
+    let s: f64 = parts.next()?.parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + s)
+}
+
+/// Run ffmpeg with the given args, streaming `out_time` progress as
+/// `video-import-progress {phase:"convert"}` events. `eff` = expected output
+/// duration (s) for the percentage. Returns Err(stderr) on non-zero exit.
+#[cfg(not(target_os = "android"))]
+fn run_ffmpeg_encode(
+    app: &tauri::AppHandle<TauriRuntime>,
+    ffmpeg_bin: &str,
+    args: &[&str],
+    eff: f64,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+    use tauri::Emitter;
+
+    let mut child = Command::new(ffmpeg_bin)
+        .args(args)
+        .stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg introuvable: {}", e))?;
+    let mut errp = child.stderr.take().unwrap();
+    let errh = std::thread::spawn(move || { let mut s = String::new(); let _ = errp.read_to_string(&mut s); s });
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().flatten() {
+            if eff > 0.0 {
+                if let Some(t) = parse_ffmpeg_time_secs(&line) {
+                    let pct = (t / eff * 100.0).clamp(0.0, 99.0);
+                    let _ = app.emit("video-import-progress", serde_json::json!({ "phase": "convert", "pct": pct }));
+                }
+            }
+        }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let err = errh.join().unwrap_or_default();
+    if !status.success() { return Err(err); }
+    Ok(())
+}
+
+/// Probe a video URL for duration, title and the available resolutions (with a
+/// codec-preferred best format per height + estimated total size). Returns JSON
+/// `{duration, title, options:[{height, codec, ext, size}]}`. No download.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn probe_url_formats(
+    app: tauri::AppHandle<TauriRuntime>,
+    url: String,
+    ytdlp_path: Option<String>,
+) -> Result<String, String> {
+    let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
+
+    let out = std::process::Command::new(&bin)
+        // `--playlist-items 1`: multi-video posts (e.g. an X tweet with several
+        // clips) are a playlist — without this yt-dlp emits one JSON object per
+        // entry and the parse below breaks. Take the first video.
+        .args(["--dump-json", "--no-playlist", "--playlist-items", "1", "--no-warnings"])
+        .arg(&url)
+        .output()
+        .map_err(|e| format!("yt-dlp introuvable: {}", e))?;
+    if !out.status.success() {
+        return Err(format!("yt-dlp: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    // --dump-json emits NDJSON (one object per line); parse the first object.
+    let stdout_str = String::from_utf8_lossy(&out.stdout);
+    let first_line = stdout_str.lines().find(|l| l.trim_start().starts_with('{')).unwrap_or("");
+    let json: serde_json::Value = serde_json::from_str(first_line)
+        .map_err(|e| format!("JSON yt-dlp: {}", e))?;
+
+    let duration = json.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
+    let title = json.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let empty = vec![];
+    let formats = json.get("formats").and_then(|v| v.as_array()).unwrap_or(&empty);
+
+    // Estimate a format's byte size: prefer reported filesize, else derive it
+    // from the bitrate × duration (many sources — X/Twitter, HLS — omit
+    // filesize). `rate_keys` are the kbps fields to try (tbr/vbr for video,
+    // abr/tbr for audio).
+    let est = |f: &serde_json::Value, rate_keys: &[&str]| -> u64 {
+        if let Some(s) = f.get("filesize").and_then(|v| v.as_u64()) { if s > 0 { return s; } }
+        if let Some(s) = f.get("filesize_approx").and_then(|v| v.as_u64()) { if s > 0 { return s; } }
+        if duration > 0 {
+            for k in rate_keys {
+                if let Some(r) = f.get(*k).and_then(|v| v.as_f64()) {
+                    if r > 0.0 { return (r * 1000.0 / 8.0 * duration as f64) as u64; }
+                }
+            }
+        }
+        0
+    };
+
+    // Representative audio size (prefer an opus track, else any audio-only).
+    let mut audio_size = 0u64;
+    for f in formats {
+        let v = f.get("vcodec").and_then(|x| x.as_str()).unwrap_or("none");
+        let a = f.get("acodec").and_then(|x| x.as_str()).unwrap_or("none");
+        if v == "none" && a != "none" {
+            let s = est(f, &["abr", "tbr"]);
+            if a.starts_with("opus") && s > 0 { audio_size = s; }
+            else if audio_size == 0 { audio_size = s; }
+        }
+    }
+
+    // Best video-only format per height, preferring VP9 then H.264.
+    use std::collections::HashMap;
+    let mut best: HashMap<u64, (u8, u64, String)> = HashMap::new(); // height -> (rank, size, ext)
+    for f in formats {
+        let v = f.get("vcodec").and_then(|x| x.as_str()).unwrap_or("none");
+        if v == "none" { continue; }
+        let Some(h) = f.get("height").and_then(|x| x.as_u64()) else { continue; };
+        if h == 0 { continue; }
+        let label = vcodec_label(v);
+        let rank = vcodec_rank(label);
+        let ext = f.get("ext").and_then(|x| x.as_str()).unwrap_or("mp4").to_string();
+        // A combined (progressive) format already includes audio in its tbr;
+        // only add the separate audio track for video-only formats.
+        let a = f.get("acodec").and_then(|x| x.as_str()).unwrap_or("none");
+        let mut size = est(f, &["tbr", "vbr"]);
+        if a == "none" { size += audio_size; }
+        match best.get(&h) {
+            Some((r, _, _)) if *r <= rank => {}
+            _ => { best.insert(h, (rank, size, ext)); }
+        }
+    }
+
+    let mut options: Vec<serde_json::Value> = best.into_iter()
+        .map(|(h, (rank, vsize, ext))| {
+            let codec = match rank { 0 => "VP9", 1 => "H.264", 2 => "AV1", _ => "?" };
+            serde_json::json!({ "height": h, "codec": codec, "ext": ext, "size": vsize })
+        })
+        .collect();
+    options.sort_by_key(|o| o.get("height").and_then(|v| v.as_u64()).unwrap_or(0));
+
+    Ok(serde_json::json!({ "duration": duration, "title": title, "options": options }).to_string())
+}
+
+/// Download a video at a chosen max height (codec auto, preferring VP9 → native
+/// CEF playback), optionally a [start,end] section. Returns `{ext, data(b64)}`.
+/// Errors if the result exceeds `max_bytes` (server upload limit).
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn import_url_video(
+    app: tauri::AppHandle<TauriRuntime>,
+    url: String,
+    ytdlp_path: Option<String>,
+    ffmpeg_path: Option<String>,
+    height: Option<u32>,
+    start_sec: Option<f64>,
+    end_sec: Option<f64>,
+    max_bytes: Option<u64>,
+    recode_webm: Option<bool>,
+    duration_sec: Option<f64>,
+) -> Result<String, String> {
+    use base64::Engine;
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+    use tauri::Emitter;
+
+    let managed_yt = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let ytdlp_bin = resolve_ytdlp(ytdlp_path.as_deref(), managed_yt.as_deref());
+    let managed_ff = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed_ff.as_deref());
+
+    let h = height.unwrap_or(720);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    h.hash(&mut hasher);
+    if let Some(s) = start_sec { (s as u64).hash(&mut hasher); }
+    let work = std::env::temp_dir().join(format!("sion_ytv_{:x}", hasher.finish()));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let out_tmpl = work.join("src.%(ext)s");
+
+    // ── Phase 1: download (+merge / section cut) via yt-dlp, streaming % ──
+    let mut dl = Command::new(&ytdlp_bin);
+    dl.arg(&url)
+        .args(["--no-playlist", "--playlist-items", "1", "--no-warnings", "--no-part", "--newline"])
+        .args(["-f", &format!("bv*[height<={h}]+ba/b[height<={h}]")])
+        .args(["-S", "vcodec:vp9,res,ext"])
+        .arg("-o").arg(&out_tmpl)
+        .args(["--ffmpeg-location", &ffmpeg_bin])
+        .stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let (Some(s), Some(e)) = (start_sec, end_sec) {
+        if e > s {
+            dl.args(["--download-sections", &format!("*{}-{}", s, e), "--force-keyframes-at-cuts"]);
+        }
+    }
+    let mut child = dl.spawn().map_err(|e| format!("yt-dlp introuvable: {}", e))?;
+    let mut errp = child.stderr.take().unwrap();
+    let errh = std::thread::spawn(move || { let mut s = String::new(); let _ = errp.read_to_string(&mut s); s });
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().flatten() {
+            if let Some(p) = parse_download_pct(&line) {
+                let _ = app.emit("video-import-progress", serde_json::json!({ "phase": "download", "pct": p }));
+            }
+        }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let dl_err = errh.join().unwrap_or_default();
+    if !status.success() {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(format!("yt-dlp: {}", dl_err));
+    }
+
+    let src = std::fs::read_dir(&work).map_err(|e| e.to_string())?
+        .flatten().map(|e| e.path()).find(|p| p.is_file());
+    let Some(src) = src else {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err("yt-dlp n'a produit aucun fichier vidéo".into());
+    };
+
+    // ── Phase 2: re-encode to WebM with real progress ──
+    let (final_path, final_ext) = if recode_webm == Some(true) {
+        let _ = app.emit("video-import-progress", serde_json::json!({ "phase": "convert", "pct": 0.0 }));
+        let eff = match (start_sec, end_sec) {
+            (Some(s), Some(e)) if e > s => e - s,
+            _ => duration_sec.unwrap_or(0.0),
+        };
+        let out = work.join("out.webm");
+        let src_s = src.to_string_lossy().into_owned();
+        let out_s = out.to_string_lossy().into_owned();
+        let limit = max_bytes.unwrap_or(0);
+
+        // Fit-the-limit bitrate (used only by the fallback candidates), capped by
+        // a per-resolution ceiling.
+        let ceiling_kbps: u64 = if h <= 360 { 800 } else if h <= 480 { 1200 } else if h <= 720 { 2500 } else if h <= 1080 { 5000 } else { 8000 };
+        let fit_kbps: u64 = match (max_bytes, eff) {
+            (Some(lim), e) if lim > 0 && e > 0.0 => {
+                let budget = (lim as f64 * 8.0 * 0.92 / e / 1000.0) as u64;
+                budget.saturating_sub(140).clamp(150, ceiling_kbps)
+            }
+            _ => ceiling_kbps,
+        };
+        let fit = format!("{}k", fit_kbps);
+        let tail = ["-c:a", "libopus", "-b:a", "128k", "-f", "webm", "-progress", "pipe:1", "-nostats"];
+        let mk = |head: &[&str]| -> Vec<String> {
+            head.iter().chain(tail.iter()).map(|s| s.to_string())
+                .chain(std::iter::once(out_s.clone())).collect()
+        };
+
+        // Priority order: constant-QUALITY first (AV1/VP9 beat H.264 at equal
+        // quality → smaller file); if that overflows the limit, a bitrate-capped
+        // pass guarantees it fits. AV1 (GPU) before VP9 (CPU).
+        let mut candidates: Vec<Vec<String>> = Vec::new();
+        #[cfg(target_os = "linux")]
+        {
+            if std::path::Path::new("/dev/dri/renderD128").exists() {
+                // AMD AV1 VAAPI uses -global_quality (not -qp) for constant
+                // quality; ~125 ≈ good quality, smaller than the source H.264.
+                // MUST be scoped to the video stream (:v) — applied globally it
+                // hits libopus, which rejects quality-based encoding and aborts.
+                candidates.push(mk(&["-y", "-vaapi_device", "/dev/dri/renderD128", "-i", src_s.as_str(),
+                    "-vf", "format=nv12,hwupload", "-c:v", "av1_vaapi", "-rc_mode", "CQP", "-global_quality:v", "125"]));
+                candidates.push(mk(&["-y", "-vaapi_device", "/dev/dri/renderD128", "-i", src_s.as_str(),
+                    "-vf", "format=nv12,hwupload", "-c:v", "av1_vaapi", "-rc_mode", "VBR", "-b:v", fit.as_str(), "-maxrate", fit.as_str()]));
+            }
+        }
+        candidates.push(mk(&["-y", "-i", src_s.as_str(), "-c:v", "libvpx-vp9", "-crf", "33", "-b:v", "0",
+            "-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-threads", "0"]));
+        candidates.push(mk(&["-y", "-i", src_s.as_str(), "-c:v", "libvpx-vp9", "-crf", "34", "-b:v", fit.as_str(),
+            "-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-threads", "0"]));
+
+        let mut encoded = false;
+        for args in &candidates {
+            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            if run_ffmpeg_encode(&app, &ffmpeg_bin, &refs, eff).is_ok() {
+                let sz = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(u64::MAX);
+                if limit == 0 || sz <= limit { encoded = true; break; }
+            }
+            let _ = std::fs::remove_file(&out);
+        }
+        if !encoded {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err("Vidéo trop lourde même après compression : choisis une résolution plus basse ou une plage plus courte.".into());
+        }
+
+        let _ = app.emit("video-import-progress", serde_json::json!({ "phase": "convert", "pct": 100.0 }));
+        let _ = std::fs::remove_file(&src);
+        (out, "webm".to_string())
+    } else {
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_string();
+        (src, ext)
+    };
+
+    let meta = std::fs::metadata(&final_path).map_err(|e| e.to_string())?;
+    if let Some(limit) = max_bytes {
+        if limit > 0 && meta.len() > limit {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(format!(
+                "Vidéo trop lourde ({:.1} Mo > limite {:.1} Mo) : choisis une résolution plus basse ou une plage plus courte.",
+                meta.len() as f64 / 1_048_576.0, limit as f64 / 1_048_576.0
+            ));
+        }
+    }
+
+    let bytes = std::fs::read(&final_path).map_err(|e| e.to_string())?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let _ = std::fs::remove_dir_all(&work);
+    Ok(serde_json::json!({ "ext": final_ext, "data": b64 }).to_string())
 }
 
 /// Register global shortcuts via plugin + update rdev state (Linux).
@@ -1572,7 +1909,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
 
     #[cfg(target_os = "android")]
     let builder = builder

@@ -130,6 +130,19 @@
     "install": "Install yt-dlp",
     "installing": "Installing… {{pct}}%"
   },
+  "extVideo": {
+    "menuItem": "Video (link)",
+    "title": "Import a video from a link",
+    "download": "Import",
+    "downloading": "Importing…",
+    "overLimit": "too large",
+    "serverLimit": "Server upload limit: {{size}}",
+    "rangeRequired": "Set a time range (start/end) for this video.",
+    "native": "native",
+    "recoded": "re-encoded WebM",
+    "phaseDownload": "Downloading",
+    "phaseConvert": "Converting to WebM"
+  },
   "members": {
     "title": "Members",
     "close": "Close"

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { PaperclipIcon, FileIcon, PollIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { PollCreateModal } from "./PollCreateModal";
+import { ExternalVideoImport } from "./ExternalVideoImport";
 
 export function AttachButton() {
   const { t } = useTranslation();
@@ -11,6 +12,7 @@ export function AttachButton() {
   const activeChannel = useAppStore((s) => s.activeChannel);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showPoll, setShowPoll] = useState(false);
+  const [showVideoImport, setShowVideoImport] = useState(false);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -52,6 +54,15 @@ export function AttachButton() {
               onClick={() => { setMenuOpen(false); inputRef.current?.click(); }}>
               <FileIcon /> {t("chat.attachFileItem")}
             </button>
+            <button type="button" style={itemStyle}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              onClick={() => { setMenuOpen(false); setShowVideoImport(true); }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7" />
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+              </svg> {t("extVideo.menuItem")}
+            </button>
             <button type="button" style={itemStyle} disabled={!activeChannel}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
@@ -63,6 +74,12 @@ export function AttachButton() {
       )}
 
       {showPoll && activeChannel && <PollCreateModal roomId={activeChannel} onClose={() => setShowPoll(false)} />}
+      {showVideoImport && (
+        <ExternalVideoImport
+          onClose={() => setShowVideoImport(false)}
+          onImported={(file) => { addPendingFile(file); setShowVideoImport(false); }}
+        />
+      )}
     </div>
   );
 }
