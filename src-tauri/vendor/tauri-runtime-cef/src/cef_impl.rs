@@ -1350,22 +1350,31 @@ wrap_permission_handler! {
       let Some(callback) = callback else {
         return 0;
       };
-      // [Sion patch] Log requested permissions so we can confirm from logs
-      // whether getDisplayMedia's DESKTOP_* bits reach this handler. Use the
-      // `log` facade (not eprintln) so tauri-plugin-log captures it — visible
-      // in DevTools / the log file even on a release Windows build (no console).
+      // [Sion patch] log::warn (not eprintln) so tauri-plugin-log captures it —
+      // visible in DevTools / log file even on a release Windows build.
       log::warn!("[Sion-cef] on_request_media_access_permission requested_permissions={requested_permissions:#x}");
-      // Allow microphone, camera, AND desktop (screen) capture when requested.
-      // DESKTOP_AUDIO/VIDEO are the getDisplayMedia bits (4 / 8); upstream only
-      // granted DEVICE_* (1 / 2) and returned 0 for desktop, leaving CEF to
-      // auto-select the primary screen with no source picker on Windows.
-      let allowed = requested_permissions & (
-        sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE as u32
-        | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE as u32
-        | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE as u32
+
+      let desktop = requested_permissions & (
+        sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE as u32
         | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE as u32
       );
-      if allowed != 0 {
+      // getDisplayMedia (DESKTOP_* bits): return 0 → Chrome-style default
+      // handling shows the DesktopMediaPicker (screen / window / tab). Calling
+      // cont() here instead would AUTO-select the primary screen with no
+      // picker. (NOTE: this requires --enable-media-stream NOT be set, else CEF
+      // never calls this handler at all — see lib.rs.)
+      if desktop != 0 {
+        log::warn!("[Sion-cef] desktop capture requested → default handling (show picker)");
+        return 0;
+      }
+
+      // getUserMedia (mic/cam): auto-grant so the user isn't prompted on every
+      // voice join.
+      let device = requested_permissions & (
+        sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE as u32
+        | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE as u32
+      );
+      if device != 0 {
         callback.cont(requested_permissions);
         return 1;
       }
