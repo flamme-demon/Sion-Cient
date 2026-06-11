@@ -1955,13 +1955,20 @@ pub fn run() {
     let builder = builder
             .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Logging enabled in debug AND release: the shipped Windows build
+            // (windows_subsystem="windows") has no console, so without an
+            // installed logger Rust `log::*` output is silently dropped and
+            // there's no way to diagnose issues on it. The Webview target
+            // surfaces Rust logs in DevTools (exportable); the default LogDir
+            // target also writes them to a file.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .target(tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Webview,
+                    ))
+                    .build(),
+            )?;
 
             // Disable Chromium password manager via CEF preferences
             #[cfg(feature = "cef")]
