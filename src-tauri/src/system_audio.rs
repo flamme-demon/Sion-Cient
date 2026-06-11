@@ -1094,9 +1094,10 @@ mod windows_impl {
             .take()
             .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_UNEXPECTED))??;
 
-        // Build a WAVEFORMATEXTENSIBLE for f32 stereo at our sample rate.
-        // The activation device only honours formats it can consume, but in
-        // practice every modern endpoint accepts 48 kHz f32 stereo.
+        // Build a WAVEFORMATEXTENSIBLE for f32 mono (CHANNELS=1) at our sample
+        // rate. The audio engine remixes the endpoint to this requested format.
+        // Mono matches the mic so Opus doesn't hit the pt-111 stereo/mono
+        // BUNDLE collision on CEF 148 (same reason as the Linux path).
         let mut format = WAVEFORMATEXTENSIBLE {
             Format: WAVEFORMATEX {
                 wFormatTag: WAVE_FORMAT_EXTENSIBLE as u16,

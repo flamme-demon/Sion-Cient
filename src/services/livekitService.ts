@@ -1424,16 +1424,18 @@ export async function toggleScreenShare(enabled: boolean) {
   // audioPreset/red/dtx belong to the second.
   const audioPreset = getAudioPreset(settings.audioQuality);
 
-  // Linux has no usable system-audio path through getDisplayMedia: xdg-
-  // desktop-portal-kde doesn't expose the "include audio" checkbox, and
-  // Chromium filters PulseAudio monitor sources out of enumerateDevices.
-  // Passing `audio: true` yields a tab-loopback track that only contains
-  // Chromium's own playback — speaker-test and other apps are silent. On
-  // Linux we capture via Rust/parec and publish a separate LocalAudioTrack
-  // (see systemAudioService.ts + src-tauri/src/system_audio.rs). Windows
-  // and macOS keep the native portal path, which works out of the box.
-  const useLinuxSystemAudio =
-    wantAudio && typeof navigator !== "undefined" && navigator.userAgent.includes("Linux");
+  // Capture system audio via our own Rust path (and publish a separate
+  // ScreenShareAudio LocalTrack) on BOTH Linux and Windows, instead of
+  // Chromium's `systemAudio: "include"`:
+  //  - Linux: xdg-desktop-portal-kde has no "include audio" checkbox and
+  //    Chromium filters PulseAudio monitors → `include` yields silence. We
+  //    capture via parec (null-sink, excludes Sion).
+  //  - Windows: `include` captures ALL render audio INCLUDING Sion's own
+  //    voice chat → echo/doublon for peers. Our WASAPI process-loopback path
+  //    (AUDCLNT_PROCESSLOOPBACK_EXCLUDE) excludes Sion's process → no echo.
+  // macOS keeps the native `include` path (works, no echo issue there).
+  const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const useOwnSystemAudio = wantAudio && (ua.includes("Linux") || ua.includes("Windows"));
 
   // AEC/NS/AGC must be OFF for screen-share audio on platforms where it is
   // handled by Chromium (Windows). With default constraints Chromium applies
@@ -1441,7 +1443,7 @@ export async function toggleScreenShare(enabled: boolean) {
   // against itself. Passing an object is fine — what matters is the three
   // flags. On Linux we pass `audio: false` and handle audio ourselves.
   const audioCaptureConstraints: boolean | MediaTrackConstraints =
-    wantAudio && !useLinuxSystemAudio
+    wantAudio && !useOwnSystemAudio
       ? {
           echoCancellation: false,
           noiseSuppression: false,
@@ -1461,7 +1463,7 @@ export async function toggleScreenShare(enabled: boolean) {
       enabled,
       {
         audio: audioCaptureConstraints,
-        ...(wantAudio && !useLinuxSystemAudio ? { systemAudio: "include" as const } : {}),
+        ...(wantAudio && !useOwnSystemAudio ? { systemAudio: "include" as const } : {}),
         resolution: preset,
       },
       {
@@ -1471,11 +1473,11 @@ export async function toggleScreenShare(enabled: boolean) {
       },
     );
 
-    // Linux system-audio publish, after the video share is up. We do this
-    // AFTER setScreenShareEnabled so the SDP already has the screen-share
-    // video m-line — adding the audio track now renegotiates cleanly with
-    // the correct Opus fmtp.
-    if (useLinuxSystemAudio) {
+    // Own system-audio publish (Linux parec / Windows WASAPI), after the video
+    // share is up. We do this AFTER setScreenShareEnabled so the SDP already
+    // has the screen-share video m-line — adding the audio track now
+    // renegotiates cleanly with the correct Opus fmtp.
+    if (useOwnSystemAudio) {
       try {
         const { startSystemAudioCapture } = await import("./systemAudioService");
         const audioTrack = await startSystemAudioCapture();
@@ -1488,7 +1490,7 @@ export async function toggleScreenShare(enabled: boolean) {
         });
         // If the video track ends (user hit "Stop sharing" in the native
         // overlay, the shared window closed), clean up the audio too —
-        // otherwise parec keeps running and the publication stays alive
+        // otherwise the capture keeps running and the publication stays alive
         // while the user thinks the share is over.
         const videoPub = Array.from(currentRoom.localParticipant.trackPublications.values())
           .find(p => p.source === Track.Source.ScreenShare);
@@ -1501,7 +1503,10 @@ export async function toggleScreenShare(enabled: boolean) {
           mst.addEventListener("ended", onEnded);
         }
       } catch (e) {
-        console.warn("[Sion][Share] Linux system-audio capture failed:", e);
+        // On Windows this is most often build < 20348 (no process-loopback
+        // exclude). We don't fall back to systemAudio:"include" — that would
+        // re-introduce the Sion echo the user is trying to avoid.
+        console.warn("[Sion][Share] system-audio capture failed:", e);
         appStore.setState({ screenShareAudioWarning: true });
       }
     }
