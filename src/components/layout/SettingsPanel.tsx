@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "../../i18n";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { SettingsIcon, ArrowLeftIcon, PaperclipIcon, FileIcon, DownloadIcon } from "../icons";
-import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useSettingsStore, type VoiceCue, type VoiceSoundCfg } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
@@ -96,10 +96,12 @@ export function SettingsPanel() {
   const setVoiceChannelSounds = useSettingsStore((s) => s.setVoiceChannelSounds);
   const voiceSounds = useSettingsStore((s) => s.voiceSounds);
   const setVoiceSound = useSettingsStore((s) => s.setVoiceSound);
-  const [cueEditor, setCueEditor] = useState<{ cue: "join" | "leave" | "timeout"; file: File; path: string; label: string } | null>(null);
-  const [cueUrlImport, setCueUrlImport] = useState<{ cue: "join" | "leave" | "timeout"; label: string } | null>(null);
-  const [cueMenu, setCueMenu] = useState<"join" | "leave" | "timeout" | null>(null);
-  const pickCueFile = useCallback(async (cue: "join" | "leave" | "timeout", label: string) => {
+  const muteSoundsWhenDeafened = useSettingsStore((s) => s.muteSoundsWhenDeafened);
+  const setMuteSoundsWhenDeafened = useSettingsStore((s) => s.setMuteSoundsWhenDeafened);
+  const [cueEditor, setCueEditor] = useState<{ cue: VoiceCue; file: File; path: string; label: string } | null>(null);
+  const [cueUrlImport, setCueUrlImport] = useState<{ cue: VoiceCue; label: string } | null>(null);
+  const [cueMenu, setCueMenu] = useState<VoiceCue | null>(null);
+  const pickCueFile = useCallback(async (cue: VoiceCue, label: string) => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const p = await invoke<string | null>("pick_audio_file");
@@ -112,6 +114,75 @@ export function SettingsPanel() {
       setCueEditor({ cue, file, path: p, label });
     } catch { /* cancelled / not in Tauri */ }
   }, []);
+  // One configurable-sound row (preview / pick file / pick URL / reset).
+  // Shared by the gated voice cues (join/leave/timeout) and the always-on
+  // event sounds (poke/kick/memberKicked).
+  const renderCueRow = ({ cue, label, cfg }: { cue: VoiceCue; label: string; cfg: VoiceSoundCfg | null }) => (
+    <div key={cue} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 0', borderTop: '1px solid var(--color-surface-container-highest)', marginTop: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{label}</div>
+        <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {cfg
+            ? `${cfg.path.split(/[/\\]/).pop()} · ${(cfg.end - cfg.start).toFixed(1)}s · ${Math.round(cfg.gain * 100)}%`
+            : t("settings.cueDefault")}
+        </div>
+      </div>
+      <button
+        type="button"
+        title={t("settings.cuePreview")}
+        onClick={async () => {
+          const { previewCue } = await import("../../services/voiceChannelSounds");
+          previewCue(cue);
+        }}
+        style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', flexShrink: 0 }}
+      >
+        ▶
+      </button>
+      <div style={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
+        <button
+          type="button"
+          title={t("settings.cueSource")}
+          onClick={() => setCueMenu((c) => (c === cue ? null : cue))}
+          style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)' }}
+        >
+          <PaperclipIcon />
+        </button>
+        {cueMenu === cue && (
+          <>
+            <div onClick={() => setCueMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
+            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 51, background: 'var(--color-surface-container-high)', border: '1px solid var(--color-outline-variant)', borderRadius: 12, padding: 6, minWidth: 170, boxShadow: '0 6px 20px rgba(0,0,0,0.4)' }}>
+              <button type="button"
+                onClick={() => { setCueMenu(null); pickCueFile(cue, label); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', color: 'var(--color-on-surface)' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <FileIcon /> {t("soundboard.modeFile")}
+              </button>
+              <button type="button"
+                onClick={() => { setCueMenu(null); setCueUrlImport({ cue, label }); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', color: 'var(--color-on-surface)' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <DownloadIcon /> {t("soundboard.modeUrl")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      {cfg && (
+        <button
+          type="button"
+          title={t("settings.cueReset")}
+          onClick={() => setVoiceSound(cue, null)}
+          style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface-variant)', flexShrink: 0 }}
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
   const notificationMode = useSettingsStore((s) => s.notificationMode);
   const language = useSettingsStore((s) => s.language);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
@@ -640,76 +711,34 @@ export function SettingsPanel() {
               </button>
             </div>
 
+            <div style={{ display: 'flex', alignItems: 'center', padding: '10px 0 0', borderTop: '1px solid var(--color-surface-container-highest)', marginTop: 8 }}>
+              <div style={{ flex: 1, marginRight: 12 }}>
+                <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.muteSoundsWhenDeafened")}</div>
+                <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.muteSoundsWhenDeafenedDesc")}</div>
+              </div>
+              <button onClick={() => setMuteSoundsWhenDeafened(!muteSoundsWhenDeafened)} style={toggleStyle(muteSoundsWhenDeafened)}>
+                <div style={toggleDotStyle(muteSoundsWhenDeafened)} />
+              </button>
+            </div>
+
             {voiceChannelSounds && ([
               { cue: "join" as const, label: t("settings.cueJoin"), cfg: voiceSounds.join },
               { cue: "leave" as const, label: t("settings.cueLeave"), cfg: voiceSounds.leave },
               { cue: "timeout" as const, label: t("settings.cueTimeout"), cfg: voiceSounds.timeout },
-            ]).map(({ cue, label, cfg }) => (
-              <div key={cue} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 0', borderTop: '1px solid var(--color-surface-container-highest)', marginTop: 8 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{label}</div>
-                  <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {cfg
-                      ? `${cfg.path.split(/[/\\]/).pop()} · ${(cfg.end - cfg.start).toFixed(1)}s · ${Math.round(cfg.gain * 100)}%`
-                      : t("settings.cueDefault")}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  title={t("settings.cuePreview")}
-                  onClick={async () => {
-                    const { previewCue } = await import("../../services/voiceChannelSounds");
-                    previewCue(cue);
-                  }}
-                  style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', flexShrink: 0 }}
-                >
-                  ▶
-                </button>
-                <div style={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
-                  <button
-                    type="button"
-                    title={t("settings.cueSource")}
-                    onClick={() => setCueMenu((c) => (c === cue ? null : cue))}
-                    style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)' }}
-                  >
-                    <PaperclipIcon />
-                  </button>
-                  {cueMenu === cue && (
-                    <>
-                      <div onClick={() => setCueMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
-                      <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 51, background: 'var(--color-surface-container-high)', border: '1px solid var(--color-outline-variant)', borderRadius: 12, padding: 6, minWidth: 170, boxShadow: '0 6px 20px rgba(0,0,0,0.4)' }}>
-                        <button type="button"
-                          onClick={() => { setCueMenu(null); pickCueFile(cue, label); }}
-                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', color: 'var(--color-on-surface)' }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        >
-                          <FileIcon /> {t("soundboard.modeFile")}
-                        </button>
-                        <button type="button"
-                          onClick={() => { setCueMenu(null); setCueUrlImport({ cue, label }); }}
-                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: 8, padding: '8px 12px', fontSize: 13, fontFamily: 'inherit', color: 'var(--color-on-surface)' }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                        >
-                          <DownloadIcon /> {t("soundboard.modeUrl")}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-                {cfg && (
-                  <button
-                    type="button"
-                    title={t("settings.cueReset")}
-                    onClick={() => setVoiceSound(cue, null)}
-                    style={{ padding: '6px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface-variant)', flexShrink: 0 }}
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-            ))}
+            ]).map(renderCueRow)}
+          </div>
+
+          {/* ---- SONS D'ÉVÉNEMENTS (toujours actifs, personnalisables) ---- */}
+          <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--color-on-surface-variant)', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '8px 4px 2px' }}>
+            {t("settings.eventSoundsSection")}
+          </div>
+          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("settings.eventSoundsDesc")}</div>
+            {([
+              { cue: "poke" as const, label: t("settings.cuePoke"), cfg: voiceSounds.poke },
+              { cue: "kick" as const, label: t("settings.cueKick"), cfg: voiceSounds.kick },
+              { cue: "memberKicked" as const, label: t("settings.cueMemberKicked"), cfg: voiceSounds.memberKicked },
+            ]).map(renderCueRow)}
           </div>
         </>)}
 

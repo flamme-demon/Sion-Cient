@@ -6,7 +6,9 @@ export type SidebarView = "channels" | "dm";
 export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
 export type NotificationMode = "all" | "mentions" | "minimal";
 
-export type VoiceCue = "join" | "leave" | "timeout";
+// join/leave/timeout are gated by the `voiceChannelSounds` toggle; poke/kick/
+// memberKicked are user-event notifications that always play (just customizable).
+export type VoiceCue = "join" | "leave" | "timeout" | "poke" | "kick" | "memberKicked";
 
 /** A custom voice-channel cue sound: a picked file, trimmed to [start,end]
  *  seconds, played at `gain` (Web Audio). null = use the bundled default. */
@@ -58,6 +60,10 @@ interface SettingsState {
   /** Play short join/leave/timeout cues when a member enters or leaves the
    *  voice channel the local user is currently in (TeamSpeak-style). */
   voiceChannelSounds: boolean;
+  /** When true, all voice/event cues (join/leave/timeout/poke/kick/…) are
+   *  silenced while the local user is deafened. Off by default: most users
+   *  like still hearing who joins even while deafened. */
+  muteSoundsWhenDeafened: boolean;
   /** Optional custom sound (trimmed + gain) per cue, overriding the bundled
    *  default. null = use the bundled default. */
   voiceSounds: Record<VoiceCue, VoiceSoundCfg | null>;
@@ -110,6 +116,7 @@ interface SettingsState {
   setSoundboardEnabled: (v: boolean) => void;
   setSoundboardVolume: (v: number) => void;
   setVoiceChannelSounds: (v: boolean) => void;
+  setMuteSoundsWhenDeafened: (v: boolean) => void;
   setVoiceSound: (cue: VoiceCue, cfg: VoiceSoundCfg | null) => void;
   setSoundboardOpenAtLaunch: (v: boolean) => void;
   toggleCategoryHidden: (categoryPath: string) => void;
@@ -153,7 +160,8 @@ export const useSettingsStore = create<SettingsState>()(
       soundboardEnabled: true,
       soundboardVolume: 0.2,
       voiceChannelSounds: true,
-      voiceSounds: { join: null, leave: null, timeout: null },
+      muteSoundsWhenDeafened: false,
+      voiceSounds: { join: null, leave: null, timeout: null, poke: null, kick: null, memberKicked: null },
       soundboardOpenAtLaunch: false,
       hiddenCategories: [],
       soundboardFavorites: [],
@@ -199,6 +207,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
       setVoiceChannelSounds: (v) => set({ voiceChannelSounds: v }),
+      setMuteSoundsWhenDeafened: (v) => set({ muteSoundsWhenDeafened: v }),
       setVoiceSound: (cue, cfg) => set((s) => ({ voiceSounds: { ...s.voiceSounds, [cue]: cfg } })),
       setSoundboardEnabled: (v) => set({ soundboardEnabled: v }),
       setSoundboardVolume: (v) => {

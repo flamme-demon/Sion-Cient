@@ -259,8 +259,8 @@ export function useVoiceChannel() {
             }];
 
             session.joinRoomSession(fociPreferred, undefined, {
-              // Short TTL: if app crashes/reloads, membership expires in 60s
-              // The MembershipManager will re-publish before expiry to keep it alive
+              // The MembershipManager re-publishes before expiry to keep the
+              // membership alive while we're in the call.
               membershipEventExpiryMs: 3_600_000, // 1 hour — avoid frequent renewals that disrupt audio in background
               // NB: to-device key transport is the default (and only) path since
               // matrix-js-sdk 41.6.0 — the former `useExperimentalToDeviceTransport`

@@ -9,7 +9,8 @@ import * as matrixService from "../services/matrixService";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
-import { playMessageReceived, playPoke } from "../services/soundService";
+import { playMessageReceived } from "../services/soundService";
+import { playPokeCue, playKickCue, playMemberKickedCue } from "../services/voiceChannelSounds";
 import { findAdminRoom } from "../services/adminCommandService";
 
 export type VerificationStep =
@@ -919,10 +920,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       const eventTs = event.getTs?.() ?? 0;
       if (Date.now() - eventTs > 60_000) return;
       const content = event.getContent?.();
-      const myUserId = client.getUserId();
-      if (!content?.kicked_user || content.kicked_user !== myUserId) return;
+      if (!content?.kicked_user) return;
 
-      // Verify the sender has power level >= 50 (moderator+)
+      // Verify the sender has power level >= 50 (moderator+) before reacting —
+      // applies to BOTH the victim and witness paths so a spoofed kick event
+      // can't trigger a disconnect or a sound.
       const senderId = event.getSender?.() || "";
       const senderPL = room.getMember?.(senderId)?.powerLevel ?? 0;
       if (senderPL < 50) {
@@ -930,6 +932,19 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         return;
       }
 
+      const myUserId = client.getUserId();
+      if (content.kicked_user !== myUserId) {
+        // Someone ELSE was kicked. Let the rest of that voice channel hear it
+        // so they know a member was removed — but only if we're connected to
+        // the same channel (don't beep for kicks in rooms we're not in).
+        if (useAppStore.getState().connectedVoiceChannel === room.roomId) {
+          playMemberKickedCue();
+        }
+        return;
+      }
+
+      // We are the one kicked.
+      playKickCue();
       const kickerName = content.kicked_by_name || senderId;
       console.warn("[Sion] Voice kicked by:", kickerName);
 
@@ -1135,7 +1150,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               if (evtType === "m.room.message") {
                 const eventMsgtype = event.getContent?.()?.msgtype;
                 if (eventMsgtype === "m.poke") {
-                  playPoke();
+                  playPokeCue();
                 } else {
                   playMessageReceived();
                 }
@@ -1611,7 +1626,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               if (activeChannel === roomId || connectedVoice === roomId || room.getJoinedMemberCount() === 2) {
                 const msgtype = event.getContent?.()?.msgtype;
                 if (msgtype === "m.poke") {
-                  playPoke();
+                  playPokeCue();
                 } else {
                   playMessageReceived();
                 }

@@ -94,6 +94,11 @@ const speakingDetectors = new Map<string, SpeakingDetector>();
 const speakingState = new Map<string, boolean>();
 let participantUpdateCallback: (() => void) | null = null;
 let pendingTimerCleanup: (() => void) | null = null;
+// Removes every room event listener registered by connectToRoom (via the
+// `onRoom` wrapper). Run in disconnectFromRoom so a discarded Room leaves no
+// handlers behind — matters for HMR and to stop a tearing-down Room from
+// writing to global stores. Null when no room is connected.
+let roomListenersCleanup: (() => void) | null = null;
 
 // Soundboard "now playing" state per participant. Last-wins semantics: a new
 // trigger replaces the previous emoji and resets the expiry timer. The UI
@@ -477,6 +482,24 @@ function ensureAutoplayUnlock() {
   document.addEventListener("keydown", unlock, { once: true });
 }
 
+/** Suppress (or restore) an audio element's OWN output: the `muted` property,
+ *  the matching HTML attribute, and volume. Belt-and-suspenders for CEF, which
+ *  has let residual audio through when any one of these was missing. */
+function setElementMuted(el: HTMLAudioElement, muted: boolean) {
+  el.muted = muted;
+  if (muted) el.setAttribute("muted", "");
+  else el.removeAttribute("muted");
+  el.volume = muted ? 0 : 1;
+}
+
+/** Gate the underlying remote MediaStreamTrack — the only reliable mute on
+ *  CEF, where el.muted/volume don't always silence a MediaStream <audio>.
+ *  `el`'s srcObject carries the same track instance LiveKit attached. */
+function setElementTrackEnabled(el: HTMLAudioElement | undefined, enabled: boolean) {
+  const mst = (el?.srcObject as MediaStream | null)?.getAudioTracks?.()[0];
+  if (mst) mst.enabled = enabled;
+}
+
 function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
   if (track.kind !== Track.Kind.Audio) return;
   const sid = publication.trackSid;
@@ -560,10 +583,11 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
     (el as HTMLAudioElement & { _fadeInHandle?: ReturnType<typeof setInterval> })._fadeInHandle = handle;
   }
 
-  // Re-apply per-participant local mute — the new MediaStreamTrack starts
-  // with enabled=true, so a peer that reloads would bypass the local mute
-  // until the user re-toggled it manually.
-  if (locallyMutedIdentities.has(participant.identity)) {
+  // Re-apply per-participant local mute AND global deafen on the track itself.
+  // The new MediaStreamTrack starts enabled=true; el.muted alone doesn't
+  // reliably silence on CEF (the WebRTC track plays to the output device), so
+  // gate the track when we're deafened or this peer is locally muted.
+  if (isCurrentlyDeafened || locallyMutedIdentities.has(participant.identity)) {
     track.mediaStreamTrack.enabled = false;
   }
 
@@ -571,9 +595,11 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   // the rendered element). captureStream ties activity to the element's
   // audible output, which goes silent when the user is deafened (el.muted) —
   // we still want to *see* who is talking to decide whether to undeafen.
-  // The SpeakingDetector terminates the graph at audioCtx.destination via a
-  // 0-gain node, which is what pumps samples from a remote RTCRtpReceiver
-  // track into Web Audio on Chromium. No clone: we wrap the same track in a
+  // The SpeakingDetector terminates the graph at a (non-audible)
+  // MediaStreamAudioDestinationNode (see speakingDetector.ts) — NOT
+  // audioCtx.destination, which leaked the remote mic through deafen on CEF.
+  // That sink still pumps samples from a remote RTCRtpReceiver track into Web
+  // Audio on Chromium. No clone: we wrap the same track in a
   // fresh MediaStream (cloning a remote track is what was observed to fail,
   // not referencing it). Skip for ScreenShareAudio — game/video audio isn't
   // voice, feeding it would falsely mark the participant as "speaking".
@@ -680,24 +706,41 @@ export async function connectToRoom(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).__SION_ROOM = room;
 
+  // Register every room listener through this wrapper so disconnectFromRoom can
+  // remove them all in one shot — a discarded Room must not keep handlers that
+  // fire during its teardown (e.g. writing connection state to a global store).
+  const listenerOffs: Array<() => void> = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onRoom = (event: any, handler: any) => {
+    room.on(event, handler);
+    listenerOffs.push(() => { try { room.off(event, handler); } catch { /* ignore */ } });
+  };
+  roomListenersCleanup = () => { for (const off of listenerOffs) off(); listenerOffs.length = 0; };
+
   // Attach remote audio tracks for playback
-  room.on(RoomEvent.TrackSubscribed, attachAudioTrack);
-  room.on(RoomEvent.TrackUnsubscribed, detachAudioTrack);
+  onRoom(RoomEvent.TrackSubscribed, attachAudioTrack);
+  onRoom(RoomEvent.TrackUnsubscribed, detachAudioTrack);
 
   // Re-apply per-participant local mute when the remote peer unmutes. The
   // local `mediaStreamTrack.enabled` flag is DOM-local (LiveKit shouldn't
   // touch it), but this is the belt-and-suspenders guarantee that a remote
   // unmute can't silently flip a locally muted peer back to audible.
-  room.on(RoomEvent.TrackUnmuted, (publication: TrackPublication, participant: Participant) => {
+  onRoom(RoomEvent.TrackUnmuted, (publication: TrackPublication, participant: Participant) => {
     if (publication.kind !== Track.Kind.Audio) return;
     const sid = (publication as RemoteTrackPublication).trackSid;
     const el = sid ? audioElements.get(sid) : undefined;
     console.log(`[Sion][deafen] TrackUnmuted pid=${participant.identity} sid=${sid} src=${publication.source} — isCurrentlyDeafened=${isCurrentlyDeafened} elMuted=${el?.muted} elVol=${el?.volume}`);
-    if (!locallyMutedIdentities.has(participant.identity)) return;
-    const mst = (publication as RemoteTrackPublication).track?.mediaStreamTrack;
-    if (mst) mst.enabled = false;
+    // A remote un-mute (e.g. they were muted when we deafened, then un-mute)
+    // must NOT become audible while we're deafened OR while we've locally
+    // muted this peer. el.muted is unreliable on CEF — the WebRTC track keeps
+    // playing — so gate the track itself. Re-enabling the track is owned by
+    // setDeafened / muteRemoteParticipant, never here.
+    if (isCurrentlyDeafened || locallyMutedIdentities.has(participant.identity)) {
+      if (el) setElementMuted(el, true);
+      setElementTrackEnabled(el, false);
+    }
   });
-  room.on(RoomEvent.TrackMuted, (publication: TrackPublication, participant: Participant) => {
+  onRoom(RoomEvent.TrackMuted, (publication: TrackPublication, participant: Participant) => {
     if (publication.kind !== Track.Kind.Audio) return;
     const sid = (publication as RemoteTrackPublication).trackSid;
     const el = sid ? audioElements.get(sid) : undefined;
@@ -776,7 +819,7 @@ export async function connectToRoom(
     }
     scheduleStuckCheck(publication, participant);
   };
-  room.on(RoomEvent.TrackPublished, forceSubscribeAudio);
+  onRoom(RoomEvent.TrackPublished, forceSubscribeAudio);
 
   // Screen share publications suffer from the same unreliable auto-subscribe
   // behaviour as audio — seen most often after the sharer restarts a share
@@ -795,12 +838,12 @@ export async function connectToRoom(
       console.warn("[Sion][LK] screen-share force-subscribe failed:", err);
     }
   };
-  room.on(RoomEvent.TrackPublished, forceSubscribeScreenShare);
+  onRoom(RoomEvent.TrackPublished, forceSubscribeScreenShare);
 
   // When a participant reconnects (e.g. Ctrl+R), LiveKit may skip their new
   // tracks with "already ended". Clean up stale audio on disconnect, then
   // re-attach tracks on reconnect after a short delay.
-  room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+  onRoom(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
     // TeamSpeak-style cue: leave vs timeout (inferred from prior ConnectionQuality).
     onParticipantLeft(participant.identity);
     // Clean up all audio elements for this participant
@@ -812,12 +855,12 @@ export async function connectToRoom(
   });
   // Track each remote peer's connection quality so a disconnect preceded by
   // `lost` is treated as a timeout cue rather than a clean leave.
-  room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+  onRoom(RoomEvent.ConnectionQualityChanged, (quality: unknown, participant?: Participant) => {
     if (participant && !participant.isLocal) {
       noteConnectionLost(participant.identity, String(quality) === "lost");
     }
   });
-  room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
+  onRoom(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
     playJoinCue();
     // After a short delay, attach any audio tracks the SDK may have skipped
     setTimeout(() => {
@@ -847,8 +890,8 @@ export async function connectToRoom(
   });
 
   // Screen share tracks
-  room.on(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
-  room.on(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
+  onRoom(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
+  onRoom(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
 
   // Connection state — propagated to useLiveKitStore for the global banner.
   // RoomEvent.Reconnecting only fires when the SDK escalates to a full
@@ -876,10 +919,10 @@ export async function connectToRoom(
       }
     });
   };
-  room.on(RoomEvent.ConnectionStateChanged, propagateConnectionState);
-  room.on(RoomEvent.Reconnecting, propagateConnectionState);
-  room.on(RoomEvent.Reconnected, propagateConnectionState);
-  room.on(RoomEvent.Disconnected, propagateConnectionState);
+  onRoom(RoomEvent.ConnectionStateChanged, propagateConnectionState);
+  onRoom(RoomEvent.Reconnecting, propagateConnectionState);
+  onRoom(RoomEvent.Reconnected, propagateConnectionState);
+  onRoom(RoomEvent.Disconnected, propagateConnectionState);
 
   await room.connect(url, token);
   currentRoom = room;
@@ -890,7 +933,7 @@ export async function connectToRoom(
 
   if (e2eeKeyProvider) {
     await room.setE2EEEnabled(true);
-    room.on(EncryptionEvent.EncryptionError, onE2EEError);
+    onRoom(EncryptionEvent.EncryptionError, onE2EEError);
   }
 
   // Attach audio tracks from participants already in the room. For any
@@ -954,11 +997,27 @@ export async function connectToRoom(
       stopSpeakingDetector(room.localParticipant.identity);
     }
   };
-  room.on(RoomEvent.LocalTrackPublished, refreshLocalDetector);
-  room.on(RoomEvent.LocalTrackUnpublished, refreshLocalDetector);
-  room.on(RoomEvent.TrackMuted, refreshLocalDetector);
-  room.on(RoomEvent.TrackUnmuted, refreshLocalDetector);
+  onRoom(RoomEvent.LocalTrackPublished, refreshLocalDetector);
+  onRoom(RoomEvent.LocalTrackUnpublished, refreshLocalDetector);
+  onRoom(RoomEvent.TrackMuted, refreshLocalDetector);
+  onRoom(RoomEvent.TrackUnmuted, refreshLocalDetector);
   refreshLocalDetector();
+
+  // Re-broadcast our E2EE key whenever our own mic (re)publishes. A local mic
+  // republish — un-mute/un-deafen re-acquiring the track (denoise re-wrap), a
+  // device switch, or a reconnect — rotates our media key, but MatrixRTC only
+  // auto-resends keys on MEMBERSHIP changes. Without a membership change peers
+  // never receive the rotated key and can't decrypt us → one-way audio (the
+  // classic "I came out of deafen and now they can't hear me"). A couple of
+  // re-emits cover the key-provider wiring race.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reemitOnLocalMicPublish = (pub: any) => {
+    if (pub?.source !== Track.Source.Microphone || !reemitKeysFn) return;
+    console.log("[Sion][E2EE] local mic (re)published → re-broadcasting encryption key");
+    setTimeout(() => reemitKeysFn?.(), 300);
+    setTimeout(() => reemitKeysFn?.(), 1500);
+  };
+  onRoom(RoomEvent.LocalTrackPublished, reemitOnLocalMicPublish);
 
   // When we unpublish our own screen share (native browser "Stop sharing"
   // button, tab close, monitor unplug, …) the overlay window would
@@ -970,7 +1029,7 @@ export async function connectToRoom(
       import("./cursorOverlayService").then(({ closeCursorOverlay }) => closeCursorOverlay()).catch(() => {});
     }
   };
-  room.on(RoomEvent.LocalTrackUnpublished, onLocalScreenShareUnpub);
+  onRoom(RoomEvent.LocalTrackUnpublished, onLocalScreenShareUnpub);
 
   return room;
 }
@@ -1001,11 +1060,10 @@ export function muteRemoteParticipant(participantIdentity: string, mute: boolean
 
 export async function disconnectFromRoom() {
   if (currentRoom) {
-    currentRoom.off(RoomEvent.TrackSubscribed, attachAudioTrack);
-    currentRoom.off(RoomEvent.TrackUnsubscribed, detachAudioTrack);
-    currentRoom.off(RoomEvent.TrackSubscribed, handleScreenShareSubscribed);
-    currentRoom.off(RoomEvent.TrackUnsubscribed, handleScreenShareUnsubscribed);
-    currentRoom.off(EncryptionEvent.EncryptionError, onE2EEError);
+    // Remove ALL room listeners registered via onRoom (not just the few that
+    // used to be off'd here) so the discarded Room leaks no handlers.
+    roomListenersCleanup?.();
+    roomListenersCleanup = null;
     // Tell the UI there's no active share now — but keep the callback
     // registered. ScreenShareView is mounted in MainArea and is NOT tied to
     // voice-connection state; its useEffect runs once and never re-fires,
@@ -1043,16 +1101,32 @@ export async function disconnectFromRoom() {
 export async function toggleMicrophone(enabled: boolean) {
   if (!currentRoom) return;
   const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
-  if (micPub?.track) {
-    // mute/unmute keeps the track alive (works in Android background)
-    if (enabled) {
+  const denoiseOn = useSettingsStore.getState().aiNoiseSuppression;
+  // Re-acquiring getUserMedia needs the foreground, so mobile keeps the
+  // kept-alive-track unmute path. Everything else is "desktop".
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if (enabled) {
+    // CEF (esp. Windows) bug: when the published mic is the denoise pipeline's
+    // Web Audio output, resuming after a mute (or deafen-mute) leaves the track
+    // SILENT — the re-wrapped track doesn't resume in the existing sender, so
+    // peers stop hearing us (confirmed: disabling denoise fixes it). Recreate a
+    // fresh denoise track + publication (the known-good initial-publish path)
+    // on resume when denoise is on, desktop. Covers BOTH the muted-track and
+    // no-track cases. Gated on !mobile (not a UA platform sniff, which is
+    // unreliable in CEF).
+    if (denoiseOn && !isMobile) {
+      console.log(`[Sion][mic] enable → denoise refresh (hadTrack=${!!micPub?.track})`);
+      await refreshMicrophoneForDenoise(true);
+    } else if (micPub?.track) {
+      console.log("[Sion][mic] enable → track.unmute()");
       await micPub.track.unmute();
     } else {
-      await micPub.track.mute();
+      console.log("[Sion][mic] enable → setMicrophoneEnabled(true)");
+      await currentRoom.localParticipant.setMicrophoneEnabled(true);
     }
-  } else if (enabled) {
-    // No track yet — create one (only works in foreground)
-    await currentRoom.localParticipant.setMicrophoneEnabled(true);
+  } else if (micPub?.track) {
+    // mute keeps the track alive (works in Android background)
+    await micPub.track.mute();
   }
 }
 
@@ -1094,11 +1168,14 @@ export function setDeafened(deafened: boolean) {
   // suppression (property + attribute + volume) so runtime toggles match
   // the guarantees applied at track-attach time.
   audioElements.forEach((el, sid) => {
-    el.muted = deafened;
-    if (deafened) el.setAttribute("muted", "");
-    else el.removeAttribute("muted");
-    el.volume = deafened ? 0 : 1;
-    console.log(`[Sion][deafen]   → sid=${sid} pid=${el.dataset.participantId} src=${el.dataset.trackSource} muted=${el.muted} vol=${el.volume}`);
+    setElementMuted(el, deafened);
+    // CEF/Chromium does NOT reliably silence a MediaStream <audio> via
+    // el.muted/volume=0 — the WebRTC track keeps playing. Gate the track too
+    // (as per-participant mute does). On un-deafen, only re-enable if the user
+    // hasn't locally muted this peer.
+    const pid = el.dataset.participantId;
+    setElementTrackEnabled(el, deafened ? false : !(pid && locallyMutedIdentities.has(pid)));
+    console.log(`[Sion][deafen]   → sid=${sid} pid=${pid} src=${el.dataset.trackSource} muted=${el.muted} vol=${el.volume}`);
   });
   broadcastAfk();
 }
@@ -1239,10 +1316,12 @@ export async function updateAudioProcessing(options: {
  *  generator's `ended` event from the stop cascades into the previous
  *  denoise pump's `cancel()` (safety net landed in v1.0.0), so no pump
  *  leak. */
-export async function refreshMicrophoneForDenoise() {
+export async function refreshMicrophoneForDenoise(force = false) {
   if (!currentRoom) return;
   const lp = currentRoom.localParticipant;
-  if (!lp.isMicrophoneEnabled) return;
+  // `force` is used by the un-mute path (the mic may read as disabled while
+  // muted) — there we explicitly WANT to (re)publish a fresh track.
+  if (!force && !lp.isMicrophoneEnabled) return;
   try {
     const micPub = lp.getTrackPublication(Track.Source.Microphone);
     if (micPub?.track) {
@@ -1624,6 +1703,9 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
   const rebroadcastOnJoin = () => { broadcastAfk(); update(); };
   const forgetOnLeave = (p: RemoteParticipant) => {
     remoteDeafenState.delete(p.identity);
+    // Per-participant local mute is the only per-peer Set not otherwise purged
+    // on leave — a peer who left should not keep a stale local-mute entry.
+    locallyMutedIdentities.delete(p.identity);
     if (remoteCursors.delete(p.identity)) cursorCallback?.(Array.from(remoteCursors.values()));
     clearE2EEState(p.identity);
     update();

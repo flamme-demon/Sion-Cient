@@ -91,28 +91,17 @@ interface Capture {
 
 let current: Capture | null = null;
 
-export async function listMonitorSinks(): Promise<Array<{ id: string; label: string }>> {
-  try {
-    const sinks = await invoke<[string, string][]>("system_audio_list_sinks");
-    return sinks.map(([id, label]) => ({ id, label }));
-  } catch (e) {
-    console.warn("[Sion][sysaudio] list_sinks failed:", e);
-    return [];
-  }
-}
-
 /**
- * Start capturing the given sink's monitor (or the default sink's when
- * `sinkMonitor` is undefined) and return a MediaStreamTrack fed by those
- * samples. If a capture is already active, it is stopped first.
+ * Start capturing the default sink's monitor and return a MediaStreamTrack fed
+ * by those samples. If a capture is already active, it is stopped first.
  */
-export async function startSystemAudioCapture(sinkMonitor?: string): Promise<MediaStreamTrack> {
+export async function startSystemAudioCapture(): Promise<MediaStreamTrack> {
   if (current) {
     await current.stop();
     current = null;
   }
 
-  const port = await invoke<number>("system_audio_start", { sinkMonitor: sinkMonitor ?? null });
+  const port = await invoke<number>("system_audio_start", { sinkMonitor: null });
   if (!port) throw new Error("system_audio_start returned port 0");
 
   // Explicit sampleRate matches parec's output so we never need to resample
@@ -197,9 +186,4 @@ export async function stopSystemAudioCapture(): Promise<void> {
   const c = current;
   current = null;
   if (c) await c.stop();
-}
-
-export function isSystemAudioSupported(): boolean {
-  // Linux-only — the commands are stubbed on other platforms.
-  return typeof navigator !== "undefined" && navigator.userAgent.includes("Linux");
 }

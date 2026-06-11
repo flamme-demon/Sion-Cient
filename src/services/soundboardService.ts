@@ -553,7 +553,11 @@ export async function handleRemoteBroadcast(payload: Uint8Array, senderIdentity:
 export function playErrorBuzzer(): void {
   if (useAppStore.getState().isDeafened) return;
   try {
-    const ctx = new AudioContext();
+    // Reuse the shared context (browsers/CEF cap concurrent AudioContexts) —
+    // a per-call `new AudioContext()` risked hitting the cap and leaked when
+    // start/stop threw before its close timer fired.
+    const ctx = getSharedAudioContext();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -563,15 +567,9 @@ export function playErrorBuzzer(): void {
     gain.gain.setValueAtTime(0.15, now);
     gain.gain.linearRampToValueAtTime(0, now + 0.35);
     osc.connect(gain).connect(ctx.destination);
+    // Detach from the shared destination once done so the nodes are GC'd.
+    osc.onended = () => { try { osc.disconnect(); gain.disconnect(); } catch { /* already gone */ } };
     osc.start(now);
     osc.stop(now + 0.4);
-    setTimeout(() => ctx.close().catch(() => {}), 500);
   } catch { /* AudioContext not available */ }
-}
-
-/** Returns unique category paths present in the sound list (for UI). */
-export function extractCategoryTree(sounds: SoundEntry[]): string[] {
-  const set = new Set<string>();
-  for (const s of sounds) set.add(s.category);
-  return Array.from(set).sort();
 }

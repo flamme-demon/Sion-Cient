@@ -808,6 +808,35 @@ fn stop_voice_service() {
     // This command is a no-op stub so invoke() doesn't error on desktop
 }
 
+/// Build a `Command` that does not pop a console window on Windows. ffmpeg,
+/// ffprobe, yt-dlp and tar are CLI tools; spawning them straight would flash a
+/// black `cmd` window on every video conversion. CREATE_NO_WINDOW (0x0800_0000)
+/// keeps them invisible. No-op on non-Windows targets (incl. Android/Linux),
+/// so it is NOT cfg-gated: `transcode_video` (a caller) is compiled on Android.
+fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    let cmd = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut c = cmd;
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    cmd
+}
+
+/// True if `bin` runs successfully with the given version flag — used to verify
+/// a resolved ffmpeg/yt-dlp path actually works.
+#[cfg(not(target_os = "android"))]
+fn bin_runs(bin: &str, version_flag: &str) -> bool {
+    hidden_command(bin)
+        .arg(version_flag)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Clean up old Sion transcode temp files (older than 24 hours).
 fn cleanup_old_transcodes() {
     let tmp_dir = std::env::temp_dir();
@@ -886,7 +915,7 @@ async fn transcode_video(
     }
 
     // Transcode with ffmpeg (fast preset)
-    let output = std::process::Command::new(&ffmpeg_bin)
+    let output = hidden_command(&ffmpeg_bin)
         .args(["-y", "-i"])
         .arg(&input_path)
         .args(["-c:v", "libvpx-vp9", "-crf", "35", "-b:v", "0",
@@ -984,12 +1013,7 @@ fn resolve_ffmpeg(configured: Option<&str>, managed: Option<&str>) -> String {
 fn detect_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Option<String> {
     let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ffmpeg(None, managed.as_deref());
-    let ok = std::process::Command::new(&bin)
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if ok { Some(bin) } else { None }
+    if bin_runs(&bin, "-version") { Some(bin) } else { None }
 }
 
 /// Download a static ffmpeg build into `<app-data>/bin/` so the video
@@ -1017,8 +1041,16 @@ async fn download_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<String, 
 
     let _ = app.emit("ffmpeg-install-progress", 0u64);
 
-    // Stream download to a temp archive, reporting progress.
-    let client = build_client().map_err(|e| e.to_string())?;
+    // Stream download to a temp archive, reporting progress. Dedicated client
+    // with a generous timeout — the archive is ~80 MB and the shared
+    // build_client() caps at 10 s total, which aborts the body mid-download on
+    // any normal link ("error decoding response body").
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(600))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("Mozilla/5.0 (Sion ffmpeg installer)")
+        .build()
+        .map_err(|e| e.to_string())?;
     let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -1044,7 +1076,7 @@ async fn download_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<String, 
     let ext_dir = tmp_dir.join("sion_ffmpeg_ext");
     let _ = std::fs::remove_dir_all(&ext_dir);
     std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
-    let out = std::process::Command::new("tar")
+    let out = hidden_command("tar")
         .arg("-xf").arg(&archive).arg("-C").arg(&ext_dir)
         .output()
         .map_err(|e| format!("tar introuvable: {}", e))?;
@@ -1131,12 +1163,7 @@ fn resolve_ytdlp(configured: Option<&str>, managed: Option<&str>) -> String {
 fn detect_ytdlp(app: tauri::AppHandle<TauriRuntime>) -> Option<String> {
     let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ytdlp(None, managed.as_deref());
-    let ok = std::process::Command::new(&bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if ok { Some(bin) } else { None }
+    if bin_runs(&bin, "--version") { Some(bin) } else { None }
 }
 
 /// Report the installed yt-dlp version (`--version`) and the latest released
@@ -1151,7 +1178,7 @@ async fn ytdlp_versions(
     let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
 
-    let current = std::process::Command::new(&bin)
+    let current = hidden_command(&bin)
         .arg("--version")
         .output()
         .ok()
@@ -1274,7 +1301,7 @@ async fn probe_url_media(
     let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
 
-    let out = std::process::Command::new(&bin)
+    let out = hidden_command(&bin)
         .args(["--no-playlist", "--playlist-items", "1", "--skip-download", "--no-warnings",
                "--print", "%(duration)s|%(title)s"])
         .arg(&url)
@@ -1321,7 +1348,7 @@ async fn import_url_audio(
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let out_tmpl = work.join("audio.%(ext)s");
 
-    let mut cmd = std::process::Command::new(&ytdlp_bin);
+    let mut cmd = hidden_command(&ytdlp_bin);
     cmd.arg(&url)
         .args(["-f", "bestaudio/best", "--no-playlist", "--playlist-items", "1", "--no-warnings", "--no-part"])
         .arg("-o").arg(&out_tmpl)
@@ -1415,10 +1442,10 @@ fn run_ffmpeg_encode(
     eff: f64,
 ) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Read};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tauri::Emitter;
 
-    let mut child = Command::new(ffmpeg_bin)
+    let mut child = hidden_command(ffmpeg_bin)
         .args(args)
         .stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn()
@@ -1454,7 +1481,7 @@ async fn probe_url_formats(
     let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ytdlp(ytdlp_path.as_deref(), managed.as_deref());
 
-    let out = std::process::Command::new(&bin)
+    let out = hidden_command(&bin)
         // `--playlist-items 1`: multi-video posts (e.g. an X tweet with several
         // clips) are a playlist — without this yt-dlp emits one JSON object per
         // entry and the parse below breaks. Take the first video.
@@ -1557,7 +1584,7 @@ async fn import_url_video(
 ) -> Result<String, String> {
     use base64::Engine;
     use std::io::{BufRead, BufReader, Read};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tauri::Emitter;
 
     let managed_yt = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
@@ -1576,7 +1603,7 @@ async fn import_url_video(
     let out_tmpl = work.join("src.%(ext)s");
 
     // ── Phase 1: download (+merge / section cut) via yt-dlp, streaming % ──
-    let mut dl = Command::new(&ytdlp_bin);
+    let mut dl = hidden_command(&ytdlp_bin);
     dl.arg(&url)
         .args(["--no-playlist", "--playlist-items", "1", "--no-warnings", "--no-part", "--newline"])
         .args(["-f", &format!("bv*[height<={h}]+ba/b[height<={h}]")])

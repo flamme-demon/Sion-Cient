@@ -15,6 +15,7 @@
 // via noteConnectionLost(); onParticipantLeft() reads + clears it.
 
 import { useSettingsStore, type VoiceSoundCfg } from "../stores/useSettingsStore";
+import { useAppStore } from "../stores/useAppStore";
 import { getSharedAudioContext } from "./audioContext";
 
 // User-supplied sound files, resolved at build time. Missing files are simply
@@ -140,11 +141,26 @@ const SYNTH: Record<Cue, () => void> = {
   timeout: () => playSequence(
     [{ freq: 440, start: 0, dur: 0.09 }, { freq: 349.23, start: 0.1, dur: 0.09 }, { freq: 261.63, start: 0.2, dur: 0.16 }],
     "triangle", SYNTH_PEAK),
+  // Attention fanfare (matches the old soundService.playPoke character).
+  poke: () => playSequence(
+    [{ freq: 523.25, start: 0, dur: 0.1 }, { freq: 659.25, start: 0.09, dur: 0.1 }, { freq: 783.99, start: 0.18, dur: 0.22 }],
+    "sawtooth", 0.12),
+  // You got kicked — harsh descending buzz.
+  kick: () => playSequence(
+    [{ freq: 392, start: 0, dur: 0.12 }, { freq: 311.13, start: 0.11, dur: 0.12 }, { freq: 196, start: 0.22, dur: 0.22 }],
+    "sawtooth", 0.18),
+  // Someone in your channel got kicked — short neutral two-tone (witnesses).
+  memberKicked: () => playSequence(
+    [{ freq: 466.16, start: 0, dur: 0.09 }, { freq: 349.23, start: 0.1, dur: 0.14 }], "triangle", SYNTH_PEAK),
 };
 
 // ---- cue dispatch --------------------------------------------------------
 
-type Cue = "join" | "leave" | "timeout";
+type Cue = "join" | "leave" | "timeout" | "poke" | "kick" | "memberKicked";
+
+// Cues gated by the "voice channel sounds" toggle (ambient join/leave). The
+// rest (poke/kick/memberKicked) are user-event notifications that always play.
+const GATED: ReadonlySet<Cue> = new Set<Cue>(["join", "leave", "timeout"]);
 
 function playDefault(cue: Cue) {
   const url = fileFor(cue);
@@ -153,7 +169,11 @@ function playDefault(cue: Cue) {
 }
 
 function play(cue: Cue) {
-  if (!ENABLED()) return;
+  if (GATED.has(cue) && !ENABLED()) return;
+  // Opt-in: silence every cue while deafened. Off by default — most users like
+  // still hearing who joins even while deafened.
+  const s = useSettingsStore.getState();
+  if (s.muteSoundsWhenDeafened && useAppStore.getState().isDeafened) return;
   const custom = overrideFor(cue);
   if (custom) {
     void playCustom(custom).then((ok) => { if (!ok) playDefault(cue); }); // custom failed → fall back
@@ -178,6 +198,22 @@ export function resetVoiceCues() {
 
 export function playJoinCue() {
   play("join");
+}
+
+/** You received a poke. Always plays (customizable), independent of the
+ *  join/leave cue toggle. */
+export function playPokeCue() {
+  play("poke");
+}
+
+/** You were voice-kicked from a channel. */
+export function playKickCue() {
+  play("kick");
+}
+
+/** Someone else in your current voice channel was kicked — so witnesses know. */
+export function playMemberKickedCue() {
+  play("memberKicked");
 }
 
 /** Play a cue on demand (Settings preview button). Respects the enabled
