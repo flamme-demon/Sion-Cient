@@ -1351,8 +1351,10 @@ wrap_permission_handler! {
         return 0;
       };
       // [Sion patch] Log requested permissions so we can confirm from logs
-      // whether getDisplayMedia's DESKTOP_* bits reach this handler.
-      eprintln!("[Sion-cef] on_request_media_access_permission requested_permissions={requested_permissions:#x}");
+      // whether getDisplayMedia's DESKTOP_* bits reach this handler. Use the
+      // `log` facade (not eprintln) so tauri-plugin-log captures it — visible
+      // in DevTools / the log file even on a release Windows build (no console).
+      log::warn!("[Sion-cef] on_request_media_access_permission requested_permissions={requested_permissions:#x}");
       // Allow microphone, camera, AND desktop (screen) capture when requested.
       // DESKTOP_AUDIO/VIDEO are the getDisplayMedia bits (4 / 8); upstream only
       // granted DEVICE_* (1 / 2) and returned 0 for desktop, leaving CEF to
