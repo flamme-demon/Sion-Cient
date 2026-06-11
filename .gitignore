@@ -30,6 +30,9 @@ sion-release.keystore
 keystore.properties
 package-for-windows.sh
 
+# Local experiment/patch notes (not shipped)
+patches/
+
 # Claude Code workspace (project-local skills, settings, etc.)
 .claude/
 
