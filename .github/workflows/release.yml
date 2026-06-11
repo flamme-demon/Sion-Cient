@@ -1,7 +1,7 @@
 name: Release
 
 # Triggered when we push a `v*` tag (e.g. `v1.1.0`). Builds Linux AppImage
-# and Windows MSI in parallel, then publishes a GitHub Release with both
+# and Windows NSIS installer (.exe) in parallel, then publishes a GitHub Release with both
 # artifacts attached. The version string is derived from the tag itself
 # so we don't have to keep the workflow in sync with package.json.
 
@@ -91,9 +91,8 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
-  # Windows MSI. Tauri's bundler downloads WiX on first run; we let it do
-  # so rather than pre-installing, since the cache makes subsequent runs
-  # fast. We invoke `tauri build --bundles msi` directly instead of the
+  # Windows NSIS installer (.exe). We invoke `tauri build --bundles nsis`
+  # directly (NSIS handles the CEF resource injection cleanly) instead of the
   # PowerShell helper script — the helper does dev-machine setup that's
   # unnecessary on a fresh GHA runner.
   # -------------------------------------------------------------------------
