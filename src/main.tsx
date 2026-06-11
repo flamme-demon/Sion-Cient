@@ -8,6 +8,13 @@ import { openExternalUrl } from "./utils/openExternal";
 import { installCefAudioShim } from "./services/cefAudioShim";
 import { installDenoiseShim } from "./services/denoiseShim";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
+import { attachConsole } from "@tauri-apps/plugin-log";
+
+// Route Rust `log::*` records (e.g. the [Sion-cef] media-access diagnostic)
+// into the webview console — the only way to see them on the shipped Windows
+// build (no terminal). Pairs with the Rust logger's Webview target. No-op
+// outside Tauri.
+attachConsole().catch(() => {});
 
 // Override enumerateDevices/getUserMedia in CEF so WebRTC sees real devices.
 // Denoise shim wraps getUserMedia *after* cefAudioShim so both chains compose.
