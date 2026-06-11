@@ -145,6 +145,15 @@ fn get_or_start_handle() -> Option<&'static OverlayHandle> {
             {
                 EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
                 EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+                // Force the X11 (XWayland) backend. winit's native Wayland
+                // backend does NOT honor WindowLevel::AlwaysOnTop (Wayland has
+                // no always-on-top for ordinary toplevels; that needs
+                // wlr-layer-shell, which winit lacks), so the overlay sank
+                // behind app windows on KDE/GNOME Wayland and remote cursors
+                // were hidden under the shared app. XWayland maps AlwaysOnTop
+                // to _NET_WM_STATE_ABOVE, which KWin/Mutter respect → the
+                // overlay stays on top and is captured on top in the share.
+                EventLoopBuilderExtX11::with_x11(&mut builder);
             }
             #[cfg(target_os = "windows")]
             {

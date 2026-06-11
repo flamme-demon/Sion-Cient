@@ -13,7 +13,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 const SAMPLE_RATE = 48000;
-const CHANNELS = 2;
+// MONO — the published system-audio track must match the mono mic, else Opus
+// negotiates pt 111 with sprop-stereo:1 and collides with the mic's mono pt 111
+// (BUNDLE codec collision on CEF/Chromium 148 → peers hear nothing). The Rust
+// side captures mono (parec --channels=1) to match.
+const CHANNELS = 1;
 
 // Inline AudioWorklet: ring buffers the interleaved f32 samples shipped over
 // WS and hands them out at the 128-sample quantum cadence. Underruns emit
@@ -27,8 +31,8 @@ const WORKLET_SRC = `
 class SionSystemAudio extends AudioWorkletProcessor {
   constructor() {
     super();
-    // Interleaved ring buffer, float32 LR LR LR…
-    this.buf = new Float32Array(48000); // 0.5 s stereo interleaved
+    // Mono ring buffer, float32 samples.
+    this.buf = new Float32Array(48000); // ~1 s mono
     this.readIdx = 0;
     this.writeIdx = 0;
     this.size = 0;
@@ -61,23 +65,19 @@ class SionSystemAudio extends AudioWorkletProcessor {
   }
   process(_inputs, outputs) {
     const out = outputs[0];
-    // Expect stereo. Browsers pass [Float32Array(128), Float32Array(128)].
-    const qL = out[0];
-    const qR = out.length > 1 ? out[1] : out[0];
-    const quantum = qL.length;
-    const needed = quantum * 2; // interleaved samples to produce 128 frames
-    if (this.size < needed) {
+    // Mono — one output channel fed from the mono ring buffer.
+    const q = out[0];
+    const quantum = q.length;
+    if (this.size < quantum) {
       // Underrun: emit silence. Keep processing so the node stays alive.
-      qL.fill(0);
-      qR.fill(0);
+      q.fill(0);
       return true;
     }
     for (let i = 0; i < quantum; i++) {
-      qL[i] = this.buf[this.readIdx];
-      qR[i] = this.buf[(this.readIdx + 1) % this.cap];
-      this.readIdx = (this.readIdx + 2) % this.cap;
+      q[i] = this.buf[this.readIdx];
+      this.readIdx = (this.readIdx + 1) % this.cap;
     }
-    this.size -= needed;
+    this.size -= quantum;
     return true;
   }
 }
@@ -128,9 +128,14 @@ export async function startSystemAudioCapture(): Promise<MediaStreamTrack> {
     outputChannelCount: [CHANNELS],
   });
 
-  // Destination node produces a MediaStream with one stereo track. LiveKit's
-  // LocalAudioTrack wraps the track directly; no need for a separate stream.
+  // Destination node produces the MediaStream track LiveKit publishes. Force
+  // MONO (explicit channelCount = 1) so the track stays 1-channel — otherwise
+  // the node upmixes to 2 and Opus negotiates stereo, re-triggering the pt-111
+  // collision with the mono mic on CEF 148.
   const dest = ctx.createMediaStreamDestination();
+  dest.channelCount = 1;
+  dest.channelCountMode = "explicit";
+  dest.channelInterpretation = "speakers";
   workletNode.connect(dest);
 
   const wsUrl = `ws://127.0.0.1:${port}`;

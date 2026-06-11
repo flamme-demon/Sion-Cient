@@ -13,6 +13,11 @@
 edition = "2021"
 rust-version = "1.71.0"
 name = "softbuffer"
+# Must EQUAL the version the resolver selects for `softbuffer = "0.4"` (registry
+# max = 0.4.8) so this [patch] replaces it. The Argb8888 Wayland transparency
+# fix lives in src/backends/wayland/buffer.rs — if this patch is dropped
+# ([[patch.unused]]) the overlay regresses to opaque black. Re-apply by
+# removing the stale softbuffer entry from Cargo.lock and re-resolving.
 version = "0.4.8"
 build = false
 exclude = ["examples"]

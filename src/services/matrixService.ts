@@ -1009,6 +1009,19 @@ export function getRoomMembers(roomId: string): { userId: string; displayName: s
   }));
 }
 
+/** Resolve a single room member's display name + (small) avatar URL. Falls back
+ *  to the raw user id when the member isn't known locally. Synchronous — reads
+ *  the in-memory room state, safe to call during render. */
+export function getRoomMemberInfo(roomId: string, userId: string): { displayName: string; avatarUrl: string | null } {
+  if (!matrixClient) return { displayName: userId, avatarUrl: null };
+  const m = matrixClient.getRoom(roomId)?.getMember(userId);
+  if (!m) return { displayName: userId, avatarUrl: null };
+  return {
+    displayName: m.name || userId,
+    avatarUrl: m.getAvatarUrl(matrixClient.getHomeserverUrl(), 24, 24, "crop", false, false) || null,
+  };
+}
+
 export async function createChannel(name: string, isVoice: boolean, isPublic = true, encrypted = false): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
 

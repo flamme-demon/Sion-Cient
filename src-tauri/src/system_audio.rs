@@ -106,13 +106,18 @@ pub fn system_audio_list_sinks() -> Vec<(String, String)> {
 
 #[allow(dead_code)] // used by both platform modules
 const SAMPLE_RATE: u32 = 48000;
+// MONO: the system-audio track must match the (mono) mic so both negotiate the
+// same Opus payload. A STEREO system-audio track collided with the mono mic on
+// opus pt 111 (sprop-stereo:1 vs none) on CEF/Chromium 148 → BUNDLE codec
+// collision (INVALID_PARAMETER) → peers heard nothing. parec downmixes the
+// stereo sink monitor to mono for us.
 #[allow(dead_code)]
-const CHANNELS: u32 = 2;
-/// 20 ms @ 48 kHz stereo f32 = 960 samples × 4 bytes × 2 ch = 7680 bytes.
+const CHANNELS: u32 = 1;
+/// 20 ms @ 48 kHz mono f32 = 960 samples × 4 bytes × 1 ch = 3840 bytes.
 /// Small enough to keep WebSocket head-of-line blocking low and matches the
 /// JS-side AudioWorklet render-quantum granularity (20 ms ≈ 7.5 quanta).
 #[allow(dead_code)]
-const FRAME_BYTES: usize = 7680;
+const FRAME_BYTES: usize = 3840;
 
 // ============================================================================
 // Linux implementation. Strategy: hidden null-sink + per-app pw-link, then
@@ -395,67 +400,103 @@ mod linux_impl {
         LINKED_NODES.lock().unwrap().clear();
     }
 
-    /// Wire one node's stereo (or mono) outputs into our virtual sink.
-    /// Different applications expose different port names — Chromium uses
-    /// `output_FL/FR`, some pipewire-pulse clients use `monitor_FL/FR`,
-    /// mono apps have `output_MONO`. We try them all; `pw-link` exits
-    /// non-zero when the port doesn't exist OR the link already exists,
-    /// which is fine — at least one combination will succeed for any real
-    /// audio source. We address ports by `node.name`, NOT `object.id`:
-    /// `pw-link` parses the part before `:` as a node *name*, so a numeric
-    /// id never resolves and every link silently fails. Using the name is
-    /// also correct for apps with several nodes of the same name (Firefox =
-    /// one node per tab): pw-link links the matching port on *every* node
-    /// sharing that name, so all tabs reach the capture sink.
-    fn link_node_to_virtual_sink(node_name: &str) {
-        const ATTEMPTS: &[(&str, &str)] = &[
-            ("output_FL", "playback_FL"),
-            ("output_FR", "playback_FR"),
-            ("monitor_FL", "playback_FL"),
-            ("monitor_FR", "playback_FR"),
-            ("output_MONO", "playback_FL"),
-            ("output_MONO", "playback_FR"),
-        ];
-        for (out_port, in_port) in ATTEMPTS {
-            let from = format!("{node_name}:{out_port}");
-            let to = format!("{VIRTUAL_SINK_NAME}:{in_port}");
-            let _ = Command::new("pw-link")
-                .args([&from, &to])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+    /// Link two ports by numeric ID: `pw-link <out_id> <in_id>`. No-op
+    /// (harmless non-zero) when the link already exists. We MUST address ports
+    /// by id, not `node:port` name: `pw-link "Firefox:output_FL"` connects only
+    /// ONE of several nodes sharing the name (Firefox = one node per tab), so
+    /// the actually-playing tab was silently missed → capture recorded silence.
+    /// Port ids are unique, so linking each enumerated port covers every tab.
+    fn pw_link_ids(out_id: u32, in_id: u32) {
+        let _ = Command::new("pw-link")
+            .args([out_id.to_string(), in_id.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 
-    /// Re-scan sink-inputs and re-issue `pw-link` for every non-Sion node
-    /// each tick. `pw-link` is a no-op on duplicate links (returns
-    /// non-zero, harmless), so retrying is cheap and recovers from any
-    /// silent failure on first attempt (race with node port enumeration).
-    /// We only log on first sighting per `object.id` to keep the journal
-    /// readable — `object.id` is unique server-side, whereas `node.name`
-    /// collides across multiple sink-inputs of the same app (Firefox = one
-    /// node per tab, all named "Firefox"). The link itself is issued by
-    /// `node.name` (see `link_node_to_virtual_sink`), which covers every
-    /// node sharing that name in one call; the per-`object.id` dedup here
-    /// only governs logging.
+    /// Parse `pw-link -I <flag>` (`-o` outputs / `-i` inputs) into
+    /// (port_id, node_name, port_name). Lines look like ` 173 Firefox:output_FL`.
+    /// We split node:port at the LAST ':' since some node names contain ':'.
+    fn list_ports(flag: &str) -> Vec<(u32, String, String)> {
+        let out = match Command::new("pw-link").args(["-I", flag]).output() {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => return Vec::new(),
+        };
+        let mut result = Vec::new();
+        for line in String::from_utf8_lossy(&out).lines() {
+            let line = line.trim_start();
+            let Some((id_str, name)) = line.split_once(' ') else { continue };
+            let Ok(id) = id_str.trim().parse::<u32>() else { continue };
+            let name = name.trim();
+            let Some(pos) = name.rfind(':') else { continue };
+            result.push((id, name[..pos].to_string(), name[pos + 1..].to_string()));
+        }
+        result
+    }
+
+    /// The virtual sink's playback_FL/FR input port ids (parec captures its
+    /// monitor; these are where app audio is fed in).
+    fn virtual_sink_playback_ports() -> Option<(u32, u32)> {
+        let (mut fl, mut fr) = (None, None);
+        for (id, node, port) in list_ports("-i") {
+            if node != VIRTUAL_SINK_NAME {
+                continue;
+            }
+            match port.as_str() {
+                "playback_FL" => fl = Some(id),
+                "playback_FR" => fr = Some(id),
+                _ => {}
+            }
+        }
+        Some((fl?, fr?))
+    }
+
+    /// Re-scan sink-inputs each tick and link EVERY non-Sion stream's output
+    /// ports into the virtual sink, by port id (so every tab of every app is
+    /// captured — see `pw_link_ids`). Sink-inputs are identified via pactl
+    /// (which gives the process binary), so Sion is excluded reliably and
+    /// device monitors / capture devices are never linked. NOTE: Sion's
+    /// node.name is "Chromium" (CEF); if a *real* Chromium browser is also
+    /// running, its node.name collides and it would be excluded too — known
+    /// limitation, acceptable for now.
     fn refresh_sink_input_links() {
         let inputs = list_pa_sink_inputs();
         let mut already_seen = LINKED_NODES.lock().unwrap();
+        // node.names of the non-Sion sink-inputs we want to capture.
+        let mut want: HashSet<String> = HashSet::new();
         for input in &inputs {
             if input.binary == SION_BINARY_NAME {
                 continue;
             }
             if !already_seen.contains(&input.object_id) {
                 log::info!(
-                    "[Sion][sysaudio] linking '{}' (binary={} object_id={}) → {VIRTUAL_SINK_NAME}",
+                    "[Sion][sysaudio] capturing '{}' (binary={} object_id={}) → {VIRTUAL_SINK_NAME}",
                     input.node_name, input.binary, input.object_id
                 );
                 already_seen.insert(input.object_id);
             }
-            link_node_to_virtual_sink(&input.node_name);
+            want.insert(input.node_name.clone());
         }
-        let live: HashSet<u32> = inputs.into_iter().map(|i| i.object_id).collect();
+        let live: HashSet<u32> = inputs.iter().map(|i| i.object_id).collect();
         already_seen.retain(|id| live.contains(id));
+        drop(already_seen);
+
+        if want.is_empty() {
+            return;
+        }
+        let Some((pb_fl, pb_fr)) = virtual_sink_playback_ports() else {
+            return;
+        };
+        for (id, node, port) in list_ports("-o") {
+            if !want.contains(&node) {
+                continue;
+            }
+            if port.ends_with("FR") {
+                pw_link_ids(id, pb_fr);
+            } else if port.ends_with("FL") || port == "output_MONO" {
+                pw_link_ids(id, pb_fl);
+            }
+        }
     }
 
     fn spawn_link_watcher() {

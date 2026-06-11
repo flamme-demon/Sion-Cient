@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "../../services/matrixService";
 import type { PollData } from "../../types/matrix";
@@ -11,6 +11,39 @@ interface Props {
   currentUserId: string;
   /** Whether the current user may end the poll (creator or moderator). */
   canEnd: boolean;
+}
+
+const VOTER_STACK_MAX = 5;
+
+/** Overlapping mini-avatars of the voters for one option (capped, with a
+ *  "+N" overflow chip). Names show on hover via the title attribute. */
+function VoterStack({ voters, roomId }: { voters: string[]; roomId: string }) {
+  if (voters.length === 0) return null;
+  const shown = voters.slice(0, VOTER_STACK_MAX);
+  const extra = voters.length - shown.length;
+  const chip: CSSProperties = {
+    width: 18, height: 18, borderRadius: '50%', overflow: 'hidden',
+    border: '1.5px solid var(--color-surface-container)', background: 'var(--color-surface-container-highest)',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 9, fontWeight: 600, color: 'var(--color-on-surface-variant)', flexShrink: 0,
+  };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {shown.map((uid, i) => {
+        const info = matrixService.getRoomMemberInfo(roomId, uid);
+        return (
+          <span key={uid} title={info.displayName} style={{ ...chip, marginLeft: i === 0 ? 0 : -6 }}>
+            {info.avatarUrl
+              ? <img src={info.avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : (Array.from(info.displayName.replace(/^@/, ""))[0]?.toUpperCase() || "?")}
+          </span>
+        );
+      })}
+      {extra > 0 && (
+        <span style={{ ...chip, marginLeft: -6, width: 'auto', minWidth: 18, padding: '0 4px', borderRadius: 9 }}>+{extra}</span>
+      )}
+    </span>
+  );
 }
 
 /** Renders an MSC3381 poll: question, options with live results, vote on click,
@@ -30,15 +63,19 @@ export function PollMessage({ poll, pollEventId, roomId, currentUserId, canEnd }
 
   const ended = poll.ended || (poll.endsTs != null && nowTs >= poll.endsTs);
 
-  const { tally, totalVoters, myVote } = useMemo(() => {
+  const { tally, totalVoters, myVote, votersByAnswer } = useMemo(() => {
     const tally: Record<string, number> = {};
+    const votersByAnswer: Record<string, string[]> = {};
     let totalVoters = 0;
-    for (const ids of Object.values(poll.votes)) {
+    for (const [voter, ids] of Object.entries(poll.votes)) {
       if (!ids.length) continue;
       totalVoters += 1;
-      for (const id of ids) tally[id] = (tally[id] || 0) + 1;
+      for (const id of ids) {
+        tally[id] = (tally[id] || 0) + 1;
+        (votersByAnswer[id] ||= []).push(voter);
+      }
     }
-    return { tally, totalVoters, myVote: poll.votes[currentUserId] || [] };
+    return { tally, totalVoters, myVote: poll.votes[currentUserId] || [], votersByAnswer };
   }, [poll.votes, currentUserId]);
 
   // Disclosed polls show results live; undisclosed hide them until ended.
@@ -97,7 +134,10 @@ export function PollMessage({ poll, pollEventId, roomId, currentUserId, canEnd }
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ans.text}</span>
                 </span>
                 {showResults && (
-                  <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', whiteSpace: 'nowrap', flexShrink: 0 }}>{count} · {pct}%</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <VoterStack voters={votersByAnswer[ans.id] || []} roomId={roomId} />
+                    <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', whiteSpace: 'nowrap' }}>{pct}%</span>
+                  </span>
                 )}
               </div>
             </button>
@@ -119,7 +159,8 @@ export function PollMessage({ poll, pollEventId, roomId, currentUserId, canEnd }
         {canEnd && !ended && !pollEventId.startsWith("~") && (
           <button
             onClick={() => matrixService.endPoll(roomId, pollEventId).catch((e) => console.warn("[Sion] endPoll failed:", e))}
-            style={{ border: 'none', background: 'transparent', color: 'var(--color-primary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', padding: '2px 6px' }}
+            title={t("poll.endHint")}
+            style={{ border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'var(--color-primary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit', padding: '4px 10px', borderRadius: 999, whiteSpace: 'nowrap', flexShrink: 0 }}
           >
             {t("poll.end")}
           </button>
