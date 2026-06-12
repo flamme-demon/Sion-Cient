@@ -740,6 +740,20 @@ export function SettingsPanel() {
               { cue: "memberKicked" as const, label: t("settings.cueMemberKicked"), cfg: voiceSounds.memberKicked },
             ]).map(renderCueRow)}
           </div>
+
+          {/* ---- SONS D'ACTION (mute / sourdine — toujours actifs) ---- */}
+          <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--color-on-surface-variant)', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '8px 4px 2px' }}>
+            {t("settings.actionSoundsSection")}
+          </div>
+          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("settings.actionSoundsDesc")}</div>
+            {([
+              { cue: "mute" as const, label: t("settings.cueMute"), cfg: voiceSounds.mute },
+              { cue: "unmute" as const, label: t("settings.cueUnmute"), cfg: voiceSounds.unmute },
+              { cue: "deafen" as const, label: t("settings.cueDeafen"), cfg: voiceSounds.deafen },
+              { cue: "undeafen" as const, label: t("settings.cueUndeafen"), cfg: voiceSounds.undeafen },
+            ]).map(renderCueRow)}
+          </div>
         </>)}
 
         {/* === SHORTCUTS === */}

@@ -152,15 +152,33 @@ const SYNTH: Record<Cue, () => void> = {
   // Someone in your channel got kicked — short neutral two-tone (witnesses).
   memberKicked: () => playSequence(
     [{ freq: 466.16, start: 0, dur: 0.09 }, { freq: 349.23, start: 0.1, dur: 0.14 }], "triangle", SYNTH_PEAK),
+  // Local action feedback — descending = off, ascending = on (ported from the
+  // old soundService dual-tones).
+  mute: () => playSequence(
+    [{ freq: 480, start: 0, dur: 0.1 }, { freq: 320, start: 0.06, dur: 0.1 }], "sine", SYNTH_PEAK),
+  unmute: () => playSequence(
+    [{ freq: 320, start: 0, dur: 0.1 }, { freq: 480, start: 0.06, dur: 0.1 }], "sine", SYNTH_PEAK),
+  deafen: () => playSequence(
+    [{ freq: 400, start: 0, dur: 0.12 }, { freq: 250, start: 0.08, dur: 0.12 }], "sine", SYNTH_PEAK),
+  undeafen: () => playSequence(
+    [{ freq: 250, start: 0, dur: 0.12 }, { freq: 400, start: 0.08, dur: 0.12 }], "sine", SYNTH_PEAK),
 };
 
 // ---- cue dispatch --------------------------------------------------------
 
-type Cue = "join" | "leave" | "timeout" | "poke" | "kick" | "memberKicked";
+type Cue =
+  | "join" | "leave" | "timeout"
+  | "poke" | "kick" | "memberKicked"
+  | "mute" | "unmute" | "deafen" | "undeafen";
 
 // Cues gated by the "voice channel sounds" toggle (ambient join/leave). The
 // rest (poke/kick/memberKicked) are user-event notifications that always play.
 const GATED: ReadonlySet<Cue> = new Set<Cue>(["join", "leave", "timeout"]);
+
+// Local action-feedback cues (confirm the user's OWN mute/deafen toggle). These
+// always play AND are never silenced by `muteSoundsWhenDeafened` — otherwise the
+// "deafen" confirmation itself would be swallowed the instant you deafen.
+const ACTION_FEEDBACK: ReadonlySet<Cue> = new Set<Cue>(["mute", "unmute", "deafen", "undeafen"]);
 
 function playDefault(cue: Cue) {
   const url = fileFor(cue);
@@ -171,9 +189,10 @@ function playDefault(cue: Cue) {
 function play(cue: Cue) {
   if (GATED.has(cue) && !ENABLED()) return;
   // Opt-in: silence every cue while deafened. Off by default — most users like
-  // still hearing who joins even while deafened.
+  // still hearing who joins even while deafened. Action-feedback cues are exempt
+  // (you must hear your own mute/deafen confirmation).
   const s = useSettingsStore.getState();
-  if (s.muteSoundsWhenDeafened && useAppStore.getState().isDeafened) return;
+  if (!ACTION_FEEDBACK.has(cue) && s.muteSoundsWhenDeafened && useAppStore.getState().isDeafened) return;
   const custom = overrideFor(cue);
   if (custom) {
     void playCustom(custom).then((ok) => { if (!ok) playDefault(cue); }); // custom failed → fall back
@@ -214,6 +233,21 @@ export function playKickCue() {
 /** Someone else in your current voice channel was kicked — so witnesses know. */
 export function playMemberKickedCue() {
   play("memberKicked");
+}
+
+// Local action-feedback (your own mic mute / deafen toggle). Always play,
+// customizable, never silenced by deafen. Replace the old soundService beeps.
+export function playMuteCue() {
+  play("mute");
+}
+export function playUnmuteCue() {
+  play("unmute");
+}
+export function playDeafenCue() {
+  play("deafen");
+}
+export function playUndeafenCue() {
+  play("undeafen");
 }
 
 /** Play a cue on demand (Settings preview button). Respects the enabled

@@ -7,8 +7,13 @@ export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
 export type NotificationMode = "all" | "mentions" | "minimal";
 
 // join/leave/timeout are gated by the `voiceChannelSounds` toggle; poke/kick/
-// memberKicked are user-event notifications that always play (just customizable).
-export type VoiceCue = "join" | "leave" | "timeout" | "poke" | "kick" | "memberKicked";
+// memberKicked are user-event notifications that always play; mute/unmute/
+// deafen/undeafen are local action-feedback (always play, never silenced by
+// deafen). All are customizable.
+export type VoiceCue =
+  | "join" | "leave" | "timeout"
+  | "poke" | "kick" | "memberKicked"
+  | "mute" | "unmute" | "deafen" | "undeafen";
 
 /** A custom voice-channel cue sound: a picked file, trimmed to [start,end]
  *  seconds, played at `gain` (Web Audio). null = use the bundled default. */
@@ -168,7 +173,7 @@ export const useSettingsStore = create<SettingsState>()(
       soundboardVolume: 0.2,
       voiceChannelSounds: true,
       muteSoundsWhenDeafened: false,
-      voiceSounds: { join: null, leave: null, timeout: null, poke: null, kick: null, memberKicked: null },
+      voiceSounds: { join: null, leave: null, timeout: null, poke: null, kick: null, memberKicked: null, mute: null, unmute: null, deafen: null, undeafen: null },
       soundboardOpenAtLaunch: false,
       hiddenCategories: [],
       soundboardFavorites: [],

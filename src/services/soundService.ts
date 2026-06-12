@@ -48,30 +48,9 @@ function playTone(frequency: number, duration: number, volume = 0.15, type: Osci
   }
 }
 
-function playDualTone(freq1: number, freq2: number, duration: number, delay: number, volume = 0.12) {
-  playTone(freq1, duration, volume);
-  setTimeout(() => playTone(freq2, duration, volume), delay);
-}
-
-/** Son de mute micro — ton descendant bref */
-export function playMute() {
-  playDualTone(480, 320, 0.1, 60, 0.1);
-}
-
-/** Son de unmute micro — ton montant bref */
-export function playUnmute() {
-  playDualTone(320, 480, 0.1, 60, 0.1);
-}
-
-/** Son de deafen (couper le son) — ton grave descendant */
-export function playDeafen() {
-  playDualTone(400, 250, 0.12, 80, 0.1);
-}
-
-/** Son de undeafen (rétablir le son) — ton montant */
-export function playUndeafen() {
-  playDualTone(250, 400, 0.12, 80, 0.1);
-}
+// Mic mute/unmute + deafen/undeafen feedback now lives in the customizable cue
+// system (voiceChannelSounds.ts: playMuteCue/playUnmuteCue/playDeafenCue/
+// playUndeafenCue) so users can swap the beeps for their own MP3s.
 
 /** Son de message reçu — "blop" court et doux */
 export function playMessageReceived() {

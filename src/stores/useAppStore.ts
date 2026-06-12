@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as livekitService from "../services/livekitService";
 import * as matrixService from "../services/matrixService";
-import { playMute, playUnmute, playDeafen, playUndeafen } from "../services/soundService";
+import { playMuteCue, playUnmuteCue, playDeafenCue, playUndeafenCue } from "../services/voiceChannelSounds";
 
 // Timestamp at which the app session started. Used as a cutoff for unread
 // badge computation on channels the user has never opened: historical
@@ -130,7 +130,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleMute: async () => {
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });
-    newMuted ? playMute() : playUnmute();
+    newMuted ? playMuteCue() : playUnmuteCue();
     // Mirror into the call.member state event so clients in other voice
     // channels see our mute indicator. Fire-and-forget — the publish is
     // debounced and a failure is purely cosmetic for those other clients.
@@ -145,7 +145,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newDeafened = !get().isDeafened;
     console.log(`[Sion][deafen] toggleDeafen() store: ${get().isDeafened} → ${newDeafened}`);
     set({ isDeafened: newDeafened });
-    newDeafened ? playDeafen() : playUndeafen();
+    newDeafened ? playDeafenCue() : playUndeafenCue();
     livekitService.setDeafened(newDeafened);
     matrixService.publishLocalVoiceState({ deafened: newDeafened });
     // Deafen also mutes the mic
