@@ -1353,28 +1353,20 @@ wrap_permission_handler! {
       // [Sion patch] log::warn (not eprintln) so tauri-plugin-log captures it —
       // visible in DevTools / log file even on a release Windows build.
       log::warn!("[Sion-cef] on_request_media_access_permission requested_permissions={requested_permissions:#x}");
-
-      let desktop = requested_permissions & (
-        sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE as u32
-        | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE as u32
-      );
-      // getDisplayMedia (DESKTOP_* bits): return 0 → Chrome-style default
-      // handling shows the DesktopMediaPicker (screen / window / tab). Calling
-      // cont() here instead would AUTO-select the primary screen with no
-      // picker. (NOTE: this requires --enable-media-stream NOT be set, else CEF
-      // never calls this handler at all — see lib.rs.)
-      if desktop != 0 {
-        log::warn!("[Sion-cef] desktop capture requested → default handling (show picker)");
-        return 0;
-      }
-
-      // getUserMedia (mic/cam): auto-grant so the user isn't prompted on every
-      // voice join.
-      let device = requested_permissions & (
+      // Auto-grant mic, camera AND desktop capture. NOTE: with
+      // `--enable-media-stream` set (see lib.rs) this handler is not actually
+      // invoked for media — auto-grant happens upstream — but we keep the grant
+      // here as the safe default if that switch is ever removed. We deliberately
+      // do NOT `return 0` for DESKTOP_* to trigger the Chrome DesktopMediaPicker:
+      // that UI crashes this CEF embedding on stop/focus. Single-monitor
+      // selection is done in JS via the legacy getUserMedia desktop constraint.
+      let allowed = requested_permissions & (
         sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE as u32
         | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE as u32
+        | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE as u32
+        | sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE as u32
       );
-      if device != 0 {
+      if allowed != 0 {
         callback.cont(requested_permissions);
         return 1;
       }

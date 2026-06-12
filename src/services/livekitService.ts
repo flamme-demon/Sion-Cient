@@ -367,6 +367,15 @@ let screenShareCallback: ((info: ScreenShareInfo | null) => void) | null = null;
 // so we publish audio independently and must clean it up on our own.
 let systemAudioPublication: LocalTrackPublication | null = null;
 
+// Windows/CEF only: publication of the screen-share VIDEO track when we capture
+// a single monitor ourselves (legacy getUserMedia desktop constraint) instead
+// of going through LiveKit's setScreenShareEnabled/getDisplayMedia. The Chrome
+// source-picker UI crashes in this CEF embedding (stop/focus), and the
+// auto-grant fallback captures ALL monitors at once — so on Windows we pick one
+// monitor via `chromeMediaSourceId: "screen:N:0"` and publish the track here.
+// Tracked separately because setScreenShareEnabled(false) won't unpublish it.
+let manualScreenPublication: LocalTrackPublication | null = null;
+
 /** Resolve a displayable name from a LiveKit participant identity. The
  *  matrix-rtc backend identities are shaped `@user:homeserver:deviceID` —
  *  useless to show as-is. We look up the Matrix room member for the
@@ -1380,7 +1389,7 @@ export async function updateAudioQuality(quality: AudioQualityPreset) {
   }
 }
 
-export async function toggleScreenShare(enabled: boolean) {
+export async function toggleScreenShare(enabled: boolean, opts?: { sourceId?: string }) {
   if (!currentRoom) return;
   const settings = useSettingsStore.getState();
   const wantAudio = settings.screenShareAudio;
@@ -1457,21 +1466,80 @@ export async function toggleScreenShare(enabled: boolean) {
   // flow through on disable (the peer briefly loses our voice and the
   // local user appears to drop from the room). The plain two-arg form
   // for disable is the documented contract.
+  // On Windows/CEF the Chrome source-picker UI crashes (stop/focus) and the
+  // auto-grant fallback captures EVERY monitor at once. So on Windows we capture
+  // a single chosen monitor ourselves via the legacy getUserMedia desktop
+  // constraint (`chromeMediaSourceId: "screen:N:0"`) and publish the track
+  // directly. Linux (xdg portal), macOS (native picker) and web keep
+  // getDisplayMedia via setScreenShareEnabled.
+  const isWindows = ua.includes("Windows");
+  const isTauriDesktop =
+    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const useManualSource = enabled && isWindows && isTauriDesktop;
+
   const appStore = (await import("../stores/useAppStore")).useAppStore;
   if (enabled) {
-    await currentRoom.localParticipant.setScreenShareEnabled(
-      enabled,
-      {
-        audio: audioCaptureConstraints,
-        ...(wantAudio && !useOwnSystemAudio ? { systemAudio: "include" as const } : {}),
-        resolution: preset,
-      },
-      {
-        audioPreset,
-        red: false,
-        dtx: false,
-      },
-    );
+    if (useManualSource) {
+      const sourceId = opts?.sourceId ?? settings.screenShareSourceId ?? "screen:0:0";
+      const { LocalVideoTrack } = await import("livekit-client");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const p = preset as any;
+      const maxWidth = p.width ?? 1920;
+      const maxHeight = p.height ?? 1080;
+      const maxFrameRate = p.encoding?.maxFramerate ?? settings.screenShareFramerate;
+      // Legacy Chromium desktop constraint — the only way in CEF to target ONE
+      // source (a specific media ID); without it CEF "shares everything".
+      // Capture VIDEO only — system audio still rides our WASAPI path below.
+      const constraints = {
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: "desktop",
+            chromeMediaSourceId: sourceId,
+            maxWidth,
+            maxHeight,
+            maxFrameRate,
+          },
+        },
+      } as unknown as MediaStreamConstraints;
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const mst = stream.getVideoTracks()[0];
+      const videoTrack = new LocalVideoTrack(mst);
+      manualScreenPublication = await currentRoom.localParticipant.publishTrack(videoTrack, {
+        source: Track.Source.ScreenShare,
+        name: "screen",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        videoEncoding: p.encoding,
+        simulcast: false,
+        degradationPreference: "maintain-resolution",
+      });
+      // Clean up if the capture ends on its own (monitor unplugged). Guard
+      // against re-entry: the stop path nulls the publication before stopping
+      // the track, so this fires harmlessly there.
+      const onEnded = () => {
+        mst.removeEventListener("ended", onEnded);
+        if (manualScreenPublication) {
+          toggleScreenShare(false).catch(() => { /* best-effort */ });
+          appStore.setState({ isScreenSharing: false });
+        }
+      };
+      mst.addEventListener("ended", onEnded);
+      console.log(`[Sion][Share] manual desktop capture published (${sourceId} ${maxWidth}x${maxHeight}@${maxFrameRate})`);
+    } else {
+      await currentRoom.localParticipant.setScreenShareEnabled(
+        enabled,
+        {
+          audio: audioCaptureConstraints,
+          ...(wantAudio && !useOwnSystemAudio ? { systemAudio: "include" as const } : {}),
+          resolution: preset,
+        },
+        {
+          audioPreset,
+          red: false,
+          dtx: false,
+        },
+      );
+    }
 
     // Own system-audio publish (Linux parec / Windows WASAPI), after the video
     // share is up. We do this AFTER setScreenShareEnabled so the SDP already
@@ -1492,15 +1560,19 @@ export async function toggleScreenShare(enabled: boolean) {
         // overlay, the shared window closed), clean up the audio too —
         // otherwise the capture keeps running and the publication stays alive
         // while the user thinks the share is over.
-        const videoPub = Array.from(currentRoom.localParticipant.trackPublications.values())
-          .find(p => p.source === Track.Source.ScreenShare);
-        const mst = videoPub?.track?.mediaStreamTrack;
-        if (mst) {
-          const onEnded = () => {
-            mst.removeEventListener("ended", onEnded);
-            toggleScreenShare(false).catch(() => { /* best-effort */ });
-          };
-          mst.addEventListener("ended", onEnded);
+        // The manual Windows path attaches its own "ended" listener above; only
+        // the native (setScreenShareEnabled) path needs one wired here.
+        if (!useManualSource) {
+          const videoPub = Array.from(currentRoom.localParticipant.trackPublications.values())
+            .find(p => p.source === Track.Source.ScreenShare);
+          const mst = videoPub?.track?.mediaStreamTrack;
+          if (mst) {
+            const onEnded = () => {
+              mst.removeEventListener("ended", onEnded);
+              toggleScreenShare(false).catch(() => { /* best-effort */ });
+            };
+            mst.addEventListener("ended", onEnded);
+          }
         }
       } catch (e) {
         // On Windows this is most often build < 20348 (no process-loopback
@@ -1526,7 +1598,20 @@ export async function toggleScreenShare(enabled: boolean) {
         await stopSystemAudioCapture();
       } catch { /* best-effort */ }
     }
-    await currentRoom.localParticipant.setScreenShareEnabled(false);
+    if (manualScreenPublication) {
+      // Manual Windows capture: setScreenShareEnabled(false) doesn't know about
+      // this track. Null the handle FIRST so the track's "ended" listener won't
+      // re-enter, then unpublish (and stop the capture).
+      const pub = manualScreenPublication;
+      manualScreenPublication = null;
+      try {
+        if (pub.track) await currentRoom.localParticipant.unpublishTrack(pub.track, true);
+      } catch (e) {
+        console.warn("[Sion][Share] unpublish manual screen track failed:", e);
+      }
+    } else {
+      await currentRoom.localParticipant.setScreenShareEnabled(false);
+    }
   }
 
   // Post-check: did a ScreenShareAudio track actually land on the publication

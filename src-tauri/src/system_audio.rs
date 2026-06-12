@@ -1088,6 +1088,17 @@ mod windows_impl {
         WaitForSingleObject(event_done, INFINITE);
         let _ = CloseHandle(event_done);
 
+        // CRITICAL: `prop` is a windows-rs `PROPVARIANT` whose `Drop` runs
+        // `PropVariantClear`. For a VT_BLOB that frees `blob.pBlobData` via
+        // `CoTaskMemFree` — but our `pBlobData` points at the STACK `activation`,
+        // not CoTaskMem-allocated memory. Letting `prop` drop as VT_BLOB frees a
+        // stack address → heap corruption (exit code 0xC0000374), which surfaced
+        // as an app crash when the screen share (and thus this capture thread)
+        // stopped. The activation params have now been fully consumed by
+        // ActivateAudioInterfaceAsync, so skip the destructor entirely — there
+        // is no heap allocation to release.
+        std::mem::forget(prop);
+
         let audio_client: IAudioClient = result_slot
             .lock()
             .unwrap()

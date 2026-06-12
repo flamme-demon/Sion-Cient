@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
@@ -10,6 +11,22 @@ interface Props {
 
 type Resolution = "720p" | "1080p" | "1440p";
 type Framerate = 5 | 15 | 30 | 60;
+
+interface MonitorInfo {
+  name: string | null;
+  size: { width: number; height: number };
+  position: { x: number; y: number };
+}
+
+// Windows/CEF can't use the Chrome desktop source picker (it crashes), so we
+// list the monitors ourselves and capture the chosen one via
+// `chromeMediaSourceId: "screen:N:0"`. Linux uses the xdg portal picker and
+// macOS the native getDisplayMedia picker — the selector is hidden there.
+const isWindowsTauri =
+  typeof navigator !== "undefined" &&
+  navigator.userAgent.includes("Windows") &&
+  typeof window !== "undefined" &&
+  "__TAURI_INTERNALS__" in window;
 
 const RESOLUTIONS: { value: Resolution; label: string }[] = [
   { value: "720p", label: "720p" },
@@ -34,6 +51,26 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
   const setFramerate = useSettingsStore((s) => s.setScreenShareFramerate);
   const setAudio = useSettingsStore((s) => s.setScreenShareAudio);
   const setCursorOverlay = useSettingsStore((s) => s.setScreenShareCursorOverlay);
+  const sourceId = useSettingsStore((s) => s.screenShareSourceId) ?? "screen:0:0";
+  const setSourceId = useSettingsStore((s) => s.setScreenShareSourceId);
+
+  const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  useEffect(() => {
+    if (!isWindowsTauri) return;
+    let cancelled = false;
+    import("@tauri-apps/api/window")
+      .then(({ availableMonitors }) => availableMonitors())
+      .then((list) => {
+        if (cancelled) return;
+        setMonitors(list as unknown as MonitorInfo[]);
+        // First time (no saved choice): default to the primary screen.
+        if (useSettingsStore.getState().screenShareSourceId == null) {
+          setSourceId("screen:0:0");
+        }
+      })
+      .catch((e) => console.warn("[Sion][Share] availableMonitors failed:", e));
+    return () => { cancelled = true; };
+  }, [setSourceId]);
 
   return (
     <div
@@ -56,6 +93,55 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
         <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>
           {t("screenShare.title")}
         </div>
+
+        {isWindowsTauri && monitors.length > 0 && (
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6 }}>
+              {t("screenShare.monitor", { defaultValue: "Écran à partager" })}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {monitors.map((m, i) => {
+                const id = `screen:${i}:0`;
+                const selected = sourceId === id;
+                const isPrimary = m.position.x === 0 && m.position.y === 0;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => setSourceId(id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                      padding: '8px 12px',
+                      borderRadius: 10,
+                      border: selected ? '2px solid var(--color-primary)' : '2px solid transparent',
+                      background: selected ? 'var(--color-primary-container)' : 'var(--color-surface-container-high)',
+                      color: selected ? 'var(--color-on-primary-container)' : 'var(--color-on-surface)',
+                      fontSize: 13,
+                      fontFamily: 'inherit',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span>
+                      {t("screenShare.monitorN", { defaultValue: "Écran {{n}}", n: i + 1 })}
+                      {isPrimary && (
+                        <span style={{ fontWeight: 400, color: 'var(--color-outline)' }}>
+                          {" · " + t("screenShare.monitorPrimary", { defaultValue: "principal" })}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
+                      {m.size.width}×{m.size.height}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 6, lineHeight: 1.4 }}>
+              {t("screenShare.monitorHint", { defaultValue: "Le partage de fenêtre unique n'est pas disponible sur Windows — choisis un écran entier." })}
+            </div>
+          </div>
+        )}
 
         <div>
           <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6 }}>

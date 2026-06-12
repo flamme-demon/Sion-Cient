@@ -160,6 +160,10 @@
     "cursorOverlay": "Voir les curseurs des viewers",
     "cursorOverlayDesc": "Affiche les curseurs et clics des viewers sur ton écran. Activable même en cours de partage.",
     "hint": "1080p/15fps est un bon compromis. Monter à 30 fps pour vidéo/jeu (plus de bande passante).",
+    "monitor": "Écran à partager",
+    "monitorN": "Écran {{n}}",
+    "monitorPrimary": "principal",
+    "monitorHint": "Le partage d'une fenêtre unique n'est pas disponible sur Windows — choisis un écran entier.",
     "start": "Démarrer le partage",
     "apply": "Appliquer"
   },

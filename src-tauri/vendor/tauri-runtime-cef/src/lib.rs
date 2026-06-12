@@ -2075,14 +2075,14 @@ impl<T: UserEvent> CefRuntime<T> {
       init_ns_app();
     }
 
-    // `--enable-media-stream` auto-grants ALL media permissions and BYPASSES
-    // the permission handler entirely (per CEF docs), which on Windows kills
-    // the getDisplayMedia source picker (CEF auto-selects the primary screen).
-    // Keep it OFF on Windows so the handler runs and Chrome shows the
-    // DesktopMediaPicker; mic/cam are still auto-granted by the handler.
-    // Linux keeps it: screen-share source selection there is the xdg portal
-    // (validated working), independent of this switch.
-    #[cfg(not(target_os = "windows"))]
+    // `--enable-media-stream` auto-grants ALL media permissions and bypasses the
+    // permission handler (per CEF docs). We keep it ON for every platform:
+    //  - Linux: screen-share source selection is the xdg portal (validated).
+    //  - Windows: the Chrome DesktopMediaPicker route (handler returns 0) CRASHES
+    //    this CEF embedding on stop/focus, so we do NOT use it. Instead the app
+    //    captures a single chosen monitor via the legacy getUserMedia desktop
+    //    constraint (`chromeMediaSourceId: "screen:N:0"`), which works fine under
+    //    auto-grant. mic/cam are auto-granted too (no per-join prompt).
     command_line_args.push(("--enable-media-stream".to_string(), None));
 
     let mut app = cef_impl::TauriApp::new(

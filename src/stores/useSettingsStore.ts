@@ -91,6 +91,12 @@ interface SettingsState {
   screenShareCursorOverlay: boolean;
   screenShareResolution: "720p" | "1080p" | "1440p";
   screenShareFramerate: 5 | 15 | 30 | 60;
+  /** CEF/Windows only: which desktop source to capture (e.g. "screen:0:0").
+   *  Windows CEF has no working Chrome source picker (it crashes on stop/focus),
+   *  so we pick a single monitor ourselves via the legacy getUserMedia desktop
+   *  constraint. null = primary screen (screen:0:0). Unused on Linux (xdg
+   *  portal), macOS (native picker) and web (getDisplayMedia). */
+  screenShareSourceId: string | null;
 
   setMutedSpeakAlert: (v: boolean) => void;
   setJoinMuted: (v: boolean) => void;
@@ -128,6 +134,7 @@ interface SettingsState {
   setScreenShareCursorOverlay: (v: boolean) => void;
   setScreenShareResolution: (v: "720p" | "1080p" | "1440p") => void;
   setScreenShareFramerate: (v: 5 | 15 | 30 | 60) => void;
+  setScreenShareSourceId: (v: string | null) => void;
   setNotificationMode: (v: NotificationMode) => void;
   setLanguage: (v: string) => void;
 }
@@ -171,6 +178,7 @@ export const useSettingsStore = create<SettingsState>()(
       screenShareCursorOverlay: false,
       screenShareResolution: "1080p" as const,
       screenShareFramerate: 15 as const,
+      screenShareSourceId: null,
       notificationMode: "mentions" as NotificationMode,
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
@@ -247,6 +255,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setScreenShareResolution: (v) => set({ screenShareResolution: v }),
       setScreenShareFramerate: (v) => set({ screenShareFramerate: v }),
+      setScreenShareSourceId: (v) => set({ screenShareSourceId: v }),
       setLanguage: (v) => {
         set({ language: v });
         import("i18next").then((i18n) => i18n.default.changeLanguage(v));
