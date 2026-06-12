@@ -313,15 +313,15 @@ export function useVoiceChannel() {
           await joinRoom(matrixRoomId);
           await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
 
-          // Three complementary reemit triggers (all event-driven, no fixed
-          // timers). The EncryptionManager may not have been ready when the
-          // first to-device key arrived, and the session may gain new keys
-          // as peers join or rotate — reemit re-applies them to our local
-          // decryptor state.
+          // Four complementary reemit triggers. The EncryptionManager may not
+          // have been ready when the first to-device key arrived, and the
+          // session may gain new keys as peers join or rotate — reemit
+          // re-applies/re-sends keys.
           //   1. LiveKit participant connect  — new peer published
           //   2. MatrixRTC membership change  — known peer rotated keys
           //   3. On-demand from livekitService — MissingKey error observed
           //      (exponential backoff, replaces the old 15 s × 5 fixed timer)
+          //   4. Bounded post-join burst       — see below
           if (activeRTCSession && activeKeyProvider) {
             const lkRoom = getCurrentRoom();
             const rtcSession = activeRTCSession;
@@ -338,6 +338,26 @@ export function useVoiceChannel() {
 
               // Bridge for the MissingKey-driven reemit in livekitService.
               setReemitKeysCallback(() => rtcSession.reemitEncryptionKeys());
+
+              // Bounded post-join re-emit burst (NOT the old blind 15 s × 5
+              // timer — three sends over 4 s, then done). Closes a real race:
+              // the handlers above attach only AFTER joinRoomSession()+connect(),
+              // but the *initial* MembershipsChanged (peers already present when
+              // we joined) fires DURING joinRoomSession — before #2 is wired —
+              // so our key is never pushed to already-present peers. On a cold
+              // crypto store (e.g. a CEF upgrade that wiped the cache) that
+              // initial to-device push can also be lost. Result without this:
+              // already-present peers can't decrypt us until someone talks or
+              // reloads. Sender-side only and guarded so it no-ops if we've
+              // since left the session — no feedback-loop risk (the v0.9.6
+              // model only forbids *receiver-side* leave/rejoin recovery).
+              const reemitNow = () => {
+                if (activeRTCSession !== rtcSession) return; // left/changed voice
+                try { rtcSession.reemitEncryptionKeys(); } catch { /* session ended */ }
+              };
+              for (const delay of [300, 1500, 4000]) {
+                setTimeout(reemitNow, delay);
+              }
             }
           }
 
