@@ -334,6 +334,9 @@ export function ScreenShareView() {
             aria-label={t("screenShare.audioIncluded", { defaultValue: "Son du partage inclus" })}
           >🔊</span>
         )}
+        <span style={{ opacity: 0.6 }}>
+          · {t("screenShare.fullscreenHint", { defaultValue: "double-clic pour agrandir" })}
+        </span>
       </div>
     </div>
   );
