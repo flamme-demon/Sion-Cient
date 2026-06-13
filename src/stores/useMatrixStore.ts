@@ -10,7 +10,7 @@ import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
 import { playMessageReceived } from "../services/soundService";
-import { playPokeCue, playKickCue, playMemberKickedCue } from "../services/voiceChannelSounds";
+import { playPokeCue, playKickCue, playMemberKickedCue, noteKicked } from "../services/voiceChannelSounds";
 import { findAdminRoom } from "../services/adminCommandService";
 
 export type VerificationStep =
@@ -938,6 +938,9 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         // so they know a member was removed — but only if we're connected to
         // the same channel (don't beep for kicks in rooms we're not in).
         if (useAppStore.getState().connectedVoiceChannel === room.roomId) {
+          // Suppress the kicked peer's imminent LiveKit leave cue so witnesses
+          // hear only the memberKicked cue, not memberKicked + leave.
+          noteKicked(content.kicked_user);
           playMemberKickedCue();
         }
         return;

@@ -210,9 +210,46 @@ export function noteConnectionLost(identity: string, lost: boolean) {
   else lostPeers.delete(identity);
 }
 
+// LiveKit can fire ParticipantDisconnected twice for the same peer (most often
+// after a watchdog-triggered `simulateScenario('full-reconnect')` re-emits the
+// disconnect for a peer that's already gone). The first call consumes the
+// `lost` flag and plays `timeout`; the second, with the flag cleared, played
+// `leave` on top — hence the reported "timeout + leave" double. Dedup by
+// identity within a short window so only the first cue plays.
+const LEAVE_DEDUP_MS = 2500;
+const recentLeaves = new Map<string, number>();
+
+// Matrix user IDs we just saw kicked from our voice channel. Their imminent
+// LiveKit disconnect must NOT also play a leave/timeout cue — the kick cue
+// (kick / memberKicked) already covered the departure.
+const KICK_SUPPRESS_MS = 5000;
+const recentlyKicked = new Map<string, number>();
+
+/** Record that `mxid` was just voice-kicked, so its LiveKit departure stays
+ *  silent (the kick cue speaks for it). Called from the kick event handler. */
+export function noteKicked(mxid: string) {
+  recentlyKicked.set(mxid, Date.now());
+}
+
+// The rtc-backend identity is `@user:server` + suffix; extract the bare mxid.
+function mxidOf(identity: string): string | null {
+  return identity.match(/^(@[^:]+:[^:]+)/)?.[1] ?? null;
+}
+
+function wasRecentlyKicked(identity: string): boolean {
+  const mxid = mxidOf(identity);
+  if (!mxid) return false;
+  const ts = recentlyKicked.get(mxid);
+  if (ts == null) return false;
+  recentlyKicked.delete(mxid);
+  return Date.now() - ts < KICK_SUPPRESS_MS;
+}
+
 /** Clear tracked state — call when the local user leaves the room. */
 export function resetVoiceCues() {
   lostPeers.clear();
+  recentLeaves.clear();
+  recentlyKicked.clear();
 }
 
 export function playJoinCue() {
@@ -257,6 +294,16 @@ export function previewCue(cue: Cue) {
 }
 
 export function onParticipantLeft(identity: string) {
+  const now = Date.now();
+  const prev = recentLeaves.get(identity);
+  if (prev != null && now - prev < LEAVE_DEDUP_MS) {
+    // Duplicate ParticipantDisconnected — first call already played the cue.
+    lostPeers.delete(identity);
+    return;
+  }
+  recentLeaves.set(identity, now);
   const timedOut = lostPeers.delete(identity);
+  // A kicked peer's departure is already announced by the kick cue.
+  if (wasRecentlyKicked(identity)) return;
   play(timedOut ? "timeout" : "leave");
 }

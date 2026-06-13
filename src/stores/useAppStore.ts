@@ -62,7 +62,7 @@ interface AppState {
   setConnectedVoice: (id: string | null) => void;
   setConnectingVoice: (id: string | null) => void;
   disconnectVoice: () => void;
-  toggleMute: () => void;
+  toggleMute: (silent?: boolean) => void;
   toggleDeafen: () => void;
   toggleScreenShare: () => void;
   toggleAdmin: () => void;
@@ -127,10 +127,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   setConnectedVoice: (id: string | null) => set({ connectedVoiceChannel: id }),
   disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false }),
-  toggleMute: async () => {
+  toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });
-    newMuted ? playMuteCue() : playUnmuteCue();
+    // `silent` is set when deafen triggers the implicit mute below — the deafen
+    // cue already played, so we skip the mute cue to avoid a double sound.
+    if (!silent) newMuted ? playMuteCue() : playUnmuteCue();
     // Mirror into the call.member state event so clients in other voice
     // channels see our mute indicator. Fire-and-forget — the publish is
     // debounced and a failure is purely cosmetic for those other clients.
@@ -148,9 +150,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     newDeafened ? playDeafenCue() : playUndeafenCue();
     livekitService.setDeafened(newDeafened);
     matrixService.publishLocalVoiceState({ deafened: newDeafened });
-    // Deafen also mutes the mic
+    // Deafen also mutes the mic — silently, so only the deafen cue plays.
     if (newDeafened && !get().isMuted) {
-      get().toggleMute();
+      get().toggleMute(true);
     }
   },
   toggleScreenShare: async () => {
