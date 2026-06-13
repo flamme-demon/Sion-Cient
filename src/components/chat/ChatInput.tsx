@@ -589,7 +589,7 @@ export function ChatInput() {
                 style={{
                   border: 'none',
                   cursor: 'pointer',
-                  padding: 8,
+                  padding: 10,
                   display: 'flex',
                   flexShrink: 0,
                   borderRadius: '50%',
