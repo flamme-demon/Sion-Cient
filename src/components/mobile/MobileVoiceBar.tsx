@@ -112,7 +112,7 @@ export function MobileVoiceBar() {
         {/* Left: mute/deafen */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, justifyContent: 'flex-start' }}>
           <button
-            onClick={toggleMute}
+            onClick={() => toggleMute()}
             style={{
               border: 'none', cursor: 'pointer', padding: 8, borderRadius: 12, display: 'flex',
               background: isMuted ? 'var(--color-error-container)' : 'transparent',

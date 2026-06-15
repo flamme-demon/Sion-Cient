@@ -189,7 +189,7 @@ export function UserControls() {
           {/* When not in voice, mute/deafen live here so you can pre-set them. */}
           {!inVoice && (
             <>
-              <button onClick={toggleMute} style={iconBtnStyle(isMuted)} title={isMuted ? t("controls.unmute") : t("controls.mute")}>
+              <button onClick={() => toggleMute()} style={iconBtnStyle(isMuted)} title={isMuted ? t("controls.unmute") : t("controls.mute")}>
                 <MicIcon muted={isMuted} />
               </button>
               <button onClick={toggleDeafen} style={iconBtnStyle(isDeafened)} title={isDeafened ? t("controls.undeafen") : t("controls.deafen")}>
