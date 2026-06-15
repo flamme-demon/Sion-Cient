@@ -51,7 +51,8 @@
     "pushToTalk": "Push to talk",
     "speaking": "Speaking...",
     "connecting": "Connecting...",
-    "reconnect": "Reconnect"
+    "reconnect": "Reconnect",
+    "republishPresence": "Re-publish my presence (if others can't hear me)"
   },
   "controls": {
     "mute": "Mute",
@@ -89,6 +90,10 @@
     "recentEmojis": "Recently used",
     "searchGif": "Search GIF...",
     "gifDisabled": "GIFs are disabled. Enable them in settings to send GIFs.",
+    "tooLargeTitle": "Message too large",
+    "tooLargeBody": "This message is {{size}} KB, too large to send as text. Do you want to send it as a .txt attachment instead?",
+    "tooLargeSendAsFile": "Send as .txt",
+    "tooLargeFileName": "message.txt",
     "loading": "Loading..."
   },
   "poll": {

@@ -11,9 +11,15 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { EMOJI_DATA } from "../../utils/emojiData";
 import { EmojiGridPanel } from "./EmojiGridPanel";
+import { LargeMessageModal } from "./LargeMessageModal";
 
 const TENOR_API_KEY = "LIVDSRZULELA";
 const TENOR_BASE = "https://g.tenor.com/v1";
+// Matrix caps a single event at 65 536 bytes (the PDU size the server accepts).
+// Encryption + JSON wrapping inflate the cleartext, so we guard well below
+// that: anything past this many UTF-8 bytes is offered as a .txt attachment
+// instead of failing the send with M_TOO_LARGE (e.g. pasting a huge log).
+const MAX_MESSAGE_BYTES = 32 * 1024;
 // Match VOICE_BAR_HEIGHT from MobileVoiceBar (avoid circular import)
 const VOICE_BAR_HEIGHT = 120;
 
@@ -21,6 +27,9 @@ export function ChatInput() {
   const { t } = useTranslation();
   const [inputText, setInputText] = useState("");
   const [focused, setFocused] = useState(false);
+  // Holds the size (KB) of an oversized draft awaiting the user's choice to
+  // send it as a .txt attachment. null = no modal shown.
+  const [largeMessageKb, setLargeMessageKb] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeChannel = useAppStore((s) => s.activeChannel);
   const sendMessage = useMatrixStore((s) => s.sendMessage);
@@ -169,14 +178,37 @@ export function ChatInput() {
       return;
     }
 
+    // Guard oversized text BEFORE touching anything (files, encryption): the
+    // server rejects events past ~64KB with M_TOO_LARGE. Rather than fail,
+    // open the modal offering to send the text as a .txt attachment (which
+    // goes through media upload, no event-size limit). Returning here keeps
+    // the draft intact until the user decides.
+    const byteLength = inputText.trim() ? new TextEncoder().encode(inputText).length : 0;
+    if (byteLength > MAX_MESSAGE_BYTES) {
+      setLargeMessageKb(Math.round(byteLength / 1024));
+      return;
+    }
+
+    await performSend(false);
+  };
+
+  // Performs the actual send (pending files + text) and resets the input.
+  // `asFile` ships the text as a .txt attachment instead of a chat message —
+  // used when the user confirms the oversized-message modal.
+  const performSend = async (asFile: boolean) => {
     // Send files first
     for (const pf of pendingFiles) {
       await sendFile(activeChannel, pf.file);
     }
-    if (inputText.trim()) {
+    const trimmed = inputText.trim();
+    if (trimmed) {
       // Add to history
-      messageHistory.current = [...messageHistory.current.slice(-49), inputText.trim()];
-      if (replyingTo) {
+      messageHistory.current = [...messageHistory.current.slice(-49), trimmed];
+      if (asFile) {
+        const file = new File([inputText], t("chat.tooLargeFileName"), { type: "text/plain" });
+        await sendFile(activeChannel, file);
+        if (replyingTo) clearReplyingTo();
+      } else if (replyingTo) {
         await sendReply(activeChannel, replyingTo.eventId, inputText);
         clearReplyingTo();
       } else {
@@ -368,6 +400,14 @@ export function ChatInput() {
 
   return (
     <div style={{ padding: '8px 20px 20px 20px' }}>
+      {/* Oversized message → offer to send as a .txt attachment */}
+      {largeMessageKb !== null && (
+        <LargeMessageModal
+          sizeKb={largeMessageKb}
+          onConfirm={() => { setLargeMessageKb(null); performSend(true); }}
+          onClose={() => setLargeMessageKb(null)}
+        />
+      )}
       {/* File error banner (auto-dismiss) */}
       {fileError && (
         <div style={{

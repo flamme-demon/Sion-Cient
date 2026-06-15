@@ -2,6 +2,7 @@ import { useState, useCallback, type ReactNode } from "react";
 import DOMPurify from "dompurify";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 import { useAppStore } from "../../stores/useAppStore";
@@ -47,18 +48,24 @@ function CodeBlock({ children }: { children: ReactNode }) {
   }, [children]);
 
   return (
-    <pre className="md-code-block" style={{
-      position: 'relative',
-      background: 'var(--color-surface-container-lowest)',
-      border: '1px solid var(--color-outline-variant)',
-      borderRadius: 16,
-      padding: 16,
-      margin: '8px 0',
-      overflowX: 'auto' as const,
-      maxWidth: '100%',
-      fontSize: 12,
-      fontFamily: 'var(--font-family-mono)',
-    }}>
+    // The wrapper owns positioning (and does NOT scroll) so the copy button
+    // stays pinned to the visible right edge. The inner <pre> owns the
+    // horizontal scroll — otherwise the absolutely-positioned button would be
+    // laid out relative to the full scroll width and drift off as you scroll.
+    <div style={{ position: 'relative', margin: '8px 0', maxWidth: '100%' }}>
+      <pre className="md-code-block" style={{
+        background: 'var(--color-surface-container-lowest)',
+        border: '1px solid var(--color-outline-variant)',
+        borderRadius: 16,
+        padding: 16,
+        margin: 0,
+        overflowX: 'auto' as const,
+        maxWidth: '100%',
+        fontSize: 12,
+        fontFamily: 'var(--font-family-mono)',
+      }}>
+        {children}
+      </pre>
       <button
         onClick={handleCopy}
         style={{
@@ -81,8 +88,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
       >
         {copied ? "✓" : "⎘"}
       </button>
-      {children}
-    </pre>
+    </div>
   );
 }
 
@@ -233,7 +239,7 @@ export function MarkdownRenderer({ content, formattedBody, msgtype }: MarkdownRe
 
   // Regular messages — render as Markdown
   return (
-    <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={components}>
+    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]} components={components}>
       {content}
     </Markdown>
   );

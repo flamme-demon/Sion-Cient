@@ -113,9 +113,15 @@ export function parseMentions(body: string, room: RoomLike): ParsedMentions {
   let cursor = 0;
   const mentionedSet = new Set<string>();
 
+  // Body text segments keep their newlines as literal "\n", which HTML
+  // collapses to a space on render — convert them to <br> so multi-line
+  // messages with mentions stay multi-line (mirrors remark-breaks on the
+  // plain-text path). <br> is allowed by the renderer's sanitizer.
+  const escapeBody = (s: string) => escapeHtml(s).replace(/\n/g, "<br>");
+
   for (const hit of hits) {
     if (hit.start > cursor) {
-      parts.push(escapeHtml(body.slice(cursor, hit.start)));
+      parts.push(escapeBody(body.slice(cursor, hit.start)));
     }
     const href = `https://matrix.to/#/${encodeURIComponent(hit.member.userId)}`;
     parts.push(
@@ -125,7 +131,7 @@ export function parseMentions(body: string, room: RoomLike): ParsedMentions {
     cursor = hit.end;
   }
   if (cursor < body.length) {
-    parts.push(escapeHtml(body.slice(cursor)));
+    parts.push(escapeBody(body.slice(cursor)));
   }
 
   return {
