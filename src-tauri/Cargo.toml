@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "1.4.1"
+version = "1.4.2"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
