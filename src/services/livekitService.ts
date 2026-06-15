@@ -194,6 +194,20 @@ export function setReemitKeysCallback(fn: (() => void) | null) {
   reemitKeysFn = fn;
 }
 
+// Drives the store's `e2eeUnhealthy` flag (which gates the manual
+// republish-presence button). Raised when MissingKey errors cross the
+// protection threshold; lowered after a quiet window with no new errors.
+let e2eeHealthClearTimer: ReturnType<typeof setTimeout> | null = null;
+const E2EE_HEALTHY_AFTER_MS = 12_000;
+function markE2EEUnhealthy() {
+  useAppStore.getState().setE2EEUnhealthy(true);
+  if (e2eeHealthClearTimer) clearTimeout(e2eeHealthClearTimer);
+  e2eeHealthClearTimer = setTimeout(() => {
+    e2eeHealthClearTimer = null;
+    useAppStore.getState().setE2EEUnhealthy(false);
+  }, E2EE_HEALTHY_AFTER_MS);
+}
+
 function getOrInitE2EEState(identity: string): E2EEParticipantState {
   let s = e2eeParticipantState.get(identity);
   if (!s) {
@@ -289,6 +303,8 @@ function resetAllE2EEState() {
   }
   e2eeParticipantState.clear();
   reemitKeysFn = null;
+  if (e2eeHealthClearTimer) { clearTimeout(e2eeHealthClearTimer); e2eeHealthClearTimer = null; }
+  useAppStore.getState().setE2EEUnhealthy(false);
 }
 
 function onE2EEError(error: Error, participant?: Participant) {
@@ -327,6 +343,9 @@ function onE2EEError(error: Error, participant?: Participant) {
   const PROTECTION_MS = 2000;
   if (s.errorCount >= PROTECTION_THRESHOLD) {
     muteParticipantForE2EEProtection(participantIdentity, PROTECTION_MS);
+    // E2EE is genuinely struggling for this peer — surface the manual
+    // republish-presence recovery in the UI.
+    markE2EEUnhealthy();
   }
 
   scheduleKeyReemit(participantIdentity);

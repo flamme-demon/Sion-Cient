@@ -51,6 +51,10 @@ interface AppState {
   isSpeaking: boolean;
   pendingAutoJoinVoice: string | null;
   connectingVoiceChannel: string | null;
+  /** True while voice E2EE is struggling locally (recent MissingKey errors —
+   *  i.e. we can't decrypt a peer). Best available proxy for "voice E2EE is
+   *  unhealthy right now"; surfaces the manual republish-presence recovery. */
+  e2eeUnhealthy: boolean;
   /** Globally-positioned user context menu, opened from sidebar voice list, mention pills, etc. */
   userContextMenu: UserContextMenuState | null;
   /** Download completion toast */
@@ -89,6 +93,7 @@ interface AppState {
   setMobileView: (view: MobileView) => void;
   setIsSpeaking: (v: boolean) => void;
   setPendingAutoJoinVoice: (roomId: string | null) => void;
+  setE2EEUnhealthy: (v: boolean) => void;
   openUserContextMenu: (state: UserContextMenuState) => void;
   closeUserContextMenu: () => void;
   showDownloadNotification: (filename: string, path: string) => void;
@@ -116,6 +121,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isSpeaking: false,
   pendingAutoJoinVoice: null,
   connectingVoiceChannel: null,
+  e2eeUnhealthy: false,
   userContextMenu: null,
   downloadNotification: null,
   downloadedFiles: new Set<string>(JSON.parse(localStorage.getItem("sion-downloaded-files") || "[]")),
@@ -126,13 +132,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       mobileView: "chat" as MobileView,
     })),
   setConnectedVoice: (id: string | null) => set({ connectedVoiceChannel: id }),
-  disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false }),
+  disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false, e2eeUnhealthy: false }),
+  setE2EEUnhealthy: (v: boolean) => set({ e2eeUnhealthy: v }),
   toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });
-    // `silent` is set when deafen triggers the implicit mute below — the deafen
-    // cue already played, so we skip the mute cue to avoid a double sound.
-    if (!silent) newMuted ? playMuteCue() : playUnmuteCue();
+    // `silent` is set ONLY when deafen triggers the implicit mute below (passed
+    // as a literal `true`) — the deafen cue already played, so we skip the mute
+    // cue to avoid a double sound. We must compare `=== true` and NOT rely on
+    // truthiness: this is also wired straight to button `onClick` handlers,
+    // which inject the click event as the first arg — a truthy object that
+    // would otherwise swallow the cue on every manual mute/unmute.
+    if (silent !== true) newMuted ? playMuteCue() : playUnmuteCue();
     // Mirror into the call.member state event so clients in other voice
     // channels see our mute indicator. Fire-and-forget — the publish is
     // debounced and a failure is purely cosmetic for those other clients.

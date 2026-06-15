@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, SignalBarsIcon } from "../icons";
+import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, SignalBarsIcon, RefreshIcon } from "../icons";
 import { UserAvatar } from "./UserAvatar";
 import { AccountPopover } from "./AccountPopover";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAuthStore } from "../../stores/useAuthStore";
-import { useVoiceChannel } from "../../hooks/useVoiceChannel";
+import { useVoiceChannel, republishVoicePresence } from "../../hooks/useVoiceChannel";
 import { getCurrentRoom } from "../../services/livekitService";
 
 type Quality = "excellent" | "good" | "poor" | "lost" | "unknown";
@@ -50,7 +50,20 @@ export function UserControls() {
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const channels = useMatrixStore((s) => s.channels);
   const credentials = useAuthStore((s) => s.credentials);
+  const e2eeUnhealthy = useAppStore((s) => s.e2eeUnhealthy);
+  const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
+  // Brief "done" feedback after the user hits the republish-presence recovery.
+  const [republished, setRepublished] = useState(false);
+
+  const handleRepublish = async () => {
+    await republishVoicePresence();
+    // Optimistically clear the unhealthy flag — if E2EE is still broken a new
+    // MissingKey error re-raises it within seconds.
+    setE2EEUnhealthy(false);
+    setRepublished(true);
+    setTimeout(() => setRepublished(false), 2000);
+  };
 
   const displayName = credentials?.displayName || credentials?.userId || "User";
   const userId = credentials?.userId || "";
@@ -117,16 +130,36 @@ export function UserControls() {
                 <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', whiteSpace: 'nowrap' }}>{Math.round(rtt)} ms</span>
               )}
             </div>
-            <button
-              onClick={() => connectedVoice && leaveVoiceChannel(connectedVoice)}
-              title={t("voice.disconnect")}
-              style={{
-                flexShrink: 0, border: 'none', cursor: 'pointer', padding: 7, borderRadius: 10, display: 'flex',
-                background: 'var(--color-error-container)', color: 'var(--color-error)',
-              }}
-            >
-              <DisconnectIcon />
-            </button>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              {/* Recovery: re-publish our voice presence + E2EE keys without
+                  leaving the call. Shown only while voice E2EE is struggling
+                  locally (recent MissingKey errors) — or briefly after a click
+                  to confirm the action — so it isn't permanent clutter. */}
+              {(e2eeUnhealthy || republished) && (
+                <button
+                  onClick={handleRepublish}
+                  title={t("voice.republishPresence")}
+                  style={{
+                    flexShrink: 0, border: 'none', cursor: 'pointer', padding: 7, borderRadius: 10, display: 'flex',
+                    background: republished ? 'var(--color-primary-container)' : 'var(--color-error-container)',
+                    color: republished ? 'var(--color-primary)' : 'var(--color-error)',
+                    transition: 'all 150ms',
+                  }}
+                >
+                  <RefreshIcon />
+                </button>
+              )}
+              <button
+                onClick={() => connectedVoice && leaveVoiceChannel(connectedVoice)}
+                title={t("voice.disconnect")}
+                style={{
+                  flexShrink: 0, border: 'none', cursor: 'pointer', padding: 7, borderRadius: 10, display: 'flex',
+                  background: 'var(--color-error-container)', color: 'var(--color-error)',
+                }}
+              >
+                <DisconnectIcon />
+              </button>
+            </div>
           </div>
 
           {/* Channel name */}

@@ -6,7 +6,7 @@ import { useAuthStore } from "../stores/useAuthStore";
 import { useMatrixStore } from "../stores/useMatrixStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitTokenService";
-import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMemberEvent } from "../services/matrixService";
+import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMemberEvent, republishCallMember } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
 import { getCurrentRoom, setReemitKeysCallback } from "../services/livekitService";
@@ -149,6 +149,31 @@ export async function cleanupVoiceOnKick() {
   const { disconnectFromRoom } = await import("../services/livekitService");
   await disconnectFromRoom();
   useAppStore.getState().disconnectVoice();
+}
+
+/**
+ * Manual recovery for "a peer can't hear me": re-publishes our presence in the
+ * current voice call WITHOUT leaving/rejoining. Two sender-side steps, both
+ * safe under the v0.9.6 model (which only forbids *receiver-side* leave/rejoin
+ * recovery loops):
+ *   1. Re-write our `call.member` so peers re-evaluate us as a live membership
+ *      (fixes the "No matching RTC membership, delaying key addition" stall,
+ *      e.g. after dev reloads left zombie memberships from dead devices).
+ *   2. Re-emit our encryption keys so peers that just (re)matched our
+ *      membership immediately get the key.
+ * No-op (returns false) when we're not in a voice call.
+ */
+export async function republishVoicePresence(): Promise<boolean> {
+  let rooms = 0;
+  try {
+    rooms = await republishCallMember();
+  } catch (err) {
+    console.warn("[Sion] republishVoicePresence: call.member rewrite failed:", err);
+  }
+  if (activeRTCSession) {
+    try { activeRTCSession.reemitEncryptionKeys(); } catch { /* session ended */ }
+  }
+  return rooms > 0 || activeRTCSession !== null;
 }
 
 export function useVoiceChannel() {

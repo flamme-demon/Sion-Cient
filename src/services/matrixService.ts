@@ -660,6 +660,24 @@ export function publishLocalVoiceState(state: { muted?: boolean; deafened?: bool
   }, PUBLISH_DEBOUNCE_MS);
 }
 
+/**
+ * Force an immediate re-write of our `call.member` state event for every
+ * registered voice room, bypassing the debounce. This refreshes the
+ * membership's `origin_server_ts`, so peers that had us marked expired or
+ * never received our (live) membership re-evaluate us as a current member —
+ * the prerequisite for them to accept our E2EE key. Used by the manual
+ * "republish voice presence" recovery action when a peer can't hear us.
+ * Returns the number of rooms re-written (0 = not in a voice call).
+ */
+export async function republishCallMember(): Promise<number> {
+  if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
+  const roomIds = Array.from(callMemberCache.keys());
+  for (const roomId of roomIds) {
+    await writeCallMember(roomId);
+  }
+  return roomIds.length;
+}
+
 export async function sendTextMessage(roomId: string, body: string) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const room = matrixClient.getRoom(roomId);
