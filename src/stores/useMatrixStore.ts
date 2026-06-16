@@ -356,6 +356,13 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
 const POLL_START_TYPES = ["m.poll.start", "org.matrix.msc3381.poll.start"];
 const POLL_RESPONSE_TYPES = ["m.poll.response", "org.matrix.msc3381.poll.response"];
 const POLL_END_TYPES = ["m.poll.end", "org.matrix.msc3381.poll.end"];
+
+// Dedup voice-kick handling by target user within this window. A single kick
+// can reach us twice (local echo + decrypted server event, with different ids)
+// — see handleVoiceKickEvent. Module-level so it also survives any duplicate
+// listener registration (e.g. HMR in dev).
+const KICK_HANDLE_DEDUP_MS = 8000;
+const recentlyHandledKicks = new Map<string, number>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function readMText(node: any): string {
   return node?.["m.text"] ?? node?.["org.matrix.msc1767.text"] ?? "";
@@ -919,15 +926,8 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // identically regardless of delivery path. Previously the decrypted path
     // only showed the victim banner — so in encrypted rooms the victim heard no
     // kick sound and witnesses heard no memberKicked cue (only the LiveKit leave).
-    const handledKickEventIds = new Set<string>();
     const handleVoiceKickEvent = (event: MatrixEvent) => {
       if (event.getType?.() !== "com.sion.voice_kick") return;
-      // Dedup across the two delivery paths (and timeline re-emits).
-      const id = event.getId?.();
-      if (id) {
-        if (handledKickEventIds.has(id)) return;
-        handledKickEventIds.add(id);
-      }
       // Ignore stale kick events (initial sync replay, reload, etc.) —
       // a legitimate kick is delivered within seconds. Without this check,
       // reloading the app re-triggers the kick banner from replay.
@@ -935,6 +935,19 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       if (Date.now() - eventTs > 60_000) return;
       const content = event.getContent?.();
       if (!content?.kicked_user) return;
+
+      // Dedup the SAME kick reaching us twice. We can't key on event id: when
+      // WE are the kicker in an ENCRYPTED room, the event surfaces once via the
+      // local echo (Timeline, "~!…" id) and again once decrypted (Decrypted,
+      // "$…" server id) — two different ids, so an id-based dedup misses it and
+      // the cue plays twice (cleartext rooms have no decrypt step → single).
+      // Dedup by target within a short window instead: stable across both
+      // deliveries and both ids. Trade-off: a re-kick of the same user within
+      // the window is silenced — negligible.
+      const now = Date.now();
+      const last = recentlyHandledKicks.get(content.kicked_user);
+      if (last != null && now - last < KICK_HANDLE_DEDUP_MS) return;
+      recentlyHandledKicks.set(content.kicked_user, now);
 
       const roomId = event.getRoomId?.();
       const room = roomId ? client.getRoom(roomId) : null;
@@ -1167,7 +1180,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           // Pas de son pour l'admin room (bot conduit OU autres admins humains
           // qui exécutent des commandes via le menu Admin)
           const isAdminRoom = room.roomId === findAdminRoom();
-          if (!eventSender.includes("conduit") && !isAdminRoom) {
+          // Don't replay notification sounds for events streamed in during the
+          // initial sync (e.g. a recent poke after a Ctrl+R) — only react to
+          // genuinely live events.
+          if (!eventSender.includes("conduit") && !isAdminRoom && client.isInitialSyncComplete()) {
             const activeChannel = useAppStore.getState().activeChannel;
             const connectedVoice = useAppStore.getState().connectedVoiceChannel;
             if (activeChannel === room.roomId || connectedVoice === room.roomId || room.getJoinedMemberCount() === 2) {
@@ -1640,7 +1656,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // that decrypt during initial sync or after key re-emit.
       if (event.getType?.() === "m.room.message") {
         const eventTs = event.getTs?.() ?? 0;
-        if (Date.now() - eventTs < 10_000) {
+        // Freshness window + initial-sync gate: don't replay sounds for events
+        // that decrypt during the initial sync on reload (e.g. a recent poke
+        // after a Ctrl+R) or after a key re-emit.
+        if (Date.now() - eventTs < 10_000 && client.isInitialSyncComplete()) {
           const sender = event.getSender?.();
           const myUserId = client.getUserId();
           const roomId = event.getRoomId?.();
