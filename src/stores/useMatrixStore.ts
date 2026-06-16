@@ -910,17 +910,35 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // Track processed event IDs to prevent duplicates from SDK re-emissions
     const processedEventIds = new Set<string>();
 
-    // Listen for voice kick events (Sion-specific)
-    client.on(RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
-      if (toStartOfTimeline) return; // skip backfill/pagination
-      if (!room || event.getType?.() !== "com.sion.voice_kick") return;
+    // Voice kick (Sion-specific `com.sion.voice_kick`) reaches us via TWO paths
+    // depending on room encryption: cleartext rooms deliver it on
+    // RoomEvent.Timeline; encrypted rooms deliver it as m.room.encrypted (the
+    // Timeline listener sees the wrong type and skips it) and it only surfaces
+    // once decrypted (MatrixEventEvent.Decrypted handler below). Both call this
+    // shared handler so the victim sound, witness cue and banner fire
+    // identically regardless of delivery path. Previously the decrypted path
+    // only showed the victim banner — so in encrypted rooms the victim heard no
+    // kick sound and witnesses heard no memberKicked cue (only the LiveKit leave).
+    const handledKickEventIds = new Set<string>();
+    const handleVoiceKickEvent = (event: MatrixEvent) => {
+      if (event.getType?.() !== "com.sion.voice_kick") return;
+      // Dedup across the two delivery paths (and timeline re-emits).
+      const id = event.getId?.();
+      if (id) {
+        if (handledKickEventIds.has(id)) return;
+        handledKickEventIds.add(id);
+      }
       // Ignore stale kick events (initial sync replay, reload, etc.) —
       // a legitimate kick is delivered within seconds. Without this check,
-      // reloading the app re-triggers the kick banner from timeline replay.
+      // reloading the app re-triggers the kick banner from replay.
       const eventTs = event.getTs?.() ?? 0;
       if (Date.now() - eventTs > 60_000) return;
       const content = event.getContent?.();
       if (!content?.kicked_user) return;
+
+      const roomId = event.getRoomId?.();
+      const room = roomId ? client.getRoom(roomId) : null;
+      if (!room) return;
 
       // Verify the sender has power level >= 50 (moderator+) before reacting —
       // applies to BOTH the victim and witness paths so a spoofed kick event
@@ -962,6 +980,12 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // Show persistent kick message with room reference for reconnect
       const reason = content.reason ? ` — ${content.reason}` : "";
       useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || room.roomId });
+    };
+
+    // Listen for voice kick events (Sion-specific) — cleartext path.
+    client.on(RoomEvent.Timeline, (event, _room, toStartOfTimeline) => {
+      if (toStartOfTimeline) return; // skip backfill/pagination
+      handleVoiceKickEvent(event);
     });
 
     // Reconcile a sent message's local-echo id ("~…") to its real server id
@@ -1639,34 +1663,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         }
       }
 
-      // Check for voice kick in decrypted events (custom events arrive
-      // as m.room.encrypted first, so the Timeline listener misses them)
-      if (event.getType?.() === "com.sion.voice_kick") {
-        // Ignore stale kicks — same rationale as the Timeline handler:
-        // reloads would otherwise re-trigger the banner from replayed events.
-        const eventTs = event.getTs?.() ?? 0;
-        if (Date.now() - eventTs > 60_000) return;
-        const content = event.getContent?.();
-        const myUserId = client.getUserId();
-        if (content?.kicked_user === myUserId) {
-          const roomId = event.getRoomId?.();
-          const room = roomId ? client.getRoom(roomId) : null;
-          const senderId = event.getSender?.() || "";
-          const senderPL = room?.getMember?.(senderId)?.powerLevel ?? 0;
-          if (senderPL >= 50) {
-            const kickerName = content.kicked_by_name || senderId;
-            console.warn("[Sion] Voice kicked by (decrypted):", kickerName);
-            const kickedRoom = useAppStore.getState().connectedVoiceChannel;
-            if (kickedRoom) {
-              import("../hooks/useVoiceChannel").then(({ cleanupVoiceOnKick }) => {
-                cleanupVoiceOnKick();
-              });
-            }
-            const reason = content.reason ? ` — ${content.reason}` : "";
-            useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || roomId });
-          }
-        }
-      }
+      // Voice kick in decrypted events: custom events arrive as
+      // m.room.encrypted first, so the Timeline listener misses them — the
+      // shared handler does the full victim sound + witness cue + banner
+      // (the same as the cleartext path), deduped by event id.
+      handleVoiceKickEvent(event);
 
       const evtId = event.getId?.();
       if (evtId) pendingDecryptedEvents.add(evtId);
