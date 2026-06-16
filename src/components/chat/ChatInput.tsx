@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type ClipboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { SendIcon, CloseIcon, EmojiIcon } from "../icons";
+import { SendIcon, CloseIcon, EmojiIcon, DisconnectIcon } from "../icons";
 import { AttachButton } from "./AttachButton";
 import { FilePreview } from "./FilePreview";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -427,17 +427,21 @@ export function ChatInput() {
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 16px',
-          marginBottom: 4,
-          borderRadius: 12,
+          gap: 12,
+          padding: '12px 14px',
+          marginBottom: 6,
+          borderRadius: 16,
           background: 'var(--color-error-container)',
           color: 'var(--color-on-error-container)',
-          fontSize: 12,
-          fontWeight: 500,
+          boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
         }}>
-          <span>{kickMessage}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ flexShrink: 0, display: 'flex' }}>
+            <DisconnectIcon />
+          </div>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, lineHeight: 1.3 }}>
+            {kickMessage}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <button onClick={() => {
               const roomId = useAppStore.getState().kickedFromRoom;
               dismissKick();
@@ -445,15 +449,18 @@ export function ChatInput() {
                 useAppStore.getState().setPendingAutoJoinVoice(roomId);
               }
             }} style={{
-              background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)',
-              cursor: 'pointer', color: 'var(--color-on-error-container)',
-              fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 8,
-              fontFamily: 'inherit',
+              background: 'var(--color-error)', border: 'none',
+              cursor: 'pointer', color: 'var(--color-on-error)',
+              fontSize: 12, fontWeight: 600, padding: '7px 14px', borderRadius: 12,
+              fontFamily: 'inherit', whiteSpace: 'nowrap',
             }}>{t("voice.reconnect")}</button>
-            <button onClick={dismissKick} style={{
+            <button onClick={dismissKick} title={t("auth.cancel")} style={{
               background: 'transparent', border: 'none', cursor: 'pointer',
-              color: 'var(--color-on-error-container)', fontSize: 14, padding: '0 4px',
-            }}>✕</button>
+              color: 'var(--color-on-error-container)', display: 'flex',
+              padding: 4, borderRadius: 8, opacity: 0.8,
+            }}>
+              <CloseIcon />
+            </button>
           </div>
         </div>
       )}

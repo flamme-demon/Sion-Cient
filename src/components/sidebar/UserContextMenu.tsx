@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { ConnectionQuality } from "livekit-client";
+import { ConnectionQuality, RoomEvent } from "livekit-client";
 import { getCurrentRoom, muteRemoteParticipant } from "../../services/livekitService";
 import { useAdminStore } from "../../stores/useAdminStore";
 import { useAppStore } from "../../stores/useAppStore";
@@ -145,6 +145,8 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
   const [suspended, setSuspended] = useState<boolean | null>(null);
   const [suspendLoading, setSuspendLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [showKickModal, setShowKickModal] = useState(false);
+  const [kickReason, setKickReason] = useState("");
 
   // Persist mute state across context menu re-opens
   const [isMuted, setIsMuted] = useState(() => {
@@ -160,6 +162,35 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
 
   // Extract Matrix userId from LiveKit identity (@user:server:deviceId → @user:server)
   const matrixUserId = rawUserId.match(/^(@[^:]+:[^:]+)/)?.[1] || rawUserId;
+
+  // Whether the target is CURRENTLY in the voice room. Kept reactive so the
+  // Kick/Mute options vanish the moment they leave (e.g. another moderator
+  // already kicked them) — otherwise the menu would keep offering to kick a
+  // user who's no longer there.
+  const [targetInVoice, setTargetInVoice] = useState(false);
+  useEffect(() => {
+    const room = getCurrentRoom();
+    if (!room) { setTargetInVoice(false); return; }
+    const matches = (id: string) => id === matrixUserId || id.startsWith(matrixUserId + ":");
+    const check = () => {
+      const present = Array.from(room.remoteParticipants.values()).some((p) => matches(p.identity))
+        || matches(room.localParticipant.identity);
+      setTargetInVoice(present);
+    };
+    check();
+    room.on(RoomEvent.ParticipantConnected, check);
+    room.on(RoomEvent.ParticipantDisconnected, check);
+    return () => {
+      room.off(RoomEvent.ParticipantConnected, check);
+      room.off(RoomEvent.ParticipantDisconnected, check);
+    };
+  }, [matrixUserId]);
+
+  // If the kick modal is open and the target leaves (someone else kicked them
+  // first), dismiss it — there's no one left to kick.
+  useEffect(() => {
+    if (showKickModal && !targetInVoice) onClose();
+  }, [showKickModal, targetInVoice, onClose]);
 
   // Current user's power level in this room
   const myPowerLevel = activeChannel ? matrixService.getUserPowerLevel(activeChannel) : 0;
@@ -196,10 +227,16 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
 
   const connectedVoiceChannel = useAppStore((s) => s.connectedVoiceChannel);
 
-  const handleKickVoice = async () => {
+  // Open the Sion-styled kick modal (replaces the native window.prompt).
+  const handleKickVoice = () => {
     const voiceRoom = connectedVoiceChannel || activeChannel;
     if (!voiceRoom || actionLoading) return;
-    const reason = window.prompt(t("contextMenu.kickReason")) || "";
+    setShowKickModal(true);
+  };
+
+  const confirmKickVoice = async () => {
+    const voiceRoom = connectedVoiceChannel || activeChannel;
+    if (!voiceRoom) return;
     setActionLoading(true);
     try {
       const client = matrixService.getMatrixClient();
@@ -210,7 +247,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
           kicked_user: matrixUserId,
           kicked_by: myUserId,
           kicked_by_name: myName,
-          reason,
+          reason: kickReason.trim(),
         });
       }
       onClose();
@@ -319,6 +356,63 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
 
   const roleLabel = targetRole === "admin" ? t("contextMenu.roleAdmin") : targetRole === "moderator" ? t("contextMenu.roleModerator") : t("contextMenu.roleUser");
 
+  if (showKickModal) {
+    return (
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000,
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            width: 380, maxWidth: "92%",
+            background: "var(--color-surface-container)",
+            borderRadius: 20, padding: 24,
+            display: "flex", flexDirection: "column", gap: 14,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--color-on-surface)" }}>
+            {t("contextMenu.kickTitle", { defaultValue: "Exclure du vocal", name: userName })}
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: "var(--color-on-surface-variant)" }}>
+            {t("contextMenu.kickConfirm", { defaultValue: "Exclure {{name}} du salon vocal ?", name: userName })}
+          </div>
+          <input
+            autoFocus
+            value={kickReason}
+            onChange={(e) => setKickReason(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !actionLoading) confirmKickVoice(); }}
+            placeholder={t("contextMenu.kickReason")}
+            style={{
+              padding: "10px 12px", borderRadius: 12,
+              border: "1px solid var(--color-outline-variant)",
+              background: "var(--color-surface-container-high)",
+              color: "var(--color-on-surface)", fontSize: 13, fontFamily: "inherit",
+              outline: "none",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+            <button onClick={onClose} style={{
+              padding: "8px 16px", borderRadius: 16, border: "none", cursor: "pointer",
+              background: "var(--color-surface-container-high)", color: "var(--color-on-surface)",
+              fontSize: 13, fontFamily: "inherit",
+            }}>{t("auth.cancel")}</button>
+            <button onClick={confirmKickVoice} disabled={actionLoading} style={{
+              padding: "8px 16px", borderRadius: 16, border: "none",
+              cursor: actionLoading ? "default" : "pointer", opacity: actionLoading ? 0.5 : 1,
+              background: "var(--color-error)", color: "var(--color-on-error)",
+              fontSize: 13, fontFamily: "inherit", fontWeight: 600,
+            }}>{t("contextMenu.kickVoice")}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={menuRef}
@@ -378,14 +472,14 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       )}
 
       {/* Mute (local, works for everyone in vocal) */}
-      {!isMyself && getCurrentRoom() && (
+      {!isMyself && targetInVoice && (
         <button onClick={handleMuteToggle} style={itemStyle}>
           {isMuted ? t("contextMenu.unmute") : t("contextMenu.mute")}
         </button>
       )}
 
       {/* Voice kick — PL >= 50 and >= target (admins can kick each other) */}
-      {!isMyself && myPowerLevel >= 50 && myPowerLevel >= targetPowerLevel && getCurrentRoom() && (
+      {!isMyself && myPowerLevel >= 50 && myPowerLevel >= targetPowerLevel && targetInVoice && (
         <>
           <div style={{ height: 1, background: "var(--color-outline-variant)", margin: "4px 8px" }} />
           <button onClick={handleKickVoice} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-orange)", opacity: actionLoading ? 0.5 : 1 }}>
