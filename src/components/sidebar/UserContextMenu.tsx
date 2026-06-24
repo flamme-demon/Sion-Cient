@@ -200,6 +200,13 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
 
   // Can we moderate this user? (our PL must be > target PL, and >= 50)
   const canModerate = myPowerLevel >= 50 && myPowerLevel > targetPowerLevel;
+  // Can we voice-kick this user? Voice kick is a client-side signal
+  // (com.sion.voice_kick), NOT a real Matrix membership kick, so we don't need
+  // the protocol's PL hierarchy. We cap the target PL at 100 so any admin
+  // (PL 100) can kick anyone — including room creators, whose PL is Infinity
+  // under room v12 (Hydra) and would otherwise be unkickable since no finite
+  // admin level satisfies `myPowerLevel >= targetPowerLevel`.
+  const canVoiceKick = myPowerLevel >= 50 && myPowerLevel >= Math.min(targetPowerLevel, 100);
   // Can we change roles? (need admin level)
   const canChangeRole = myPowerLevel >= 100 && myPowerLevel > targetPowerLevel;
   // Is this ourselves?
@@ -478,8 +485,8 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
         </button>
       )}
 
-      {/* Voice kick — PL >= 50 and >= target (admins can kick each other) */}
-      {!isMyself && myPowerLevel >= 50 && myPowerLevel >= targetPowerLevel && targetInVoice && (
+      {/* Voice kick — PL >= 50 and >= target, capped (admins can kick each other, incl. room creators) */}
+      {!isMyself && canVoiceKick && targetInVoice && (
         <>
           <div style={{ height: 1, background: "var(--color-outline-variant)", margin: "4px 8px" }} />
           <button onClick={handleKickVoice} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-orange)", opacity: actionLoading ? 0.5 : 1 }}>
@@ -491,7 +498,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       {/* Ban — PL >= 50 and strictly > target */}
       {!isMyself && canModerate && (
         <>
-          {!(myPowerLevel >= 50 && myPowerLevel >= targetPowerLevel && getCurrentRoom()) && (
+          {!(canVoiceKick && targetInVoice) && (
             <div style={{ height: 1, background: "var(--color-outline-variant)", margin: "4px 8px" }} />
           )}
           <button onClick={handleBan} disabled={actionLoading} style={{ ...itemStyle, color: "var(--color-error)", opacity: actionLoading ? 0.5 : 1 }}>
