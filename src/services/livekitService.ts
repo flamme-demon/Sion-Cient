@@ -92,6 +92,13 @@ const audioElements = new Map<string, HTMLAudioElement>();
 // speaker indicator). Keyed by participant identity.
 const speakingDetectors = new Map<string, SpeakingDetector>();
 const speakingState = new Map<string, boolean>();
+// Track SID currently feeding each participant's detector. A republish
+// (mute→unmute denoise refresh, reconnect) gives the mic a NEW sid, and the
+// new track's TrackSubscribed can fire BEFORE the old track's TrackUnsubscribed.
+// Without this guard, the late detach of the dead sid would call
+// stopSpeakingDetector(identity) and kill the detector the new attach just
+// started — leaving the peer's speaking halo permanently dark.
+const speakingDetectorSid = new Map<string, string>();
 let participantUpdateCallback: (() => void) | null = null;
 let pendingTimerCleanup: (() => void) | null = null;
 // Removes every room event listener registered by connectToRoom (via the
@@ -132,7 +139,7 @@ function setSpeakingState(identity: string, isSpeaking: boolean) {
   participantUpdateCallback?.();
 }
 
-function startSpeakingDetectorForStream(identity: string, stream: MediaStream) {
+function startSpeakingDetectorForStream(identity: string, sid: string, stream: MediaStream) {
   // Replace any previous detector for this participant
   speakingDetectors.get(identity)?.stop();
   const detector = new SpeakingDetector(
@@ -141,6 +148,7 @@ function startSpeakingDetectorForStream(identity: string, stream: MediaStream) {
   );
   detector.start();
   speakingDetectors.set(identity, detector);
+  speakingDetectorSid.set(identity, sid);
 }
 
 function stopSpeakingDetector(identity: string) {
@@ -149,12 +157,14 @@ function stopSpeakingDetector(identity: string) {
     detector.stop();
     speakingDetectors.delete(identity);
   }
+  speakingDetectorSid.delete(identity);
   speakingState.delete(identity);
 }
 
 function stopAllSpeakingDetectors() {
   speakingDetectors.forEach((d) => d.stop());
   speakingDetectors.clear();
+  speakingDetectorSid.clear();
   speakingState.clear();
 }
 
@@ -634,6 +644,7 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   if (publication.source !== Track.Source.ScreenShareAudio) {
     startSpeakingDetectorForStream(
       participant.identity,
+      sid,
       new MediaStream([track.mediaStreamTrack]),
     );
   }
@@ -668,7 +679,16 @@ function detachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   // Unsubscribing a ScreenShareAudio track must NOT kill the mic's detector —
   // otherwise the remote's halo stays dark after they stop screen-share-with-audio
   // until they republish their mic.
-  if (publication.source !== Track.Source.ScreenShareAudio) {
+  //
+  // Only stop the detector if it's still fed by THIS sid. On a republish
+  // (mute→unmute denoise refresh) the new mic track's TrackSubscribed can land
+  // before the old track's TrackUnsubscribed; the new attach already started a
+  // detector keyed to the new sid. Killing it here by identity would leave the
+  // peer's speaking halo permanently dark until their next republish.
+  if (
+    publication.source !== Track.Source.ScreenShareAudio
+    && speakingDetectorSid.get(participant.identity) === sid
+  ) {
     stopSpeakingDetector(participant.identity);
   }
 }
@@ -1020,7 +1040,7 @@ export async function connectToRoom(
     const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
     const mst = micPub?.track?.mediaStreamTrack;
     if (mst) {
-      startSpeakingDetectorForStream(room.localParticipant.identity, new MediaStream([mst]));
+      startSpeakingDetectorForStream(room.localParticipant.identity, micPub!.trackSid, new MediaStream([mst]));
     } else {
       stopSpeakingDetector(room.localParticipant.identity);
     }
@@ -1168,7 +1188,7 @@ export async function switchAudioInput(deviceId: string) {
   const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
   const mst = micPub?.track?.mediaStreamTrack;
   if (mst) {
-    startSpeakingDetectorForStream(currentRoom.localParticipant.identity, new MediaStream([mst]));
+    startSpeakingDetectorForStream(currentRoom.localParticipant.identity, micPub!.trackSid, new MediaStream([mst]));
   }
 }
 
