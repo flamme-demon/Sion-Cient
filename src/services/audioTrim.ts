@@ -96,6 +96,36 @@ export function computePeaks(buffer: AudioBuffer, buckets: number): { min: numbe
   return peaks;
 }
 
+/** Compute peaks for a time sub-range [startSec, endSec] — the zoom view scans
+ *  only the window around the selection, so a 40s window on a 1h track renders
+ *  at ~0.07 s/px instead of ~6 s/px. */
+export function computePeaksRange(
+  buffer: AudioBuffer,
+  buckets: number,
+  startSec: number,
+  endSec: number,
+): { min: number; max: number }[] {
+  const data = buffer.getChannelData(0);
+  const sr = buffer.sampleRate;
+  const sStart = Math.max(0, Math.floor(startSec * sr));
+  const sEnd = Math.min(data.length, Math.ceil(endSec * sr));
+  const span = Math.max(1, sEnd - sStart);
+  const per = Math.max(1, Math.floor(span / buckets));
+  const peaks: { min: number; max: number }[] = [];
+  for (let b = 0; b < buckets; b++) {
+    let min = 1, max = -1;
+    const s = sStart + b * per;
+    const e = Math.min(s + per, sEnd);
+    for (let i = s; i < e; i++) {
+      const v = data[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    peaks.push({ min: min === 1 ? 0 : min, max: max === -1 ? 0 : max });
+  }
+  return peaks;
+}
+
 /** A playable preview of a [start,end] slice with a playhead callback. */
 export function playSlice(
   buffer: AudioBuffer,
