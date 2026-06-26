@@ -73,6 +73,11 @@ ab_glyph = "0.2"
 # Linux-only dependencies (rdev for evdev keyboard capture)
 [target.'cfg(target_os = "linux")'.dependencies]
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
+# Used to mark the cursor overlay sticky (on all virtual desktops) via the
+# EWMH `_NET_WM_STATE_STICKY` ClientMessage. The overlay runs on XWayland, so
+# KWin/Mutter honor X11 window-state hints. Already in the lockfile (transitive
+# via winit's x11 backend) — promoted to a direct dep, ~0 compile cost.
+x11rb = "0.13"
 # NOTE: `pipewire = "0.9"` was added here for the screen-share-audio
 # exclusion path (commit 2a) but removed because libpipewire's static
 # constructors (run before main()) conflict with CEF's GLib/Wayland init

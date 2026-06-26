@@ -198,6 +198,69 @@ fn get_or_start_handle() -> Option<&'static OverlayHandle> {
     HANDLE.get()
 }
 
+// ── Linux: mark the overlay sticky (on all virtual desktops) ─────────────
+//
+// winit 0.30 has no portable API for "show on all workspaces". The overlay
+// is an XWayland window (we force the X11 backend for AlwaysOnTop), so we
+// drive it through EWMH directly: send a `_NET_WM_STATE` ClientMessage to the
+// root adding `_NET_WM_STATE_STICKY`, and set `_NET_WM_DESKTOP = 0xFFFFFFFF`
+// as a belt-and-suspenders fallback (some WMs read the property rather than
+// react to the message). KWin/Mutter honor either. Done via x11rb so we don't
+// shell out to wmctrl/xdotool (not installed by default).
+#[cfg(target_os = "linux")]
+fn make_sticky_x11(window: &Window) -> Result<(), Box<dyn std::error::Error>> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, PropMode,
+    };
+    use x11rb::wrapper::ConnectionExt as _;
+
+    // Only X11/XWayland windows carry an XID; a native Wayland surface would
+    // not, so bail quietly if winit ever stops forcing the X11 backend.
+    let xid = match window.window_handle()?.as_raw() {
+        RawWindowHandle::Xlib(h) => h.window as u32,
+        RawWindowHandle::Xcb(h) => h.window.get(),
+        other => {
+            log::info!("[Sion][CursorOverlay] not an X11 window ({other:?}); skipping sticky hint");
+            return Ok(());
+        }
+    };
+
+    let (conn, screen_num) = x11rb::connect(None)?;
+    let root = conn.setup().roots[screen_num].root;
+    let net_wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
+    let net_wm_state_sticky = conn.intern_atom(false, b"_NET_WM_STATE_STICKY")?.reply()?.atom;
+    let net_wm_desktop = conn.intern_atom(false, b"_NET_WM_DESKTOP")?.reply()?.atom;
+
+    // _NET_WM_STATE_ADD = 1, source indication 1 = "application".
+    let event = ClientMessageEvent::new(
+        32,
+        xid,
+        net_wm_state,
+        [1, net_wm_state_sticky, 0, 1, 0],
+    );
+    conn.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+        event,
+    )?;
+
+    // 0xFFFFFFFF = "all desktops" per the EWMH spec.
+    conn.change_property32(
+        PropMode::REPLACE,
+        xid,
+        net_wm_desktop,
+        AtomEnum::CARDINAL,
+        &[0xFFFF_FFFF_u32],
+    )?;
+
+    conn.flush()?;
+    log::info!("[Sion][CursorOverlay] overlay marked sticky (all desktops) via EWMH");
+    Ok(())
+}
+
 // ── winit app ──────────────────────────────────────────────────────────
 
 struct App {
@@ -271,11 +334,15 @@ impl App {
             log::warn!("[Sion][CursorOverlay] set_cursor_hittest(false) failed: {err:?}");
         }
 
-        // Linux X11/Wayland: make sure the window shows on all workspaces
-        // so it overlays the sharer's current work area even if they
-        // switch virtual desktops during the share.
-        // (winit 0.30 doesn't have a portable API for this; it's a
-        // nice-to-have rather than a blocker.)
+        // Linux: pin the overlay to ALL virtual desktops so it keeps
+        // covering the shared work area even if the sharer switches
+        // desktop mid-share. The overlay runs on XWayland (we force the
+        // X11 backend above for AlwaysOnTop), so we can use the standard
+        // EWMH `_NET_WM_STATE_STICKY` hint, which KWin/Mutter honor.
+        #[cfg(target_os = "linux")]
+        if let Err(err) = make_sticky_x11(&window) {
+            log::warn!("[Sion][CursorOverlay] make_sticky_x11 failed: {err:?}");
+        }
 
         Some(window)
     }
