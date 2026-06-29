@@ -284,6 +284,13 @@ body {
   box-shadow: 0 0 4px rgba(0,0,0,0.4);
 }
 
+/* Screen-share audio volume slider — native appearance with the Sion accent so
+   the filled track shows blue, matching the soundboard volume slider. */
+.screenshare-volume-slider {
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
 /* Mobile responsive */
 @media (max-width: 767px) {
   body {

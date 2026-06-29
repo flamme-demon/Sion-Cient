@@ -388,7 +388,58 @@ export interface ScreenShareInfo {
   hasAudio: boolean;
 }
 
-let screenShareCallback: ((info: ScreenShareInfo | null) => void) | null = null;
+let screenShareCallback: ((shares: ScreenShareInfo[]) => void) | null = null;
+
+// Per-share audio controls, keyed by the sharer's participant identity. These
+// are independent of the per-participant *voice* mute (`locallyMutedIdentities`)
+// and of global deafen: a viewer can silence the game/video audio of a share
+// while still hearing the sharer talk. Default = unmuted, volume 1.
+const screenShareAudioMuted = new Set<string>();
+const screenShareAudioVolume = new Map<string, number>();
+
+/** Desired output volume (0..1) for a participant's screen-share audio,
+ *  honoring the per-share mute toggle. Does NOT account for global deafen —
+ *  deafen always wins and is applied separately in `setDeafened`. */
+function desiredScreenShareVolume(identity: string): number {
+  if (screenShareAudioMuted.has(identity)) return 0;
+  return screenShareAudioVolume.get(identity) ?? 1;
+}
+
+/** Apply the per-share audio mute/volume to all of a participant's
+ *  ScreenShareAudio elements. No-op while deafened — deafen owns el.muted then
+ *  and will re-apply this state on un-deafen. */
+function applyScreenShareAudioState(identity: string) {
+  if (isCurrentlyDeafened) return;
+  const vol = desiredScreenShareVolume(identity);
+  for (const el of audioElements.values()) {
+    if (el.dataset.participantId === identity && el.dataset.trackSource === Track.Source.ScreenShareAudio) {
+      cancelFadeIn(el);
+      setElementMuted(el, vol === 0);
+      el.volume = vol;
+    }
+  }
+}
+
+/** Mute/unmute only the screen-share (system) audio of a given sharer, leaving
+ *  their microphone untouched. Local perception only. */
+export function setScreenShareAudioMuted(identity: string, muted: boolean) {
+  if (muted) screenShareAudioMuted.add(identity);
+  else screenShareAudioMuted.delete(identity);
+  applyScreenShareAudioState(identity);
+}
+
+/** Set the local playback volume (0..1) of a sharer's screen-share audio. */
+export function setScreenShareAudioVolume(identity: string, volume: number) {
+  screenShareAudioVolume.set(identity, Math.max(0, Math.min(1, volume)));
+  applyScreenShareAudioState(identity);
+}
+
+export function getScreenShareAudioState(identity: string): { muted: boolean; volume: number } {
+  return {
+    muted: screenShareAudioMuted.has(identity),
+    volume: screenShareAudioVolume.get(identity) ?? 1,
+  };
+}
 
 // Linux-only: publication of the system-audio track captured via Rust/parec
 // and injected into a MediaStreamAudioDestinationNode. Separate from the
@@ -442,60 +493,62 @@ function participantHasScreenShareAudio(participant: RemoteParticipant): boolean
   return false;
 }
 
+/** Snapshot every remote participant's currently-subscribed screen-share video
+ *  track. Multiple peers can share at once, so the UI gets the full list and
+ *  lets the viewer pick which one to watch. */
+function collectActiveScreenShares(excludeSid?: string): ScreenShareInfo[] {
+  const shares: ScreenShareInfo[] = [];
+  if (!currentRoom) return shares;
+  for (const [, participant] of currentRoom.remoteParticipants) {
+    for (const [, pub] of participant.trackPublications) {
+      // `excludeSid` drops a track we KNOW is going away: LiveKit doesn't clear
+      // `pub.track`/`isSubscribed` synchronously when it fires TrackUnsubscribed,
+      // so a naive recompute would re-list the share that just stopped.
+      if (pub.trackSid === excludeSid) continue;
+      if (pub.track && pub.track.kind === Track.Kind.Video && pub.source === Track.Source.ScreenShare && pub.isSubscribed) {
+        shares.push({
+          track: pub.track as RemoteTrack,
+          participantIdentity: participant.identity,
+          participantName: resolveDisplayName(participant),
+          hasAudio: participantHasScreenShareAudio(participant),
+        });
+      }
+    }
+  }
+  return shares;
+}
+
+function emitScreenShares() {
+  screenShareCallback?.(collectActiveScreenShares());
+}
+
 function handleScreenShareSubscribed(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
   if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
-    const hasAudio = participantHasScreenShareAudio(participant);
-    console.log(`[Sion][LK] screen share subscribed from ${participant.identity} (trackSid=${publication.trackSid}, hasAudio=${hasAudio}) — has callback=${!!screenShareCallback}`);
-    screenShareCallback?.({
-      track,
-      participantIdentity: participant.identity,
-      participantName: resolveDisplayName(participant),
-      hasAudio,
-    });
+    console.log(`[Sion][LK] screen share subscribed from ${participant.identity} (trackSid=${publication.trackSid}) — has callback=${!!screenShareCallback}`);
+    emitScreenShares();
   } else if (track.kind === Track.Kind.Audio && publication.source === Track.Source.ScreenShareAudio) {
-    // ScreenShareAudio subscribed AFTER the video; re-fire callback so the UI
-    // picks up the 🔊 indicator.
-    const videoSub = Array.from(participant.trackPublications.values())
-      .find(p => p.source === Track.Source.ScreenShare && p.track);
-    if (videoSub?.track) {
-      console.log(`[Sion][LK] screen share audio arrived from ${participant.identity} — refreshing UI`);
-      screenShareCallback?.({
-        track: videoSub.track as RemoteTrack,
-        participantIdentity: participant.identity,
-        participantName: resolveDisplayName(participant),
-        hasAudio: true,
-      });
-    }
+    // ScreenShareAudio subscribed AFTER the video; re-fire so the UI picks up
+    // the 🔊 indicator, and re-apply any per-share mute/volume the viewer set
+    // on a previous share from this participant.
+    console.log(`[Sion][LK] screen share audio arrived from ${participant.identity} — refreshing UI`);
+    emitScreenShares();
+    applyScreenShareAudioState(participant.identity);
   }
 }
 
 function handleScreenShareUnsubscribed(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
   if (track.kind === Track.Kind.Video && publication.source === Track.Source.ScreenShare) {
-    console.log(`[Sion][LK] screen share unsubscribed from ${participant.identity}`);
-    screenShareCallback?.(null);
+    console.log(`[Sion][LK] screen share unsubscribed from ${participant.identity} (trackSid=${publication.trackSid})`);
+    // Exclude the dying track — its publication may still read as subscribed.
+    screenShareCallback?.(collectActiveScreenShares(publication.trackSid));
   }
 }
 
-export function onScreenShareChange(cb: (info: ScreenShareInfo | null) => void): () => void {
+export function onScreenShareChange(cb: (shares: ScreenShareInfo[]) => void): () => void {
   screenShareCallback = cb;
-
-  // Check if there's already an active screen share
-  if (currentRoom) {
-    for (const [, participant] of currentRoom.remoteParticipants) {
-      for (const [, pub] of participant.trackPublications) {
-        if (pub.track && pub.track.kind === Track.Kind.Video && pub.source === Track.Source.ScreenShare && pub.isSubscribed) {
-          cb({
-            track: pub.track as RemoteTrack,
-            participantIdentity: participant.identity,
-            participantName: resolveDisplayName(participant),
-            hasAudio: participantHasScreenShareAudio(participant),
-          });
-          return () => { screenShareCallback = null; };
-        }
-      }
-    }
-  }
-
+  // Replay the current set so a freshly-mounted view picks up shares already
+  // in progress.
+  if (currentRoom) cb(collectActiveScreenShares());
   return () => { screenShareCallback = null; };
 }
 
@@ -602,16 +655,24 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
   document.body.appendChild(el);
   audioElements.set(sid, el);
 
-  // Fade in to 1.0 over FADE_IN_MS. No-op when deafened (el.muted already
-  // kills output regardless of volume). The interval handle is stashed on
-  // the element so detachAudioTrack can cancel it if the track dies early.
-  if (!isCurrentlyDeafened) {
+  // Screen-share audio honours the viewer's per-share mute/volume; everything
+  // else fades to full. Computing the target up-front means a share the viewer
+  // previously muted stays silent across re-subscribes — no 500 ms leak.
+  const fadeTarget = publication.source === Track.Source.ScreenShareAudio
+    ? desiredScreenShareVolume(participant.identity)
+    : 1;
+
+  // Fade in to fadeTarget over FADE_IN_MS. No-op when deafened (el.muted
+  // already kills output regardless of volume) or when the target is 0 (muted
+  // share). The interval handle is stashed on the element so detachAudioTrack
+  // can cancel it if the track dies early.
+  if (!isCurrentlyDeafened && fadeTarget > 0) {
     const FADE_IN_MS = 500;
     const FADE_STEPS = 20;
     let step = 0;
     const handle = setInterval(() => {
       step++;
-      const v = step >= FADE_STEPS ? 1 : step / FADE_STEPS;
+      const v = step >= FADE_STEPS ? fadeTarget : (step / FADE_STEPS) * fadeTarget;
       el.volume = v;
       if (step >= FADE_STEPS) {
         clearInterval(handle);
@@ -619,6 +680,9 @@ function attachAudioTrack(track: RemoteTrack, publication: RemoteTrackPublicatio
       }
     }, FADE_IN_MS / FADE_STEPS);
     (el as HTMLAudioElement & { _fadeInHandle?: ReturnType<typeof setInterval> })._fadeInHandle = handle;
+  } else if (!isCurrentlyDeafened && fadeTarget === 0) {
+    // Muted screen-share audio: keep it silenced (volume already 0 above).
+    setElementMuted(el, true);
   }
 
   // Re-apply per-participant local mute AND global deafen on the track itself.
@@ -1119,7 +1183,7 @@ export async function disconnectFromRoom() {
     // break the next voice session's screen share. The cleanup that
     // ScreenShareView's own unmount returns is the only path allowed to
     // null this — it fires when the user logs out / leaves the app.
-    screenShareCallback?.(null);
+    screenShareCallback?.([]);
     resetAllE2EEState();
     pendingTimerCleanup?.();
     pendingTimerCleanup = null;
@@ -1223,6 +1287,13 @@ export function setDeafened(deafened: boolean) {
     // hasn't locally muted this peer.
     const pid = el.dataset.participantId;
     setElementTrackEnabled(el, deafened ? false : !(pid && locallyMutedIdentities.has(pid)));
+    // setElementMuted forced volume→1 / muted→false on un-deafen; restore the
+    // viewer's per-share audio choice for screen-share-audio elements.
+    if (!deafened && pid && el.dataset.trackSource === Track.Source.ScreenShareAudio) {
+      const vol = desiredScreenShareVolume(pid);
+      setElementMuted(el, vol === 0);
+      el.volume = vol;
+    }
     console.log(`[Sion][deafen]   → sid=${sid} pid=${pid} src=${el.dataset.trackSource} muted=${el.muted} vol=${el.volume}`);
   });
   broadcastAfk();

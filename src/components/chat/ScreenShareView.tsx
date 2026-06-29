@@ -1,6 +1,35 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { onScreenShareChange, onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, type ScreenShareInfo, type RemoteCursor, type RemoteCursorClick } from "../../services/livekitService";
+import { onScreenShareChange, onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, setScreenShareAudioMuted, setScreenShareAudioVolume, getScreenShareAudioState, type ScreenShareInfo, type RemoteCursor, type RemoteCursorClick } from "../../services/livekitService";
 import { useTranslation } from "react-i18next";
+import { SpeakerIcon, ScreenIcon } from "../icons";
+
+/** Speaker with an X — the muted counterpart to the maison SpeakerIcon,
+ *  matched in stroke/size so the toggle doesn't jump. */
+function SpeakerMutedIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <line x1="23" y1="9" x2="17" y2="15" />
+      <line x1="17" y1="9" x2="23" y2="15" />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  );
+}
 
 // 60 Hz to match the overlay's redraw cadence — at 30 Hz the cursor
 // jumped every other frame, which the lerp helps but doesn't fully hide.
@@ -48,7 +77,9 @@ function colorForIdentity(identity: string): string {
 
 export function ScreenShareView() {
   const { t } = useTranslation();
-  const [screenShare, setScreenShare] = useState<ScreenShareInfo | null>(null);
+  // All concurrent shares in the channel; `selectedId` is the viewer's pick.
+  const [shares, setShares] = useState<ScreenShareInfo[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cursors, setCursors] = useState<RemoteCursor[]>([]);
   const [clicks, setClicks] = useState<RemoteCursorClick[]>([]);
   // Content-area box (inside the video element, after object-contain) in
@@ -60,28 +91,47 @@ export function ScreenShareView() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const unsub = onScreenShareChange(setScreenShare);
+    const unsub = onScreenShareChange(setShares);
     return unsub;
   }, []);
 
+  // Derive the active share from the viewer's pick, auto-falling back to the
+  // first available one when their pick is gone — no effect needed.
+  const activeShare = shares.find((s) => s.participantIdentity === selectedId) ?? shares[0] ?? null;
+  const activeTrack = activeShare?.track ?? null;
+  const activeIdentity = activeShare?.participantIdentity ?? null;
+
+  // Audio control widgets, re-synced from the service when the active share
+  // changes (each sharer keeps their own mute/volume). Adjusting state during
+  // render is React's sanctioned alternative to a setState-in-effect.
+  const [audioCtl, setAudioCtl] = useState<{ id: string | null; muted: boolean; volume: number }>({ id: null, muted: false, volume: 1 });
+  if (audioCtl.id !== activeIdentity) {
+    const st = activeIdentity ? getScreenShareAudioState(activeIdentity) : { muted: false, volume: 1 };
+    setAudioCtl({ id: activeIdentity, muted: st.muted, volume: st.volume });
+  }
+  const audioMuted = audioCtl.muted;
+  const audioVolume = audioCtl.volume;
+
+  // Attach the *track instance* (stable across re-emits) so the video doesn't
+  // re-attach/flash every time another share toggles or audio arrives.
   useEffect(() => {
-    if (!screenShare || !videoRef.current) return;
-    const el = screenShare.track.attach(videoRef.current);
+    if (!activeTrack || !videoRef.current) return;
+    const el = activeTrack.attach(videoRef.current);
     return () => {
-      screenShare.track.detach(el);
+      activeTrack.detach(el);
     };
-  }, [screenShare]);
+  }, [activeTrack]);
 
   // Subscribe to remote cursors only while a share is visible.
   useEffect(() => {
-    if (!screenShare) { setCursors([]); return; }
+    if (!activeIdentity) { setCursors([]); return; }
     const unsub = onCursorsChange(setCursors);
     return () => { unsub(); setCursors([]); };
-  }, [screenShare]);
+  }, [activeIdentity]);
 
   // Subscribe to click ripples — ephemeral, auto-swept after CLICK_TTL_MS.
   useEffect(() => {
-    if (!screenShare) { setClicks([]); return; }
+    if (!activeIdentity) { setClicks([]); return; }
     const unsub = onCursorClick((click) => {
       setClicks((prev) => [...prev, click]);
     });
@@ -90,12 +140,12 @@ export function ScreenShareView() {
       setClicks((prev) => prev.filter((c) => c.expiresAt > now));
     }, 300);
     return () => { unsub(); clearInterval(sweep); setClicks([]); };
-  }, [screenShare]);
+  }, [activeIdentity]);
 
   // Capture local cursor and broadcast normalised coords. Throttled to
   // CURSOR_BROADCAST_HZ so the data channel stays light.
   useEffect(() => {
-    if (!screenShare) return;
+    if (!activeIdentity) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -178,7 +228,7 @@ export function ScreenShareView() {
       window.removeEventListener("blur", onLeave);
       if (insideVideo) broadcastCursorHide();
     };
-  }, [screenShare]);
+  }, [activeIdentity]);
 
   // Track the content-area box so the absolute-positioned overlays (cursors,
   // click ripples) sit exactly over the pixels the sharer captured, not over
@@ -187,7 +237,7 @@ export function ScreenShareView() {
   // `resize` fire on HTMLMediaElement). useLayoutEffect to avoid a
   // single-frame flash of overlays positioned against stale measurements.
   useLayoutEffect(() => {
-    if (!screenShare) { setContentBox(null); return; }
+    if (!activeIdentity) { setContentBox(null); return; }
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container) return;
@@ -217,12 +267,73 @@ export function ScreenShareView() {
       video.removeEventListener("loadedmetadata", measure);
       video.removeEventListener("resize", measure);
     };
-  }, [screenShare]);
+  }, [activeIdentity]);
 
-  if (!screenShare) return null;
+  const handleToggleAudioMute = () => {
+    if (!activeIdentity) return;
+    const next = !audioMuted;
+    setAudioCtl((c) => ({ ...c, muted: next }));
+    setScreenShareAudioMuted(activeIdentity, next);
+  };
+
+  const handleVolumeChange = (v: number) => {
+    if (!activeIdentity) return;
+    // Dragging to 0 mutes; dragging back up unmutes — keep the two in sync.
+    const shouldMute = v === 0;
+    setAudioCtl((c) => ({ ...c, volume: v, muted: shouldMute }));
+    setScreenShareAudioVolume(activeIdentity, v);
+    setScreenShareAudioMuted(activeIdentity, shouldMute);
+  };
+
+  // Carousel navigation between concurrent shares (wraps around).
+  const activeIndex = shares.findIndex((s) => s.participantIdentity === activeIdentity);
+  const goToShare = (delta: number) => {
+    if (shares.length < 2) return;
+    const base = activeIndex < 0 ? 0 : activeIndex;
+    const next = (base + delta + shares.length) % shares.length;
+    setSelectedId(shares[next].participantIdentity);
+  };
+
+  if (!activeShare) return null;
 
   return (
     <div className="bg-black flex flex-col items-center border-b border-[var(--color-border)]">
+      {/* Tab bar (browser-style) when several peers share at once — full width,
+          active tab visually connected to the video below. */}
+      {shares.length > 1 && (
+        <div className="w-full flex" style={{ background: 'var(--color-surface-container-low)' }}>
+          {shares.map((s, i) => {
+            const isActive = s.participantIdentity === activeIdentity;
+            // Reflect this share's audio state: live for the active one,
+            // stored for the others. Lets each tab show 🔊 vs 🔇.
+            const tabMuted = isActive ? audioMuted : getScreenShareAudioState(s.participantIdentity).muted;
+            return (
+              <button
+                key={s.participantIdentity}
+                type="button"
+                onClick={() => setSelectedId(s.participantIdentity)}
+                title={s.participantName}
+                className="flex-1 min-w-0 flex items-center justify-center gap-2 text-sm px-4 py-3 transition-colors"
+                style={{
+                  background: isActive ? 'var(--color-surface-container-high)' : 'transparent',
+                  color: isActive ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                  fontWeight: isActive ? 600 : 400,
+                  borderBottom: isActive ? '2px solid var(--color-primary)' : '2px solid transparent',
+                  borderRight: i < shares.length - 1 ? '1px solid var(--color-outline-variant)' : 'none',
+                }}
+              >
+                <ScreenIcon />
+                <span className="truncate">{s.participantName}</span>
+                {s.hasAudio && (
+                  <span style={{ color: tabMuted ? 'var(--color-error)' : undefined, display: 'flex' }}>
+                    {tabMuted ? <SpeakerMutedIcon /> : <SpeakerIcon />}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div ref={containerRef} style={{ position: 'relative', width: '100%', maxHeight: '50vh', display: 'flex', justifyContent: 'center' }}>
         <video
           ref={videoRef}
@@ -235,6 +346,38 @@ export function ScreenShareView() {
           disablePictureInPicture
           className="w-full max-h-[50vh] object-contain"
         />
+        {/* Carousel chevrons — overlaid on the video edges, in addition to the
+            top tab bar, for quick prev/next cycling. Only when >1 share. */}
+        {shares.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={() => goToShare(-1)}
+              title={t("screenShare.prevShare", { defaultValue: "Écran précédent" })}
+              aria-label={t("screenShare.prevShare", { defaultValue: "Écran précédent" })}
+              className="absolute left-2 top-1/2 flex items-center justify-center rounded-full transition-colors hover:!bg-black/75"
+              style={{ width: 38, height: 38, transform: 'translateY(-50%)', background: 'rgba(0,0,0,0.5)', color: 'white', zIndex: 200 }}
+            >
+              <ChevronLeftIcon />
+            </button>
+            <button
+              type="button"
+              onClick={() => goToShare(1)}
+              title={t("screenShare.nextShare", { defaultValue: "Écran suivant" })}
+              aria-label={t("screenShare.nextShare", { defaultValue: "Écran suivant" })}
+              className="absolute right-2 top-1/2 flex items-center justify-center rounded-full transition-colors hover:!bg-black/75"
+              style={{ width: 38, height: 38, transform: 'translateY(-50%)', background: 'rgba(0,0,0,0.5)', color: 'white', zIndex: 200 }}
+            >
+              <ChevronRightIcon />
+            </button>
+            <div
+              className="absolute top-2 left-1/2 text-xs px-2 py-0.5 rounded-full"
+              style={{ transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.5)', color: 'white', zIndex: 200 }}
+            >
+              {activeIndex + 1}/{shares.length}
+            </div>
+          </>
+        )}
         {/* Keyframes for click ripples — 3 concentric rings cascade outward. */}
         <style>{`
           @keyframes sion-ripple-viewer {
@@ -326,13 +469,38 @@ export function ScreenShareView() {
           ))}
         </div>
       </div>
-      <div className="text-xs text-[var(--color-text-secondary)] py-1 flex items-center gap-1">
-        {t("screenShare.sharedBy", { name: screenShare.participantName, defaultValue: "{{name}} partage son écran" })}
-        {screenShare.hasAudio && (
+      <div className="text-xs text-[var(--color-text-secondary)] py-1.5 flex items-center gap-2.5 flex-wrap justify-center px-2">
+        <span>{t("screenShare.sharedBy", { name: activeShare.participantName, defaultValue: "{{name}} partage son écran" })}</span>
+        {activeShare.hasAudio && (
           <span
-            title={t("screenShare.audioIncluded", { defaultValue: "Son du partage inclus" })}
-            aria-label={t("screenShare.audioIncluded", { defaultValue: "Son du partage inclus" })}
-          >🔊</span>
+            className="flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full"
+            style={{ background: 'rgba(255,255,255,0.08)' }}
+          >
+            <button
+              type="button"
+              onClick={handleToggleAudioMute}
+              title={audioMuted ? t("screenShare.unmuteAudio", { defaultValue: "Réactiver le son du partage" }) : t("screenShare.muteAudio", { defaultValue: "Couper le son du partage" })}
+              aria-label={audioMuted ? t("screenShare.unmuteAudio", { defaultValue: "Réactiver le son du partage" }) : t("screenShare.muteAudio", { defaultValue: "Couper le son du partage" })}
+              className="flex items-center transition-colors"
+              style={{
+                border: 'none', background: 'transparent', cursor: 'pointer', padding: 0,
+                color: audioMuted ? 'var(--color-error)' : 'var(--color-on-surface)',
+              }}
+            >
+              {audioMuted ? <SpeakerMutedIcon /> : <SpeakerIcon />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round((audioMuted ? 0 : audioVolume) * 100)}
+              onChange={(e) => handleVolumeChange(Number(e.target.value) / 100)}
+              title={t("screenShare.audioVolume", { defaultValue: "Volume du partage" })}
+              aria-label={t("screenShare.audioVolume", { defaultValue: "Volume du partage" })}
+              className="screenshare-volume-slider"
+              style={{ width: 72 }}
+            />
+          </span>
         )}
         <span style={{ opacity: 0.6 }}>
           · {t("screenShare.fullscreenHint", { defaultValue: "double-clic pour agrandir" })}
