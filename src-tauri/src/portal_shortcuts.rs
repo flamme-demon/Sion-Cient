@@ -101,6 +101,7 @@ async fn run_session(
     // without this registration KDE answers BindShortcuts with
     // org.freedesktop.portal.Error.NotAllowed ("An app id is required").
     // Best-effort: the Registry interface needs xdg-desktop-portal ≥ 1.18.
+    ensure_host_desktop_file();
     if let Err(e) = ashpd::register_host_app("com.sion.client".parse().unwrap()).await {
         log::info!("[Sion] Portal host-app registration unavailable: {}", e);
     }
@@ -156,6 +157,38 @@ async fn run_session(
     }
     let _ = session.close().await;
     Ok(())
+}
+
+/// The portal Registry resolves the host app id against an installed
+/// `com.sion.client.desktop`. Users install Sion as an AppImage (nothing is
+/// ever written to /usr/share/applications), so self-provision the file in
+/// `~/.local/share/applications` — pointing Exec at the AppImage when we run
+/// as one ($APPIMAGE), else at the current executable.
+fn ensure_host_desktop_file() {
+    let Some(dir) = dirs::data_dir().map(|d| d.join("applications")) else { return };
+    let path = dir.join("com.sion.client.desktop");
+    if path.exists() {
+        return;
+    }
+    let exec = std::env::var("APPIMAGE")
+        .ok()
+        .or_else(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "sion-client".into());
+    let contents = format!(
+        "[Desktop Entry]\n\
+         Name=Sion Client\n\
+         Comment=Voice and text client (Matrix + LiveKit)\n\
+         Exec=\"{}\"\n\
+         Icon=sion-client\n\
+         Type=Application\n\
+         Categories=Network;Chat;AudioVideo;\n\
+         Terminal=false\n\
+         StartupWMClass=sion-client\n",
+        exec
+    );
+    if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, contents).is_ok() {
+        log::info!("[Sion] Installed portal desktop file at {}", path.display());
+    }
 }
 
 /// Portal shortcut ids must stay within [A-Za-z0-9-._]; combos contain '+'
