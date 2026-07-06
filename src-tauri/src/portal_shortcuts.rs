@@ -97,6 +97,14 @@ async fn run_session(
     id_to_action: HashMap<String, String>,
     mut cancel_rx: tauri::async_runtime::Receiver<()>,
 ) -> Result<(), ashpd::Error> {
+    // Non-sandboxed apps have no app id the portal can derive on its own —
+    // without this registration KDE answers BindShortcuts with
+    // org.freedesktop.portal.Error.NotAllowed ("An app id is required").
+    // Best-effort: the Registry interface needs xdg-desktop-portal ≥ 1.18.
+    if let Err(e) = ashpd::register_host_app("com.sion.client".parse().unwrap()).await {
+        log::info!("[Sion] Portal host-app registration unavailable: {}", e);
+    }
+
     let portal = GlobalShortcuts::new().await?;
     let session = portal.create_session().await?;
 
