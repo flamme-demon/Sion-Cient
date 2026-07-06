@@ -1562,6 +1562,17 @@ async fn probe_url_formats(
         .collect();
     options.sort_by_key(|o| o.get("height").and_then(|v| v.as_u64()).unwrap_or(0));
 
+    // Some sources expose a single format with no height/vcodec metadata at all
+    // (e.g. X/Twitter animated GIFs served as tweet_video mp4). Offer it as an
+    // "original quality" option (height 0) instead of returning nothing.
+    if options.is_empty() {
+        if let Some(f) = formats.iter().rev().find(|f| f.get("url").and_then(|v| v.as_str()).is_some()) {
+            let ext = f.get("ext").and_then(|x| x.as_str()).unwrap_or("mp4");
+            let size = est(f, &["tbr", "vbr"]);
+            options.push(serde_json::json!({ "height": 0, "codec": "?", "ext": ext, "size": size }));
+        }
+    }
+
     Ok(serde_json::json!({ "duration": duration, "title": title, "options": options }).to_string())
 }
 
@@ -1606,7 +1617,9 @@ async fn import_url_video(
     let mut dl = hidden_command(&ytdlp_bin);
     dl.arg(&url)
         .args(["--no-playlist", "--playlist-items", "1", "--no-warnings", "--no-part", "--newline"])
-        .args(["-f", &format!("bv*[height<={h}]+ba/b[height<={h}]")])
+        // height 0 = "original quality" fallback (source without height
+        // metadata, e.g. X GIFs) — a [height<=0] filter would match nothing.
+        .args(["-f", &if h == 0 { "bv*+ba/b".to_string() } else { format!("bv*[height<={h}]+ba/b[height<={h}]") }])
         .args(["-S", "vcodec:vp9,res,ext"])
         .arg("-o").arg(&out_tmpl)
         .args(["--ffmpeg-location", &ffmpeg_bin])
@@ -1733,7 +1746,7 @@ async fn import_url_video(
 /// Register global shortcuts via plugin + update rdev state (Linux).
 /// Shared logic extracted so both Linux and non-Linux entry points use it.
 #[cfg(not(target_os = "android"))]
-fn register_plugin_shortcuts(app: &tauri::AppHandle<TauriRuntime>, payload: &UpdateShortcutsPayload) {
+pub(crate) fn register_plugin_shortcuts(app: &tauri::AppHandle<TauriRuntime>, payload: &UpdateShortcutsPayload) {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();

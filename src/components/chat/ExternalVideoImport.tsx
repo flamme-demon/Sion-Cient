@@ -175,11 +175,11 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
                       }}>
                       <input type="radio" name="vidres" disabled={over} checked={selected}
                         onChange={() => setHeight(o.height)} style={{ accentColor: 'var(--color-primary)' }} />
-                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', minWidth: 52 }}>{o.height}p</span>
-                      <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>{o.codec} · {o.codec === "VP9" ? t("extVideo.native") : t("extVideo.recoded")}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', minWidth: 52 }}>{o.height > 0 ? `${o.height}p` : t("extVideo.original")}</span>
+                      <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>{o.codec !== "?" ? `${o.codec} · ` : ""}{o.codec === "VP9" ? t("extVideo.native") : t("extVideo.recoded")}</span>
                       <span style={{ flex: 1 }} />
                       <span style={{ fontSize: 12, color: over ? 'var(--color-error)' : 'var(--color-on-surface-variant)' }}>
-                        ~{fmtSize(o.size)}{over ? ` · ${t("extVideo.overLimit")}` : ""}
+                        {o.size > 0 ? `~${fmtSize(o.size)}` : t("extVideo.sizeUnknown")}{over ? ` · ${t("extVideo.overLimit")}` : ""}
                       </span>
                     </label>
                   );
