@@ -7,6 +7,8 @@ use tauri::Manager;
 mod cursor_overlay;
 #[cfg(target_os = "linux")]
 mod portal_shortcuts;
+#[cfg(target_os = "windows")]
+mod win_shortcuts;
 #[cfg(not(target_os = "android"))]
 mod system_audio;
 #[cfg(not(target_os = "android"))]
@@ -1782,7 +1784,8 @@ async fn import_url_video(
 
 /// Register global shortcuts via plugin + update rdev state (Linux).
 /// Shared logic extracted so both Linux and non-Linux entry points use it.
-#[cfg(not(target_os = "android"))]
+// Not compiled on Windows: win_shortcuts.rs replaces the plugin path there.
+#[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 pub(crate) fn register_plugin_shortcuts(app: &tauri::AppHandle<TauriRuntime>, payload: &UpdateShortcutsPayload) {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
     let gs = app.global_shortcut();
@@ -1876,6 +1879,32 @@ fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, state: tauri::State<'_,
 #[tauri::command]
 fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, payload: UpdateShortcutsPayload) {
     log::info!("[Sion] Global shortcuts updated: mute={}, deafen={}", payload.mute, payload.deafen);
+    // Windows: layout-aware RegisterHotKey path (see win_shortcuts.rs) — the
+    // plugin's fixed US VK table binds the wrong keys on AZERTY & co. Clear
+    // any plugin grabs from a previous version of this handler first.
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        let _ = app.global_shortcut().unregister_all();
+        let mut bindings: Vec<win_shortcuts::Binding> = Vec::new();
+        if !payload.mute.is_empty() {
+            bindings.push(win_shortcuts::Binding { action: "mute".into(), combo: payload.mute.clone() });
+        }
+        if !payload.deafen.is_empty() {
+            bindings.push(win_shortcuts::Binding { action: "deafen".into(), combo: payload.deafen.clone() });
+        }
+        for sb in &payload.soundboard {
+            if sb.combo.is_empty() { continue; }
+            bindings.push(win_shortcuts::Binding {
+                action: format!("soundboard:{}", sb.id),
+                combo: sb.combo.clone(),
+            });
+        }
+        win_shortcuts::update(bindings);
+    }
+    // macOS: the plugin is fine — Carbon RegisterEventHotKey works on
+    // physical keycodes (Code::Backquote → kVK_ANSI_Grave).
+    #[cfg(not(target_os = "windows"))]
     register_plugin_shortcuts(&app, &payload);
 }
 
