@@ -5,6 +5,8 @@ use tauri::Manager;
 
 #[cfg(not(target_os = "android"))]
 mod cursor_overlay;
+#[cfg(target_os = "linux")]
+mod portal_shortcuts;
 #[cfg(not(target_os = "android"))]
 mod system_audio;
 #[cfg(not(target_os = "android"))]
@@ -71,6 +73,41 @@ fn parse_key(s: &str) -> Option<Key> {
         "End" => Some(Key::End),
         "PageUp" => Some(Key::PageUp),
         "PageDown" => Some(Key::PageDown),
+        // W3C physical-key codes (e.code) — the UI stores combos in this form
+        // since the layout-character migration ("²" on AZERTY = Backquote…).
+        "ArrowUp" => Some(Key::UpArrow),
+        "ArrowDown" => Some(Key::DownArrow),
+        "ArrowLeft" => Some(Key::LeftArrow),
+        "ArrowRight" => Some(Key::RightArrow),
+        "Backquote" => Some(Key::BackQuote),
+        "Quote" => Some(Key::Quote),
+        "Backslash" => Some(Key::BackSlash),
+        "IntlBackslash" => Some(Key::IntlBackslash),
+        "Comma" => Some(Key::Comma),
+        "Period" => Some(Key::Dot),
+        "Slash" => Some(Key::Slash),
+        "Semicolon" => Some(Key::SemiColon),
+        "Minus" => Some(Key::Minus),
+        "Equal" => Some(Key::Equal),
+        "BracketLeft" => Some(Key::LeftBracket),
+        "BracketRight" => Some(Key::RightBracket),
+        "CapsLock" => Some(Key::CapsLock),
+        "ScrollLock" => Some(Key::ScrollLock),
+        "Pause" => Some(Key::Pause),
+        "PrintScreen" => Some(Key::PrintScreen),
+        "NumpadEnter" => Some(Key::KpReturn),
+        "NumpadAdd" => Some(Key::KpPlus),
+        "NumpadSubtract" => Some(Key::KpMinus),
+        "NumpadMultiply" => Some(Key::KpMultiply),
+        "NumpadDivide" => Some(Key::KpDivide),
+        "NumpadDecimal" => Some(Key::KpDecimal),
+        "Numpad0" => Some(Key::Kp0), "Numpad1" => Some(Key::Kp1), "Numpad2" => Some(Key::Kp2),
+        "Numpad3" => Some(Key::Kp3), "Numpad4" => Some(Key::Kp4), "Numpad5" => Some(Key::Kp5),
+        "Numpad6" => Some(Key::Kp6), "Numpad7" => Some(Key::Kp7), "Numpad8" => Some(Key::Kp8),
+        "Numpad9" => Some(Key::Kp9),
+        // "KeyA" / "Digit1" → recurse on the trailing letter/digit.
+        s if s.len() == 4 && s.starts_with("Key") => parse_key(&s[3..]),
+        s if s.len() == 6 && s.starts_with("Digit") => parse_key(&s[5..]),
         s if s.len() == 1 => {
             let c = s.chars().next().unwrap().to_ascii_uppercase();
             match c {
@@ -118,7 +155,7 @@ fn keys_match(required: &[Key], pressed: &HashSet<Key>) -> bool {
 
 #[cfg(not(target_os = "android"))]
 #[derive(Deserialize)]
-struct UpdateShortcutsPayload {
+pub(crate) struct UpdateShortcutsPayload {
     mute: String,
     deafen: String,
     #[serde(default)]
@@ -1798,8 +1835,41 @@ fn update_shortcuts(app: tauri::AppHandle<TauriRuntime>, state: tauri::State<'_,
     let mut shortcuts = state.lock().unwrap();
     shortcuts.mute_keys = parse_shortcut(&payload.mute);
     shortcuts.deafen_keys = parse_shortcut(&payload.deafen);
+    drop(shortcuts);
     log::info!("[Sion] Global shortcuts updated: mute={}, deafen={}", payload.mute, payload.deafen);
-    register_plugin_shortcuts(&app, &payload);
+
+    // Background capture: prefer the XDG portal (layout-proof, sees native
+    // Wayland windows); it falls back to the X11-grab plugin if unavailable.
+    // Any previously plugin-registered grabs are cleared either way so the
+    // two backends never double-fire beyond the WS-level dedup.
+    {
+        use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        let _ = app.global_shortcut().unregister_all();
+    }
+    let mut bindings: Vec<portal_shortcuts::Binding> = Vec::new();
+    if !payload.mute.is_empty() {
+        bindings.push(portal_shortcuts::Binding {
+            action: "mute".into(),
+            description: "Sion — Couper/activer le micro".into(),
+            combo: payload.mute.clone(),
+        });
+    }
+    if !payload.deafen.is_empty() {
+        bindings.push(portal_shortcuts::Binding {
+            action: "deafen".into(),
+            description: "Sion — Sourdine (casque)".into(),
+            combo: payload.deafen.clone(),
+        });
+    }
+    for sb in &payload.soundboard {
+        if sb.combo.is_empty() { continue; }
+        bindings.push(portal_shortcuts::Binding {
+            action: format!("soundboard:{}", sb.id),
+            description: format!("Sion — Soundboard ({})", sb.combo),
+            combo: sb.combo.clone(),
+        });
+    }
+    portal_shortcuts::update(app, bindings, payload);
 }
 
 #[cfg(all(not(target_os = "android"), not(target_os = "linux")))]
@@ -1827,7 +1897,7 @@ static WS_SENDERS: std::sync::LazyLock<Mutex<Vec<std::sync::mpsc::Sender<String>
 static LAST_PUSH_TS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(not(target_os = "android"))]
-fn push_shortcut_event(action: &str) {
+pub(crate) fn push_shortcut_event(action: &str) {
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let prev = LAST_PUSH_TS.swap(ts, Ordering::Relaxed);
     if ts - prev < 500 { return; } // Deduplicate rdev + plugin firing for same keypress

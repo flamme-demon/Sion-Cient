@@ -73,6 +73,16 @@ ab_glyph = "0.2"
 # Linux-only dependencies (rdev for evdev keyboard capture)
 [target.'cfg(target_os = "linux")'.dependencies]
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
+# Background global shortcuts via the XDG portal (org.freedesktop.portal.
+# GlobalShortcuts). The X11-grab path (tauri-plugin-global-shortcut) resolves
+# keys through US keysyms, so layout-dependent keys (² on AZERTY = Backquote)
+# either fail to register or grab the wrong key — the portal lets the
+# compositor do the capture instead, and works in front of native Wayland
+# windows too. Already in-tree transitively via rfd's xdg-portal feature.
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# keysym → name ("XK_twosuperior") for building layout-aware portal triggers.
+xkeysym = "0.2"
+futures-util = { version = "0.3", default-features = false }
 # Used to mark the cursor overlay sticky (on all virtual desktops) via the
 # EWMH `_NET_WM_STATE_STICKY` ClientMessage. The overlay runs on XWayland, so
 # KWin/Mutter honor X11 window-state hints. Already in the lockfile (transitive
