@@ -5,6 +5,8 @@
  * WebSocket used for mute/deafen (action = `soundboard:<eventId>`).
  */
 
+import { normalizeCombo } from "../utils/keyCombo";
+
 const STORAGE_KEY = "sion.soundboard.hotkeys";
 
 export interface HotkeyMap {
@@ -60,8 +62,9 @@ export function getHotkey(eventId: string): string | null {
 /** Returns the eventId currently bound to a combo, or null. */
 export function findConflict(combo: string, excludeEventId: string | null = null): string | null {
   const map = loadHotkeys();
+  const target = normalizeCombo(combo);
   for (const [id, c] of Object.entries(map)) {
-    if (c === combo && id !== excludeEventId) return id;
+    if (normalizeCombo(c) === target && id !== excludeEventId) return id;
   }
   return null;
 }
@@ -89,11 +92,11 @@ async function syncToBackend() {
     // hook. Read current mute/deafen from the settings store.
     const { useSettingsStore } = await import("../stores/useSettingsStore");
     const map = loadHotkeys();
-    const soundboard = Object.entries(map).map(([id, combo]) => ({ id, combo }));
+    const soundboard = Object.entries(map).map(([id, combo]) => ({ id, combo: normalizeCombo(combo) }));
     await invoke("update_shortcuts", {
       payload: {
-        mute: useSettingsStore.getState().muteShortcut,
-        deafen: useSettingsStore.getState().deafenShortcut,
+        mute: normalizeCombo(useSettingsStore.getState().muteShortcut),
+        deafen: normalizeCombo(useSettingsStore.getState().deafenShortcut),
         soundboard,
       },
     });
@@ -117,8 +120,8 @@ const CEF_RESERVED_F_KEYS = new Set(["F1", "F3", "F5", "F7", "F11", "F12"]);
 /** Valide une combo avant attribution. Retourne le message d'erreur ou null si OK. */
 export function validateCombo(combo: string, muteShortcut: string, deafenShortcut: string): string | null {
   if (!combo) return "Combo vide";
-  if (combo === muteShortcut) return "Conflit avec le raccourci mute";
-  if (combo === deafenShortcut) return "Conflit avec le raccourci sourdine";
+  if (normalizeCombo(combo) === normalizeCombo(muteShortcut)) return "Conflit avec le raccourci mute";
+  if (normalizeCombo(combo) === normalizeCombo(deafenShortcut)) return "Conflit avec le raccourci sourdine";
   // F12 is reserved for Sion (dev tools).
   if (combo === "F12" || combo.endsWith("+F12")) return "F12 est réservé";
 
@@ -162,11 +165,11 @@ export function normalizeManualCombo(input: string): string | null {
   }
   if (normalized.length !== 1) return null;
 
-  // Normalize the main key: single letter uppercase, F-key uppercase, else keep
+  // Normalize the main key: F-key uppercase, then to physical-code form
+  // ("A" → "KeyA") so manual input matches the e.code capture format.
   let main = normalized[0];
-  if (/^[a-z]$/i.test(main)) main = main.toUpperCase();
-  else if (/^f\d{1,2}$/i.test(main)) main = main.toUpperCase();
+  if (/^f\d{1,2}$/i.test(main)) main = main.toUpperCase();
 
   const orderedMods = ["Ctrl", "Shift", "Alt", "Meta"].filter((m) => modifiers.includes(m));
-  return [...orderedMods, main].join("+");
+  return normalizeCombo([...orderedMods, main].join("+"));
 }

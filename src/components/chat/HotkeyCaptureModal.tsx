@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore } from "../../stores/useSettingsStore";
-import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
+import { keyEventToString, formatCombo } from "../../utils/keyCombo";
 import { findConflict, setHotkey, validateCombo, normalizeManualCombo } from "../../services/soundboardHotkeys";
 
 interface Props {
@@ -110,11 +110,11 @@ export function HotkeyCaptureModal({ eventId, label, currentCombo, onClose }: Pr
           {t("hotkey.title", { label })}
         </div>
         <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
-          {capturing ? t("hotkey.pressKey") : t("hotkey.captured", { combo: captured || "" })}
+          {capturing ? t("hotkey.pressKey") : t("hotkey.captured", { combo: formatCombo(captured || "") })}
         </div>
         {currentCombo && capturing && (
           <div style={{ fontSize: 11, color: 'var(--color-outline)' }}>
-            {t("hotkey.currentBinding", { combo: currentCombo })}
+            {t("hotkey.currentBinding", { combo: formatCombo(currentCombo) })}
           </div>
         )}
         {error && (

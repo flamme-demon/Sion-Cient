@@ -146,6 +146,8 @@
     "rangeRequired": "Indique une plage horaire (début/fin) pour cette vidéo.",
     "native": "natif",
     "recoded": "réencodé WebM",
+    "original": "Originale",
+    "sizeUnknown": "taille inconnue",
     "phaseDownload": "Téléchargement",
     "phaseConvert": "Conversion en WebM"
   },

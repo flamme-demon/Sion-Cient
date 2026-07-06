@@ -7,7 +7,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useClickOutside } from "../../hooks/useClickOutside";
-import { keyEventToString } from "../../hooks/useKeyboardShortcuts";
+import { keyEventToString, formatCombo } from "../../utils/keyCombo";
 import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
 import { VoiceCueEditor } from "../chat/VoiceCueEditor";
@@ -762,13 +762,13 @@ export function SettingsPanel() {
             <div style={{ ...rowStyle, marginBottom: 12 }}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.muteShortcut")}</div>
               <button onClick={() => { setRecordingMute(true); setRecordingDeafen(false); }} style={shortcutBtnStyle(recordingMute)}>
-                {recordingMute ? t("settings.pressKey") : muteShortcut || t("settings.none")}
+                {recordingMute ? t("settings.pressKey") : formatCombo(muteShortcut) || t("settings.none")}
               </button>
             </div>
             <div style={rowStyle}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.deafenShortcut")}</div>
               <button onClick={() => { setRecordingDeafen(true); setRecordingMute(false); }} style={shortcutBtnStyle(recordingDeafen)}>
-                {recordingDeafen ? t("settings.pressKey") : deafenShortcut || t("settings.none")}
+                {recordingDeafen ? t("settings.pressKey") : formatCombo(deafenShortcut) || t("settings.none")}
               </button>
             </div>
           </div>

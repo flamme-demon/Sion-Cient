@@ -2,17 +2,7 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 
-function keyEventToString(e: KeyboardEvent): string {
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push("Ctrl");
-  if (e.shiftKey) parts.push("Shift");
-  if (e.altKey) parts.push("Alt");
-  if (e.metaKey) parts.push("Meta");
-  if (!["Control", "Shift", "Alt", "Meta"].includes(e.key)) {
-    parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
-  }
-  return parts.join("+");
-}
+import { keyEventToString, normalizeCombo } from "../utils/keyCombo";
 
 export { keyEventToString };
 
@@ -25,8 +15,10 @@ async function syncShortcutsToBackend(mute: string, deafen: string) {
     const { invoke } = await import("@tauri-apps/api/core");
     const { loadHotkeys } = await import("../services/soundboardHotkeys");
     const map = loadHotkeys();
-    const soundboard = Object.entries(map).map(([id, combo]) => ({ id, combo }));
-    await invoke("update_shortcuts", { payload: { mute, deafen, soundboard } });
+    // normalizeCombo: combos saved before the e.code migration ("Ctrl+A") are
+    // upgraded to physical-code form ("Ctrl+KeyA") on the fly.
+    const soundboard = Object.entries(map).map(([id, combo]) => ({ id, combo: normalizeCombo(combo) }));
+    await invoke("update_shortcuts", { payload: { mute: normalizeCombo(mute), deafen: normalizeCombo(deafen), soundboard } });
   } catch { /* Not in Tauri */ }
 }
 
@@ -133,11 +125,11 @@ export function useKeyboardShortcuts() {
       const hasModifier = e.ctrlKey || e.altKey || e.metaKey;
       if ((tag === "INPUT" || tag === "TEXTAREA") && !isFKey && !hasModifier) return;
       const combo = keyEventToString(e);
-      if (muteShortcut && combo === muteShortcut) {
+      if (muteShortcut && combo === normalizeCombo(muteShortcut)) {
         e.preventDefault();
         debouncedMute();
       }
-      if (deafenShortcut && combo === deafenShortcut) {
+      if (deafenShortcut && combo === normalizeCombo(deafenShortcut)) {
         e.preventDefault();
         debouncedDeafen();
       }

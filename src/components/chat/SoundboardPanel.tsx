@@ -17,6 +17,7 @@ import {
 import { canSendMessage, getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { SoundboardUploadModal } from "./SoundboardUploadModal";
 import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
+import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { loadHotkeys, onHotkeysChange, pruneHotkeys, resyncHotkeys } from "../../services/soundboardHotkeys";
 
@@ -516,7 +517,7 @@ export function SoundboardPanel() {
                       className="sound-card"
                       onClick={() => handlePlay(s)}
                       onContextMenu={(ev) => { ev.preventDefault(); setHotkeyTarget(s); }}
-                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: hotkey })}` : ""}`}
+                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: formatCombo(hotkey) })}` : ""}`}
                       style={{
                         position: 'relative', display: 'flex', flexDirection: 'column', gap: 8,
                         padding: 12, borderRadius: 14,
@@ -553,7 +554,7 @@ export function SoundboardPanel() {
                           position: 'absolute', bottom: 8, right: 8,
                           background: 'var(--color-primary)', color: 'var(--color-on-primary)',
                           fontSize: 9, padding: '1px 5px', borderRadius: 5, fontWeight: 700, letterSpacing: '0.02em', pointerEvents: 'none',
-                        }}>{hotkey}</span>
+                        }}>{formatCombo(hotkey)}</span>
                       )}
                       {canUpload && (
                         <>

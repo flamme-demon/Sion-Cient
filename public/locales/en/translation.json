@@ -146,6 +146,8 @@
     "rangeRequired": "Set a time range (start/end) for this video.",
     "native": "native",
     "recoded": "re-encoded WebM",
+    "original": "Original",
+    "sizeUnknown": "unknown size",
     "phaseDownload": "Downloading",
     "phaseConvert": "Converting to WebM"
   },
