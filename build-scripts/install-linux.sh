@@ -7,7 +7,10 @@ set -e
 APP_NAME="sion-client"
 INSTALL_DIR="/opt/sion-client"
 BIN_LINK="/usr/local/bin/sion-client"
-DESKTOP_FILE="/usr/share/applications/sion-client.desktop"
+# Nommé d'après l'app id Tauri : le portal XDG GlobalShortcuts (raccourcis
+# globaux layout-proof sous Wayland) exige un fichier <app-id>.desktop.
+DESKTOP_FILE="/usr/share/applications/com.sion.client.desktop"
+LEGACY_DESKTOP_FILE="/usr/share/applications/sion-client.desktop"
 ICON_FILE="/usr/share/icons/hicolor/128x128/apps/sion-client.png"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,7 +23,7 @@ if [ "$1" = "--uninstall" ]; then
     echo "Suppression de Sion Client..."
     sudo rm -rf "$INSTALL_DIR"
     sudo rm -f "$BIN_LINK"
-    sudo rm -f "$DESKTOP_FILE"
+    sudo rm -f "$DESKTOP_FILE" "$LEGACY_DESKTOP_FILE"
     sudo rm -f "$ICON_FILE"
     echo "Sion Client a ete desinstalle."
     exit 0
@@ -96,6 +99,7 @@ Terminal=false
 StartupWMClass=sion-client
 DESKTOP
 sudo chmod 644 "$DESKTOP_FILE"
+sudo rm -f "$LEGACY_DESKTOP_FILE"
 
 # Refresh desktop database
 command -v update-desktop-database &>/dev/null && sudo update-desktop-database /usr/share/applications/ 2>/dev/null || true
