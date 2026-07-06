@@ -105,6 +105,14 @@ async fn run_session(
         log::info!("[Sion] Portal host-app registration unavailable: {}", e);
     }
 
+    // The frontend fires update_shortcuts twice in quick succession at
+    // startup: if a newer update already superseded us, bail out before
+    // creating a session — otherwise two sessions bind the same ids and KDE
+    // shows its confirmation dialog twice.
+    if cancel_rx.try_recv().is_ok() {
+        return Ok(());
+    }
+
     let portal = GlobalShortcuts::new().await?;
     let session = portal.create_session().await?;
 
@@ -138,6 +146,7 @@ async fn run_session(
         match select(next, cancelled).await {
             Either::Left((Some(ev), _)) => {
                 if let Some(action) = id_to_action.get(ev.shortcut_id()) {
+                    log::debug!("[Sion] Portal shortcut activated: {}", ev.shortcut_id());
                     crate::push_shortcut_event(action);
                 }
             }
