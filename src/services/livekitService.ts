@@ -68,6 +68,10 @@ export interface RemoteCursor {
   name: string;
   x: number; // 0..1 relative to video rect
   y: number; // 0..1
+  // Identity of the SHARE this cursor is pointing at. With several concurrent
+  // shares, coords in [0,1] are only meaningful relative to one of them, so
+  // every receiver filters to the share it owns / is viewing.
+  target: string;
   expiresAt: number;
 }
 /** One-shot click ripple broadcast by a viewer. */
@@ -77,6 +81,7 @@ export interface RemoteCursorClick {
   name: string;
   x: number;
   y: number;
+  target: string; // identity of the share being pointed at (see RemoteCursor)
   expiresAt: number;
 }
 const remoteCursors = new Map<string, RemoteCursor>();
@@ -1311,38 +1316,42 @@ function broadcastAfk() {
   }
 }
 
-/** Broadcast our cursor position over the screen share. Unreliable delivery
- *  is fine — cursor is throttled to ~30Hz so the next update makes up for
- *  any dropped packet. The caller is responsible for throttling. */
-export function broadcastCursor(x: number, y: number) {
+/** Broadcast our cursor position over the screen share. `target` is the
+ *  identity of the share we're pointing at, so the right sharer (and only the
+ *  right sharer) renders it — coords are only meaningful for that one share.
+ *  Unreliable delivery is fine — cursor is throttled to ~30Hz so the next
+ *  update makes up for any dropped packet. The caller throttles. */
+export function broadcastCursor(x: number, y: number, target: string) {
   if (!currentRoom) return;
   try {
-    const payload = afkEncoder.encode(JSON.stringify({ x, y }));
+    const payload = afkEncoder.encode(JSON.stringify({ x, y, t: target }));
     // `reliable: false` = DataPacketKind.LOSSY — low-latency, drops allowed.
     currentRoom.localParticipant.publishData(payload, { reliable: false, topic: CURSOR_TOPIC }).catch(() => { /* best-effort */ });
   } catch { /* ignore */ }
 }
 
 /** Broadcast a click from the viewer at normalised coords. The sharer (and
- *  all other viewers) render an expanding ripple at that position — lets
- *  one viewer say "look HERE" without hijacking the mouse.
+ *  all other viewers of the same share) render an expanding ripple at that
+ *  position — lets one viewer say "look HERE" without hijacking the mouse.
+ *  `target` scopes it to the pointed-at share.
  *  Reliable delivery: drops would miss the single visual cue, unlike the
  *  continuous cursor stream which is idempotent. */
-export function broadcastCursorClick(x: number, y: number) {
+export function broadcastCursorClick(x: number, y: number, target: string) {
   if (!currentRoom) return;
   try {
-    const payload = afkEncoder.encode(JSON.stringify({ click: true, x, y }));
+    const payload = afkEncoder.encode(JSON.stringify({ click: true, x, y, t: target }));
     currentRoom.localParticipant.publishData(payload, { reliable: true, topic: CURSOR_CLICK_TOPIC }).catch(() => { /* best-effort */ });
   } catch { /* ignore */ }
 }
 
 /** Signal to viewers that our cursor is no longer over the share. Sending
  *  `{expire: true}` lets peers remove our cursor immediately instead of
- *  waiting for the TTL to fire. */
-export function broadcastCursorHide() {
+ *  waiting for the TTL to fire. `target` is optional — omit to clear from
+ *  every share we might have been pointing at (e.g. on teardown). */
+export function broadcastCursorHide(target?: string) {
   if (!currentRoom) return;
   try {
-    const payload = afkEncoder.encode(JSON.stringify({ expire: true }));
+    const payload = afkEncoder.encode(JSON.stringify({ expire: true, t: target }));
     currentRoom.localParticipant.publishData(payload, { reliable: true, topic: CURSOR_TOPIC }).catch(() => { /* best-effort */ });
   } catch { /* ignore */ }
 }
@@ -1839,20 +1848,24 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     }
     if (topic === CURSOR_CLICK_TOPIC) {
       try {
-        const parsed = JSON.parse(afkDecoder.decode(payload)) as { click?: boolean; x?: number; y?: number };
+        const parsed = JSON.parse(afkDecoder.decode(payload)) as { click?: boolean; x?: number; y?: number; t?: string };
         if (parsed.click && typeof parsed.x === "number" && typeof parsed.y === "number") {
+          const target = parsed.t ?? "";
           const click: RemoteCursorClick = {
             id: `${participant.identity}:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`,
             identity: participant.identity,
             name: resolveDisplayName(participant),
             x: parsed.x,
             y: parsed.y,
+            target,
             expiresAt: Date.now() + CLICK_TTL_MS,
           };
           cursorClickCallback?.(click);
-          // Forward to the Tauri overlay too so the ripple appears baked in
-          // the stream for all viewers.
-          if (currentRoom?.localParticipant.isScreenShareEnabled) {
+          // Forward to the Tauri overlay only when the click targets OUR share
+          // — otherwise a click meant for another sharer would ripple on our
+          // captured screen at coords that don't belong to it.
+          const localIdentity = currentRoom?.localParticipant.identity;
+          if (currentRoom?.localParticipant.isScreenShareEnabled && (!parsed.t || parsed.t === localIdentity)) {
             import("./cursorOverlayService").then(({ pushCursorClickToOverlay }) => pushCursorClickToOverlay(click)).catch(() => {});
           }
         }
@@ -1861,30 +1874,35 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     }
     if (topic === CURSOR_TOPIC) {
       try {
-        const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean };
+        const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean; t?: string };
         // If we're the one sharing the screen, forward to the transparent
         // Tauri overlay so the cursor appears on our real display (captured
-        // by getDisplayMedia → all viewers see where everyone points).
+        // by getDisplayMedia → all viewers see where everyone points). Only
+        // do so when the cursor targets OUR share (or carries no target, for
+        // back-compat with older clients) — coords are relative to one share.
+        const localIdentity = currentRoom?.localParticipant.identity;
+        const targetsOurShare = !parsed.t || parsed.t === localIdentity;
         const localIsSharing = currentRoom?.localParticipant.isScreenShareEnabled === true;
         if (parsed.expire) {
           if (remoteCursors.delete(participant.identity)) {
             cursorCallback?.(Array.from(remoteCursors.values()));
           }
-          if (localIsSharing) {
+          if (localIsSharing && targetsOurShare) {
             import("./cursorOverlayService").then(({ clearCursorFromOverlay }) => clearCursorFromOverlay(participant.identity)).catch(() => {});
           }
         } else if (typeof parsed.x === "number" && typeof parsed.y === "number") {
           const expiresAt = Date.now() + CURSOR_TTL_MS;
-          const entry = {
+          const entry: RemoteCursor = {
             identity: participant.identity,
             name: resolveDisplayName(participant),
             x: parsed.x,
             y: parsed.y,
+            target: parsed.t ?? "",
             expiresAt,
           };
           remoteCursors.set(participant.identity, entry);
           cursorCallback?.(Array.from(remoteCursors.values()));
-          if (localIsSharing) {
+          if (localIsSharing && targetsOurShare) {
             import("./cursorOverlayService").then(({ pushCursorToOverlay }) => pushCursorToOverlay(entry)).catch(() => {});
           }
         }

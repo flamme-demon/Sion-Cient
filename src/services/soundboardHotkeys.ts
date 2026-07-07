@@ -5,7 +5,7 @@
  * WebSocket used for mute/deafen (action = `soundboard:<eventId>`).
  */
 
-import { normalizeCombo } from "../utils/keyCombo";
+import { normalizeCombo, globalComboIssue } from "../utils/keyCombo";
 
 const STORAGE_KEY = "sion.soundboard.hotkeys";
 
@@ -112,34 +112,20 @@ export function resyncHotkeys() {
   syncToBackend();
 }
 
-// F-keys intercepted by CEF (help, find, reload, caret, fullscreen, devtools)
-// — the OS plugin captures them before CEF only if the user manages to enter
-// them via manual input (the live keydown capture never sees them).
-const CEF_RESERVED_F_KEYS = new Set(["F1", "F3", "F5", "F7", "F11", "F12"]);
-
 /** Valide une combo avant attribution. Retourne le message d'erreur ou null si OK. */
 export function validateCombo(combo: string, muteShortcut: string, deafenShortcut: string): string | null {
-  if (!combo) return "Combo vide";
+  const issue = globalComboIssue(combo);
+  if (issue === "empty") return "Combo vide";
   if (normalizeCombo(combo) === normalizeCombo(muteShortcut)) return "Conflit avec le raccourci mute";
   if (normalizeCombo(combo) === normalizeCombo(deafenShortcut)) return "Conflit avec le raccourci sourdine";
-  // F12 is reserved for Sion (dev tools).
-  if (combo === "F12" || combo.endsWith("+F12")) return "F12 est réservé";
-
-  const parts = combo.split("+");
-  const main = parts[parts.length - 1];
-  const hasModifier = parts.length > 1 && parts.slice(0, -1).some((p) => ["Ctrl", "Shift", "Alt", "Meta"].includes(p));
-
-  // A plain single character or number without modifier would swallow text
-  // input — reject. Function keys (F1..F11) are OK without modifier.
-  if (!hasModifier) {
-    if (/^F([1-9]|1[01])$/.test(main)) {
-      if (CEF_RESERVED_F_KEYS.has(main)) {
-        return `${main} est réservée par CEF (aide/recherche/reload/plein-écran). Choisissez F2/F4/F6/F8/F9/F10 ou un combo Ctrl+/Alt+`;
-      }
-      return null;
-    }
-    return "Touche simple refusée — combinez avec Ctrl/Shift/Alt ou utilisez F2/F4/F6/F8/F9/F10";
+  if (issue === "f12") return "F12 est réservé";
+  if (issue === "cef-fkey") {
+    const main = normalizeCombo(combo).split("+").pop();
+    return `${main} est réservée par CEF (aide/recherche/reload/plein-écran). Choisissez F2/F4/F6/F8/F9/F10 ou un combo Ctrl+/Alt+`;
   }
+  // A plain single character or number without modifier would swallow text
+  // input system-wide — reject. Function keys (F1..F11) are OK without modifier.
+  if (issue === "bare") return "Touche simple refusée — combinez avec Ctrl/Shift/Alt ou utilisez F2/F4/F6/F8/F9/F10";
   return null;
 }
 

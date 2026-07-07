@@ -44,6 +44,33 @@ try {
     .catch(() => {});
 } catch { /* no Keyboard API */ }
 
+// F-keys CEF intercepts before the page sees them (help, find, reload, caret,
+// fullscreen, devtools) — unusable as global shortcuts on the CEF runtime.
+export const CEF_RESERVED_F_KEYS = new Set(["F1", "F3", "F5", "F7", "F11", "F12"]);
+
+export type ComboIssue = "empty" | "f12" | "cef-fkey" | "bare";
+
+/**
+ * Global-shortcut safety check for a combo in physical-code form. A bare
+ * printable key with no modifier is grabbed system-wide by the OS/compositor
+ * (portal, RegisterHotKey, X11 grab) and becomes unusable for typing
+ * everywhere else — so it must be rejected. Modifier-less F-keys (F1..F11)
+ * are the only exception, minus the ones CEF steals. Returns the issue code,
+ * or null when the combo is safe to register globally.
+ */
+export function globalComboIssue(combo: string): ComboIssue | null {
+  if (!combo) return "empty";
+  const parts = normalizeCombo(combo).split("+");
+  const main = parts[parts.length - 1];
+  if (main === "F12") return "f12";
+  const hasModifier = parts.length > 1 && parts.slice(0, -1).some((p) => MODIFIERS.includes(p));
+  if (hasModifier) return null;
+  if (/^F([1-9]|1[01])$/.test(main)) {
+    return CEF_RESERVED_F_KEYS.has(main) ? "cef-fkey" : null;
+  }
+  return "bare";
+}
+
 /** Human-readable form of a stored combo, for display only. */
 export function formatCombo(combo: string): string {
   if (!combo) return "";

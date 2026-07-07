@@ -7,7 +7,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useClickOutside } from "../../hooks/useClickOutside";
-import { keyEventToString, formatCombo } from "../../utils/keyCombo";
+import { keyEventToString, formatCombo, globalComboIssue } from "../../utils/keyCombo";
 import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
 import { VoiceCueEditor } from "../chat/VoiceCueEditor";
@@ -26,6 +26,7 @@ export function SettingsPanel() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [recordingMute, setRecordingMute] = useState(false);
   const [recordingDeafen, setRecordingDeafen] = useState(false);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   const mutedSpeakAlert = useSettingsStore((s) => s.mutedSpeakAlert);
   const micThreshold = useSettingsStore((s) => s.micThreshold);
@@ -353,12 +354,27 @@ export function SettingsPanel() {
       }
       if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
       const combo = keyEventToString(e);
+      // Reject globally-grabbed bare keys: a modifier-less printable key is
+      // captured system-wide by the portal/RegisterHotKey grab and becomes
+      // unusable for typing everywhere else (see keyCombo.globalComboIssue).
+      const issue = globalComboIssue(combo);
+      if (issue === "bare") {
+        setShortcutError(t("settings.shortcutBareKey"));
+        setRecordingMute(false); setRecordingDeafen(false);
+        return;
+      }
+      if (issue === "f12" || issue === "cef-fkey") {
+        setShortcutError(t("settings.shortcutReservedKey", { key: formatCombo(combo) }));
+        setRecordingMute(false); setRecordingDeafen(false);
+        return;
+      }
+      setShortcutError(null);
       if (recordingMute) { setMuteShortcut(combo); setRecordingMute(false); }
       if (recordingDeafen) { setDeafenShortcut(combo); setRecordingDeafen(false); }
     }
     window.addEventListener("keydown", handleKey, true);
     return () => window.removeEventListener("keydown", handleKey, true);
-  }, [recordingMute, recordingDeafen, setMuteShortcut, setDeafenShortcut]);
+  }, [recordingMute, recordingDeafen, setMuteShortcut, setDeafenShortcut, t]);
 
   // Shared styles
   const toggleStyle = (active: boolean): React.CSSProperties => ({
@@ -761,15 +777,23 @@ export function SettingsPanel() {
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ ...rowStyle, marginBottom: 12 }}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.muteShortcut")}</div>
-              <button onClick={() => { setRecordingMute(true); setRecordingDeafen(false); }} style={shortcutBtnStyle(recordingMute)}>
+              <button onClick={() => { setShortcutError(null); setRecordingMute(true); setRecordingDeafen(false); }} style={shortcutBtnStyle(recordingMute)}>
                 {recordingMute ? t("settings.pressKey") : formatCombo(muteShortcut) || t("settings.none")}
               </button>
             </div>
             <div style={rowStyle}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.deafenShortcut")}</div>
-              <button onClick={() => { setRecordingDeafen(true); setRecordingMute(false); }} style={shortcutBtnStyle(recordingDeafen)}>
+              <button onClick={() => { setShortcutError(null); setRecordingDeafen(true); setRecordingMute(false); }} style={shortcutBtnStyle(recordingDeafen)}>
                 {recordingDeafen ? t("settings.pressKey") : formatCombo(deafenShortcut) || t("settings.none")}
               </button>
+            </div>
+            {shortcutError && (
+              <div style={{ marginTop: 12, fontSize: 12, color: 'var(--color-error)', background: 'var(--color-error-container)', padding: '8px 12px', borderRadius: 8 }}>
+                {shortcutError}
+              </div>
+            )}
+            <div style={{ marginTop: 12, fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
+              {t("settings.shortcutHint")}
             </div>
           </div>
         )}

@@ -159,16 +159,16 @@ export function ScreenShareView() {
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
       if (x < 0 || x > 1 || y < 0 || y > 1) {
-        if (insideVideo) { broadcastCursorHide(); insideVideo = false; }
+        if (insideVideo) { broadcastCursorHide(activeIdentity); insideVideo = false; }
         return;
       }
       insideVideo = true;
       lastBroadcast = now;
-      broadcastCursor(x, y);
+      broadcastCursor(x, y, activeIdentity);
     };
 
     const onLeave = () => {
-      if (insideVideo) { broadcastCursorHide(); insideVideo = false; }
+      if (insideVideo) { broadcastCursorHide(activeIdentity); insideVideo = false; }
     };
 
     // Single-click = "point here" ripple (broadcast to sharer + peers).
@@ -199,7 +199,7 @@ export function ScreenShareView() {
           // A 2nd click arrived — dblclick will handle it, skip ripple.
           return;
         }
-        broadcastCursorClick(x, y);
+        broadcastCursorClick(x, y, activeIdentity);
       }, DBLCLICK_WINDOW);
     };
 
@@ -226,7 +226,7 @@ export function ScreenShareView() {
       video.removeEventListener("click", onClick);
       video.removeEventListener("dblclick", onDblClick);
       window.removeEventListener("blur", onLeave);
-      if (insideVideo) broadcastCursorHide();
+      if (insideVideo) broadcastCursorHide(activeIdentity);
     };
   }, [activeIdentity]);
 
@@ -295,6 +295,13 @@ export function ScreenShareView() {
   };
 
   if (!activeShare) return null;
+
+  // Only show cursors/ripples pointing at the share we're currently watching.
+  // Coords are relative to one share; a viewer hovering another sharer's tab
+  // would otherwise paint on top of this one. Empty target = legacy client
+  // (pre-scoping) — keep showing it so old peers still work.
+  const visibleCursors = cursors.filter((c) => !c.target || c.target === activeIdentity);
+  const visibleClicks = clicks.filter((c) => !c.target || c.target === activeIdentity);
 
   return (
     <div className="bg-black flex flex-col items-center border-b border-[var(--color-border)]">
@@ -397,7 +404,7 @@ export function ScreenShareView() {
           pointerEvents: 'none',
           overflow: 'hidden',
         }}>
-          {clicks.map((c, idx) => (
+          {visibleClicks.map((c, idx) => (
             <div key={c.id} style={{ position: 'absolute', left: `${c.x * 100}%`, top: `${c.y * 100}%` }}>
               {[0, 120, 240].map((delay) => (
                 <div key={delay} style={{
@@ -429,7 +436,7 @@ export function ScreenShareView() {
           pointerEvents: 'none',
           overflow: 'hidden',
         }}>
-          {cursors.map((c) => (
+          {visibleCursors.map((c) => (
             <div
               key={c.identity}
               style={{
