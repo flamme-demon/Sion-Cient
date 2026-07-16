@@ -241,10 +241,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
+          # Hyphenated tags (v1.5.0-beta.1, v2.0.0-rc.1…) publish as
+          # pre-releases: excluded from /releases/latest, so the in-app
+          # update banner (updateService.ts) never offers a beta to everyone.
+          PRERELEASE=""
+          case "$TAG" in *-*) PRERELEASE="--prerelease" ;; esac
           # Auto-generate notes from commit history since previous tag.
           # `gh release create --generate-notes` does this server-side.
           gh release create "$TAG" \
             --title "Sion Client $TAG" \
             --generate-notes \
+            $PRERELEASE \
             ./artifacts/*.AppImage \
             ./artifacts/*.exe
