@@ -296,12 +296,13 @@ export function ScreenShareView() {
 
   if (!activeShare) return null;
 
-  // Only show cursors/ripples pointing at the share we're currently watching.
-  // Coords are relative to one share; a viewer hovering another sharer's tab
-  // would otherwise paint on top of this one. Empty target = legacy client
-  // (pre-scoping) — keep showing it so old peers still work.
-  const visibleCursors = cursors.filter((c) => !c.target || c.target === activeIdentity);
-  const visibleClicks = clicks.filter((c) => !c.target || c.target === activeIdentity);
+  // Only show cursors/ripples EXPLICITLY pointing at the share we're
+  // currently watching. Coords are relative to one share; a viewer hovering
+  // another sharer's tab would otherwise paint on top of this one. Untargeted
+  // events (pre-1.4.8 senders) are dropped — rendering them on every share
+  // at once is worse than not rendering them at all.
+  const visibleCursors = cursors.filter((c) => !!c.target && c.target === activeIdentity);
+  const visibleClicks = clicks.filter((c) => !!c.target && c.target === activeIdentity);
 
   return (
     <div className="bg-black flex flex-col items-center border-b border-[var(--color-border)]">

@@ -1316,6 +1316,11 @@ function broadcastAfk() {
   }
 }
 
+// Diagnostic throttles for the cursor TX/RX logs (one line every 2 s for the
+// 60 Hz move stream; clicks log every time).
+let lastCursorTxLog = 0;
+let lastCursorRxLog = 0;
+
 /** Broadcast our cursor position over the screen share. `target` is the
  *  identity of the share we're pointing at, so the right sharer (and only the
  *  right sharer) renders it — coords are only meaningful for that one share.
@@ -1323,7 +1328,22 @@ function broadcastAfk() {
  *  update makes up for any dropped packet. The caller throttles. */
 export function broadcastCursor(x: number, y: number, target: string) {
   if (!currentRoom) return;
+  if (!target) {
+    // An untargeted cursor is ambiguous with several concurrent shares —
+    // never send one. Every ≥1.4.8 caller passes the share's identity.
+    // Throttled: the caller runs at 60 Hz, an unguarded warn would flood.
+    if (Date.now() - lastCursorTxLog > 2000) {
+      lastCursorTxLog = Date.now();
+      console.warn("[Sion][Cursor] tx move SKIPPED — empty target");
+    }
+    return;
+  }
   try {
+    const now = Date.now();
+    if (now - lastCursorTxLog > 2000) {
+      lastCursorTxLog = now;
+      console.log(`[Sion][Cursor] tx move t=${target}`);
+    }
     const payload = afkEncoder.encode(JSON.stringify({ x, y, t: target }));
     // `reliable: false` = DataPacketKind.LOSSY — low-latency, drops allowed.
     currentRoom.localParticipant.publishData(payload, { reliable: false, topic: CURSOR_TOPIC }).catch(() => { /* best-effort */ });
@@ -1338,7 +1358,12 @@ export function broadcastCursor(x: number, y: number, target: string) {
  *  continuous cursor stream which is idempotent. */
 export function broadcastCursorClick(x: number, y: number, target: string) {
   if (!currentRoom) return;
+  if (!target) {
+    console.warn("[Sion][Cursor] tx click SKIPPED — empty target");
+    return;
+  }
   try {
+    console.log(`[Sion][Cursor] tx click t=${target}`);
     const payload = afkEncoder.encode(JSON.stringify({ click: true, x, y, t: target }));
     currentRoom.localParticipant.publishData(payload, { reliable: true, topic: CURSOR_CLICK_TOPIC }).catch(() => { /* best-effort */ });
   } catch { /* ignore */ }
@@ -1861,11 +1886,15 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
             expiresAt: Date.now() + CLICK_TTL_MS,
           };
           cursorClickCallback?.(click);
-          // Forward to the Tauri overlay only when the click targets OUR share
-          // — otherwise a click meant for another sharer would ripple on our
-          // captured screen at coords that don't belong to it.
+          // Forward to the Tauri overlay only when the click EXPLICITLY
+          // targets our share — otherwise a click meant for another sharer
+          // would ripple on our captured screen at coords that don't belong
+          // to it. Untargeted clicks (pre-1.4.8 senders) are dropped: with
+          // several concurrent shares they'd ripple on every one at once.
           const localIdentity = currentRoom?.localParticipant.identity;
-          if (currentRoom?.localParticipant.isScreenShareEnabled && (!parsed.t || parsed.t === localIdentity)) {
+          const forwardClick = currentRoom?.localParticipant.isScreenShareEnabled === true && !!parsed.t && parsed.t === localIdentity;
+          console.log(`[Sion][Cursor] rx click from=${participant.identity} t=${parsed.t ?? "(none)"} local=${localIdentity} overlay=${forwardClick}`);
+          if (forwardClick) {
             import("./cursorOverlayService").then(({ pushCursorClickToOverlay }) => pushCursorClickToOverlay(click)).catch(() => {});
           }
         }
@@ -1878,16 +1907,18 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
         // If we're the one sharing the screen, forward to the transparent
         // Tauri overlay so the cursor appears on our real display (captured
         // by getDisplayMedia → all viewers see where everyone points). Only
-        // do so when the cursor targets OUR share (or carries no target, for
-        // back-compat with older clients) — coords are relative to one share.
+        // do so when the cursor EXPLICITLY targets OUR share — coords are
+        // relative to one share, and an untargeted cursor (pre-1.4.8 sender)
+        // would paint on every concurrent share at once. Clearing stays
+        // lenient: an untargeted expire means "remove me everywhere".
         const localIdentity = currentRoom?.localParticipant.identity;
-        const targetsOurShare = !parsed.t || parsed.t === localIdentity;
+        const targetsOurShare = !!parsed.t && parsed.t === localIdentity;
         const localIsSharing = currentRoom?.localParticipant.isScreenShareEnabled === true;
         if (parsed.expire) {
           if (remoteCursors.delete(participant.identity)) {
             cursorCallback?.(Array.from(remoteCursors.values()));
           }
-          if (localIsSharing && targetsOurShare) {
+          if (localIsSharing && (targetsOurShare || !parsed.t)) {
             import("./cursorOverlayService").then(({ clearCursorFromOverlay }) => clearCursorFromOverlay(participant.identity)).catch(() => {});
           }
         } else if (typeof parsed.x === "number" && typeof parsed.y === "number") {
@@ -1902,6 +1933,10 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
           };
           remoteCursors.set(participant.identity, entry);
           cursorCallback?.(Array.from(remoteCursors.values()));
+          if (Date.now() - lastCursorRxLog > 2000) {
+            lastCursorRxLog = Date.now();
+            console.log(`[Sion][Cursor] rx move from=${participant.identity} t=${parsed.t ?? "(none)"} local=${localIdentity} sharing=${localIsSharing} overlay=${localIsSharing && targetsOurShare}`);
+          }
           if (localIsSharing && targetsOurShare) {
             import("./cursorOverlayService").then(({ pushCursorToOverlay }) => pushCursorToOverlay(entry)).catch(() => {});
           }
