@@ -13,8 +13,17 @@ import { EMOJI_DATA } from "../../utils/emojiData";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { LargeMessageModal } from "./LargeMessageModal";
 
-const TENOR_API_KEY = "LIVDSRZULELA";
-const TENOR_BASE = "https://g.tenor.com/v1";
+// Klipy GIF API — Tenor was shut down by Google on 2026-06-30. The key is
+// injected at build time via VITE_KLIPY_API_KEY: `.env.local` in dev, GitHub
+// Actions secret KLIPY_API_KEY for release builds. It ends up in the shipped
+// JS bundle by design (same model as the old public Tenor key) — it only
+// scopes GIF-search quota, nothing sensitive. Without a key the GIF tab
+// shows no results instead of erroring.
+const KLIPY_API_KEY = (import.meta.env.VITE_KLIPY_API_KEY as string | undefined) ?? "";
+const KLIPY_BASE = "https://api.klipy.com/api/v1";
+// The missing-key warning would otherwise repeat on every keystroke in the
+// GIF search box (the fetch effect re-runs per query change) — warn once.
+let warnedMissingKlipyKey = false;
 // Matrix caps a single event at 65 536 bytes (the PDU size the server accepts).
 // Encryption + JSON wrapping inflate the cleartext, so we guard well below
 // that: anything past this many UTF-8 bytes is offered as a .txt attachment
@@ -83,36 +92,51 @@ export function ChatInput() {
   const canSend = activeChannel ? matrixService.canSendMessage(activeChannel) : false;
 
   // Close emoji picker on outside click/touch
-  // Fetch GIFs from Tenor (only when enabled and tab is active)
+  // Fetch GIFs from Klipy (only when enabled and tab is active)
   useEffect(() => {
     if (!showEmojiPicker || pickerTab !== "gif" || !enableGifs) return;
+    if (!KLIPY_API_KEY) {
+      if (!warnedMissingKlipyKey) {
+        warnedMissingKlipyKey = true;
+        console.warn("[Sion] VITE_KLIPY_API_KEY missing at build time — GIF search disabled");
+      }
+      setGifResults([]);
+      return;
+    }
+    // Abort the in-flight request when the search changes or the picker
+    // closes — otherwise a slow stale response could overwrite the results
+    // of a newer query (and setState would fire after unmount).
+    const ctrl = new AbortController();
     clearTimeout(gifDebounceRef.current);
     gifDebounceRef.current = setTimeout(async () => {
       setGifLoading(true);
       try {
-        const endpoint = gifSearch.trim() ? "search" : "trending";
-        const params = new URLSearchParams({ key: TENOR_API_KEY, limit: "30", media_filter: "minimal" });
-        if (gifSearch.trim()) params.set("q", gifSearch.trim());
-        const res = await fetch(`${TENOR_BASE}/${endpoint}?${params}`);
+        const q = gifSearch.trim();
+        const endpoint = q ? "search" : "trending";
+        const params = new URLSearchParams({ page: "1", per_page: "30" });
+        if (q) params.set("q", q);
+        const res = await fetch(`${KLIPY_BASE}/${KLIPY_API_KEY}/gifs/${endpoint}?${params}`, { signal: ctrl.signal });
         const data = await res.json();
+        // Klipy nests the list under data.data; each item carries hd/md/sm/xs
+        // renditions. Full-size gif goes to the room, sm/xs feed the grid.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        setGifResults((data.results || []).map((r: any) => {
-          const media = r.media?.[0] || {};
+        setGifResults((data.data?.data || []).map((r: any) => {
+          const file = r.file || {};
           return {
-            id: r.id,
-            url: media.gif?.url || media.mediumgif?.url || "",
-            preview: media.tinygif?.url || media.nanogif?.url || "",
-            width: media.tinygif?.dims?.[0] || 200,
-            height: media.tinygif?.dims?.[1] || 150,
+            id: String(r.id),
+            url: file.hd?.gif?.url || file.md?.gif?.url || "",
+            preview: file.sm?.gif?.url || file.xs?.gif?.url || "",
+            width: file.sm?.gif?.width || 200,
+            height: file.sm?.gif?.height || 150,
           };
-        }));
+        }).filter((g: { url: string; preview: string }) => g.url && g.preview));
       } catch {
-        setGifResults([]);
+        if (!ctrl.signal.aborted) setGifResults([]);
       } finally {
-        setGifLoading(false);
+        if (!ctrl.signal.aborted) setGifLoading(false);
       }
     }, gifSearch.trim() ? 400 : 0);
-    return () => clearTimeout(gifDebounceRef.current);
+    return () => { clearTimeout(gifDebounceRef.current); ctrl.abort(); };
   }, [showEmojiPicker, pickerTab, gifSearch, enableGifs]);
 
   const sendGif = async (gifUrl: string) => {
