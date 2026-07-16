@@ -12,6 +12,8 @@ mod win_shortcuts;
 #[cfg(not(target_os = "android"))]
 mod system_audio;
 #[cfg(not(target_os = "android"))]
+mod transcribe;
+#[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 use serde::Serialize;
 #[cfg(target_os = "linux")]
@@ -1142,6 +1144,92 @@ async fn download_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<String, 
     Ok(dest.to_string_lossy().into_owned())
 }
 
+/// Map a user-facing whisper model key to its quantized ggml file. Quantized
+/// variants halve the download/RAM for a negligible accuracy cost.
+#[cfg(not(target_os = "android"))]
+fn whisper_model_file(model: &str) -> Option<&'static str> {
+    match model {
+        "base" => Some("ggml-base-q5_1.bin"),     // ~60 MB — weak CPUs
+        "small" => Some("ggml-small-q5_1.bin"),   // ~190 MB — default
+        "medium" => Some("ggml-medium-q5_0.bin"), // ~540 MB — best quality
+        _ => None,
+    }
+}
+
+/// Path of a whisper model under `<app-data>/models/`, if downloaded.
+/// Same convention as the managed ffmpeg: survives CEF profile purges.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn detect_whisper_model(app: tauri::AppHandle<TauriRuntime>, model: String) -> Option<String> {
+    let file = whisper_model_file(&model)?;
+    let path = app.path().app_data_dir().ok()?.join("models").join(file);
+    if path.exists() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// Download a whisper ggml model from the official whisper.cpp Hugging Face
+/// repo into `<app-data>/models/`, emitting `whisper-model-progress` percent
+/// events (same UX as the ffmpeg installer). Returns the model path.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn download_whisper_model(
+    app: tauri::AppHandle<TauriRuntime>,
+    model: String,
+) -> Result<String, String> {
+    use std::io::Write;
+    use tauri::Emitter;
+
+    let file = whisper_model_file(&model).ok_or("modèle inconnu")?;
+    let models_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    std::fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
+    let dest = models_dir.join(file);
+    if dest.exists() {
+        return Ok(dest.to_string_lossy().into_owned());
+    }
+
+    let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}");
+    let _ = app.emit("whisper-model-progress", 0u64);
+
+    // Dedicated client: models are 60–540 MB, the shared client's timeout
+    // would abort mid-body (same rationale as download_ffmpeg).
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("Mozilla/5.0 (Sion whisper installer)")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let total = resp.content_length();
+    // Stream to a .part file, rename on success — a killed download never
+    // leaves a truncated model that whisper would then fail to load.
+    let part = models_dir.join(format!("{file}.part"));
+    let mut out = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let mut downloaded: u64 = 0;
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        out.write_all(&chunk).map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        if let Some(t) = total {
+            if t > 0 {
+                let _ = app.emit("whisper-model-progress", downloaded * 99 / t);
+            }
+        }
+    }
+    drop(out);
+    std::fs::rename(&part, &dest).map_err(|e| e.to_string())?;
+    let _ = app.emit("whisper-model-progress", 100u64);
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 /// Recursively search `dir` for a file named `name`; first match wins.
 #[cfg(not(target_os = "android"))]
 fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
@@ -2048,7 +2136,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks, transcribe::transcribe_start, transcribe::transcribe_stop, detect_whisper_model, download_whisper_model]);
 
     #[cfg(target_os = "android")]
     let builder = builder

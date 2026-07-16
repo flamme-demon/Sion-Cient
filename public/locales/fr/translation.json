@@ -424,6 +424,14 @@
     "linkPreviewsDesc": "Afficher un aperçu des liens partagés",
     "enableGifs": "GIFs (Klipy)",
     "enableGifsDesc": "Activer la recherche et l'envoi de GIFs via Klipy",
+    "transcribeTitle": "Transcription de réunion",
+    "transcribeDesc": "Chaque participant transcrit sa propre voix, localement (Whisper). Le modèle est téléchargé au premier usage. Micro coupé = aucune transcription.",
+    "transcribeModel": "Modèle",
+    "transcribeModelBase": "Base — rapide, ~60 Mo",
+    "transcribeModelSmall": "Small — recommandé, ~190 Mo",
+    "transcribeModelMedium": "Medium — meilleure qualité, ~540 Mo",
+    "transcribeLang": "Langue parlée",
+    "transcribeLangAuto": "Détection automatique",
     "notifications": "Notifications",
     "notifyDM": "Notifications MP",
     "notifyDMDesc": "Recevoir une notification pour les messages privés",
@@ -530,5 +538,17 @@
       "none": "Aucun utilisateur",
       "suspend": "Suspendre"
     }
+  },
+  "transcript": {
+    "title": "Transcription",
+    "pill": "Transcription",
+    "togglePanel": "Transcription de la réunion",
+    "startMine": "Transcrire mon micro",
+    "stopMine": "Arrêter mon micro",
+    "export": "Exporter .md",
+    "exportHint": "Envoie le transcript en .md dans le chat",
+    "exportTitle": "Transcription",
+    "empty": "Aucun segment pour l'instant. Activez « Transcrire mon micro » — chaque participant transcrit sa propre voix, localement.",
+    "downloading": "téléchargement du modèle…"
   }
 }

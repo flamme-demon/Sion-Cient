@@ -995,10 +995,38 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || room.roomId });
     };
 
+    // Live transcript (`com.sion.transcript`): same dual-path delivery as the
+    // voice kick — cleartext rooms surface it on Timeline, encrypted rooms
+    // only after decryption. The store dedups by content signature, so an
+    // event reaching us through both paths (local echo + server ack) or via
+    // a decrypt replay renders once.
+    const handleTranscriptEvent = (event: MatrixEvent) => {
+      if (event.getType?.() !== "com.sion.transcript") return;
+      const roomId = event.getRoomId?.();
+      const content = event.getContent?.();
+      const text = content?.text;
+      if (!roomId || typeof text !== "string" || !text) return;
+      const senderId = event.getSender?.() || "";
+      const room = client.getRoom(roomId);
+      const senderName = room?.getMember?.(senderId)?.name || senderId.replace(/^@/, "").split(":")[0];
+      import("./useTranscriptStore").then(({ useTranscriptStore }) => {
+        useTranscriptStore.getState().addEntry({
+          id: event.getId?.() || `${roomId}:${event.getTs?.() ?? Date.now()}`,
+          roomId,
+          senderId,
+          senderName,
+          text,
+          t0: typeof content?.t0 === "number" ? content.t0 : (event.getTs?.() ?? Date.now()),
+          t1: typeof content?.t1 === "number" ? content.t1 : 0,
+        });
+      }).catch(() => {});
+    };
+
     // Listen for voice kick events (Sion-specific) — cleartext path.
     client.on(RoomEvent.Timeline, (event, _room, toStartOfTimeline) => {
       if (toStartOfTimeline) return; // skip backfill/pagination
       handleVoiceKickEvent(event);
+      handleTranscriptEvent(event);
     });
 
     // Reconcile a sent message's local-echo id ("~…") to its real server id
@@ -1687,6 +1715,8 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // shared handler does the full victim sound + witness cue + banner
       // (the same as the cleartext path), deduped by event id.
       handleVoiceKickEvent(event);
+      // Same story for the live transcript in encrypted rooms.
+      handleTranscriptEvent(event);
 
       const evtId = event.getId?.();
       if (evtId) pendingDecryptedEvents.add(evtId);

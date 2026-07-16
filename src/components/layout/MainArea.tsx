@@ -2,6 +2,7 @@ import { useCallback, type DragEvent } from "react";
 import { ChatHeader } from "../chat/ChatHeader";
 import { PinnedBar } from "../chat/PinnedBar";
 import { ScreenShareView } from "../chat/ScreenShareView";
+import { TranscriptPanel } from "../chat/TranscriptPanel";
 import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
 import { DropZone } from "../chat/DropZone";
@@ -51,6 +52,7 @@ export function MainArea() {
         <ChatHeader />
         <PinnedBar />
         <ScreenShareView />
+        <TranscriptPanel />
         <MessageList />
         <ChatInput />
         <DropZone />

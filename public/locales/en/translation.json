@@ -424,6 +424,14 @@
     "linkPreviewsDesc": "Show a preview of shared links",
     "enableGifs": "GIFs (Klipy)",
     "enableGifsDesc": "Enable GIF search and sending via Klipy",
+    "transcribeTitle": "Meeting transcription",
+    "transcribeDesc": "Each participant transcribes their own voice, locally (Whisper). The model is downloaded on first use. Muted mic = nothing transcribed.",
+    "transcribeModel": "Model",
+    "transcribeModelBase": "Base — fast, ~60 MB",
+    "transcribeModelSmall": "Small — recommended, ~190 MB",
+    "transcribeModelMedium": "Medium — best quality, ~540 MB",
+    "transcribeLang": "Spoken language",
+    "transcribeLangAuto": "Auto-detect",
     "notifications": "Notifications",
     "notifyDM": "DM Notifications",
     "notifyDMDesc": "Receive notifications for direct messages",
@@ -530,5 +538,17 @@
       "none": "No users",
       "suspend": "Suspend"
     }
+  },
+  "transcript": {
+    "title": "Transcript",
+    "pill": "Transcript",
+    "togglePanel": "Meeting transcript",
+    "startMine": "Transcribe my mic",
+    "stopMine": "Stop my mic",
+    "export": "Export .md",
+    "exportHint": "Posts the transcript as .md into the chat",
+    "exportTitle": "Transcript",
+    "empty": "No segments yet. Enable “Transcribe my mic” — each participant transcribes their own voice, locally.",
+    "downloading": "downloading model…"
   }
 }

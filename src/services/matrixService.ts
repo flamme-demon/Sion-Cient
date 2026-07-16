@@ -836,6 +836,16 @@ export async function sendImageUrl(roomId: string, imageUrl: string): Promise<vo
   });
 }
 
+/** Publish one transcribed utterance into the room. Custom event type —
+ *  never rendered as a chat message (extractMessagesFromRoom only maps
+ *  m.room.message); the transcript panel consumes it instead. Encrypted
+ *  automatically by the SDK when the room is. */
+export async function sendTranscriptSegment(roomId: string, text: string, t0: number, t1: number): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "com.sion.transcript" as any, { text, t0, t1, v: 1 });
+}
+
 export async function createOrGetDMRoom(userId: string): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const client = matrixClient;

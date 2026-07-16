@@ -1,6 +1,6 @@
 [package]
 name = "sion-client"
-version = "1.4.9"
+version = "1.5.0"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -50,6 +50,13 @@ tauri-plugin-window-state = "2"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 tungstenite = "0.24"
 cpal = "0.15"
+# Meeting transcription (local ASR). whisper-rs binds whisper.cpp (CPU for
+# now; vulkan/cuda features exist for later). earshot is a pure-Rust port of
+# the WebRTC VAD — gates what audio reaches the model so silence/noise never
+# triggers a (costly, hallucination-prone) inference. Pinned to 0.1: later
+# earshot versions require rustc 1.87 > our rust-version.
+whisper-rs = "0.16"
+earshot = "0.1"
 
 # Native cursor-overlay window: the Tauri-CEF fork doesn't propagate
 # `transparent: true` to child webviews on Linux, so we bypass webview

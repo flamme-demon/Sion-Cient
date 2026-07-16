@@ -8,6 +8,19 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useVoiceChannel, republishVoicePresence } from "../../hooks/useVoiceChannel";
 import { getCurrentRoom } from "../../services/livekitService";
+import { useTranscriptStore } from "../../stores/useTranscriptStore";
+
+/** "CC" captions glyph for the transcript toggle — drawn inline (the icons
+ *  module has no captions icon) and tinted green while OUR engine runs. */
+function TranscriptIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={active ? { color: 'var(--color-green)' } : undefined}>
+      <rect x="2" y="4" width="20" height="16" rx="3" />
+      <path d="M10.5 10.2a2.4 2.4 0 0 0-3.4 0 2.7 2.7 0 0 0 0 3.6 2.4 2.4 0 0 0 3.4 0" />
+      <path d="M17 10.2a2.4 2.4 0 0 0-3.4 0 2.7 2.7 0 0 0 0 3.6 2.4 2.4 0 0 0 3.4 0" />
+    </svg>
+  );
+}
 
 type Quality = "excellent" | "good" | "poor" | "lost" | "unknown";
 
@@ -53,6 +66,8 @@ export function UserControls() {
   const e2eeUnhealthy = useAppStore((s) => s.e2eeUnhealthy);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
+  const transcriptPanelOpen = useTranscriptStore((s) => s.panelOpen);
+  const transcriptState = useTranscriptStore((s) => s.state);
   // Brief "done" feedback after the user hits the republish-presence recovery.
   const [republished, setRepublished] = useState(false);
 
@@ -173,6 +188,29 @@ export function UserControls() {
             {pillBtn(isMuted, t("controls.micro"), <MicIcon muted={isMuted} />, toggleMute, isMuted ? t("controls.unmute") : t("controls.mute"))}
             {pillBtn(isDeafened, t("controls.sound"), <HeadphoneIcon muted={isDeafened} />, toggleDeafen, isDeafened ? t("controls.undeafen") : t("controls.deafen"))}
           </div>
+
+          {/* Meeting transcript panel toggle. Opening the panel does NOT start
+              transcribing — that's an explicit per-user opt-in inside the
+              panel (each participant transcribes their own mic, locally). */}
+          <button
+            onClick={() => useTranscriptStore.getState().setPanelOpen(!transcriptPanelOpen)}
+            title={t("transcript.togglePanel", { defaultValue: "Transcription de la réunion" })}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer',
+              fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+              background: transcriptPanelOpen || transcriptState === 'on'
+                ? 'var(--color-secondary-container)'
+                : 'var(--color-surface-container-highest)',
+              color: transcriptPanelOpen || transcriptState === 'on'
+                ? 'var(--color-on-secondary-container)'
+                : 'var(--color-on-surface)',
+              transition: 'background 150ms',
+            }}
+          >
+            <TranscriptIcon active={transcriptState === 'on'} />
+            {t("transcript.pill", { defaultValue: "Transcription" })}
+          </button>
         </div>
       )}
 

@@ -90,6 +90,10 @@ export function SettingsPanel() {
   const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
   const setAutoJoinVoice = useSettingsStore((s) => s.setAutoJoinVoice);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
+  const transcribeModel = useSettingsStore((s) => s.transcribeModel);
+  const transcribeLang = useSettingsStore((s) => s.transcribeLang);
+  const setTranscribeModel = useSettingsStore((s) => s.setTranscribeModel);
+  const setTranscribeLang = useSettingsStore((s) => s.setTranscribeLang);
   const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
   const screenShareAudio = useSettingsStore((s) => s.screenShareAudio);
   const setScreenShareAudio = useSettingsStore((s) => s.setScreenShareAudio);
@@ -715,6 +719,31 @@ export function SettingsPanel() {
           {/* ---- VOCAL ---- */}
           <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--color-on-surface-variant)', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '8px 4px 2px' }}>
             {t("settings.channelVoiceSection")}
+          </div>
+
+          {/* Meeting transcription (local whisper) — model + language. The
+              model is fetched on first use; the button just pre-downloads. */}
+          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.transcribeTitle")}</div>
+            <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2, marginBottom: 12 }}>{t("settings.transcribeDesc")}</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeModel")}</div>
+                <select value={transcribeModel} onChange={(e) => setTranscribeModel(e.target.value as "base" | "small" | "medium")} style={selectStyle}>
+                  <option value="base">{t("settings.transcribeModelBase")}</option>
+                  <option value="small">{t("settings.transcribeModelSmall")}</option>
+                  <option value="medium">{t("settings.transcribeModelMedium")}</option>
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeLang")}</div>
+                <select value={transcribeLang} onChange={(e) => setTranscribeLang(e.target.value as "auto" | "fr" | "en")} style={selectStyle}>
+                  <option value="auto">{t("settings.transcribeLangAuto")}</option>
+                  <option value="fr">{t("settings.languageFr")}</option>
+                  <option value="en">{t("settings.languageEn")}</option>
+                </select>
+              </div>
+            </div>
           </div>
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={voiceChannelSounds ? { ...rowStyle, marginBottom: 8 } : rowStyle}>

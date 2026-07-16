@@ -1215,6 +1215,17 @@ export async function disconnectFromRoom() {
   }
 }
 
+/** Current local microphone MediaStreamTrack (the one LiveKit publishes),
+ *  or null when not connected / no mic. Used by the transcription tap —
+ *  reading the SAME track the call uses means the transcriber benefits from
+ *  the browser's echo cancellation + noise suppression and never opens the
+ *  device a second time. */
+export function getLocalMicMediaStreamTrack(): MediaStreamTrack | null {
+  if (!currentRoom) return null;
+  const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
+  return micPub?.track?.mediaStreamTrack ?? null;
+}
+
 export async function toggleMicrophone(enabled: boolean) {
   if (!currentRoom) return;
   const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);

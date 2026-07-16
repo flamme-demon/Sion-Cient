@@ -102,6 +102,13 @@ interface SettingsState {
    *  constraint. null = primary screen (screen:0:0). Unused on Linux (xdg
    *  portal), macOS (native picker) and web (getDisplayMedia). */
   screenShareSourceId: string | null;
+  /** Whisper model for the local meeting transcription (downloaded on first
+   *  use): base ≈60 MB (weak CPUs), small ≈190 MB (default), medium ≈540 MB
+   *  (best quality, GPU/strong CPU). */
+  transcribeModel: "base" | "small" | "medium";
+  /** Spoken language hint for whisper ("auto" = detect). Pinning the right
+   *  language avoids misdetections on short utterances. */
+  transcribeLang: "auto" | "fr" | "en";
 
   setMutedSpeakAlert: (v: boolean) => void;
   setJoinMuted: (v: boolean) => void;
@@ -140,6 +147,8 @@ interface SettingsState {
   setScreenShareResolution: (v: "720p" | "1080p" | "1440p") => void;
   setScreenShareFramerate: (v: 5 | 15 | 30 | 60) => void;
   setScreenShareSourceId: (v: string | null) => void;
+  setTranscribeModel: (v: "base" | "small" | "medium") => void;
+  setTranscribeLang: (v: "auto" | "fr" | "en") => void;
   setNotificationMode: (v: NotificationMode) => void;
   setLanguage: (v: string) => void;
 }
@@ -184,6 +193,8 @@ export const useSettingsStore = create<SettingsState>()(
       screenShareResolution: "1080p" as const,
       screenShareFramerate: 15 as const,
       screenShareSourceId: null,
+      transcribeModel: "small",
+      transcribeLang: "auto",
       notificationMode: "mentions" as NotificationMode,
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
@@ -261,6 +272,8 @@ export const useSettingsStore = create<SettingsState>()(
       setScreenShareResolution: (v) => set({ screenShareResolution: v }),
       setScreenShareFramerate: (v) => set({ screenShareFramerate: v }),
       setScreenShareSourceId: (v) => set({ screenShareSourceId: v }),
+      setTranscribeModel: (v) => set({ transcribeModel: v }),
+      setTranscribeLang: (v) => set({ transcribeLang: v }),
       setLanguage: (v) => {
         set({ language: v });
         import("i18next").then((i18n) => i18n.default.changeLanguage(v));
