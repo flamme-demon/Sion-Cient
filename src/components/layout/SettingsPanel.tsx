@@ -729,10 +729,18 @@ export function SettingsPanel() {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 140 }}>
                 <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeModel")}</div>
-                <select value={transcribeModel} onChange={(e) => setTranscribeModel(e.target.value as "base" | "small" | "medium")} style={selectStyle}>
-                  <option value="base">{t("settings.transcribeModelBase")}</option>
-                  <option value="small">{t("settings.transcribeModelSmall")}</option>
-                  <option value="medium">{t("settings.transcribeModelMedium")}</option>
+                <select
+                  // Legacy persisted values ("small"…) from the whisper-rs era
+                  // map onto their whisper-* equivalents so the select never
+                  // shows an empty value after the upgrade.
+                  value={transcribeModel.startsWith("whisper") || transcribeModel === "parakeet-v3" ? transcribeModel : `whisper-${transcribeModel}`}
+                  onChange={(e) => setTranscribeModel(e.target.value as "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3")}
+                  style={selectStyle}
+                >
+                  <option value="whisper-base">{t("settings.transcribeModelBase")}</option>
+                  <option value="whisper-small">{t("settings.transcribeModelSmall")}</option>
+                  <option value="whisper-medium">{t("settings.transcribeModelMedium")}</option>
+                  <option value="parakeet-v3">{t("settings.transcribeModelParakeet")}</option>
                 </select>
               </div>
               <div style={{ flex: 1, minWidth: 140 }}>

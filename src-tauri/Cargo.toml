@@ -50,12 +50,15 @@ tauri-plugin-window-state = "2"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 tungstenite = "0.24"
 cpal = "0.15"
-# Meeting transcription (local ASR). whisper-rs binds whisper.cpp (CPU for
-# now; vulkan/cuda features exist for later). earshot is a pure-Rust port of
-# the WebRTC VAD — gates what audio reaches the model so silence/noise never
+# Meeting transcription (local ASR). transcribe-cpp binds transcribe.cpp
+# (handy-computer): one ggml inference engine for 16 ASR families — whisper
+# AND parakeet-tdt-v3 GGUFs run through the same API, so the user-facing
+# choice is just "which model". Static link by default (nothing to bundle);
+# vulkan/cuda features exist for later. earshot is a pure-Rust port of the
+# WebRTC VAD — gates what audio reaches the model so silence/noise never
 # triggers a (costly, hallucination-prone) inference. Pinned to 0.1: later
 # earshot versions require rustc 1.87 > our rust-version.
-whisper-rs = "0.16"
+transcribe-cpp = "0.1.3"
 earshot = "0.1"
 
 # Native cursor-overlay window: the Tauri-CEF fork doesn't propagate

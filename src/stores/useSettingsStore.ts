@@ -102,12 +102,16 @@ interface SettingsState {
    *  constraint. null = primary screen (screen:0:0). Unused on Linux (xdg
    *  portal), macOS (native picker) and web (getDisplayMedia). */
   screenShareSourceId: string | null;
-  /** Whisper model for the local meeting transcription (downloaded on first
-   *  use): base ≈60 MB (weak CPUs), small ≈190 MB (default), medium ≈540 MB
-   *  (best quality, GPU/strong CPU). */
-  transcribeModel: "base" | "small" | "medium";
-  /** Spoken language hint for whisper ("auto" = detect). Pinning the right
-   *  language avoids misdetections on short utterances. */
+  /** ASR model for the local meeting transcription (GGUF via transcribe.cpp,
+   *  downloaded on first use): whisper-base ≈64 MB (weak CPUs), whisper-small
+   *  ≈194 MB (default), whisper-medium ≈583 MB (best whisper quality),
+   *  parakeet-v3 ≈549 MB (25 EU languages, much faster on CPU). Legacy
+   *  values "base"/"small"/"medium" may persist from the whisper-rs era —
+   *  the Rust catalog still accepts them. */
+  transcribeModel: "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3";
+  /** Spoken language hint ("auto" = detect). Only whisper uses it — parakeet
+   *  is inherently multilingual. Pinning the right language avoids whisper
+   *  misdetections on short utterances. */
   transcribeLang: "auto" | "fr" | "en";
 
   setMutedSpeakAlert: (v: boolean) => void;
@@ -147,7 +151,7 @@ interface SettingsState {
   setScreenShareResolution: (v: "720p" | "1080p" | "1440p") => void;
   setScreenShareFramerate: (v: 5 | 15 | 30 | 60) => void;
   setScreenShareSourceId: (v: string | null) => void;
-  setTranscribeModel: (v: "base" | "small" | "medium") => void;
+  setTranscribeModel: (v: "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3") => void;
   setTranscribeLang: (v: "auto" | "fr" | "en") => void;
   setNotificationMode: (v: NotificationMode) => void;
   setLanguage: (v: string) => void;
@@ -193,7 +197,7 @@ export const useSettingsStore = create<SettingsState>()(
       screenShareResolution: "1080p" as const,
       screenShareFramerate: 15 as const,
       screenShareSourceId: null,
-      transcribeModel: "small",
+      transcribeModel: "whisper-small",
       transcribeLang: "auto",
       notificationMode: "mentions" as NotificationMode,
 

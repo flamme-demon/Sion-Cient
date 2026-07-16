@@ -1,2 +1,22 @@
 [build]
 jobs = 4
+
+# --- Build knobs required by the transcribe.cpp (ASR) native dependency. ---
+# Committed so every build — local dev, CI, package-for-windows — agrees.
+
+[env]
+# Self-contained ASR build: never link the host's OpenBLAS/MKL. Without this,
+# transcribe.cpp's cmake probes the system, bakes cblas_* calls into the
+# static lib, and the Rust link dies with `undefined symbol: cblas_sgemm`
+# (observed on Manjaro). Cost: the small host-side decoder falls back to a
+# scalar loop — the heavy encoder work is ggml and unaffected. This is the
+# same "official wheel" posture the transcribe.cpp project ships with.
+TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"
+
+# Static MSVC CRT (/MT): the CEF wrapper objects are MT_StaticRelease; any
+# cmake-built C++ dep (transcribe.cpp) must match or link.exe fails with
+# LNK2038 RuntimeLibrary mismatch (this killed the v1.5.0-beta.1 Windows CI
+# build back when whisper-rs was the ASR backend). `+crt-static` makes the
+# cmake crate select /MT for all native deps.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-Ctarget-feature=+crt-static"]

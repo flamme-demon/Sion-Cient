@@ -237,14 +237,14 @@ export function isTranscribing(): boolean {
  *  (~60–540 MB). Progress is surfaced through the transcript store so the
  *  panel and the settings section both render it. */
 export async function ensureModelDownloaded(model: string): Promise<string> {
-  const existing = await invoke<string | null>("detect_whisper_model", { model });
+  const existing = await invoke<string | null>("detect_asr_model", { model });
   if (existing) return existing;
   const { listen } = await import("@tauri-apps/api/event");
-  const unlisten = await listen<number>("whisper-model-progress", (e) => {
+  const unlisten = await listen<number>("asr-model-progress", (e) => {
     useTranscriptStore.getState().setDownloadPct(Number(e.payload));
   });
   try {
-    return await invoke<string>("download_whisper_model", { model });
+    return await invoke<string>("download_asr_model", { model });
   } finally {
     unlisten();
     useTranscriptStore.getState().setDownloadPct(null);
@@ -254,5 +254,5 @@ export async function ensureModelDownloaded(model: string): Promise<string> {
 /** Whether the given model is already on disk (settings indicator). */
 export async function isModelDownloaded(model: string): Promise<boolean> {
   if (!isTauri()) return false;
-  return !!(await invoke<string | null>("detect_whisper_model", { model }));
+  return !!(await invoke<string | null>("detect_asr_model", { model }));
 }

@@ -31,8 +31,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use earshot::{VoiceActivityDetector, VoiceActivityProfile};
+use transcribe_cpp::{Model, RunExtension, RunOptions, SessionOptions, TimestampKind, WhisperRunOptions};
 use tungstenite::Message;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const SAMPLE_RATE: usize = 16_000;
 /// 20 ms VAD frames (earshot accepts 10/20/30 ms at 16 kHz).
@@ -224,9 +224,9 @@ fn json_escape(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
-fn whisper_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
-    let ctx = match WhisperContext::new_with_params(&model_path, WhisperContextParameters::default()) {
-        Ok(c) => c,
+fn asr_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
+    let model = match Model::load(&model_path) {
+        Ok(m) => m,
         Err(e) => {
             log::error!("[Sion][transcribe] model load failed: {e}");
             broadcast_json(&format!(
@@ -237,18 +237,36 @@ fn whisper_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
             return;
         }
     };
-    let mut state = match ctx.create_state() {
+    let threads = thread::available_parallelism()
+        .map(|n| n.get().min(4))
+        .unwrap_or(4) as i32;
+    let mut session = match model.session_with(&SessionOptions { n_threads: threads, ..Default::default() }) {
         Ok(s) => s,
         Err(e) => {
-            log::error!("[Sion][transcribe] state init failed: {e}");
+            log::error!("[Sion][transcribe] session init failed: {e}");
             ENGINE_RUNNING.store(false, Ordering::Relaxed);
             return;
         }
     };
-    let threads = thread::available_parallelism()
-        .map(|n| n.get().min(4))
-        .unwrap_or(4) as i32;
-    log::info!("[Sion][transcribe] model ready ({model_path}), lang={lang}, threads={threads}");
+
+    // Options shared by every run. Text-only output (timestamps come from
+    // our own segmenter's wall clock). The language hint and the decode
+    // knobs are whisper-family-specific — parakeet & friends are inherently
+    // multilingual with their own defaults, so they get plain options.
+    let is_whisper = model_path.to_lowercase().contains("whisper");
+    let mut opts = RunOptions { timestamps: TimestampKind::None, ..Default::default() };
+    if is_whisper {
+        if lang != "auto" {
+            opts.language = Some(lang.clone());
+        }
+        // Independent segments: conditioning on previous tokens makes one
+        // hallucination snowball into the following segments.
+        opts.family = Some(RunExtension::Whisper(WhisperRunOptions {
+            condition_on_prev_tokens: Some(false),
+            ..Default::default()
+        }));
+    }
+    log::info!("[Sion][transcribe] model ready ({model_path}), lang={lang}, threads={threads}, whisper={is_whisper}");
     broadcast_json("{\"type\":\"ready\"}");
 
     loop {
@@ -266,49 +284,17 @@ fn whisper_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
             break;
         }
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(threads);
-        if lang != "auto" {
-            params.set_language(Some(&lang));
-        }
-        params.set_translate(false);
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-        params.set_suppress_blank(true);
-        // Independent segments: conditioning on previous text makes one
-        // hallucination snowball into the following segments.
-        params.set_no_context(true);
-        // Shrink the encoder context to the segment's real length instead of
-        // whisper's fixed 30 s window — the classic streaming speed-up
-        // (whisper.cpp `stream` does the same). Floor keeps short utterances
-        // accurate; 1500 = the full 30 s window.
         let seg_secs = job.samples.len() as f32 / SAMPLE_RATE as f32;
-        let audio_ctx = ((seg_secs / 30.0 * 1500.0) as i32 + 64).clamp(256, 1500);
-        params.set_audio_ctx(audio_ctx);
-
         let started = std::time::Instant::now();
-        if let Err(e) = state.full(params, &job.samples) {
-            log::warn!("[Sion][transcribe] inference failed: {e}");
-            continue;
-        }
-        let n = state.full_n_segments();
-        let mut text = String::new();
-        for i in 0..n {
-            let Some(seg) = state.get_segment(i) else { continue };
-            // Whisper's own "this was probably not speech" signal — drops
-            // most hallucinations the VAD let through (breaths, far noise).
-            if seg.no_speech_probability() > 0.75 {
+        let text = match session.run(&job.samples, &opts) {
+            Ok(res) => res.text.trim().to_string(),
+            Err(e) => {
+                log::warn!("[Sion][transcribe] inference failed: {e}");
                 continue;
             }
-            if let Ok(t) = seg.to_str_lossy() {
-                text.push_str(&t);
-            }
-        }
-        let text = text.trim().to_string();
+        };
         log::info!(
-            "[Sion][transcribe] {:.1}s audio → {} chars in {} ms (ctx={audio_ctx})",
+            "[Sion][transcribe] {:.1}s audio → {} chars in {} ms",
             seg_secs,
             text.len(),
             started.elapsed().as_millis()
@@ -430,7 +416,7 @@ pub fn transcribe_start(model_path: String, lang: String) -> Result<u16, String>
     let (tx, rx) = std::sync::mpsc::sync_channel::<SegJob>(6);
     *SEG_TX.lock().unwrap() = Some(tx);
     ENGINE_RUNNING.store(true, Ordering::Relaxed);
-    thread::spawn(move || whisper_worker(model_path, lang, rx));
+    thread::spawn(move || asr_worker(model_path, lang, rx));
     Ok(port)
 }
 

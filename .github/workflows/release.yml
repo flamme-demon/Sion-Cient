@@ -126,6 +126,8 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      # CRT/BLAS build knobs for the transcribe.cpp dep live in
+      # src-tauri/.cargo/config.toml (committed), so local and CI builds agree.
       - name: Compile Rust binary (CEF runtime)
         # We do `cargo build` first instead of going straight to
         # `tauri build`, because we need access to the CEF binaries that
