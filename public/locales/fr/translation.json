@@ -433,6 +433,11 @@
     "transcribeModelParakeet": "Parakeet v3 — très rapide, 25 langues, ~549 Mo",
     "transcribeLang": "Langue parlée (Whisper uniquement)",
     "transcribeLangAuto": "Détection automatique",
+    "assetAsr": "Modèle de transcription ({{model}})",
+    "assetSummary": "Résumé IA (llama.cpp + Qwen3.5-4B, ~2,7 Go)",
+    "assetDownloaded": "téléchargé",
+    "assetMissing": "non téléchargé",
+    "assetDownload": "Télécharger",
     "notifications": "Notifications",
     "notifyDM": "Notifications MP",
     "notifyDMDesc": "Recevoir une notification pour les messages privés",
@@ -550,6 +555,10 @@
     "exportHint": "Envoie le transcript en .md dans le chat",
     "exportTitle": "Transcription",
     "empty": "Aucun segment pour l'instant. Activez « Transcrire mon micro » — chaque participant transcrit sa propre voix, localement.",
-    "downloading": "téléchargement du modèle…"
+    "downloading": "téléchargement du modèle…",
+    "summarize": "Résumer la réunion",
+    "summarizing": "Résumé en cours…",
+    "summaryDownloading": "Téléchargement IA…",
+    "summarizeHint": "Génère un compte-rendu (IA locale) et le poste dans le chat"
   }
 }

@@ -14,6 +14,8 @@ mod system_audio;
 #[cfg(not(target_os = "android"))]
 mod transcribe;
 #[cfg(not(target_os = "android"))]
+mod summarize;
+#[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 use serde::Serialize;
 #[cfg(target_os = "linux")]
@@ -34,9 +36,9 @@ use std::time::Duration;
 use tungstenite::Message;
 
 #[cfg(feature = "cef")]
-type TauriRuntime = tauri::Cef;
+pub(crate) type TauriRuntime = tauri::Cef;
 #[cfg(not(feature = "cef"))]
-type TauriRuntime = tauri::Wry;
+pub(crate) type TauriRuntime = tauri::Wry;
 
 #[cfg(target_os = "linux")]
 struct ShortcutState {
@@ -854,7 +856,7 @@ fn stop_voice_service() {
 /// black `cmd` window on every video conversion. CREATE_NO_WINDOW (0x0800_0000)
 /// keeps them invisible. No-op on non-Windows targets (incl. Android/Linux),
 /// so it is NOT cfg-gated: `transcode_video` (a caller) is compiled on Android.
-fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+pub(crate) fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
     let cmd = std::process::Command::new(program);
     #[cfg(target_os = "windows")]
     let cmd = {
@@ -870,7 +872,7 @@ fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Comman
 /// True if `bin` runs successfully with the given version flag — used to verify
 /// a resolved ffmpeg/yt-dlp path actually works.
 #[cfg(not(target_os = "android"))]
-fn bin_runs(bin: &str, version_flag: &str) -> bool {
+pub(crate) fn bin_runs(bin: &str, version_flag: &str) -> bool {
     hidden_command(bin)
         .arg(version_flag)
         .output()
@@ -1237,7 +1239,7 @@ async fn download_asr_model(
 
 /// Recursively search `dir` for a file named `name`; first match wins.
 #[cfg(not(target_os = "android"))]
-fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn find_file(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut subdirs = Vec::new();
     for entry in entries.flatten() {
@@ -2141,7 +2143,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks, transcribe::transcribe_start, transcribe::transcribe_stop, detect_asr_model, download_asr_model]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks, transcribe::transcribe_start, transcribe::transcribe_stop, detect_asr_model, download_asr_model, summarize::detect_summary_assets, summarize::download_llama, summarize::download_summary_model, summarize::summarize_transcript]);
 
     #[cfg(target_os = "android")]
     let builder = builder

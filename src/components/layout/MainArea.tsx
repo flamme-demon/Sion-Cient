@@ -52,13 +52,13 @@ export function MainArea() {
         <ChatHeader />
         <PinnedBar />
         <ScreenShareView />
-        <TranscriptPanel />
         <MessageList />
         <ChatInput />
         <DropZone />
       </div>
       {!isMobile && <MemberPanel />}
       {!isMobile && <SoundboardPanel />}
+      {!isMobile && <TranscriptPanel />}
     </div>
   );
 }

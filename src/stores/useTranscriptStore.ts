@@ -32,11 +32,17 @@ interface TranscriptStore {
   error: string | null;
   /** Model download progress 0–100, null when idle. */
   downloadPct: number | null;
+  /** Meeting-summary pipeline state (phase 2, llama.cpp). "downloading"
+   *  covers both the llama binary and the LLM model fetches. */
+  summaryState: "idle" | "downloading" | "running";
+  /** Download progress for the summary assets, 0–100. */
+  summaryPct: number | null;
 
   addEntry: (entry: TranscriptEntry) => void;
   setPanelOpen: (open: boolean) => void;
   setState: (state: TranscribeState, error?: string | null) => void;
   setDownloadPct: (pct: number | null) => void;
+  setSummaryState: (state: "idle" | "downloading" | "running", pct?: number | null) => void;
   clearRoom: (roomId: string) => void;
 }
 
@@ -46,6 +52,8 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
   state: "off",
   error: null,
   downloadPct: null,
+  summaryState: "idle",
+  summaryPct: null,
 
   addEntry: (entry) =>
     set((s) => {
@@ -67,6 +75,7 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
   setPanelOpen: (open) => set({ panelOpen: open }),
   setState: (state, error = null) => set({ state, error }),
   setDownloadPct: (pct) => set({ downloadPct: pct }),
+  setSummaryState: (state, pct = null) => set({ summaryState: state, summaryPct: pct }),
   clearRoom: (roomId) =>
     set((s) => {
       const entries = { ...s.entries };

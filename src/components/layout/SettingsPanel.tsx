@@ -12,6 +12,8 @@ import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
 import { VoiceCueEditor } from "../chat/VoiceCueEditor";
 import { ExternalAudioImport } from "../chat/ExternalAudioImport";
+import { isModelDownloaded, ensureModelDownloaded, summaryAssetsStatus, ensureSummaryAssets } from "../../services/transcriptionService";
+import { useTranscriptStore } from "../../stores/useTranscriptStore";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -90,9 +92,7 @@ export function SettingsPanel() {
   const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
   const setAutoJoinVoice = useSettingsStore((s) => s.setAutoJoinVoice);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
-  const transcribeModel = useSettingsStore((s) => s.transcribeModel);
   const transcribeLang = useSettingsStore((s) => s.transcribeLang);
-  const setTranscribeModel = useSettingsStore((s) => s.setTranscribeModel);
   const setTranscribeLang = useSettingsStore((s) => s.setTranscribeLang);
   const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
   const screenShareAudio = useSettingsStore((s) => s.screenShareAudio);
@@ -727,22 +727,7 @@ export function SettingsPanel() {
             <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.transcribeTitle")}</div>
             <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2, marginBottom: 12 }}>{t("settings.transcribeDesc")}</div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeModel")}</div>
-                <select
-                  // Legacy persisted values ("small"…) from the whisper-rs era
-                  // map onto their whisper-* equivalents so the select never
-                  // shows an empty value after the upgrade.
-                  value={transcribeModel.startsWith("whisper") || transcribeModel === "parakeet-v3" ? transcribeModel : `whisper-${transcribeModel}`}
-                  onChange={(e) => setTranscribeModel(e.target.value as "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3")}
-                  style={selectStyle}
-                >
-                  <option value="whisper-base">{t("settings.transcribeModelBase")}</option>
-                  <option value="whisper-small">{t("settings.transcribeModelSmall")}</option>
-                  <option value="whisper-medium">{t("settings.transcribeModelMedium")}</option>
-                  <option value="parakeet-v3">{t("settings.transcribeModelParakeet")}</option>
-                </select>
-              </div>
+              <TranscribeModelPicker selectStyle={selectStyle} />
               <div style={{ flex: 1, minWidth: 140 }}>
                 <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeLang")}</div>
                 <select value={transcribeLang} onChange={(e) => setTranscribeLang(e.target.value as "auto" | "fr" | "en")} style={selectStyle}>
@@ -1057,6 +1042,115 @@ export function SettingsPanel() {
               }}
             />
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Model picker with per-model download state IN the list (🟢 downloaded /
+ *  ⚪ not yet — native <option> can't render real widgets, but emoji dots
+ *  can), plus a manual download button for the selected model and the
+ *  summary assets (llama-cli + LLM). Desktop only — the engines live in
+ *  Rust; on web the parent still renders the plain select via the fallback
+ *  below so the setting stays editable. */
+function TranscribeModelPicker({ selectStyle }: { selectStyle: React.CSSProperties }) {
+  const { t } = useTranslation();
+  const transcribeModel = useSettingsStore((s) => s.transcribeModel);
+  const setTranscribeModel = useSettingsStore((s) => s.setTranscribeModel);
+  const asrPct = useTranscriptStore((s) => s.downloadPct);
+  const summaryState = useTranscriptStore((s) => s.summaryState);
+  const summaryPct = useTranscriptStore((s) => s.summaryPct);
+  const [status, setStatus] = useState<Record<string, boolean>>({});
+  const [summaryReady, setSummaryReady] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState<"asr" | "summary" | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isTauri = typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
+
+  const MODELS: { key: "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3"; label: string }[] = [
+    { key: "whisper-base", label: t("settings.transcribeModelBase") },
+    { key: "whisper-small", label: t("settings.transcribeModelSmall") },
+    { key: "whisper-medium", label: t("settings.transcribeModelMedium") },
+    { key: "parakeet-v3", label: t("settings.transcribeModelParakeet") },
+  ];
+  // Legacy persisted values ("small"…) from the whisper-rs era map onto
+  // their whisper-* equivalents so the select never shows an empty value.
+  const selected = transcribeModel.startsWith("whisper") || transcribeModel === "parakeet-v3"
+    ? transcribeModel : `whisper-${transcribeModel}`;
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    Promise.all(MODELS.map(async (m) => [m.key, await isModelDownloaded(m.key)] as const)).then((pairs) => {
+      if (!cancelled) setStatus(Object.fromEntries(pairs));
+    });
+    summaryAssetsStatus().then((s) => { if (!cancelled) setSummaryReady(s.llama && s.model); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, isTauri]);
+
+  const dlBtnStyle: React.CSSProperties = {
+    border: '1px solid var(--color-outline-variant)', borderRadius: 8,
+    background: 'transparent', color: 'var(--color-primary)',
+    fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+    padding: '4px 10px', cursor: 'pointer', whiteSpace: 'nowrap',
+  };
+
+  const asrDownloading = busy === "asr" || (asrPct != null && asrPct < 100);
+  const summaryDownloading = busy === "summary" || summaryState === "downloading";
+
+  return (
+    <div style={{ flex: 1, minWidth: 180 }}>
+      <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeModel")}</div>
+      <select
+        value={selected}
+        onChange={(e) => setTranscribeModel(e.target.value as "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3")}
+        style={selectStyle}
+      >
+        {MODELS.map((m) => (
+          <option key={m.key} value={m.key}>
+            {isTauri ? (status[m.key] ? "🟢 " : "⚪ ") : ""}{m.label}
+          </option>
+        ))}
+      </select>
+      {isTauri && status[selected] === false && (
+        <div style={{ marginTop: 6 }}>
+          <button
+            style={{ ...dlBtnStyle, cursor: asrDownloading ? 'wait' : 'pointer' }}
+            disabled={asrDownloading}
+            onClick={() => {
+              setBusy("asr");
+              ensureModelDownloaded(selected)
+                .catch((e) => console.error("[Sion] ASR download failed:", e))
+                .finally(() => setBusy(null));
+            }}
+          >
+            {asrDownloading ? `${asrPct ?? 0}%` : t("settings.assetDownload")}
+          </button>
+        </div>
+      )}
+      {isTauri && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', flex: 1 }}>
+            {summaryReady == null ? "…" : summaryReady ? "🟢 " : "⚪ "}{t("settings.assetSummary")}
+          </span>
+          {summaryReady === false && (
+            <button
+              style={{ ...dlBtnStyle, cursor: summaryDownloading ? 'wait' : 'pointer' }}
+              disabled={summaryDownloading}
+              onClick={() => {
+                setBusy("summary");
+                ensureSummaryAssets()
+                  .catch((e) => console.error("[Sion] summary assets download failed:", e))
+                  .finally(() => {
+                    useTranscriptStore.getState().setSummaryState("idle");
+                    setBusy(null);
+                  });
+              }}
+            >
+              {summaryDownloading ? `${summaryPct ?? 0}%` : t("settings.assetDownload")}
+            </button>
+          )}
         </div>
       )}
     </div>

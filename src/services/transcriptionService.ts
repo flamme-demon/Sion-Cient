@@ -256,3 +256,81 @@ export async function isModelDownloaded(model: string): Promise<boolean> {
   if (!isTauri()) return false;
   return !!(await invoke<string | null>("detect_asr_model", { model }));
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 — meeting summary (local llama.cpp over the transcript).
+// ---------------------------------------------------------------------------
+
+interface SummaryAssets { llama: string | null; model: string | null }
+
+/** Whether both summary assets (llama-cli + LLM model) are on disk. */
+export async function summaryAssetsStatus(): Promise<{ llama: boolean; model: boolean }> {
+  if (!isTauri()) return { llama: false, model: false };
+  const a = await invoke<SummaryAssets>("detect_summary_assets");
+  return { llama: !!a.llama, model: !!a.model };
+}
+
+/** Download whatever summary asset is missing (llama binary ~18 MB, LLM
+ *  model ~2.5 GB), surfacing progress through the transcript store. */
+export async function ensureSummaryAssets(): Promise<void> {
+  const store = useTranscriptStore.getState();
+  const assets = await invoke<SummaryAssets>("detect_summary_assets");
+  const { listen } = await import("@tauri-apps/api/event");
+  if (!assets.llama) {
+    store.setSummaryState("downloading", 0);
+    const un = await listen<number>("llama-install-progress", (e) => {
+      useTranscriptStore.getState().setSummaryState("downloading", Number(e.payload));
+    });
+    try {
+      await invoke("download_llama");
+    } finally { un(); }
+  }
+  if (!assets.model) {
+    store.setSummaryState("downloading", 0);
+    const un = await listen<number>("summary-model-progress", (e) => {
+      useTranscriptStore.getState().setSummaryState("downloading", Number(e.payload));
+    });
+    try {
+      await invoke("download_summary_model");
+    } finally { un(); }
+  }
+}
+
+/** Cap fed into the LLM: ~24k chars ≈ 8k tokens of transcript, leaving room
+ *  in the 16k context for the template + the generated minutes. A longer
+ *  meeting keeps its most recent part (the part a summary reader cares
+ *  about most) — chunked map-reduce summarising can come later if needed. */
+const MAX_TRANSCRIPT_CHARS = 24_000;
+
+/** Generate meeting minutes from the room's transcript and post them into
+ *  the room's chat. Downloads the summary assets on first use. */
+export async function summarizeMeeting(roomId: string): Promise<void> {
+  if (!isTauri()) throw new Error("desktop only");
+  const store = useTranscriptStore.getState();
+  const entries = useTranscriptStore.getState().entries[roomId] || [];
+  if (!entries.length || store.summaryState !== "idle") return;
+
+  try {
+    await ensureSummaryAssets();
+    useTranscriptStore.getState().setSummaryState("running");
+
+    const fmt = (ms: number) => {
+      const d = new Date(ms);
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    };
+    let transcript = entries.map((e) => `[${fmt(e.t0)}] ${e.senderName}: ${e.text}`).join("\n");
+    if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+      transcript = transcript.slice(-MAX_TRANSCRIPT_CHARS);
+    }
+
+    const { useSettingsStore } = await import("../stores/useSettingsStore");
+    const lang = useSettingsStore.getState().language || "fr";
+    const md = await invoke<string>("summarize_transcript", { transcript, lang });
+
+    const { useMatrixStore } = await import("../stores/useMatrixStore");
+    const title = lang.startsWith("en") ? "## 📝 Meeting summary" : "## 📝 Résumé de la réunion";
+    await useMatrixStore.getState().sendMessage(roomId, `${title}\n\n${md}`);
+  } finally {
+    useTranscriptStore.getState().setSummaryState("idle");
+  }
+}
