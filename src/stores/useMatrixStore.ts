@@ -1001,7 +1001,20 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // event reaching us through both paths (local echo + server ack) or via
     // a decrypt replay renders once.
     const handleTranscriptEvent = (event: MatrixEvent) => {
-      if (event.getType?.() !== "com.sion.transcript") return;
+      const type = event.getType?.();
+      if (type === "com.sion.transcript.session") {
+        // Session lifecycle (start with uuid+date / collective end) — the
+        // service owns the adoption + engine reaction logic.
+        const roomId = event.getRoomId?.();
+        const content = event.getContent?.();
+        if (!roomId || (content?.action !== "start" && content?.action !== "end") || typeof content?.id !== "string") return;
+        const senderId = event.getSender?.() || "";
+        import("../services/transcriptionService").then(({ handleSessionEvent }) => {
+          handleSessionEvent(roomId, content.action, content.id, typeof content.ts === "number" ? content.ts : (event.getTs?.() ?? Date.now()), senderId);
+        }).catch(() => {});
+        return;
+      }
+      if (type !== "com.sion.transcript") return;
       const roomId = event.getRoomId?.();
       const content = event.getContent?.();
       const text = content?.text;
@@ -1018,6 +1031,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           text,
           t0: typeof content?.t0 === "number" ? content.t0 : (event.getTs?.() ?? Date.now()),
           t1: typeof content?.t1 === "number" ? content.t1 : 0,
+          ...(typeof content?.session === "string" ? { sessionId: content.session } : {}),
         });
       }).catch(() => {});
     };

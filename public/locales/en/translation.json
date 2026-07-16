@@ -554,11 +554,18 @@
     "export": "Export .md",
     "exportHint": "Posts the transcript as .md into the chat",
     "exportTitle": "Transcript",
-    "empty": "No segments yet. Enable “Transcribe my mic” — each participant transcribes their own voice, locally.",
+    "empty": "No segments yet. Click “Join transcription” — it starts once two participants enabled it, each transcribing their own voice, locally.",
     "downloading": "downloading model…",
     "summarize": "Summarize meeting",
     "summarizing": "Summarizing…",
     "summaryDownloading": "Downloading AI…",
-    "summarizeHint": "Generates minutes (local AI) and posts them to the chat"
+    "summarizeHint": "Generates minutes (local AI) and posts them to the chat",
+    "join": "Join transcription",
+    "cancelArm": "Cancel (waiting for a 2nd participant…)",
+    "waitingPeer": "Transcription starts once a 2nd participant clicks “Join”.",
+    "endForAll": "End for everyone",
+    "endForAllHint": "Ends the transcription session for all participants",
+    "sessionSince": "Session since {{time}}",
+    "sessionEnded": "Session ended at {{time}}"
   }
 }

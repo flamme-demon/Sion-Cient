@@ -839,11 +839,22 @@ export async function sendImageUrl(roomId: string, imageUrl: string): Promise<vo
 /** Publish one transcribed utterance into the room. Custom event type —
  *  never rendered as a chat message (extractMessagesFromRoom only maps
  *  m.room.message); the transcript panel consumes it instead. Encrypted
- *  automatically by the SDK when the room is. */
-export async function sendTranscriptSegment(roomId: string, text: string, t0: number, t1: number): Promise<void> {
+ *  automatically by the SDK when the room is. `session` ties the segment to
+ *  its transcription session (uuid). */
+export async function sendTranscriptSegment(roomId: string, text: string, t0: number, t1: number, session?: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await matrixClient.sendEvent(roomId, "com.sion.transcript" as any, { text, t0, t1, v: 1 });
+  await matrixClient.sendEvent(roomId, "com.sion.transcript" as any, { text, t0, t1, v: 1, ...(session ? { session } : {}) });
+}
+
+/** Publish a transcription-session lifecycle event: start (uuid + date, sent
+ *  by the participant whose arming reached the ≥2 threshold) or end (any
+ *  participant may end the session for everyone). Durable in room history —
+ *  this is the anchor of the future transcript-history browser. */
+export async function sendTranscriptSession(roomId: string, action: "start" | "end", id: string, ts: number): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "com.sion.transcript.session" as any, { action, id, ts, v: 1 });
 }
 
 export async function createOrGetDMRoom(userId: string): Promise<string> {

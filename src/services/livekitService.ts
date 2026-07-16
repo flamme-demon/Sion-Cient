@@ -58,6 +58,11 @@ const AFK_TOPIC = "sion-afk";
 // closes the share view.
 const CURSOR_TOPIC = "sion-cursor";
 const CURSOR_CLICK_TOPIC = "sion-cursor-click";
+// Transcription arming: "I want the meeting transcribed" — ephemeral per
+// call, so it rides the data channel like AFK (re-broadcast to newcomers,
+// forgotten on leave). The session itself (uuid + dates) is DURABLE and
+// lives in Matrix events; this topic only carries intent.
+const TRANSCRIBE_ARM_TOPIC = "sion-transcribe-arm";
 const CURSOR_TTL_MS = 2000;
 
 /** Expiry for click ripples — the effect itself animates for ~600 ms, so
@@ -1315,6 +1320,36 @@ export function setDeafened(deafened: boolean) {
   broadcastAfk();
 }
 
+// --- Transcription arming (see TRANSCRIBE_ARM_TOPIC) -----------------------
+const armedTranscribers = new Set<string>();
+let localTranscribeArmed = false;
+let armedCallback: ((identities: string[]) => void) | null = null;
+
+/** Remote participants currently armed for transcription (excludes us). */
+export function getArmedTranscribers(): string[] {
+  return Array.from(armedTranscribers);
+}
+
+/** Subscribe to remote-armed changes. Single consumer (transcriptionService). */
+export function onArmedTranscribersChange(cb: ((identities: string[]) => void) | null) {
+  armedCallback = cb;
+}
+
+/** Broadcast our own arming intent. Reliable — a lost arm/disarm would
+ *  desync the ≥2-participants gate. Re-sent to newcomers on join. */
+export function setLocalTranscribeArmed(armed: boolean) {
+  localTranscribeArmed = armed;
+  broadcastTranscribeArmed();
+}
+
+function broadcastTranscribeArmed() {
+  if (!currentRoom) return;
+  try {
+    const payload = afkEncoder.encode(JSON.stringify({ armed: localTranscribeArmed }));
+    currentRoom.localParticipant.publishData(payload, { reliable: true, topic: TRANSCRIBE_ARM_TOPIC }).catch(() => { /* best-effort */ });
+  } catch { /* ignore */ }
+}
+
 function broadcastAfk() {
   if (!currentRoom) return;
   try {
@@ -1955,6 +1990,18 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
       } catch { /* ignore malformed */ }
       return;
     }
+    if (topic === TRANSCRIBE_ARM_TOPIC) {
+      try {
+        const parsed = JSON.parse(afkDecoder.decode(payload)) as { armed?: boolean };
+        const before = armedTranscribers.size;
+        if (parsed.armed === true) armedTranscribers.add(participant.identity);
+        else armedTranscribers.delete(participant.identity);
+        if (armedTranscribers.size !== before) {
+          armedCallback?.(Array.from(armedTranscribers));
+        }
+      } catch { /* ignore malformed */ }
+      return;
+    }
     // Soundboard broadcast — lazy-load to avoid circular import at module load
     import("./soundboardService").then(({ SOUNDBOARD_TOPIC, handleRemoteBroadcast }) => {
       if (topic === SOUNDBOARD_TOPIC) handleRemoteBroadcast(payload, participant.identity);
@@ -1964,9 +2011,10 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
 
   // Re-broadcast our state to newcomers so they learn it, and forget
   // state for disconnected peers.
-  const rebroadcastOnJoin = () => { broadcastAfk(); update(); };
+  const rebroadcastOnJoin = () => { broadcastAfk(); if (localTranscribeArmed) broadcastTranscribeArmed(); update(); };
   const forgetOnLeave = (p: RemoteParticipant) => {
     remoteDeafenState.delete(p.identity);
+    if (armedTranscribers.delete(p.identity)) armedCallback?.(Array.from(armedTranscribers));
     // Per-participant local mute is the only per-peer Set not otherwise purged
     // on leave — a peer who left should not keep a stale local-mute entry.
     locallyMutedIdentities.delete(p.identity);

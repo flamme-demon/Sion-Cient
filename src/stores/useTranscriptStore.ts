@@ -11,11 +11,28 @@ export interface TranscriptEntry {
   /** Utterance start/end, epoch ms (from the speaker's clock). */
   t0: number;
   t1: number;
+  /** Transcription session this segment belongs to. Missing on segments from
+   *  pre-session clients. */
+  sessionId?: string;
+}
+
+/** One meeting-transcription session: born when a SECOND participant arms
+ *  (uuid + date), ended for everyone by any participant. The unit of the
+ *  future transcript history. */
+export interface TranscriptSession {
+  id: string;
+  /** Session start, epoch ms (from the starter's clock). */
+  ts: number;
+  /** Matrix user who emitted the adopted start event. */
+  startedBy: string;
+  /** Set when an end event arrived — the session is over for everyone. */
+  endedAt?: number;
 }
 
 /** Engine lifecycle for OUR OWN transcription (remote entries arrive over
- *  Matrix regardless of this state). */
-export type TranscribeState = "off" | "starting" | "on" | "error";
+ *  Matrix regardless of this state). "armed" = waiting for a second
+ *  participant before any audio flows. */
+export type TranscribeState = "off" | "armed" | "starting" | "on" | "error";
 
 /** Cap per room — a 3 h meeting is well under this; beyond it we drop the
  *  oldest entries to bound memory. */
@@ -24,6 +41,8 @@ const MAX_ENTRIES_PER_ROOM = 5000;
 interface TranscriptStore {
   /** Entries per room, sorted by t0. */
   entries: Record<string, TranscriptEntry[]>;
+  /** Active (or last) session per room. null/absent = none. */
+  sessions: Record<string, TranscriptSession | null>;
   /** Whether the transcript panel is visible. */
   panelOpen: boolean;
   /** Our own engine state. */
@@ -43,11 +62,13 @@ interface TranscriptStore {
   setState: (state: TranscribeState, error?: string | null) => void;
   setDownloadPct: (pct: number | null) => void;
   setSummaryState: (state: "idle" | "downloading" | "running", pct?: number | null) => void;
+  setSession: (roomId: string, session: TranscriptSession | null) => void;
   clearRoom: (roomId: string) => void;
 }
 
 export const useTranscriptStore = create<TranscriptStore>((set) => ({
   entries: {},
+  sessions: {},
   panelOpen: false,
   state: "off",
   error: null,
@@ -76,6 +97,8 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
   setState: (state, error = null) => set({ state, error }),
   setDownloadPct: (pct) => set({ downloadPct: pct }),
   setSummaryState: (state, pct = null) => set({ summaryState: state, summaryPct: pct }),
+  setSession: (roomId, session) =>
+    set((s) => ({ sessions: { ...s.sessions, [roomId]: session } })),
   clearRoom: (roomId) =>
     set((s) => {
       const entries = { ...s.entries };

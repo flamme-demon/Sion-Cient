@@ -554,11 +554,18 @@
     "export": "Exporter .md",
     "exportHint": "Envoie le transcript en .md dans le chat",
     "exportTitle": "Transcription",
-    "empty": "Aucun segment pour l'instant. Activez « Transcrire mon micro » — chaque participant transcrit sa propre voix, localement.",
+    "empty": "Aucun segment pour l'instant. Cliquez « Participer à la transcription » — elle démarre dès que deux participants l'ont activée, chacun transcrivant sa propre voix, localement.",
     "downloading": "téléchargement du modèle…",
     "summarize": "Résumer la réunion",
     "summarizing": "Résumé en cours…",
     "summaryDownloading": "Téléchargement IA…",
-    "summarizeHint": "Génère un compte-rendu (IA locale) et le poste dans le chat"
+    "summarizeHint": "Génère un compte-rendu (IA locale) et le poste dans le chat",
+    "join": "Participer à la transcription",
+    "cancelArm": "Annuler (en attente d'un 2e participant…)",
+    "waitingPeer": "La transcription démarrera quand un 2e participant cliquera « Participer ».",
+    "endForAll": "Terminer pour tous",
+    "endForAllHint": "Met fin à la session de transcription pour tous les participants",
+    "sessionSince": "Session depuis {{time}}",
+    "sessionEnded": "Session terminée à {{time}}"
   }
 }

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
-import { startTranscription, stopTranscription, summarizeMeeting } from "../../services/transcriptionService";
+import { armTranscription, disarmTranscription, endSessionForAll, summarizeMeeting } from "../../services/transcriptionService";
 
 /** Stable per-identity hue (same trick as the cursor overlay) so each
  *  speaker keeps a recognizable color in the transcript. */
@@ -33,7 +33,13 @@ export function TranscriptPanel() {
   const summaryState = useTranscriptStore((s) => s.summaryState);
   const summaryPct = useTranscriptStore((s) => s.summaryPct);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
-  const entries = useTranscriptStore((s) => (connectedVoice ? s.entries[connectedVoice] : undefined)) || [];
+  const allEntries = useTranscriptStore((s) => (connectedVoice ? s.entries[connectedVoice] : undefined)) || [];
+  const session = useTranscriptStore((s) => (connectedVoice ? s.sessions[connectedVoice] : undefined)) || null;
+  // Scope the view to the current session once one exists (legacy untagged
+  // segments stay visible); before any session, show everything received.
+  const entries = session
+    ? allEntries.filter((e) => !e.sessionId || e.sessionId === session.id)
+    : allEntries;
   const sendFile = useMatrixStore((s) => s.sendFile);
   const listRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -49,7 +55,9 @@ export function TranscriptPanel() {
   if (!panelOpen || !connectedVoice) return null;
 
   const busy = engineState === "starting";
+  const armed = engineState === "armed";
   const running = engineState === "on" || busy;
+  const sessionActive = !!session && !session.endedAt;
   const summaryBusy = summaryState !== "idle";
   // The local engines live in the Rust backend — web/mobile builds still SEE
   // everyone's transcript (it arrives over Matrix) but can't feed/summarize.
@@ -57,14 +65,20 @@ export function TranscriptPanel() {
   const canTranscribe = typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
 
   const handleToggleEngine = () => {
-    if (running) {
-      stopTranscription();
+    if (running || armed) {
+      disarmTranscription(connectedVoice);
     } else {
-      startTranscription(connectedVoice).catch((err) => {
-        console.error("[Sion][transcribe] start failed:", err);
+      armTranscription(connectedVoice).catch((err) => {
+        console.error("[Sion][transcribe] arm failed:", err);
         useTranscriptStore.getState().setState("error", String(err?.message || err));
       });
     }
+  };
+
+  const handleEndForAll = () => {
+    endSessionForAll(connectedVoice).catch((err) => {
+      console.error("[Sion][transcribe] end-for-all failed:", err);
+    });
   };
 
   const handleSummarize = () => {
@@ -90,7 +104,7 @@ export function TranscriptPanel() {
     }
   };
 
-  const statusDot = engineState === "on" ? "var(--color-green)" : engineState === "starting" ? "#ff9800" : engineState === "error" ? "var(--color-error)" : "var(--color-outline)";
+  const statusDot = engineState === "on" ? "var(--color-green)" : engineState === "starting" || engineState === "armed" ? "#ff9800" : engineState === "error" ? "var(--color-error)" : "var(--color-outline)";
 
   const actionBtn = (label: string, onClick: () => void, opts?: { danger?: boolean; disabled?: boolean; title?: string }) => (
     <button
@@ -127,8 +141,18 @@ export function TranscriptPanel() {
         borderBottom: '1px solid var(--color-outline-variant)',
       }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusDot, flexShrink: 0 }} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', flex: 1 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', flex: 1, minWidth: 0 }}>
           {t("transcript.title", { defaultValue: "Transcription" })}
+          {sessionActive && (
+            <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: 'var(--color-on-surface-variant)' }}>
+              {t("transcript.sessionSince", { time: fmtTime(session!.ts), defaultValue: "Session depuis {{time}}" })}
+            </span>
+          )}
+          {session?.endedAt != null && (
+            <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: 'var(--color-on-surface-variant)' }}>
+              {t("transcript.sessionEnded", { time: fmtTime(session.endedAt), defaultValue: "Session terminée à {{time}}" })}
+            </span>
+          )}
         </span>
         <button
           onClick={() => setPanelOpen(false)}
@@ -142,9 +166,21 @@ export function TranscriptPanel() {
         {canTranscribe && actionBtn(
           running
             ? t("transcript.stopMine", { defaultValue: "Arrêter mon micro" })
-            : t("transcript.startMine", { defaultValue: "Transcrire mon micro" }),
+            : armed
+              ? t("transcript.cancelArm", { defaultValue: "Annuler (en attente d'un 2e participant…)" })
+              : t("transcript.join", { defaultValue: "Participer à la transcription" }),
           handleToggleEngine,
-          { danger: running, disabled: busy },
+          { danger: running || armed, disabled: busy },
+        )}
+        {canTranscribe && sessionActive && actionBtn(
+          t("transcript.endForAll", { defaultValue: "Terminer pour tous" }),
+          handleEndForAll,
+          { danger: true, title: t("transcript.endForAllHint", { defaultValue: "Met fin à la session de transcription pour tous les participants" }) },
+        )}
+        {armed && (
+          <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', lineHeight: 1.4 }}>
+            {t("transcript.waitingPeer", { defaultValue: "La transcription démarrera quand un 2e participant cliquera « Participer »." })}
+          </div>
         )}
         {canTranscribe && actionBtn(
           summaryState === "downloading"
@@ -187,7 +223,7 @@ export function TranscriptPanel() {
       >
         {entries.length === 0 ? (
           <div style={{ paddingTop: 8, fontSize: 12, color: 'var(--color-on-surface-variant)', lineHeight: 1.5 }}>
-            {t("transcript.empty", { defaultValue: "Aucun segment pour l'instant. Activez « Transcrire mon micro » — chaque participant transcrit sa propre voix, localement." })}
+            {t("transcript.empty", { defaultValue: "Aucun segment pour l'instant. Cliquez « Participer à la transcription » — elle démarre dès que deux participants l'ont activée, chacun transcrivant sa propre voix, localement." })}
           </div>
         ) : (
           entries.map((e) => (

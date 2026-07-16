@@ -20,6 +20,7 @@ import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useTranscriptStore } from "../stores/useTranscriptStore";
 import { getLocalMicMediaStreamTrack } from "./livekitService";
+import * as livekit from "./livekitService";
 import * as matrixService from "./matrixService";
 
 /** ~200 ms of 16 kHz audio per WS frame — small enough for low latency,
@@ -115,12 +116,13 @@ async function tapMic(s: Session): Promise<void> {
   console.log("[Sion][transcribe] mic tapped (16 kHz worklet)");
 }
 
-/** Start transcribing into `roomId`. Resolves once the engine is starting;
- *  the store's state flips to "on" when the model reports ready. Throws with
- *  a user-displayable message when the model is missing or load fails. */
-export async function startTranscription(roomId: string): Promise<void> {
+/** Start OUR engine, feeding segments into `roomId` (internal — the public
+ *  entry point is `armTranscription`, which enforces the ≥2-participants
+ *  session gate). Resolves once the engine is starting; the store's state
+ *  flips to "on" when the model reports ready. */
+async function startEngine(roomId: string): Promise<void> {
   if (!isTauri()) throw new Error("desktop only");
-  if (session) await stopTranscription();
+  if (session) await stopEngine();
 
   const store = useTranscriptStore.getState();
   const { transcribeModel, transcribeLang } = useSettingsStore.getState();
@@ -162,8 +164,11 @@ export async function startTranscription(roomId: string): Promise<void> {
         const t0 = msg.t0 ?? Date.now();
         const t1 = msg.t1 ?? t0;
         // Publish to the room — our own entry lands in the store via the
-        // local echo / timeline path, same as everyone else's.
-        matrixService.sendTranscriptSegment(s.roomId, msg.text, t0, t1).catch((err) => {
+        // local echo / timeline path, same as everyone else's. Tagged with
+        // the CURRENT session id (read at send time: a race-adopted session
+        // retags subsequent segments automatically).
+        const sessionId = useTranscriptStore.getState().sessions[s.roomId]?.id;
+        matrixService.sendTranscriptSegment(s.roomId, msg.text, t0, t1, sessionId).catch((err) => {
           console.warn("[Sion][transcribe] segment publish failed:", err);
         });
       }
@@ -181,7 +186,7 @@ export async function startTranscription(roomId: string): Promise<void> {
   s.unsubMute = useAppStore.subscribe((state) => {
     if (state.connectedVoiceChannel !== s.roomId) {
       console.log("[Sion][transcribe] left voice channel → stopping");
-      stopTranscription();
+      disarmTranscription(s.roomId);
       return;
     }
     const muted = state.isMuted || state.isDeafened;
@@ -200,9 +205,9 @@ export async function startTranscription(roomId: string): Promise<void> {
   s.retapTimer = setInterval(() => { tapMic(s).catch(() => {}); }, 2000);
 }
 
-/** Stop transcribing: flush the open segment, tear the graph down, unload
+/** Stop OUR engine: flush the open segment, tear the graph down, unload
  *  the model. Remote transcripts keep flowing (they come over Matrix). */
-export async function stopTranscription(): Promise<void> {
+async function stopEngine(): Promise<void> {
   const s = session;
   session = null;
   if (!s) return;
@@ -231,6 +236,139 @@ function sendFlushFor(s: Session) {
 /** True while WE are transcribing (someone else may be regardless). */
 export function isTranscribing(): boolean {
   return session !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Transcription sessions — Grégory's consent model:
+//  - arming alone transcribes NOTHING; the session starts when a SECOND
+//    participant arms (the intent travels on the LiveKit data channel);
+//  - the start mints a uuid + date, published as a durable Matrix event
+//    (`com.sion.transcript.session`) — the anchor of the future history;
+//  - ANY participant can end the session for everyone.
+// ---------------------------------------------------------------------------
+
+/** Ignore session starts older than this on history replay: a session whose
+ *  client crashed without sending `end` must not resurrect on every reload. */
+const SESSION_FRESHNESS_MS = 12 * 3600 * 1000;
+
+let armedRoom: string | null = null;
+/** Only propose one session start per arming — the concurrent proposal from
+ *  the other side is resolved by earliest-ts adoption, not by re-sending. */
+let sessionProposed = false;
+let unsubArmWatch: (() => void) | null = null;
+
+function clearArmWatch() {
+  livekit.onArmedTranscribersChange(null);
+  unsubArmWatch?.();
+  unsubArmWatch = null;
+}
+
+/** Arm the transcription: declare intent, and start only when the session
+ *  exists (≥2 armed participants). If a session is already running, this
+ *  joins it immediately. */
+export async function armTranscription(roomId: string): Promise<void> {
+  if (!isTauri()) throw new Error("desktop only");
+  const store = useTranscriptStore.getState();
+  if (session || armedRoom) return; // engine running or already armed
+
+  const active = store.sessions[roomId];
+  livekit.setLocalTranscribeArmed(true);
+  if (active && !active.endedAt) {
+    // Session already live — the ≥2 gate was passed by others; join it.
+    await startEngine(roomId);
+    return;
+  }
+
+  armedRoom = roomId;
+  sessionProposed = false;
+  store.setState("armed");
+
+  const maybePropose = () => {
+    if (sessionProposed || armedRoom !== roomId) return;
+    if (livekit.getArmedTranscribers().length >= 1) {
+      sessionProposed = true;
+      // Race with the other side proposing too: both events land, everyone
+      // adopts the earliest (see handleSessionEvent).
+      matrixService.sendTranscriptSession(roomId, "start", crypto.randomUUID(), Date.now()).catch((err) => {
+        console.warn("[Sion][transcribe] session start publish failed:", err);
+        sessionProposed = false;
+      });
+    }
+  };
+
+  livekit.onArmedTranscribersChange(() => maybePropose());
+  // Disarm if we leave the voice channel while still waiting for a peer.
+  unsubArmWatch = useAppStore.subscribe((state) => {
+    if (state.connectedVoiceChannel !== roomId) disarmTranscription(roomId);
+  });
+  maybePropose();
+}
+
+/** Stop OUR participation (engine + armed intent). The session keeps
+ *  running for the others — ending it for everyone is `endSessionForAll`. */
+export function disarmTranscription(roomId: string): void {
+  void roomId;
+  clearArmWatch();
+  armedRoom = null;
+  sessionProposed = false;
+  livekit.setLocalTranscribeArmed(false);
+  if (session) {
+    stopEngine();
+  } else if (useTranscriptStore.getState().state === "armed") {
+    useTranscriptStore.getState().setState("off");
+  }
+}
+
+/** End the CURRENT session for every participant (any member may do this). */
+export async function endSessionForAll(roomId: string): Promise<void> {
+  const cur = useTranscriptStore.getState().sessions[roomId];
+  if (!cur || cur.endedAt) return;
+  await matrixService.sendTranscriptSession(roomId, "end", cur.id, Date.now());
+  // Apply locally right away — the event echo is deduped by endedAt.
+  handleSessionEvent(roomId, "end", cur.id, Date.now(), "");
+}
+
+/** React to a `com.sion.transcript.session` event (live, echo or history
+ *  replay). Called from the useMatrixStore timeline/decrypted routers. */
+export function handleSessionEvent(roomId: string, action: "start" | "end", id: string, ts: number, sender: string): void {
+  const store = useTranscriptStore.getState();
+  const cur = store.sessions[roomId];
+
+  if (action === "start") {
+    if (Date.now() - ts > SESSION_FRESHNESS_MS) return; // stale history
+    if (cur && !cur.endedAt) {
+      // Concurrent proposals: adopt the earliest (ties: lowest uuid) so all
+      // clients converge on the same session id.
+      if (cur.id === id) return;
+      if (ts > cur.ts || (ts === cur.ts && id > cur.id)) return;
+    }
+    store.setSession(roomId, { id, ts, startedBy: sender });
+    console.log(`[Sion][transcribe] session ${id.slice(0, 8)} adopted (started by ${sender || "?"})`);
+    // We were waiting for the second participant — the session exists, go.
+    if (armedRoom === roomId && !session) {
+      clearArmWatch();
+      armedRoom = null;
+      startEngine(roomId).catch((err) => {
+        console.error("[Sion][transcribe] engine start failed:", err);
+        useTranscriptStore.getState().setState("error", String((err as Error)?.message || err));
+      });
+    }
+    return;
+  }
+
+  // action === "end"
+  if (!cur || cur.id !== id || cur.endedAt) return;
+  store.setSession(roomId, { ...cur, endedAt: ts });
+  console.log(`[Sion][transcribe] session ${id.slice(0, 8)} ended for everyone`);
+  clearArmWatch();
+  armedRoom = null;
+  sessionProposed = false;
+  livekit.setLocalTranscribeArmed(false);
+  if (session) {
+    stopEngine();
+  } else if (useTranscriptStore.getState().state === "armed") {
+    useTranscriptStore.getState().setState("off");
+  }
 }
 
 /** Path of the requested whisper model, downloading it on first use
