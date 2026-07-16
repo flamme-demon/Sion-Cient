@@ -768,7 +768,13 @@ export function ChatInput() {
                             onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
                             onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
                           >
-                            <img src={gif.preview} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', borderRadius: 8 }} />
+                            {/* crossOrigin: the app is cross-origin isolated
+                                (COEP require-corp for the E2EE workers) and
+                                static.klipy.com sends ACAO:* but no CORP
+                                header — a plain no-cors <img> gets blocked
+                                (NotSameOriginAfterDefaultedToSameOrigin…);
+                                CORS mode passes. */}
+                            <img src={gif.preview} alt="" loading="lazy" crossOrigin="anonymous" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', borderRadius: 8 }} />
                           </button>
                         ))}
                       </div>
