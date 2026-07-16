@@ -320,6 +320,9 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
 }
 
 function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  // Fit (default) ↔ real size. Clicking the image toggles; at 100% the
+  // overlay scrolls so very large screenshots can actually be read.
+  const [zoomed, setZoomed] = useState(false);
   // Fermer avec Escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -333,25 +336,43 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         background: 'rgba(0,0,0,0.88)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        overflow: zoomed ? 'auto' : 'hidden',
         cursor: 'zoom-out',
       }}
     >
-      <img
-        src={src}
-        alt={alt}
-        onClick={(e) => e.stopPropagation()}
+      {/* Flex wrapper + `margin: auto` on the img: centers when it fits,
+          scrolls from the true top-left when it overflows (a plain flex
+          center would clip the top/left edges of oversized images). */}
+      <div style={{ minWidth: '100%', minHeight: '100%', display: 'flex' }}>
+        <img
+          src={src}
+          alt={alt}
+          onClick={(e) => { e.stopPropagation(); setZoomed((z) => !z); }}
+          style={{
+            margin: 'auto',
+            display: 'block',
+            ...(zoomed
+              ? { maxWidth: 'none', maxHeight: 'none' }
+              : { maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain' as const, borderRadius: 8 }),
+            boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+            cursor: zoomed ? 'zoom-out' : 'zoom-in',
+          }}
+        />
+      </div>
+      <div
+        onClick={(e) => { e.stopPropagation(); setZoomed((z) => !z); }}
+        title={zoomed ? "Taille ajustée" : "Taille réelle (100 %)"}
         style={{
-          maxWidth: '90vw', maxHeight: '90vh',
-          objectFit: 'contain', borderRadius: 8,
-          boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
-          cursor: 'default',
+          position: 'fixed', top: 'max(env(safe-area-inset-top, 0px), 16px)', left: 16,
+          background: 'rgba(255,255,255,0.15)', borderRadius: 18,
+          padding: '7px 14px', cursor: 'pointer',
+          color: '#fff', fontSize: 13, fontWeight: 600, userSelect: 'none',
         }}
-      />
+      >{zoomed ? '100 %' : 'Ajusté'}</div>
       <button
         onClick={onClose}
         style={{
-          position: 'absolute', top: 'max(env(safe-area-inset-top, 0px), 16px)', right: 16,
+          position: 'fixed', top: 'max(env(safe-area-inset-top, 0px), 16px)', right: 16,
           background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%',
           width: 36, height: 36, cursor: 'pointer',
           color: '#fff', fontSize: 18, lineHeight: '36px', textAlign: 'center',
