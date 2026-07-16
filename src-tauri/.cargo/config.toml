@@ -11,7 +11,14 @@ jobs = 4
 # (observed on Manjaro). Cost: the small host-side decoder falls back to a
 # scalar loop — the heavy encoder work is ggml and unaffected. This is the
 # same "official wheel" posture the transcribe.cpp project ships with.
-TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"
+# The MSVC_RUNTIME define pins transcribe.cpp to the static CRT (/MT) on
+# Windows. The [target] rustflags below are NOT enough for that: cargo
+# applies them to rustc/link but does not reflect them in the build script's
+# CARGO_CFG_TARGET_FEATURE, so the cmake crate still compiled the C++ with
+# /MD and beta.2 died on the same LNK2038 as beta.1. Explicit -D wins (their
+# cmake_minimum_required=3.16 makes CMP0091 NEW, so the variable is honored);
+# inert on non-MSVC platforms.
+TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
 
 # Static MSVC CRT (/MT): the CEF wrapper objects are MT_StaticRelease; any
 # cmake-built C++ dep (transcribe.cpp) must match or link.exe fails with
