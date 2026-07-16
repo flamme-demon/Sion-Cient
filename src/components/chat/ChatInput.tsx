@@ -774,7 +774,7 @@ export function ChatInput() {
                       </div>
 
                       <div style={{ padding: '4px 10px 6px', fontSize: 9, color: 'var(--color-outline)', textAlign: 'right' }}>
-                        Powered by Tenor
+                        Powered by KLIPY
                       </div>
                     </>)}
                   </>)}
