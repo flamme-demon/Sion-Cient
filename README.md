@@ -11,6 +11,7 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 - **URL media import** (yt-dlp) — bring audio/video from a link into chat or the soundboard
 - **Screen sharing** in voice channels with dedicated viewer, system-audio capture (Linux), and a native cursor overlay
 - **Soundboard** — shared server-wide sound library with per-sound category/emoji/hotkey/gain, in-app trimmer, LiveKit broadcast to voice participants
+- **Meeting transcription** — consent-based (≥2 participants), each one transcribing their own mic locally (whisper.cpp / Parakeet v3 via transcribe.cpp); live panel, session history, and AI meeting minutes generated locally (llama.cpp + Qwen3.5-4B, Vulkan-accelerated)
 - **Voice & event sounds** — customizable join/leave/timeout cues plus poke / kicked / member-kicked notifications (custom file or URL per sound)
 - **Link previews** with OG metadata extraction (YouTube oEmbed, GitHub, etc.)
 - **End-to-end encryption** (E2EE) for both text and voice via Matrix Rust Crypto + LiveKit E2EE

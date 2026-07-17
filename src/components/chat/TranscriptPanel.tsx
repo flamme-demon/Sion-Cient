@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -19,6 +19,12 @@ function fmtTime(epochMs: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/* Stable fallbacks: `?? []` in a zustand selector would build a fresh value
+ * on every store update and re-render the panel for unrelated rooms. */
+const NO_ENTRIES: never[] = [];
+const NO_SESSIONS: never[] = [];
+const NO_SUMMARIES: Record<string, { text: string; ts: number }> = {};
+
 /** Meeting transcript — right side panel (MemberPanel-style column),
  *  organized around the session lifecycle: the "Direct" tab shows ONE
  *  primary action matching the current state (start / join invitation /
@@ -36,10 +42,10 @@ export function TranscriptPanel() {
   const summaryPct = useTranscriptStore((s) => s.summaryPct);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const armedPeers = useTranscriptStore((s) => s.armedPeers);
-  const allEntries = useTranscriptStore((s) => (connectedVoice ? s.entries[connectedVoice] : undefined)) || [];
+  const allEntries = useTranscriptStore((s) => (connectedVoice ? s.entries[connectedVoice] : undefined) ?? NO_ENTRIES);
   const session = useTranscriptStore((s) => (connectedVoice ? s.sessions[connectedVoice] : undefined)) || null;
-  const history = useTranscriptStore((s) => (connectedVoice ? s.history[connectedVoice] : undefined)) || [];
-  const summaries = useTranscriptStore((s) => (connectedVoice ? s.summaries[connectedVoice] : undefined)) || {};
+  const history = useTranscriptStore((s) => (connectedVoice ? s.history[connectedVoice] : undefined) ?? NO_SESSIONS);
+  const summaries = useTranscriptStore((s) => (connectedVoice ? s.summaries[connectedVoice] : undefined) ?? NO_SUMMARIES);
 
   const [tab, setTab] = useState<"live" | "history">("live");
   const [viewedId, setViewedId] = useState<string | null>(null);
@@ -52,6 +58,14 @@ export function TranscriptPanel() {
   const pinnedToBottom = useRef(true);
 
   const viewedSession = viewedId ? history.find((h) => h.id === viewedId) || null : null;
+  // One pass over the entries instead of one filter per listed session.
+  const segmentCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of allEntries) {
+      if (e.sessionId) counts.set(e.sessionId, (counts.get(e.sessionId) || 0) + 1);
+    }
+    return counts;
+  }, [allEntries]);
   // The summary linked to the session being looked at (past or live).
   const scopedSession = viewedSession ?? session;
   const linkedSummary = scopedSession ? summaries[scopedSession.id] : undefined;
@@ -442,7 +456,7 @@ export function TranscriptPanel() {
             </div>
           ) : (
             history.map((h) => {
-              const count = allEntries.filter((e) => e.sessionId === h.id).length;
+              const count = segmentCounts.get(h.id) || 0;
               const ongoing = h.endedAt == null && session?.id === h.id && sessionActive;
               return (
                 <button
