@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { checkUserSuspended, suspendUser, getRoomsList } from "../../services/adminService";
+import { checkUserSuspended, suspendUser, getRoomsList, clearDeactivatedCache } from "../../services/adminService";
 import { getMatrixClient } from "../../services/matrixService";
 import { sendAdminCommand, findAdminRoom } from "../../services/adminCommandService";
 import {
@@ -35,6 +35,8 @@ function usePendingUsers() {
       let suspended = false;
       try {
         const result = await checkUserSuspended(userId);
+        // Deactivated (= refused) or deleted accounts: neither pending nor active.
+        if (result.deactivated) continue;
         suspended = result.suspended;
       } catch { /* assume not suspended on error */ }
       const isolated = !isInAnyPublicRoom(userId, publicRoomIds);
@@ -57,6 +59,9 @@ function usePendingUsers() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
+      // Re-check accounts previously seen as deactivated (they may have
+      // been reactivated via admin command since).
+      clearDeactivatedCache();
       await fullDiscover();
       await checkAll();
     } finally {

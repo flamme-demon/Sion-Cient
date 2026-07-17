@@ -120,6 +120,8 @@ async function countPending(userIds: Set<string>): Promise<number> {
     let suspended = false;
     try {
       const result = await checkUserSuspended(userId);
+      // Deactivated (= refused) or deleted accounts are not pending — skip.
+      if (result.deactivated) continue;
       suspended = result.suspended;
     } catch { /* ignore — fall through to isolation check */ }
     if (suspended || !isInAnyPublicRoom(userId, publicRoomIds)) count++;
@@ -148,7 +150,12 @@ export const usePendingUsersStore = create<PendingUsersState>((set, get) => ({
       for (const uid of parseUserList(response)) {
         localUsers.add(uid);
       }
-    } catch { /* fallback to room members only */ }
+    } catch (err) {
+      // Room members remain as fallback, but users who registered without
+      // joining any room are invisible without list-users — make the
+      // failure diagnosable (e.g. admin bot not responding).
+      console.warn("[Sion] Admin list-users failed, pending users may be incomplete:", err);
+    }
 
     const count = await countPending(localUsers);
     set({ _knownUserIds: localUsers, pendingCount: count, initialized: true });
