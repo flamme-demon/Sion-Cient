@@ -851,6 +851,18 @@ export async function sendTranscriptSegment(roomId: string, text: string, t0: nu
  *  by the participant whose arming reached the ≥2 threshold) or end (any
  *  participant may end the session for everyone). Durable in room history —
  *  this is the anchor of the future transcript-history browser. */
+/** Post a meeting summary as a regular chat message, tagged with the
+ *  transcription session it covers so the history view can find it back. */
+export async function sendSummaryMessage(roomId: string, body: string, sessionId?: string): Promise<void> {
+  if (!matrixClient) throw new Error("Matrix client not initialized");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await matrixClient.sendEvent(roomId, "m.room.message" as any, {
+    msgtype: "m.text",
+    body,
+    ...(sessionId ? { "com.sion.transcript.summary_of": sessionId } : {}),
+  });
+}
+
 export async function sendTranscriptSession(roomId: string, action: "start" | "end", id: string, ts: number): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -866,14 +878,15 @@ export async function sendTranscriptSession(roomId: string, action: "start" | "e
  *    MatrixEventEvent.Decrypted listener routes them once readable.
  *  Idempotent: the store dedups by id/content signature, the session
  *  handler by id/endedAt. */
-export async function backfillTranscript(roomId: string, sinceTs: number): Promise<void> {
+export async function backfillTranscript(roomId: string, sinceTs: number, maxPages = 10): Promise<void> {
   if (!matrixClient) return;
   const client = matrixClient;
   const room = client.getRoom(roomId);
   if (!room) return;
   const tl = room.getLiveTimeline();
-  // Bounded pagination: 10 × 100 events is plenty for a day of meetings.
-  for (let i = 0; i < 10; i++) {
+  // Bounded pagination: 10 × 100 events is plenty for a day of meetings;
+  // the history view passes a deeper budget.
+  for (let i = 0; i < maxPages; i++) {
     const events = tl.getEvents();
     const oldest = events[0];
     if (oldest && (oldest.getTs?.() ?? 0) < sinceTs) break;
@@ -895,6 +908,29 @@ export async function backfillTranscript(roomId: string, sinceTs: number): Promi
       const c = ev.getContent?.();
       if ((c?.action === "start" || c?.action === "end") && typeof c?.id === "string") {
         handleSessionEvent(roomId, c.action, c.id, typeof c.ts === "number" ? c.ts : (ev.getTs?.() ?? Date.now()), ev.getSender?.() || "");
+      }
+      continue;
+    }
+    if (type === "m.room.message") {
+      // Session-tagged meeting summary — see sendSummaryMessage.
+      const c = ev.getContent?.();
+      const body = typeof c?.body === "string" ? c.body : "";
+      const sid = c?.["com.sion.transcript.summary_of"];
+      const msgTs = ev.getTs?.() ?? 0;
+      if (typeof sid === "string" && body) {
+        useTranscriptStore.getState().setSummary(roomId, sid, body, msgTs);
+      } else if (/^## 📝 (Résumé de la réunion|Meeting summary)\b/.test(body)) {
+        // Legacy summary posted before session tagging existed: attach it
+        // to the session running (or last started) when it was posted.
+        // Timeline iteration is chronological, so that session's start
+        // event has already fed the history by the time we get here.
+        const sessions = useTranscriptStore.getState().history[roomId] || [];
+        const host = sessions
+          .filter((h) => h.ts <= msgTs && msgTs - h.ts < 12 * 3600 * 1000)
+          .sort((a, b) => b.ts - a.ts)[0];
+        if (host) {
+          useTranscriptStore.getState().setSummary(roomId, host.id, body, msgTs);
+        }
       }
       continue;
     }

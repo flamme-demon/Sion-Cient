@@ -9,9 +9,10 @@
 //!    is downloaded on demand into `<app-data>/models/`.
 //!
 //! The prompt uses Qwen's ChatML template applied MANUALLY in raw completion
-//! mode (`-no-cnv`): llama-cli's conversation flags have drifted across
-//! releases, while raw mode + explicit template is stable. Generation stops
-//! at the model's EOS (`<|im_end|>`).
+//! mode (`-no-cnv`), running `llama-completion` (preferred — the modern raw
+//! completion tool) or `llama-cli` (older archives). Generation stops at the
+//! model's EOS (`<|im_end|>`). The child is run with closed stdin, a hard
+//! timeout and a capped stdout — see `run_bounded` for the war story.
 
 #![cfg(not(target_os = "android"))]
 
@@ -35,6 +36,53 @@ fn llama_bin_name() -> &'static str {
     if cfg!(target_os = "windows") { "llama-cli.exe" } else { "llama-cli" }
 }
 
+/// Binaries usable for raw completion, in order of preference. Since ~b10000
+/// `llama-cli` is an interactive chat UI that ignores `-no-cnv` and, with a
+/// closed stdin, loops printing its `> ` prompt forever (gigabytes of output);
+/// the old raw-completion behaviour lives in `llama-completion`. Older
+/// archives only ship `llama-cli`.
+fn completion_bin_names() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &["llama-completion.exe", "llama-cli.exe"]
+    } else {
+        &["llama-completion", "llama-cli"]
+    }
+}
+
+/// The GPU backend library shipped only by the Vulkan archives — its absence
+/// identifies a CPU-only install.
+fn vulkan_lib_name() -> &'static str {
+    if cfg!(target_os = "windows") { "ggml-vulkan.dll" } else { "libggml-vulkan.so" }
+}
+
+/// Marker written after a deliberate fall-back to the CPU build, so a
+/// Vulkan-looking host that can't actually run the Vulkan build doesn't
+/// trigger an endless purge/re-download cycle. Wiped with the install dir
+/// (delete_summary_assets), which is the manual escape hatch.
+const CPU_FALLBACK_MARKER: &str = ".vulkan-upgrade-attempted";
+
+/// Cheap probe: does the host look Vulkan-capable? (loader present — the
+/// Vulkan build keeps an internal CPU fallback, so a loader without a
+/// usable GPU still runs.)
+fn host_has_vulkan() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var_os("WINDIR")
+            .map(|w| std::path::Path::new(&w).join("System32").join("vulkan-1.dll").exists())
+            .unwrap_or(false);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return hidden_command("ldconfig")
+            .arg("-p")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("libvulkan.so"))
+            .unwrap_or(false);
+    }
+    #[allow(unreachable_code)]
+    false
+}
+
 /** `--version` probe with the lib dir wired up — the prebuilt archives ship
  *  libllama/libggml next to the binary (bin_runs alone can't find them). */
 fn llama_runs(bin: &std::path::Path) -> bool {
@@ -47,10 +95,29 @@ fn llama_runs(bin: &std::path::Path) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// Locate a working completion binary in the install dir, upgrade-gate aside.
+fn find_llama_bin(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    completion_bin_names().iter().find_map(|name| {
+        let bin = find_file(dir, name)?;
+        llama_runs(&bin).then_some(bin)
+    })
+}
+
 fn find_llama(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
     let dir = llama_dir(app)?;
-    let bin = find_file(&dir, llama_bin_name())?;
-    llama_runs(&bin).then_some(bin)
+    let bin = find_llama_bin(&dir)?;
+    // CPU-only install on a Vulkan-capable host (typically installed before
+    // the Vulkan-first preference, or after a transient failure): report it
+    // as absent so the next asset check purges and re-downloads the Vulkan
+    // build. The marker prevents looping when the fall-back was deliberate.
+    if find_file(&dir, vulkan_lib_name()).is_none()
+        && !dir.join(CPU_FALLBACK_MARKER).exists()
+        && host_has_vulkan()
+    {
+        log::info!("[Sion][summary] CPU-only llama build on a Vulkan host — will reinstall the Vulkan build");
+        return None;
+    }
+    Some(bin)
 }
 
 fn summary_model_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
@@ -121,6 +188,12 @@ pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<Strin
             Ok(bin) => {
                 if llama_runs(&bin) {
                     log::info!("[Sion][summary] llama.cpp installé ({suffix})");
+                    if !suffix.contains("vulkan") {
+                        // Deliberate CPU fall-back: remember it so find_llama
+                        // doesn't keep purging this install on Vulkan-looking
+                        // hosts where the Vulkan build can't start.
+                        let _ = std::fs::write(dir.join(CPU_FALLBACK_MARKER), b"");
+                    }
                     let _ = app.emit("llama-install-progress", 100u64);
                     return Ok(bin.to_string_lossy().into_owned());
                 }
@@ -197,6 +270,62 @@ async fn fetch_and_install_llama(
     Ok(bin)
 }
 
+/// Installed / latest llama.cpp build info for the settings page, mirroring
+/// `ytdlp_versions`: JSON `{current, latest, vulkan}` where versions are
+/// release tags ("b10059") and `vulkan` says whether the installed build has
+/// the GPU backend. `latest` is null when GitHub is unreachable.
+#[tauri::command]
+pub async fn llama_versions(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
+    let dir = llama_dir(&app);
+    // Bypass find_llama: its CPU-on-Vulkan-host upgrade gate reports the
+    // build as absent, but the settings page wants to SHOW that build.
+    let bin = dir.as_deref().and_then(find_llama_bin);
+    let current = bin.and_then(|bin| {
+        let mut cmd = hidden_command(&bin);
+        cmd.arg("--version");
+        #[cfg(target_os = "linux")]
+        if let Some(parent) = bin.parent() {
+            cmd.env("LD_LIBRARY_PATH", parent);
+        }
+        let out = cmd.output().ok()?;
+        // "version: 10059 (11fd0a6fb)" — printed on stdout or stderr
+        // depending on the build.
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        text.lines().find_map(|l| {
+            let n = l.trim().strip_prefix("version: ")?;
+            Some(format!("b{}", n.split_whitespace().next().unwrap_or(n)))
+        })
+    });
+    let vulkan = dir
+        .as_deref()
+        .map(|d| find_file(d, vulkan_lib_name()).is_some())
+        .unwrap_or(false);
+
+    let latest: Option<String> = async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .user_agent("Mozilla/5.0 (Sion llama installer)")
+            .build()
+            .ok()?;
+        let rel: serde_json::Value = client
+            .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        rel["tag_name"].as_str().map(String::from)
+    }
+    .await;
+
+    Ok(serde_json::json!({ "current": current, "latest": latest, "vulkan": vulkan }).to_string())
+}
+
 /// Remove the summary assets (llama build + LLM model) from disk — frees
 /// ~2.7 GB, next use re-downloads (and picks up newer builds).
 #[tauri::command]
@@ -251,6 +380,100 @@ pub async fn download_summary_model(app: tauri::AppHandle<TauriRuntime>) -> Resu
     Ok(dest.to_string_lossy().into_owned())
 }
 
+/// Longest acceptable llama run — a 24k-chars transcript takes ~2 min on a
+/// mid GPU, allow a slow CPU plenty of headroom before declaring it stuck.
+const LLAMA_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// -n 1200 tokens is ~10 KB of text; anything near this cap means the
+/// binary is misbehaving (the b10059 llama-cli chat UI printed its REPL
+/// prompt in a tight loop on closed stdin — 40 GB of `> ` lines buffered
+/// in RAM took the whole app down).
+const LLAMA_MAX_OUTPUT: usize = 2 * 1024 * 1024;
+
+/// Run the command with closed stdin, a hard timeout, and a cap on captured
+/// stdout, so a misbehaving llama build can never OOM the app. Returns stdout.
+fn run_bounded(mut cmd: std::process::Command) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("lancement llama: {e}"))?;
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let child = Arc::new(Mutex::new(child));
+    let finished = Arc::new(AtomicBool::new(false));
+
+    // Watchdog: kill the child once the deadline passes, unblocking the reads.
+    let watchdog = {
+        let child = Arc::clone(&child);
+        let finished = Arc::clone(&finished);
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + LLAMA_TIMEOUT;
+            while std::time::Instant::now() < deadline {
+                if finished.load(Ordering::Relaxed) {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let _ = child.lock().unwrap().kill();
+            true
+        })
+    };
+
+    // Drain stderr concurrently (avoids pipe deadlock), keep only a tail.
+    let stderr_tail = std::thread::spawn(move || {
+        let mut tail: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = stderr.read(&mut buf) {
+            if n == 0 { break; }
+            tail.extend_from_slice(&buf[..n]);
+            if tail.len() > 4096 {
+                tail.drain(..tail.len() - 4096);
+            }
+        }
+        String::from_utf8_lossy(&tail).into_owned()
+    });
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 65536];
+    let mut overflow = false;
+    loop {
+        match stdout.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if out.len() + n > LLAMA_MAX_OUTPUT {
+                    overflow = true;
+                    let _ = child.lock().unwrap().kill();
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+        }
+    }
+
+    let status = child.lock().unwrap().wait();
+    finished.store(true, Ordering::Relaxed);
+    let timed_out = watchdog.join().unwrap_or(false);
+    let stderr_tail = stderr_tail.join().unwrap_or_default();
+
+    if overflow {
+        return Err("llama produit une sortie anormalement volumineuse (binaire incompatible ?)".into());
+    }
+    if timed_out {
+        return Err(format!("llama n'a pas terminé en {} min", LLAMA_TIMEOUT.as_secs() / 60));
+    }
+    match status {
+        Ok(s) if s.success() => Ok(String::from_utf8_lossy(&out).into_owned()),
+        Ok(s) => Err(format!("llama a échoué ({s}): {stderr_tail}")),
+        Err(e) => Err(format!("attente llama: {e}")),
+    }
+}
+
 /// Summarize a meeting transcript with the local LLM. Blocking by design —
 /// Tauri runs sync commands off the main thread, and generation takes tens
 /// of seconds on CPU. Returns the markdown compte-rendu.
@@ -276,10 +499,12 @@ pub fn summarize_transcript(
             "Voici la transcription horodatée d'une réunion vocale. Rédige un compte-rendu en français, en markdown, avec trois sections : **Sujets abordés**, **Décisions**, **Actions à suivre** (avec responsables si identifiables). Sois factuel et concis ; n'invente rien qui ne soit pas dans la transcription.",
         )
     };
-    // Qwen ChatML, applied manually (see module docs). `/no_think` opts out
-    // of Qwen3's thinking mode — minutes need no chain-of-thought budget.
+    // Qwen ChatML, applied manually (see module docs). Qwen3.5 ignores the
+    // Qwen3-era `/no_think` soft switch and will happily burn the whole -n
+    // budget thinking; prefilling an empty <think> block in the assistant
+    // turn is what actually forces a direct answer.
     let prompt = format!(
-        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user_head}\n\n/no_think\n\nTranscription :\n{transcript}<|im_end|>\n<|im_start|>assistant\n"
+        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user_head}\n\nTranscription :\n{transcript}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     );
     let prompt_file = std::env::temp_dir().join("sion_summary_prompt.txt");
     std::fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
@@ -301,15 +526,12 @@ pub fn summarize_transcript(
         cmd.env("LD_LIBRARY_PATH", parent);
     }
 
-    log::info!("[Sion][summary] running llama-cli ({} chars of transcript)", transcript.len());
+    log::info!("[Sion][summary] running {:?} ({} chars of transcript)", bin.file_name().unwrap_or_default(), transcript.len());
     let started = std::time::Instant::now();
-    let out = cmd.output().map_err(|e| format!("lancement llama-cli: {e}"))?;
+    let out = run_bounded(cmd);
     let _ = std::fs::remove_file(&prompt_file);
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("llama-cli a échoué: {}", err.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()));
-    }
-    let raw = String::from_utf8_lossy(&out.stdout).replace("<|im_end|>", "");
+    let out = out?;
+    let raw = out.replace("<|im_end|>", "").replace("[end of text]", "");
     // Hybrid-reasoning models (Qwen3.5) may open with a <think> block even
     // with /no_think in the prompt — strip it, minutes only.
     let text = match (raw.find("<think>"), raw.find("</think>")) {

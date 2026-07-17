@@ -1014,6 +1014,19 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         }).catch(() => {});
         return;
       }
+      if (type === "m.room.message") {
+        // Meeting summary posted in the chat, tagged with its session id —
+        // recorded so the transcript history can surface it.
+        const roomId = event.getRoomId?.();
+        const content = event.getContent?.();
+        const sid = content?.["com.sion.transcript.summary_of"];
+        if (roomId && typeof sid === "string" && typeof content?.body === "string") {
+          import("./useTranscriptStore").then(({ useTranscriptStore }) => {
+            useTranscriptStore.getState().setSummary(roomId, sid, content.body, event.getTs?.() ?? Date.now());
+          }).catch(() => {});
+        }
+        return;
+      }
       if (type !== "com.sion.transcript") return;
       const roomId = event.getRoomId?.();
       const content = event.getContent?.();

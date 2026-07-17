@@ -1351,8 +1351,8 @@ function broadcastTranscribeArmed() {
 }
 
 /** Mirror the armed set (with display names) into the transcript store —
- *  this is the visible "invitation": the panel pops open on the other
- *  members' side and shows who is waiting for a second participant.
+ *  the visible invitation is the TranscriptInviteBanner in the chat (the
+ *  panel no longer pops open by itself, it was too intrusive).
  *  Dynamic import: stores must not be pulled in at module load (cycle). */
 function publishArmedPeers() {
   const peers = Array.from(armedTranscribers).map((identity) => {
@@ -1361,19 +1361,6 @@ function publishArmedPeers() {
   });
   import("../stores/useTranscriptStore").then(({ useTranscriptStore }) => {
     useTranscriptStore.getState().setArmedPeers(peers);
-    // Auto-open the panel as the invitation, but only when someone is
-    // actually waiting and no session is already live (joining mid-session
-    // is a deliberate act, not an invitation).
-    if (peers.length > 0) {
-      import("../stores/useAppStore").then(({ useAppStore }) => {
-        const roomId = useAppStore.getState().connectedVoiceChannel;
-        const st = useTranscriptStore.getState();
-        const session = roomId ? st.sessions[roomId] : null;
-        if (roomId && !st.panelOpen && (!session || session.endedAt)) {
-          st.setPanelOpen(true);
-        }
-      }).catch(() => {});
-    }
   }).catch(() => {});
 }
 

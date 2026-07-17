@@ -1,6 +1,7 @@
 import { useCallback, type DragEvent } from "react";
 import { ChatHeader } from "../chat/ChatHeader";
 import { PinnedBar } from "../chat/PinnedBar";
+import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
 import { ScreenShareView } from "../chat/ScreenShareView";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
 import { MessageList } from "../chat/MessageList";
@@ -51,6 +52,7 @@ export function MainArea() {
       <div className="flex-1 flex flex-col min-w-0 relative">
         <ChatHeader />
         <PinnedBar />
+        <TranscriptInviteBanner />
         <ScreenShareView />
         <MessageList />
         <ChatInput />

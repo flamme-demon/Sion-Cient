@@ -19,11 +19,12 @@ function fmtTime(epochMs: number): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** Live meeting transcript — right side panel (MemberPanel-style column).
- *  Renders `com.sion.transcript` events for the voice channel we're
- *  connected to (they arrive over Matrix whether or not WE transcribe).
- *  "Transcrire mon micro" only controls OUR OWN engine; "Résumer" runs the
- *  local LLM over everything received and posts the minutes to the chat. */
+/** Meeting transcript — right side panel (MemberPanel-style column),
+ *  organized around the session lifecycle: the "Direct" tab shows ONE
+ *  primary action matching the current state (start / join invitation /
+ *  waiting / recording), and the summary/export artifacts only surface
+ *  once a session is over. The "Historique" tab lists past sessions
+ *  (durable Matrix events, visible to every room member). */
 export function TranscriptPanel() {
   const { t } = useTranslation();
   const panelOpen = useTranscriptStore((s) => s.panelOpen);
@@ -37,22 +38,40 @@ export function TranscriptPanel() {
   const armedPeers = useTranscriptStore((s) => s.armedPeers);
   const allEntries = useTranscriptStore((s) => (connectedVoice ? s.entries[connectedVoice] : undefined)) || [];
   const session = useTranscriptStore((s) => (connectedVoice ? s.sessions[connectedVoice] : undefined)) || null;
-  // Scope the view to the current session once one exists (legacy untagged
-  // segments stay visible); before any session, show everything received.
-  const entries = session
-    ? allEntries.filter((e) => !e.sessionId || e.sessionId === session.id)
-    : allEntries;
-  const sendFile = useMatrixStore((s) => s.sendFile);
-  const listRef = useRef<HTMLDivElement>(null);
-  const pinnedToBottom = useRef(true);
+  const history = useTranscriptStore((s) => (connectedVoice ? s.history[connectedVoice] : undefined)) || [];
+  const summaries = useTranscriptStore((s) => (connectedVoice ? s.summaries[connectedVoice] : undefined)) || {};
+
+  const [tab, setTab] = useState<"live" | "history">("live");
+  const [viewedId, setViewedId] = useState<string | null>(null);
+  const [histLoading, setHistLoading] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [exported, setExported] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const pinnedToBottom = useRef(true);
+
+  const viewedSession = viewedId ? history.find((h) => h.id === viewedId) || null : null;
+  // The summary linked to the session being looked at (past or live).
+  const scopedSession = viewedSession ?? session;
+  const linkedSummary = scopedSession ? summaries[scopedSession.id] : undefined;
+  // Scope the view: a selected past session shows only its segments; live
+  // mode scopes to the current (or freshly ended, <12 h) session once one
+  // exists (untagged segments from pre-session clients stay accepted there
+  // for mixed-version meetings). Without any session the live view shows
+  // nothing: stray pre-session segments and the past sessions loaded by
+  // the deep history backfill both belong to the history tab.
+  const entries = viewedSession
+    ? allEntries.filter((e) => e.sessionId === viewedSession.id)
+    : session
+      ? allEntries.filter((e) => !e.sessionId || e.sessionId === session.id)
+      : [];
 
   // Auto-scroll on new entries unless the user scrolled up to read back.
   useEffect(() => {
     const el = listRef.current;
-    if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [entries.length]);
+    if (el && pinnedToBottom.current && tab === "live") el.scrollTop = el.scrollHeight;
+  }, [entries.length, tab]);
 
   // Reload the transcript from the room history: a page reload wipes the
   // in-memory store and a late joiner has nothing — but every segment and
@@ -65,6 +84,22 @@ export function TranscriptPanel() {
     });
   }, [connectedVoice]);
 
+  // Back to the live tab when switching voice channel.
+  useEffect(() => {
+    setTab("live");
+    setViewedId(null);
+    setMenuOpen(false);
+  }, [connectedVoice]);
+
+  // A past session reads top-down; don't auto-stick to the bottom.
+  useEffect(() => {
+    setShowSummary(false);
+    if (viewedId && listRef.current) {
+      pinnedToBottom.current = false;
+      listRef.current.scrollTop = 0;
+    }
+  }, [viewedId]);
+
   if (!panelOpen || !connectedVoice) return null;
 
   const busy = engineState === "starting";
@@ -76,17 +111,27 @@ export function TranscriptPanel() {
   // everyone's transcript (it arrives over Matrix) but can't feed/summarize.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const canTranscribe = typeof (globalThis as any).__TAURI_INTERNALS__ !== "undefined";
+  const micCount = armedPeers.length + (running || armed ? 1 : 0);
 
-  const handleToggleEngine = () => {
-    if (running || armed) {
-      disarmTranscription(connectedVoice);
-    } else {
-      armTranscription(connectedVoice).catch((err) => {
-        console.error("[Sion][transcribe] arm failed:", err);
-        useTranscriptStore.getState().setState("error", String(err?.message || err));
-      });
-    }
+  const openHistoryTab = () => {
+    setTab("history");
+    setViewedId(null);
+    setHistLoading(true);
+    // Deep backfill: sessions live in the durable timeline, go look for
+    // them (bounded: 30 days / 40 pages).
+    backfillTranscript(connectedVoice, Date.now() - 30 * 24 * 3600 * 1000, 40)
+      .catch((err) => console.warn("[Sion][transcribe] history backfill failed:", err))
+      .finally(() => setHistLoading(false));
   };
+
+  const handleArm = () => {
+    armTranscription(connectedVoice).catch((err) => {
+      console.error("[Sion][transcribe] arm failed:", err);
+      useTranscriptStore.getState().setState("error", String(err?.message || err));
+    });
+  };
+
+  const handleStopMine = () => disarmTranscription(connectedVoice);
 
   const handleEndForAll = () => {
     endSessionForAll(connectedVoice).catch((err) => {
@@ -96,7 +141,7 @@ export function TranscriptPanel() {
 
   const handleSummarize = () => {
     setSummaryError(null);
-    summarizeMeeting(connectedVoice).catch((err) => {
+    summarizeMeeting(connectedVoice, viewedSession?.id).catch((err) => {
       console.error("[Sion][summary] failed:", err);
       setSummaryError(String(err?.message || err));
     });
@@ -105,11 +150,12 @@ export function TranscriptPanel() {
   const handleExport = async () => {
     if (!entries.length) return;
     const channelName = useMatrixStore.getState().channels.find((c) => c.id === connectedVoice)?.name || "reunion";
+    const refDate = viewedSession ? new Date(viewedSession.ts) : new Date();
     const lines = entries.map((e) => `- **${e.senderName}** (${fmtTime(e.t0)}) : ${e.text}`);
-    const md = `# ${t("transcript.exportTitle", { defaultValue: "Transcription" })} — ${channelName} — ${new Date().toLocaleDateString()}\n\n${lines.join("\n")}\n`;
-    const file = new File([md], `transcript-${channelName}-${new Date().toISOString().slice(0, 10)}.md`, { type: "text/markdown" });
+    const md = `# ${t("transcript.exportTitle", { defaultValue: "Transcription" })} — ${channelName} — ${refDate.toLocaleDateString()}\n\n${lines.join("\n")}\n`;
+    const file = new File([md], `transcript-${channelName}-${refDate.toISOString().slice(0, 10)}.md`, { type: "text/markdown" });
     try {
-      await sendFile(connectedVoice, file);
+      await useMatrixStore.getState().sendFile(connectedVoice, file);
       setExported(true);
       setTimeout(() => setExported(false), 2000);
     } catch (err) {
@@ -117,16 +163,33 @@ export function TranscriptPanel() {
     }
   };
 
-  const statusDot = engineState === "on" ? "var(--color-green)" : engineState === "starting" || engineState === "armed" ? "#ff9800" : engineState === "error" ? "var(--color-error)" : "var(--color-outline)";
+  const statusDot = running ? "var(--color-error)" : armed ? "#ff9800" : engineState === "error" ? "var(--color-error)" : "var(--color-outline)";
 
-  const actionBtn = (label: string, onClick: () => void, opts?: { danger?: boolean; disabled?: boolean; title?: string }) => (
+  const primaryBtn = (label: string, onClick: () => void, opts?: { disabled?: boolean }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={opts?.disabled}
+      style={{
+        width: '100%', padding: '9px 12px', borderRadius: 10, border: 'none',
+        fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+        cursor: opts?.disabled ? 'default' : 'pointer',
+        opacity: opts?.disabled ? 0.55 : 1,
+        background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+      }}
+    >{label}</button>
+  );
+
+  const smallBtn = (label: string, onClick: () => void, opts?: { danger?: boolean; disabled?: boolean; title?: string; grow?: boolean }) => (
     <button
       type="button"
       onClick={onClick}
       disabled={opts?.disabled}
       title={opts?.title}
       style={{
-        width: '100%', padding: '7px 10px', borderRadius: 8, border: 'none',
+        flex: opts?.grow ? 1 : undefined,
+        width: opts?.grow ? undefined : '100%',
+        padding: '7px 10px', borderRadius: 8, border: 'none',
         fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
         cursor: opts?.disabled ? 'default' : 'pointer',
         opacity: opts?.disabled ? 0.55 : 1,
@@ -135,6 +198,94 @@ export function TranscriptPanel() {
         transition: 'background 150ms',
       }}
     >{label}</button>
+  );
+
+  const tabBtn = (key: "live" | "history", label: string, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: 1, padding: '6px 0', border: 'none', cursor: 'pointer',
+        fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+        borderRadius: 8,
+        background: tab === key ? 'var(--color-surface-container-highest)' : 'transparent',
+        color: tab === key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+      }}
+    >{label}</button>
+  );
+
+  /** Summary / export actions — surfaced once there is something to act on. */
+  const artifactsFooter = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderTop: '1px solid var(--color-outline-variant)' }}>
+      {!viewedSession && session?.endedAt != null && (
+        <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
+          ✓ {t("transcript.sessionEnded", { time: fmtTime(session.endedAt), defaultValue: "Session terminée à {{time}}" })}
+        </div>
+      )}
+      {linkedSummary && smallBtn(
+        showSummary
+          ? t("transcript.hideSummary", { defaultValue: "Masquer le résumé" })
+          : t("transcript.viewSummary", { defaultValue: "Voir le résumé" }),
+        () => setShowSummary((v) => !v),
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        {canTranscribe && smallBtn(
+          summaryState === "downloading"
+            ? `${t("transcript.summaryDownloading", { defaultValue: "Téléchargement IA…" })} ${summaryPct ?? 0}%`
+            : summaryState === "running"
+              ? t("transcript.summarizing", { defaultValue: "Résumé en cours…" })
+              : t("transcript.summarize", { defaultValue: "Résumer" }),
+          handleSummarize,
+          { grow: true, disabled: summaryBusy || !entries.length, title: t("transcript.summarizeHint", { defaultValue: "Génère un compte-rendu (IA locale) et le poste dans le chat" }) },
+        )}
+        {smallBtn(
+          exported ? "✓" : t("transcript.export", { defaultValue: "Exporter .md" }),
+          handleExport,
+          { grow: true, disabled: !entries.length, title: t("transcript.exportHint", { defaultValue: "Envoie le transcript en .md dans le chat" }) },
+        )}
+      </div>
+      {summaryError && (
+        <div style={{ fontSize: 11, color: 'var(--color-error)' }}>{summaryError}</div>
+      )}
+    </div>
+  );
+
+  const transcriptList = (
+    <div
+      ref={listRef}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+      style={{ overflowY: 'auto', flex: 1, padding: '8px 12px 12px', fontSize: 13, color: 'var(--color-on-surface)' }}
+    >
+      {showSummary && linkedSummary && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px', borderRadius: 10,
+          background: 'var(--color-surface-container-high)',
+          fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+        }}>
+          {linkedSummary.text}
+        </div>
+      )}
+      {entries.length === 0 ? (
+        <div style={{ paddingTop: 8, fontSize: 12, color: 'var(--color-on-surface-variant)', lineHeight: 1.5 }}>
+          {viewedSession
+            ? t("transcript.sessionNoSegments", { defaultValue: "Aucun segment retrouvé pour cette session." })
+            : t("transcript.empty", { defaultValue: "Aucun segment pour l'instant." })}
+        </div>
+      ) : (
+        entries.map((e) => (
+          <div key={e.id} style={{ marginBottom: 8, lineHeight: 1.4 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span style={{ color: colorForIdentity(e.senderId), fontWeight: 600, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.senderName}</span>
+              <span style={{ color: 'var(--color-outline)', fontSize: 10, flexShrink: 0 }}>{fmtTime(e.t0)}</span>
+            </div>
+            <div style={{ overflowWrap: 'break-word' }}>{e.text}</div>
+          </div>
+        ))
+      )}
+    </div>
   );
 
   return (
@@ -148,120 +299,199 @@ export function TranscriptPanel() {
       overflow: 'hidden',
     }}>
       {/* Header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '10px 14px',
-        borderBottom: '1px solid var(--color-outline-variant)',
-      }}>
-        <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusDot, flexShrink: 0 }} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', flex: 1, minWidth: 0 }}>
-          {t("transcript.title", { defaultValue: "Transcription" })}
-          {sessionActive && (
-            <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: 'var(--color-on-surface-variant)' }}>
-              {t("transcript.sessionSince", { time: fmtTime(session!.ts), defaultValue: "Session depuis {{time}}" })}
-            </span>
-          )}
-          {session?.endedAt != null && (
-            <span style={{ display: 'block', fontSize: 10, fontWeight: 400, color: 'var(--color-on-surface-variant)' }}>
-              {t("transcript.sessionEnded", { time: fmtTime(session.endedAt), defaultValue: "Session terminée à {{time}}" })}
-            </span>
-          )}
-        </span>
-        <button
-          onClick={() => setPanelOpen(false)}
-          title={t("members.close", { defaultValue: "Fermer" })}
-          style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 18, padding: 2, lineHeight: 1 }}
-        >×</button>
+      <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid var(--color-outline-variant)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusDot, flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', flex: 1 }}>
+            {t("transcript.title", { defaultValue: "Transcription" })}
+          </span>
+          <button
+            onClick={() => setPanelOpen(false)}
+            title={t("members.close", { defaultValue: "Fermer" })}
+            style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 18, padding: 2, lineHeight: 1 }}
+          >×</button>
+        </div>
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 4, background: 'var(--color-surface-container)', borderRadius: 10, padding: 3 }}>
+          {tabBtn("live", t("transcript.tabLive", { defaultValue: "Direct" }), () => { setTab("live"); setViewedId(null); })}
+          {tabBtn("history", t("transcript.tabHistory", { defaultValue: "Historique" }), openHistoryTab)}
+        </div>
       </div>
 
-      {/* Actions */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--color-outline-variant)' }}>
-        {/* Invitation: someone is waiting for a second participant. */}
-        {armedPeers.length > 0 && !sessionActive && !running && !armed && (
-          <div style={{
-            fontSize: 12, lineHeight: 1.45, padding: '8px 10px', borderRadius: 8,
-            background: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)',
-          }}>
-            {t("transcript.invitation", {
-              name: armedPeers.map((p) => p.name).join(", "),
-              defaultValue: "🎙️ {{name}} souhaite lancer la transcription — cliquez « Participer » pour la démarrer.",
-            })}
-          </div>
-        )}
-        {canTranscribe && actionBtn(
-          running
-            ? t("transcript.stopMine", { defaultValue: "Arrêter mon micro" })
-            : armed
-              ? t("transcript.cancelArm", { defaultValue: "Annuler (en attente d'un 2e participant…)" })
-              : t("transcript.join", { defaultValue: "Participer à la transcription" }),
-          handleToggleEngine,
-          { danger: running || armed, disabled: busy },
-        )}
-        {canTranscribe && sessionActive && actionBtn(
-          t("transcript.endForAll", { defaultValue: "Terminer pour tous" }),
-          handleEndForAll,
-          { danger: true, title: t("transcript.endForAllHint", { defaultValue: "Met fin à la session de transcription pour tous les participants" }) },
-        )}
-        {armed && (
-          <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', lineHeight: 1.4 }}>
-            {t("transcript.waitingPeer", { defaultValue: "La transcription démarrera quand un 2e participant cliquera « Participer »." })}
-          </div>
-        )}
-        {canTranscribe && actionBtn(
-          summaryState === "downloading"
-            ? `${t("transcript.summaryDownloading", { defaultValue: "Téléchargement IA…" })} ${summaryPct ?? 0}%`
-            : summaryState === "running"
-              ? t("transcript.summarizing", { defaultValue: "Résumé en cours…" })
-              : t("transcript.summarize", { defaultValue: "Résumer la réunion" }),
-          handleSummarize,
-          {
-            disabled: summaryBusy || !entries.length,
-            title: t("transcript.summarizeHint", { defaultValue: "Génère un compte-rendu (IA locale) et le poste dans le chat" }),
-          },
-        )}
-        {actionBtn(
-          exported ? "✓" : t("transcript.export", { defaultValue: "Exporter .md" }),
-          handleExport,
-          { disabled: !entries.length, title: t("transcript.exportHint", { defaultValue: "Envoie le transcript en .md dans le chat" }) },
-        )}
-        {downloadPct != null && downloadPct < 100 && (
-          <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
-            {t("transcript.downloading", { defaultValue: "téléchargement du modèle…" })} {downloadPct}%
-          </div>
-        )}
-        {engineState === "error" && engineError && (
-          <div style={{ fontSize: 11, color: 'var(--color-error)' }}>{engineError}</div>
-        )}
-        {summaryError && (
-          <div style={{ fontSize: 11, color: 'var(--color-error)' }}>{summaryError}</div>
-        )}
-      </div>
-
-      {/* Entries */}
-      <div
-        ref={listRef}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-        }}
-        style={{ overflowY: 'auto', flex: 1, padding: '8px 12px 12px', fontSize: 13, color: 'var(--color-on-surface)' }}
-      >
-        {entries.length === 0 ? (
-          <div style={{ paddingTop: 8, fontSize: 12, color: 'var(--color-on-surface-variant)', lineHeight: 1.5 }}>
-            {t("transcript.empty", { defaultValue: "Aucun segment pour l'instant. Cliquez « Participer à la transcription » — elle démarre dès que deux participants l'ont activée, chacun transcrivant sa propre voix, localement." })}
-          </div>
-        ) : (
-          entries.map((e) => (
-            <div key={e.id} style={{ marginBottom: 8, lineHeight: 1.4 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                <span style={{ color: colorForIdentity(e.senderId), fontWeight: 600, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.senderName}</span>
-                <span style={{ color: 'var(--color-outline)', fontSize: 10, flexShrink: 0 }}>{fmtTime(e.t0)}</span>
+      {tab === "live" ? (
+        <>
+          {/* State zone — one primary action per lifecycle state. */}
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-outline-variant)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {sessionActive ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-error)', flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: 'var(--color-on-surface)', flex: 1, minWidth: 0 }}>
+                  {t("transcript.sessionSince", { time: fmtTime(session!.ts), defaultValue: "Session depuis {{time}}" })}
+                  <span style={{ display: 'block', fontSize: 10, color: 'var(--color-on-surface-variant)' }}>
+                    {t("transcript.micCount", { count: micCount, defaultValue: "{{count}} micros actifs" })}
+                    {!running && !armed ? ` · ${t("transcript.notTranscribing", { defaultValue: "votre micro n'est pas transcrit" })}` : ""}
+                  </span>
+                </span>
+                {canTranscribe && (
+                  <button
+                    type="button"
+                    onClick={() => setMenuOpen((v) => !v)}
+                    title={t("transcript.sessionActions", { defaultValue: "Actions de session" })}
+                    style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 16, padding: '0 4px', lineHeight: 1 }}
+                  >⋯</button>
+                )}
+                {menuOpen && (
+                  <>
+                    <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setMenuOpen(false)} />
+                    <div style={{
+                      position: 'absolute', right: 0, top: '100%', zIndex: 41, marginTop: 4,
+                      background: 'var(--color-surface-container-high)', borderRadius: 10,
+                      boxShadow: '0 4px 16px rgba(0,0,0,0.35)', padding: 4, minWidth: 180,
+                      display: 'flex', flexDirection: 'column', gap: 2,
+                    }}>
+                      {smallBtn(
+                        running
+                          ? t("transcript.stopMine", { defaultValue: "Arrêter mon micro" })
+                          : t("transcript.startMine", { defaultValue: "Transcrire mon micro" }),
+                        () => { setMenuOpen(false); if (running) handleStopMine(); else handleArm(); },
+                        { disabled: busy },
+                      )}
+                      {smallBtn(
+                        t("transcript.endForAll", { defaultValue: "Terminer pour tous" }),
+                        () => { setMenuOpen(false); handleEndForAll(); },
+                        { danger: true, title: t("transcript.endForAllHint", { defaultValue: "Met fin à la session de transcription pour tous les participants" }) },
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
-              <div style={{ overflowWrap: 'break-word' }}>{e.text}</div>
+            ) : armed ? (
+              <>
+                <div style={{ fontSize: 12, lineHeight: 1.45, padding: '8px 10px', borderRadius: 8, background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface-variant)' }}>
+                  {t("transcript.waitingPeer", { defaultValue: "La transcription démarrera quand un 2e participant cliquera « Participer »." })}
+                </div>
+                {smallBtn(t("transcript.cancel", { defaultValue: "Annuler" }), handleStopMine, { danger: true })}
+              </>
+            ) : (
+              <>
+                {armedPeers.length > 0 && (
+                  <div style={{
+                    fontSize: 12, lineHeight: 1.45, padding: '8px 10px', borderRadius: 8,
+                    background: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)',
+                  }}>
+                    {t("transcript.invitation", {
+                      name: armedPeers.map((p) => p.name).join(", "),
+                      defaultValue: "{{name}} souhaite lancer la transcription.",
+                    })}
+                  </div>
+                )}
+                {canTranscribe && primaryBtn(
+                  armedPeers.length > 0
+                    ? t("transcript.joinInvite", { defaultValue: "Rejoindre la transcription" })
+                    : t("transcript.start", { defaultValue: "Démarrer la transcription" }),
+                  handleArm,
+                  { disabled: busy },
+                )}
+                {canTranscribe && armedPeers.length === 0 && (
+                  <div style={{ fontSize: 10, color: 'var(--color-on-surface-variant)', lineHeight: 1.4 }}>
+                    {t("transcript.startHint", { defaultValue: "Démarre dès que deux participants l'ont activée — chacun transcrit sa propre voix, localement." })}
+                  </div>
+                )}
+              </>
+            )}
+            {downloadPct != null && downloadPct < 100 && (
+              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
+                {t("transcript.downloading", { defaultValue: "téléchargement du modèle…" })} {downloadPct}%
+              </div>
+            )}
+            {engineState === "error" && engineError && (
+              <div style={{ fontSize: 11, color: 'var(--color-error)' }}>{engineError}</div>
+            )}
+          </div>
+
+          {transcriptList}
+
+          {/* Artifacts appear once the meeting is over (or for leftover
+              segments outside any active session). */}
+          {entries.length > 0 && !sessionActive && artifactsFooter}
+        </>
+      ) : viewedSession ? (
+        <>
+          {/* One past session */}
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--color-outline-variant)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {smallBtn(`← ${t("transcript.backToSessions", { defaultValue: "Toutes les sessions" })}`, () => setViewedId(null))}
+            <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
+              {new Date(viewedSession.ts).toLocaleDateString()} · {fmtTime(viewedSession.ts)}
+              {viewedSession.endedAt != null ? `–${fmtTime(viewedSession.endedAt)}` : ""}
             </div>
-          ))
-        )}
-      </div>
+          </div>
+          {transcriptList}
+          {artifactsFooter}
+        </>
+      ) : (
+        /* Session list */
+        <div style={{ overflowY: 'auto', flex: 1, padding: '8px 12px 12px' }}>
+          {histLoading && (
+            <div style={{ padding: '6px 0', fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
+              {t("transcript.historyLoading", { defaultValue: "Recherche des sessions…" })}
+            </div>
+          )}
+          {!histLoading && history.length === 0 ? (
+            <div style={{ paddingTop: 8, fontSize: 12, color: 'var(--color-on-surface-variant)', lineHeight: 1.5 }}>
+              {t("transcript.historyEmpty", { defaultValue: "Aucune session de transcription trouvée dans les 30 derniers jours." })}
+            </div>
+          ) : (
+            history.map((h) => {
+              const count = allEntries.filter((e) => e.sessionId === h.id).length;
+              const ongoing = h.endedAt == null && session?.id === h.id && sessionActive;
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => setViewedId(h.id)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                    width: '100%', textAlign: 'left', marginBottom: 6,
+                    padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                    background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>
+                      {new Date(h.ts).toLocaleDateString()} · {fmtTime(h.ts)}
+                      {h.endedAt != null
+                        ? `–${fmtTime(h.endedAt)}`
+                        : ongoing
+                          ? ` · ${t("transcript.sessionOngoing", { defaultValue: "en cours" })}`
+                          : ""}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
+                      {t("transcript.segmentCount", { count, defaultValue: "{{count}} segments" })}
+                      {h.startedBy ? ` · ${h.startedBy.replace(/^@/, "").split(":")[0]}` : ""}
+                    </div>
+                  </div>
+                  {summaries[h.id] && (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      background: 'var(--color-tertiary-container)',
+                      color: 'var(--color-on-tertiary-container)',
+                      borderRadius: 6,
+                      padding: '1px 6px',
+                      flexShrink: 0,
+                    }}>
+                      {t("transcript.summaryAvailable", { defaultValue: "résumé" })}
+                    </span>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
     </aside>
   );
 }

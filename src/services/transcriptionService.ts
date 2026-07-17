@@ -334,6 +334,13 @@ export function handleSessionEvent(roomId: string, action: "start" | "end", id: 
   const store = useTranscriptStore.getState();
   const cur = store.sessions[roomId];
 
+  // Every sighting feeds the history, including starts too stale to adopt
+  // as the live session below.
+  store.upsertHistorySession(
+    roomId,
+    action === "start" ? { id, ts, startedBy: sender } : { id, endedAt: ts },
+  );
+
   if (action === "start") {
     if (Date.now() - ts > SESSION_FRESHNESS_MS) return; // stale history
     if (cur && !cur.endedAt) {
@@ -454,10 +461,12 @@ const MAX_TRANSCRIPT_CHARS = 24_000;
 
 /** Generate meeting minutes from the room's transcript and post them into
  *  the room's chat. Downloads the summary assets on first use. */
-export async function summarizeMeeting(roomId: string): Promise<void> {
+export async function summarizeMeeting(roomId: string, sessionId?: string): Promise<void> {
   if (!isTauri()) throw new Error("desktop only");
   const store = useTranscriptStore.getState();
-  const entries = useTranscriptStore.getState().entries[roomId] || [];
+  let entries = useTranscriptStore.getState().entries[roomId] || [];
+  // Scoped to one (past) session when the history view asks for it.
+  if (sessionId) entries = entries.filter((e) => e.sessionId === sessionId);
   if (!entries.length || store.summaryState !== "idle") return;
 
   try {
@@ -477,9 +486,12 @@ export async function summarizeMeeting(roomId: string): Promise<void> {
     const lang = useSettingsStore.getState().language || "fr";
     const md = await invoke<string>("summarize_transcript", { transcript, lang });
 
-    const { useMatrixStore } = await import("../stores/useMatrixStore");
     const title = lang.startsWith("en") ? "## 📝 Meeting summary" : "## 📝 Résumé de la réunion";
-    await useMatrixStore.getState().sendMessage(roomId, `${title}\n\n${md}`);
+    // Tag the message with the session it covers (explicit for a history
+    // re-summarize, otherwise the room's current session) so the history
+    // view can link back to it.
+    const taggedSession = sessionId ?? useTranscriptStore.getState().sessions[roomId]?.id;
+    await matrixService.sendSummaryMessage(roomId, `${title}\n\n${md}`, taggedSession);
   } finally {
     useTranscriptStore.getState().setSummaryState("idle");
   }

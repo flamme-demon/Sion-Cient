@@ -80,6 +80,18 @@ export function SettingsPanel() {
       .catch(() => setYtdlpVer(null));
   }, []);
   useEffect(() => { redetectYtdlp(); }, [ytdlpPath, redetectYtdlp]);
+  // llama.cpp (IA de résumé) : { current, latest, vulkan } — null pendant le
+  // chargement ou hors Tauri.
+  const [llamaVer, setLlamaVer] = useState<{ current: string | null; latest: string | null; vulkan: boolean } | null>(null);
+  const [llamaInstall, setLlamaInstall] = useState<number | string | null>(null);
+  const redetectLlama = useCallback(() => {
+    setLlamaVer(null);
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<string>("llama_versions"))
+      .then((raw) => setLlamaVer(JSON.parse(raw)))
+      .catch(() => setLlamaVer(null));
+  }, []);
+  useEffect(() => { redetectLlama(); }, [redetectLlama]);
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
@@ -92,8 +104,6 @@ export function SettingsPanel() {
   const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
   const setAutoJoinVoice = useSettingsStore((s) => s.setAutoJoinVoice);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
-  const transcribeLang = useSettingsStore((s) => s.transcribeLang);
-  const setTranscribeLang = useSettingsStore((s) => s.setTranscribeLang);
   const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
   const screenShareAudio = useSettingsStore((s) => s.screenShareAudio);
   const setScreenShareAudio = useSettingsStore((s) => s.setScreenShareAudio);
@@ -726,17 +736,7 @@ export function SettingsPanel() {
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.transcribeTitle")}</div>
             <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2, marginBottom: 12 }}>{t("settings.transcribeDesc")}</div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <TranscribeModelPicker selectStyle={selectStyle} />
-              <div style={{ flex: 1, minWidth: 140 }}>
-                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeLang")}</div>
-                <select value={transcribeLang} onChange={(e) => setTranscribeLang(e.target.value as "auto" | "fr" | "en")} style={selectStyle}>
-                  <option value="auto">{t("settings.transcribeLangAuto")}</option>
-                  <option value="fr">{t("settings.languageFr")}</option>
-                  <option value="en">{t("settings.languageEn")}</option>
-                </select>
-              </div>
-            </div>
+            <TranscribeModelPicker selectStyle={selectStyle} />
           </div>
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={voiceChannelSounds ? { ...rowStyle, marginBottom: 8 } : rowStyle}>
@@ -962,6 +962,65 @@ export function SettingsPanel() {
               })()}
             </div>
 
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 4 }}>IA de résumé (llama.cpp)</div>
+              {(() => {
+                const cur = llamaVer?.current || null;
+                const latest = llamaVer?.latest || null;
+                const upToDate = !!cur && !!latest && cur === latest;
+                const updateAvail = !!cur && !!latest && cur !== latest;
+                const installing = typeof llamaInstall === "number";
+                return (<>
+                <div style={{ fontSize: 11, color: cur ? 'var(--color-green)' : 'var(--color-outline)' }}>
+                  {cur
+                    ? `✓ llama.cpp installé (build ${llamaVer?.vulkan ? "GPU Vulkan" : "CPU"})`
+                    : "llama.cpp non installé — il sera téléchargé au premier résumé de réunion"}
+                </div>
+                {cur && (
+                  <div style={{ fontSize: 11, marginTop: 2, color: updateAvail ? 'var(--color-orange)' : 'var(--color-outline)' }}>
+                    {`Version ${cur}`}
+                    {latest ? (upToDate ? " — à jour" : ` — ${latest} disponible`) : " — dernière version indisponible (hors-ligne ?)"}
+                  </div>
+                )}
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    disabled={installing || upToDate}
+                    onClick={async () => {
+                      setLlamaInstall(0);
+                      try {
+                        const { listen } = await import("@tauri-apps/api/event");
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        const un = await listen<number>("llama-install-progress", (e) => setLlamaInstall(Number(e.payload)));
+                        try {
+                          await invoke("download_llama");
+                        } finally { un(); }
+                        setLlamaInstall(null);
+                        redetectLlama();
+                      } catch (err) {
+                        setLlamaInstall(`Échec : ${String(err)}`);
+                      }
+                    }}
+                    style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: (installing || upToDate) ? 'default' : 'pointer', fontSize: 13, fontFamily: 'inherit', background: updateAvail ? 'var(--color-primary)' : 'var(--color-surface-container-high)', color: updateAvail ? 'var(--color-on-primary)' : 'var(--color-on-surface)', opacity: (installing || upToDate) ? 0.6 : 1 }}
+                  >
+                    {installing
+                      ? `Installation… ${llamaInstall}%`
+                      : !cur
+                        ? "Installer llama.cpp maintenant (~50 Mo)"
+                        : upToDate
+                          ? "llama.cpp à jour"
+                          : updateAvail
+                            ? `Mettre à jour (${latest})`
+                            : "Réinstaller llama.cpp"}
+                  </button>
+                  {typeof llamaInstall === "string" && (
+                    <div style={{ fontSize: 11, marginTop: 4, color: 'var(--color-error)' }}>{llamaInstall}</div>
+                  )}
+                </div>
+                </>);
+              })()}
+            </div>
+
             <button
               onClick={() => {
                 if (window.confirm(t("settings.purgeCacheConfirm"))) {
@@ -1058,6 +1117,8 @@ function TranscribeModelPicker({ selectStyle }: { selectStyle: React.CSSProperti
   const { t } = useTranslation();
   const transcribeModel = useSettingsStore((s) => s.transcribeModel);
   const setTranscribeModel = useSettingsStore((s) => s.setTranscribeModel);
+  const transcribeLang = useSettingsStore((s) => s.transcribeLang);
+  const setTranscribeLang = useSettingsStore((s) => s.setTranscribeLang);
   const asrPct = useTranscriptStore((s) => s.downloadPct);
   const summaryState = useTranscriptStore((s) => s.summaryState);
   const summaryPct = useTranscriptStore((s) => s.summaryPct);
@@ -1093,11 +1154,52 @@ function TranscribeModelPicker({ selectStyle }: { selectStyle: React.CSSProperti
     border: '1px solid var(--color-outline-variant)', borderRadius: 8,
     background: 'transparent', color: 'var(--color-primary)',
     fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-    padding: '4px 10px', cursor: 'pointer', whiteSpace: 'nowrap',
+    padding: '4px 10px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
   };
 
   const asrDownloading = busy === "asr" || (asrPct != null && asrPct < 100);
   const summaryDownloading = busy === "summary" || summaryState === "downloading";
+
+  const HINTS: Record<string, string> = {
+    "whisper-base": t("settings.transcribeModelBaseHint"),
+    "whisper-small": t("settings.transcribeModelSmallHint"),
+    "whisper-medium": t("settings.transcribeModelMediumHint"),
+    "parakeet-v3": t("settings.transcribeModelParakeetHint"),
+  };
+
+  /** One asset line: status on the left, the single relevant action on the
+   *  right — download when absent, delete when present. */
+  const assetRow = (
+    ready: boolean | null | undefined,
+    downloading: boolean,
+    pct: number | null,
+    onDownload: () => void,
+    onDelete: () => void,
+  ) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 6, minHeight: 26 }}>
+      <span style={{ fontSize: 11, color: ready ? 'var(--color-green)' : 'var(--color-on-surface-variant)' }}>
+        {ready == null ? "…" : ready ? `✓ ${t("settings.assetDownloaded")}` : t("settings.assetMissing")}
+      </span>
+      {ready === false && (
+        <button
+          style={{ ...dlBtnStyle, cursor: downloading ? 'wait' : 'pointer' }}
+          disabled={downloading}
+          onClick={onDownload}
+        >
+          {downloading ? `${pct ?? 0}%` : t("settings.assetDownload")}
+        </button>
+      )}
+      {ready === true && (
+        <button
+          style={{ ...dlBtnStyle, color: 'var(--color-error)' }}
+          title={t("settings.assetDeleteHint")}
+          onClick={onDelete}
+        >
+          {t("settings.assetDelete")}
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div style={{ flex: 1, minWidth: 180 }}>
@@ -1108,78 +1210,64 @@ function TranscribeModelPicker({ selectStyle }: { selectStyle: React.CSSProperti
         style={selectStyle}
       >
         {MODELS.map((m) => (
-          <option key={m.key} value={m.key}>
-            {isTauri ? (status[m.key] ? "🟢 " : "⚪ ") : ""}{m.label}
-          </option>
+          <option key={m.key} value={m.key}>{m.label}</option>
         ))}
       </select>
-      {isTauri && status[selected] === false && (
-        <div style={{ marginTop: 6 }}>
-          <button
-            style={{ ...dlBtnStyle, cursor: asrDownloading ? 'wait' : 'pointer' }}
-            disabled={asrDownloading}
-            onClick={() => {
-              setBusy("asr");
-              ensureModelDownloaded(selected)
-                .catch((e) => console.error("[Sion] ASR download failed:", e))
-                .finally(() => setBusy(null));
-            }}
-          >
-            {asrDownloading ? `${asrPct ?? 0}%` : t("settings.assetDownload")}
-          </button>
-        </div>
+      {HINTS[selected] && (
+        <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4 }}>{HINTS[selected]}</div>
       )}
-      {isTauri && status[selected] === true && (
-        <div style={{ marginTop: 6 }}>
-          <button
-            style={{ ...dlBtnStyle, color: 'var(--color-error)' }}
-            title={t("settings.assetDeleteHint")}
-            onClick={() => {
-              setBusy("asr");
-              deleteAsrModel(selected)
-                .catch((e) => console.error("[Sion] ASR delete failed:", e))
-                .finally(() => setBusy(null));
-            }}
-          >
-            🗑️ {t("settings.assetDelete")}
-          </button>
+      {isTauri && assetRow(
+        status[selected],
+        asrDownloading,
+        asrPct,
+        () => {
+          setBusy("asr");
+          ensureModelDownloaded(selected)
+            .catch((e) => console.error("[Sion] ASR download failed:", e))
+            .finally(() => setBusy(null));
+        },
+        () => {
+          setBusy("asr");
+          deleteAsrModel(selected)
+            .catch((e) => console.error("[Sion] ASR delete failed:", e))
+            .finally(() => setBusy(null));
+        },
+      )}
+      {/* Spoken language — Whisper only: Parakeet auto-detects among its 25
+          languages and takes no language option, so hide the select there. */}
+      {selected.startsWith("whisper") && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{t("settings.transcribeLang")}</div>
+          <select value={transcribeLang} onChange={(e) => setTranscribeLang(e.target.value as "auto" | "fr" | "en")} style={selectStyle}>
+            <option value="auto">{t("settings.transcribeLangAuto")}</option>
+            <option value="fr">{t("settings.languageFr")}</option>
+            <option value="en">{t("settings.languageEn")}</option>
+          </select>
         </div>
       )}
       {isTauri && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', flex: 1 }}>
-            {summaryReady == null ? "…" : summaryReady ? "🟢 " : "⚪ "}{t("settings.assetSummary")}
-          </span>
-          {summaryReady === false && (
-            <button
-              style={{ ...dlBtnStyle, cursor: summaryDownloading ? 'wait' : 'pointer' }}
-              disabled={summaryDownloading}
-              onClick={() => {
-                setBusy("summary");
-                ensureSummaryAssets()
-                  .catch((e) => console.error("[Sion] summary assets download failed:", e))
-                  .finally(() => {
-                    useTranscriptStore.getState().setSummaryState("idle");
-                    setBusy(null);
-                  });
-              }}
-            >
-              {summaryDownloading ? `${summaryPct ?? 0}%` : t("settings.assetDownload")}
-            </button>
-          )}
-          {summaryReady === true && (
-            <button
-              style={{ ...dlBtnStyle, color: 'var(--color-error)' }}
-              title={t("settings.assetDeleteHint")}
-              onClick={() => {
-                setBusy("summary");
-                deleteSummaryAssets()
-                  .catch((e) => console.error("[Sion] summary delete failed:", e))
-                  .finally(() => setBusy(null));
-              }}
-            >
-              🗑️ {t("settings.assetDelete")}
-            </button>
+        <div style={{ borderTop: '1px solid var(--color-outline-variant)', marginTop: 10, paddingTop: 10 }}>
+          <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("settings.assetSummary")}</div>
+          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>{t("settings.assetSummaryHint")}</div>
+          {assetRow(
+            summaryReady,
+            summaryDownloading,
+            summaryPct,
+            () => {
+              setBusy("summary");
+              ensureSummaryAssets()
+                .catch((e) => console.error("[Sion] summary assets download failed:", e))
+                .finally(() => {
+                  useTranscriptStore.getState().setSummaryState("idle");
+                  setBusy(null);
+                });
+            },
+            () => {
+              setBusy("summary");
+              deleteSummaryAssets()
+                .catch((e) => console.error("[Sion] summary delete failed:", e))
+                .finally(() => setBusy(null));
+            },
           )}
         </div>
       )}
