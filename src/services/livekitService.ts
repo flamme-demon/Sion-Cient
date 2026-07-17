@@ -1350,6 +1350,33 @@ function broadcastTranscribeArmed() {
   } catch { /* ignore */ }
 }
 
+/** Mirror the armed set (with display names) into the transcript store —
+ *  this is the visible "invitation": the panel pops open on the other
+ *  members' side and shows who is waiting for a second participant.
+ *  Dynamic import: stores must not be pulled in at module load (cycle). */
+function publishArmedPeers() {
+  const peers = Array.from(armedTranscribers).map((identity) => {
+    const p = currentRoom?.remoteParticipants.get(identity);
+    return { identity, name: p ? resolveDisplayName(p) : identity };
+  });
+  import("../stores/useTranscriptStore").then(({ useTranscriptStore }) => {
+    useTranscriptStore.getState().setArmedPeers(peers);
+    // Auto-open the panel as the invitation, but only when someone is
+    // actually waiting and no session is already live (joining mid-session
+    // is a deliberate act, not an invitation).
+    if (peers.length > 0) {
+      import("../stores/useAppStore").then(({ useAppStore }) => {
+        const roomId = useAppStore.getState().connectedVoiceChannel;
+        const st = useTranscriptStore.getState();
+        const session = roomId ? st.sessions[roomId] : null;
+        if (roomId && !st.panelOpen && (!session || session.endedAt)) {
+          st.setPanelOpen(true);
+        }
+      }).catch(() => {});
+    }
+  }).catch(() => {});
+}
+
 function broadcastAfk() {
   if (!currentRoom) return;
   try {
@@ -1997,7 +2024,9 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
         if (parsed.armed === true) armedTranscribers.add(participant.identity);
         else armedTranscribers.delete(participant.identity);
         if (armedTranscribers.size !== before) {
+          console.log(`[Sion][transcribe] ${participant.identity} ${parsed.armed ? "armed" : "disarmed"} (${armedTranscribers.size} remote armed)`);
           armedCallback?.(Array.from(armedTranscribers));
+          publishArmedPeers();
         }
       } catch { /* ignore malformed */ }
       return;
@@ -2014,7 +2043,7 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
   const rebroadcastOnJoin = () => { broadcastAfk(); if (localTranscribeArmed) broadcastTranscribeArmed(); update(); };
   const forgetOnLeave = (p: RemoteParticipant) => {
     remoteDeafenState.delete(p.identity);
-    if (armedTranscribers.delete(p.identity)) armedCallback?.(Array.from(armedTranscribers));
+    if (armedTranscribers.delete(p.identity)) { armedCallback?.(Array.from(armedTranscribers)); publishArmedPeers(); }
     // Per-participant local mute is the only per-peer Set not otherwise purged
     // on leave — a peer who left should not keep a stale local-mute entry.
     locallyMutedIdentities.delete(p.identity);

@@ -43,6 +43,9 @@ interface TranscriptStore {
   entries: Record<string, TranscriptEntry[]>;
   /** Active (or last) session per room. null/absent = none. */
   sessions: Record<string, TranscriptSession | null>;
+  /** Remote participants currently armed ("waiting for a 2nd") in OUR voice
+   *  channel — the visible invitation. Fed by livekitService. */
+  armedPeers: { identity: string; name: string }[];
   /** Whether the transcript panel is visible. */
   panelOpen: boolean;
   /** Our own engine state. */
@@ -63,12 +66,14 @@ interface TranscriptStore {
   setDownloadPct: (pct: number | null) => void;
   setSummaryState: (state: "idle" | "downloading" | "running", pct?: number | null) => void;
   setSession: (roomId: string, session: TranscriptSession | null) => void;
+  setArmedPeers: (peers: { identity: string; name: string }[]) => void;
   clearRoom: (roomId: string) => void;
 }
 
 export const useTranscriptStore = create<TranscriptStore>((set) => ({
   entries: {},
   sessions: {},
+  armedPeers: [],
   panelOpen: false,
   state: "off",
   error: null,
@@ -99,6 +104,7 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
   setSummaryState: (state, pct = null) => set({ summaryState: state, summaryPct: pct }),
   setSession: (roomId, session) =>
     set((s) => ({ sessions: { ...s.sessions, [roomId]: session } })),
+  setArmedPeers: (peers) => set({ armedPeers: peers }),
   clearRoom: (roomId) =>
     set((s) => {
       const entries = { ...s.entries };

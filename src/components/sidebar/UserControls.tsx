@@ -68,6 +68,7 @@ export function UserControls() {
   const { leaveVoiceChannel } = useVoiceChannel();
   const transcriptPanelOpen = useTranscriptStore((s) => s.panelOpen);
   const transcriptState = useTranscriptStore((s) => s.state);
+  const transcriptInvites = useTranscriptStore((s) => s.armedPeers.length);
   // Brief "done" feedback after the user hits the republish-presence recovery.
   const [republished, setRepublished] = useState(false);
 
@@ -199,10 +200,10 @@ export function UserControls() {
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer',
               fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-              background: transcriptPanelOpen || transcriptState === 'on'
+              background: transcriptPanelOpen || transcriptState === 'on' || transcriptInvites > 0
                 ? 'var(--color-secondary-container)'
                 : 'var(--color-surface-container-highest)',
-              color: transcriptPanelOpen || transcriptState === 'on'
+              color: transcriptPanelOpen || transcriptState === 'on' || transcriptInvites > 0
                 ? 'var(--color-on-secondary-container)'
                 : 'var(--color-on-surface)',
               transition: 'background 150ms',
@@ -210,6 +211,13 @@ export function UserControls() {
           >
             <TranscriptIcon active={transcriptState === 'on'} />
             {t("transcript.pill", { defaultValue: "Transcription" })}
+            {/* Someone armed and waiting → visible invitation badge. */}
+            {transcriptInvites > 0 && transcriptState !== 'on' && (
+              <span style={{
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                background: '#ff9800', animation: 'pulse 2s infinite',
+              }} />
+            )}
           </button>
         </div>
       )}

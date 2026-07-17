@@ -566,6 +566,7 @@
     "endForAll": "Terminer pour tous",
     "endForAllHint": "Met fin à la session de transcription pour tous les participants",
     "sessionSince": "Session depuis {{time}}",
-    "sessionEnded": "Session terminée à {{time}}"
+    "sessionEnded": "Session terminée à {{time}}",
+    "invitation": "🎙️ {{name}} souhaite lancer la transcription — cliquez « Participer » pour la démarrer."
   }
 }

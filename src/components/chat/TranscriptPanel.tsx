@@ -33,6 +33,7 @@ export function TranscriptPanel() {
   const summaryState = useTranscriptStore((s) => s.summaryState);
   const summaryPct = useTranscriptStore((s) => s.summaryPct);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
+  const armedPeers = useTranscriptStore((s) => s.armedPeers);
   const allEntries = useTranscriptStore((s) => (connectedVoice ? s.entries[connectedVoice] : undefined)) || [];
   const session = useTranscriptStore((s) => (connectedVoice ? s.sessions[connectedVoice] : undefined)) || null;
   // Scope the view to the current session once one exists (legacy untagged
@@ -163,6 +164,18 @@ export function TranscriptPanel() {
 
       {/* Actions */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--color-outline-variant)' }}>
+        {/* Invitation: someone is waiting for a second participant. */}
+        {armedPeers.length > 0 && !sessionActive && !running && !armed && (
+          <div style={{
+            fontSize: 12, lineHeight: 1.45, padding: '8px 10px', borderRadius: 8,
+            background: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)',
+          }}>
+            {t("transcript.invitation", {
+              name: armedPeers.map((p) => p.name).join(", "),
+              defaultValue: "🎙️ {{name}} souhaite lancer la transcription — cliquez « Participer » pour la démarrer.",
+            })}
+          </div>
+        )}
         {canTranscribe && actionBtn(
           running
             ? t("transcript.stopMine", { defaultValue: "Arrêter mon micro" })
