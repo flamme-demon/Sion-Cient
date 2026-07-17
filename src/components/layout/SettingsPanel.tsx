@@ -12,7 +12,7 @@ import * as livekitService from "../../services/livekitService";
 import { getRawUserMedia } from "../../services/denoiseShim";
 import { VoiceCueEditor } from "../chat/VoiceCueEditor";
 import { ExternalAudioImport } from "../chat/ExternalAudioImport";
-import { isModelDownloaded, ensureModelDownloaded, summaryAssetsStatus, ensureSummaryAssets } from "../../services/transcriptionService";
+import { isModelDownloaded, ensureModelDownloaded, summaryAssetsStatus, ensureSummaryAssets, deleteAsrModel, deleteSummaryAssets } from "../../services/transcriptionService";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
 
 
@@ -1129,6 +1129,22 @@ function TranscribeModelPicker({ selectStyle }: { selectStyle: React.CSSProperti
           </button>
         </div>
       )}
+      {isTauri && status[selected] === true && (
+        <div style={{ marginTop: 6 }}>
+          <button
+            style={{ ...dlBtnStyle, color: 'var(--color-error)' }}
+            title={t("settings.assetDeleteHint")}
+            onClick={() => {
+              setBusy("asr");
+              deleteAsrModel(selected)
+                .catch((e) => console.error("[Sion] ASR delete failed:", e))
+                .finally(() => setBusy(null));
+            }}
+          >
+            🗑️ {t("settings.assetDelete")}
+          </button>
+        </div>
+      )}
       {isTauri && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
           <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', flex: 1 }}>
@@ -1149,6 +1165,20 @@ function TranscribeModelPicker({ selectStyle }: { selectStyle: React.CSSProperti
               }}
             >
               {summaryDownloading ? `${summaryPct ?? 0}%` : t("settings.assetDownload")}
+            </button>
+          )}
+          {summaryReady === true && (
+            <button
+              style={{ ...dlBtnStyle, color: 'var(--color-error)' }}
+              title={t("settings.assetDeleteHint")}
+              onClick={() => {
+                setBusy("summary");
+                deleteSummaryAssets()
+                  .catch((e) => console.error("[Sion] summary delete failed:", e))
+                  .finally(() => setBusy(null));
+              }}
+            >
+              🗑️ {t("settings.assetDelete")}
             </button>
           )}
         </div>

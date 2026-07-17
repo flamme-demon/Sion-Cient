@@ -1163,6 +1163,24 @@ fn asr_model_source(model: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// Remove a downloaded ASR model from disk (settings 🗑️ button). The next
+/// use simply re-downloads it.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn delete_asr_model(app: tauri::AppHandle<TauriRuntime>, model: String) -> Result<(), String> {
+    let (_, file) = asr_model_source(&model).ok_or("modèle inconnu")?;
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models")
+        .join(file);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Path of an ASR model under `<app-data>/models/`, if downloaded.
 /// Same convention as the managed ffmpeg: survives CEF profile purges.
 #[cfg(not(target_os = "android"))]
@@ -2143,7 +2161,7 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder
-        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks, transcribe::transcribe_start, transcribe::transcribe_stop, detect_asr_model, download_asr_model, summarize::detect_summary_assets, summarize::download_llama, summarize::download_summary_model, summarize::summarize_transcript]);
+        .invoke_handler(tauri::generate_handler![update_shortcuts, poll_shortcuts, get_shortcut_ws_port, open_url, open_file_default, download_file, open_local_file, show_in_folder, fetch_link_preview, transcode_video, list_audio_devices, switch_audio_device, set_default_audio, get_default_audio_devices, exit_app, persist_session, load_session, pick_ffmpeg_path, pick_audio_file, read_file_b64, detect_ffmpeg, download_ffmpeg, detect_ytdlp, download_ytdlp, pick_ytdlp_path, ytdlp_versions, probe_url_media, import_url_audio, probe_url_formats, import_url_video, save_imported_audio, start_voice_service, stop_voice_service, cursor_overlay::cursor_overlay_open, cursor_overlay::cursor_overlay_close, cursor_overlay::cursor_overlay_push, cursor_overlay::cursor_overlay_clear, cursor_overlay::cursor_overlay_push_click, system_audio::system_audio_start, system_audio::system_audio_stop, system_audio::system_audio_ws_port, system_audio::system_audio_list_sinks, transcribe::transcribe_start, transcribe::transcribe_stop, detect_asr_model, download_asr_model, delete_asr_model, summarize::detect_summary_assets, summarize::download_llama, summarize::download_summary_model, summarize::summarize_transcript, summarize::delete_summary_assets]);
 
     #[cfg(target_os = "android")]
     let builder = builder

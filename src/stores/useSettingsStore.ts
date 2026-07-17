@@ -104,8 +104,8 @@ interface SettingsState {
   screenShareSourceId: string | null;
   /** ASR model for the local meeting transcription (GGUF via transcribe.cpp,
    *  downloaded on first use): whisper-base ≈64 MB (weak CPUs), whisper-small
-   *  ≈194 MB (default), whisper-medium ≈583 MB (best whisper quality),
-   *  parakeet-v3 ≈549 MB (25 EU languages, much faster on CPU). Legacy
+   *  ≈194 MB, whisper-medium ≈583 MB (best whisper quality),
+   *  parakeet-v3 ≈549 MB (default — 25 EU languages, much faster, excellent French). Legacy
    *  values "base"/"small"/"medium" may persist from the whisper-rs era —
    *  the Rust catalog still accepts them. */
   transcribeModel: "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3";
@@ -197,7 +197,7 @@ export const useSettingsStore = create<SettingsState>()(
       screenShareResolution: "1080p" as const,
       screenShareFramerate: 15 as const,
       screenShareSourceId: null,
-      transcribeModel: "whisper-small",
+      transcribeModel: "parakeet-v3",
       transcribeLang: "auto",
       notificationMode: "mentions" as NotificationMode,
 

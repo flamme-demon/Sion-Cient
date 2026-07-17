@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use tauri::{Emitter, Manager};
 
-use crate::{bin_runs, find_file, hidden_command, TauriRuntime};
+use crate::{find_file, hidden_command, TauriRuntime};
 
 // Qwen3.5-4B (2026) — successor of the Qwen3-4B-Instruct first pick, same
 // ~4B/CPU-friendly class, still ChatML. Suggested by Grégory.
@@ -35,10 +35,22 @@ fn llama_bin_name() -> &'static str {
     if cfg!(target_os = "windows") { "llama-cli.exe" } else { "llama-cli" }
 }
 
+/** `--version` probe with the lib dir wired up — the prebuilt archives ship
+ *  libllama/libggml next to the binary (bin_runs alone can't find them). */
+fn llama_runs(bin: &std::path::Path) -> bool {
+    let mut cmd = hidden_command(bin);
+    cmd.arg("--version");
+    #[cfg(target_os = "linux")]
+    if let Some(parent) = bin.parent() {
+        cmd.env("LD_LIBRARY_PATH", parent);
+    }
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
 fn find_llama(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
     let dir = llama_dir(app)?;
     let bin = find_file(&dir, llama_bin_name())?;
-    bin_runs(&bin.to_string_lossy(), "--version").then_some(bin)
+    llama_runs(&bin).then_some(bin)
 }
 
 fn summary_model_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
@@ -63,13 +75,15 @@ pub fn detect_summary_assets(app: tauri::AppHandle<TauriRuntime>) -> SummaryAsse
     }
 }
 
-/// Download the latest prebuilt llama.cpp (CPU) from the official GitHub
-/// releases and unpack it into `<app-data>/bin/llama/`. Emits
-/// `llama-install-progress` percent events. ~16–18 MB.
+/// Download the latest prebuilt llama.cpp from the official GitHub releases
+/// into `<app-data>/bin/llama/`, emitting `llama-install-progress` events.
+/// Tries the VULKAN build first (GPU: minutes → seconds on any AMD/NVIDIA/
+/// Intel with a Vulkan driver; those builds keep the CPU backend as an
+/// internal fallback), and falls back to the pure-CPU build when the Vulkan
+/// binary can't even start (no libvulkan on the host).
 #[tauri::command]
 pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
     let dir = llama_dir(&app).ok_or("app-data introuvable")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let _ = app.emit("llama-install-progress", 0u64);
 
     let client = reqwest::Client::builder()
@@ -79,24 +93,59 @@ pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<Strin
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Resolve the right asset from the latest release. Names as of b10045:
-    // linux `llama-<tag>-bin-ubuntu-x64.tar.gz`, windows `…-bin-win-cpu-x64.zip`.
     let rel: serde_json::Value = client
         .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
-    let suffix = if cfg!(target_os = "windows") { "bin-win-cpu-x64.zip" } else { "bin-ubuntu-x64.tar.gz" };
-    let url = rel["assets"]
-        .as_array()
-        .and_then(|assets| {
+
+    // Asset names as of b10059. Order = preference.
+    let suffixes: &[&str] = if cfg!(target_os = "windows") {
+        &["bin-win-vulkan-x64.zip", "bin-win-cpu-x64.zip"]
+    } else {
+        &["bin-ubuntu-vulkan-x64.tar.gz", "bin-ubuntu-x64.tar.gz"]
+    };
+
+    let mut last_err = String::from("aucun asset llama.cpp trouvé");
+    for suffix in suffixes {
+        let Some(url) = rel["assets"].as_array().and_then(|assets| {
             assets.iter().find_map(|a| {
                 let name = a["name"].as_str()?;
                 name.ends_with(suffix).then(|| a["browser_download_url"].as_str().map(String::from))?
             })
-        })
-        .ok_or_else(|| format!("asset '*{suffix}' introuvable dans la dernière release llama.cpp"))?;
+        }) else {
+            last_err = format!("asset '*{suffix}' introuvable");
+            continue;
+        };
 
-    let mut resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+        match fetch_and_install_llama(&app, &client, &url, &dir).await {
+            Ok(bin) => {
+                if llama_runs(&bin) {
+                    log::info!("[Sion][summary] llama.cpp installé ({suffix})");
+                    let _ = app.emit("llama-install-progress", 100u64);
+                    return Ok(bin.to_string_lossy().into_owned());
+                }
+                // Vulkan build refused to start (missing libvulkan?) — wipe
+                // and let the loop try the CPU build.
+                log::warn!("[Sion][summary] {suffix} ne démarre pas — essai du build suivant");
+                last_err = format!("{suffix} ne démarre pas sur cette machine");
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            Err(e) => {
+                last_err = e;
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+    }
+    Err(last_err)
+}
+
+async fn fetch_and_install_llama(
+    app: &tauri::AppHandle<TauriRuntime>,
+    client: &reqwest::Client,
+    url: &str,
+    dir: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -117,18 +166,18 @@ pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<Strin
 
     // Fresh unpack (wipe any older build) — the whole archive is kept: the
     // binary needs its shared libs (libllama.so / .dll) next to it.
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let out = hidden_command("tar")
-        .arg("-xf").arg(&archive).arg("-C").arg(&dir)
+        .arg("-xf").arg(&archive).arg("-C").arg(dir)
         .output()
         .map_err(|e| format!("tar introuvable: {e}"))?;
+    let _ = std::fs::remove_file(&archive);
     if !out.status.success() {
         return Err(format!("extraction échouée: {}", String::from_utf8_lossy(&out.stderr)));
     }
-    let _ = std::fs::remove_file(&archive);
 
-    let bin = find_file(&dir, llama_bin_name()).ok_or("llama-cli absent de l'archive")?;
+    let bin = find_file(dir, llama_bin_name()).ok_or("llama-cli absent de l'archive")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -145,8 +194,20 @@ pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<Strin
             }
         }
     }
-    let _ = app.emit("llama-install-progress", 100u64);
-    Ok(bin.to_string_lossy().into_owned())
+    Ok(bin)
+}
+
+/// Remove the summary assets (llama build + LLM model) from disk — frees
+/// ~2.7 GB, next use re-downloads (and picks up newer builds).
+#[tauri::command]
+pub fn delete_summary_assets(app: tauri::AppHandle<TauriRuntime>) -> Result<(), String> {
+    if let Some(dir) = llama_dir(&app) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    if let Some(model) = summary_model_path(&app) {
+        let _ = std::fs::remove_file(model);
+    }
+    Ok(())
 }
 
 /// Download the summary model (Qwen3-4B-Instruct Q4_K_M, ~2.5 GB) into

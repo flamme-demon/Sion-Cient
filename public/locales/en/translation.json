@@ -471,7 +471,9 @@
     "noOtherSessions": "No other active sessions",
     "loadingSessions": "Loading...",
     "purgeCache": "Purge cache",
-    "purgeCacheConfirm": "Clear cache and reload the app? Encryption keys will be preserved."
+    "purgeCacheConfirm": "Clear cache and reload the app? Encryption keys will be preserved.",
+    "assetDelete": "Delete",
+    "assetDeleteHint": "Removes the file from disk — re-downloaded on next use"
   },
   "admin": {
     "title": "Admin Continuwuity",

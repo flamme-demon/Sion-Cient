@@ -395,6 +395,18 @@ export async function isModelDownloaded(model: string): Promise<boolean> {
   return !!(await invoke<string | null>("detect_asr_model", { model }));
 }
 
+/** Remove a downloaded ASR model from disk (settings 🗑️). */
+export async function deleteAsrModel(model: string): Promise<void> {
+  await invoke("delete_asr_model", { model });
+}
+
+/** Remove the summary assets (llama build + LLM, ~2.7 GB) from disk. Also
+ *  the way to upgrade: the next download picks the newest llama build
+ *  (Vulkan-first since it exists). */
+export async function deleteSummaryAssets(): Promise<void> {
+  await invoke("delete_summary_assets");
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — meeting summary (local llama.cpp over the transcript).
 // ---------------------------------------------------------------------------

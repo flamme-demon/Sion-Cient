@@ -471,7 +471,9 @@
     "noOtherSessions": "Aucune autre session active",
     "loadingSessions": "Chargement...",
     "purgeCache": "Purger le cache",
-    "purgeCacheConfirm": "Vider le cache et recharger l'application ? Les clés de chiffrement seront conservées."
+    "purgeCacheConfirm": "Vider le cache et recharger l'application ? Les clés de chiffrement seront conservées.",
+    "assetDelete": "Supprimer",
+    "assetDeleteHint": "Supprime le fichier du disque — retéléchargé au prochain usage"
   },
   "admin": {
     "title": "Admin Continuwuity",
