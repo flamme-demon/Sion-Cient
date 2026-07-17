@@ -4,6 +4,7 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
 import { armTranscription, disarmTranscription, endSessionForAll, summarizeMeeting } from "../../services/transcriptionService";
+import { backfillTranscript } from "../../services/matrixService";
 
 /** Stable per-identity hue (same trick as the cursor overlay) so each
  *  speaker keeps a recognizable color in the transcript. */
@@ -52,6 +53,17 @@ export function TranscriptPanel() {
     const el = listRef.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
   }, [entries.length]);
+
+  // Reload the transcript from the room history: a page reload wipes the
+  // in-memory store and a late joiner has nothing — but every segment and
+  // session event is durable in the Matrix timeline. Idempotent (store
+  // dedups), bounded to the last 12 h.
+  useEffect(() => {
+    if (!connectedVoice) return;
+    backfillTranscript(connectedVoice, Date.now() - 12 * 3600 * 1000).catch((err) => {
+      console.warn("[Sion][transcribe] backfill failed:", err);
+    });
+  }, [connectedVoice]);
 
   if (!panelOpen || !connectedVoice) return null;
 

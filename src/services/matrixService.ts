@@ -857,6 +857,66 @@ export async function sendTranscriptSession(roomId: string, action: "start" | "e
   await matrixClient.sendEvent(roomId, "com.sion.transcript.session" as any, { action, id, ts, v: 1 });
 }
 
+/** Reload transcript history from the room timeline — segments and session
+ *  events are durable Matrix events, but the in-memory store dies on every
+ *  reload (or misses everything for a late joiner). Paginates back until
+ *  events older than `sinceTs`, then routes what it finds:
+ *  - cleartext transcript/session events → store / session handler directly;
+ *  - encrypted events → decryptEventIfNeeded, and the global
+ *    MatrixEventEvent.Decrypted listener routes them once readable.
+ *  Idempotent: the store dedups by id/content signature, the session
+ *  handler by id/endedAt. */
+export async function backfillTranscript(roomId: string, sinceTs: number): Promise<void> {
+  if (!matrixClient) return;
+  const client = matrixClient;
+  const room = client.getRoom(roomId);
+  if (!room) return;
+  const tl = room.getLiveTimeline();
+  // Bounded pagination: 10 × 100 events is plenty for a day of meetings.
+  for (let i = 0; i < 10; i++) {
+    const events = tl.getEvents();
+    const oldest = events[0];
+    if (oldest && (oldest.getTs?.() ?? 0) < sinceTs) break;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const more = await client.paginateEventTimeline(tl as any, { backwards: true, limit: 100 }).catch(() => false);
+    if (!more) break;
+  }
+  const { useTranscriptStore } = await import("../stores/useTranscriptStore");
+  const { handleSessionEvent } = await import("./transcriptionService");
+  for (const ev of tl.getEvents()) {
+    if ((ev.getTs?.() ?? 0) < sinceTs) continue;
+    const type = ev.getType?.();
+    if (type === "m.room.encrypted") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (client as any).decryptEventIfNeeded?.(ev)?.catch?.(() => {});
+      continue;
+    }
+    if (type === "com.sion.transcript.session") {
+      const c = ev.getContent?.();
+      if ((c?.action === "start" || c?.action === "end") && typeof c?.id === "string") {
+        handleSessionEvent(roomId, c.action, c.id, typeof c.ts === "number" ? c.ts : (ev.getTs?.() ?? Date.now()), ev.getSender?.() || "");
+      }
+      continue;
+    }
+    if (type === "com.sion.transcript") {
+      const c = ev.getContent?.();
+      if (typeof c?.text === "string" && c.text) {
+        const senderId = ev.getSender?.() || "";
+        useTranscriptStore.getState().addEntry({
+          id: ev.getId?.() || `${roomId}:${ev.getTs?.()}`,
+          roomId,
+          senderId,
+          senderName: room.getMember?.(senderId)?.name || senderId.replace(/^@/, "").split(":")[0],
+          text: c.text,
+          t0: typeof c.t0 === "number" ? c.t0 : (ev.getTs?.() ?? Date.now()),
+          t1: typeof c.t1 === "number" ? c.t1 : 0,
+          ...(typeof c.session === "string" ? { sessionId: c.session } : {}),
+        });
+      }
+    }
+  }
+}
+
 export async function createOrGetDMRoom(userId: string): Promise<string> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const client = matrixClient;
