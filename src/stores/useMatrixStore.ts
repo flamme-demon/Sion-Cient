@@ -81,7 +81,7 @@ let activeSasCallbacks: ShowSasCallbacks | null = null;
 // fallback when the replied-to message isn't in our cached timeline (e.g. it
 // fell out of the loaded window, or the reply event arrived before the
 // original was processed).
-function extractReplyQuoteBody(body: string): string | undefined {
+export function extractReplyQuoteBody(body: string): string | undefined {
   const lines = body.split("\n");
   const quoteLines: string[] = [];
   for (const l of lines) {
@@ -97,7 +97,7 @@ function extractReplyQuoteBody(body: string): string | undefined {
 }
 
 // Strip Matrix reply fallback from body text (lines starting with "> " until first blank line)
-function stripReplyFallback(body: string): string {
+export function stripReplyFallback(body: string): string {
   const lines = body.split("\n");
   let i = 0;
   while (i < lines.length && lines[i].startsWith("> ")) i++;
@@ -107,7 +107,7 @@ function stripReplyFallback(body: string): string {
 }
 
 // Strip <mx-reply>...</mx-reply> from formatted HTML
-function stripMxReply(html: string): string {
+export function stripMxReply(html: string): string {
   return html.replace(/<mx-reply>[\s\S]*?<\/mx-reply>/gi, "");
 }
 
@@ -369,7 +369,7 @@ function readMText(node: any): string {
 }
 /** Parse an m.poll.start event content (stable or unstable) into PollData. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parsePollStartContent(content: any): PollData | null {
+export function parsePollStartContent(content: any): PollData | null {
   const ps = content?.["m.poll.start"] ?? content?.["org.matrix.msc3381.poll.start"];
   if (!ps || !Array.isArray(ps.answers)) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -387,7 +387,7 @@ function parsePollStartContent(content: any): PollData | null {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractMessagesFromEvents(events: any[], room: any, client: any): ChatMessage[] {
+export function extractMessagesFromEvents(events: any[], room: any, client: any): ChatMessage[] {
   const msgs: ChatMessage[] = [];
   for (const evt of events) {
     const type = evt.getType?.();
