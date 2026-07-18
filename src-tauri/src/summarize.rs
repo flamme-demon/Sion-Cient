@@ -546,3 +546,44 @@ pub fn summarize_transcript(
     }
     Ok(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    // Non-regression for the 40 GB OOM: a binary that streams output forever
+    // on closed stdin (the b10059 llama-cli chat REPL) must be killed once
+    // the capture cap is hit, instead of buffering unbounded RAM.
+    #[test]
+    fn run_bounded_kills_runaway_output() {
+        let mut cmd = Command::new("yes");
+        cmd.arg("> ");
+        let err = run_bounded(cmd).expect_err("runaway output must fail");
+        assert!(err.contains("volumineuse"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn run_bounded_returns_stdout_on_success() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "printf 'resume ok'"]);
+        assert_eq!(run_bounded(cmd).unwrap(), "resume ok");
+    }
+
+    #[test]
+    fn run_bounded_reports_failure_with_stderr_tail() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo boom >&2; exit 3"]);
+        let err = run_bounded(cmd).expect_err("non-zero exit must fail");
+        assert!(err.contains("boom"), "stderr tail missing: {err}");
+    }
+
+    // Closed stdin: a program that blocks reading stdin must see EOF and
+    // exit immediately rather than hanging until the watchdog.
+    #[test]
+    fn run_bounded_closes_stdin() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "cat; printf done"]);
+        assert_eq!(run_bounded(cmd).unwrap(), "done");
+    }
+}
