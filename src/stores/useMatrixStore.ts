@@ -149,7 +149,7 @@ function getAvatarFromSender(sender: string, room: any, client: MatrixClient | n
 
 // Extract voice users from MatrixRTC call member state events (visible without joining the call)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractVoiceUsers(room: any, client: MatrixClient | null): VoiceChannelUser[] {
+export function extractVoiceUsers(room: any, client: MatrixClient | null): VoiceChannelUser[] {
   const callMemberEvents = room.currentState?.getStateEvents?.("org.matrix.msc3401.call.member") || [];
   const events = Array.isArray(callMemberEvents) ? callMemberEvents : [callMemberEvents];
   const seenUserIds = new Set<string>();

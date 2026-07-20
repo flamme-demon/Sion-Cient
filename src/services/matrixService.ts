@@ -4,6 +4,13 @@ import { parseMentions } from "../utils/mentions";
 
 let matrixClient: MatrixClient | null = null;
 
+// Test-only injection point — lets unit tests exercise call.member
+// bookkeeping (sendCallMemberEvent, publishLocalVoiceState, …) without a
+// real login flow. Never called from application code.
+export function __setMatrixClientForTest(client: MatrixClient | null): void {
+  matrixClient = client;
+}
+
 // Cached recovery key (decoded) for the getSecretStorageKey callback
 let cachedSecretStorageKey: Uint8Array | null = null;
 
@@ -549,7 +556,10 @@ let localVoiceState: { muted: boolean; deafened: boolean } = { muted: false, dea
 const PUBLISH_DEBOUNCE_MS = 400;
 let publishTimer: ReturnType<typeof setTimeout> | null = null;
 
-function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: string, deviceId: string, userId: string) {
+// Exported for testability only (regression coverage for the membershipID
+// stability that fixed the v1.3.4 one-way-audio bug) — not part of the
+// service's real entry-point surface.
+export function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: string, deviceId: string, userId: string) {
   return {
     application: "m.call",
     call_id: "",
