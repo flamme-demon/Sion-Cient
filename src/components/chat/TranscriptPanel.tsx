@@ -5,6 +5,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
 import { armTranscription, disarmTranscription, endSessionForAll, summarizeMeeting } from "../../services/transcriptionService";
 import { backfillTranscript } from "../../services/matrixService";
+import { scopeTranscriptEntries } from "../../utils/transcriptScope";
 
 /** Stable per-identity hue (same trick as the cursor overlay) so each
  *  speaker keeps a recognizable color in the transcript. */
@@ -69,17 +70,7 @@ export function TranscriptPanel() {
   // The summary linked to the session being looked at (past or live).
   const scopedSession = viewedSession ?? session;
   const linkedSummary = scopedSession ? summaries[scopedSession.id] : undefined;
-  // Scope the view: a selected past session shows only its segments; live
-  // mode scopes to the current (or freshly ended, <12 h) session once one
-  // exists (untagged segments from pre-session clients stay accepted there
-  // for mixed-version meetings). Without any session the live view shows
-  // nothing: stray pre-session segments and the past sessions loaded by
-  // the deep history backfill both belong to the history tab.
-  const entries = viewedSession
-    ? allEntries.filter((e) => e.sessionId === viewedSession.id)
-    : session
-      ? allEntries.filter((e) => !e.sessionId || e.sessionId === session.id)
-      : [];
+  const entries = scopeTranscriptEntries(allEntries, viewedSession, session);
 
   // Auto-scroll on new entries unless the user scrolled up to read back.
   useEffect(() => {
