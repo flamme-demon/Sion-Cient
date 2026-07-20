@@ -209,7 +209,7 @@ export default function App() {
     if (useSettingsStore.getState().soundboardOpenAtLaunch && !useAppStore.getState().showSoundboardPanel) {
       useAppStore.getState().toggleSoundboardPanel();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // Register push notifications when connected + sync room names for Android

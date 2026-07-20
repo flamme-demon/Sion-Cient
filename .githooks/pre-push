@@ -57,6 +57,9 @@ if [ "$saw_range" = 0 ]; then rust_changed=1; js_changed=1; fi
 echo "▶ pre-push : TypeScript (tsc -b)…"
 bunx tsc -b
 
+echo "▶ pre-push : lint (eslint)…"
+bun run lint
+
 echo "▶ pre-push : tests JS (vitest)…"
 bun run test
 

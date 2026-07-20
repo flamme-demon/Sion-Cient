@@ -1712,7 +1712,7 @@ export async function toggleScreenShare(enabled: boolean, opts?: { sourceId?: st
       manualScreenPublication = await currentRoom.localParticipant.publishTrack(videoTrack, {
         source: Track.Source.ScreenShare,
         name: "screen",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         videoEncoding: p.encoding,
         simulcast: false,
         degradationPreference: "maintain-resolution",

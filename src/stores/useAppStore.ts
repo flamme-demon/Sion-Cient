@@ -143,7 +143,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // truthiness: this is also wired straight to button `onClick` handlers,
     // which inject the click event as the first arg — a truthy object that
     // would otherwise swallow the cue on every manual mute/unmute.
-    if (silent !== true) newMuted ? playMuteCue() : playUnmuteCue();
+    if (silent !== true) {
+      if (newMuted) playMuteCue();
+      else playUnmuteCue();
+    }
     // Mirror into the call.member state event so clients in other voice
     // channels see our mute indicator. Fire-and-forget — the publish is
     // debounced and a failure is purely cosmetic for those other clients.
@@ -158,7 +161,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newDeafened = !get().isDeafened;
     console.log(`[Sion][deafen] toggleDeafen() store: ${get().isDeafened} → ${newDeafened}`);
     set({ isDeafened: newDeafened });
-    newDeafened ? playDeafenCue() : playUndeafenCue();
+    if (newDeafened) playDeafenCue();
+    else playUndeafenCue();
     livekitService.setDeafened(newDeafened);
     matrixService.publishLocalVoiceState({ deafened: newDeafened });
     // Deafen also mutes the mic — silently, so only the deafen cue plays.

@@ -103,6 +103,6 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
     };
     // `micThreshold` intentionally omitted — the ref above carries live
     // updates without re-running the whole capture.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [isMuted, isDeafened, connectedVoice, mutedSpeakAlert, triggerAlert]);
 }

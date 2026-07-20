@@ -975,7 +975,7 @@ export async function createOrGetDMRoom(userId: string): Promise<string> {
   // exists — even when the peer has left a previous copy.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const reuseRoom = async (room: any): Promise<string> => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const peerMember = room.getMember?.(userId);
     const peerMembership = peerMember?.membership;
     if (peerMembership !== "join" && peerMembership !== "invite") {
@@ -1176,7 +1176,7 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
   // would race with sync.
   const adminIds = getServerAdminUserIds();
   const myUserId = matrixClient.getUserId() || "";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const usersPowerLevels: Record<string, number> = {};
   if (myUserId) usersPowerLevels[myUserId] = 100; // Creator must always be admin
   for (const adminId of adminIds) {

@@ -37,7 +37,7 @@ export function AdminStats() {
   // membership shuffles (which usually coincides with presence changes).
   // Cleaner would be a presence-event listener, but that'd add more
   // wiring than this admin-only stat warrants.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   const onlineCount = useMemo(() => {
     const client = getMatrixClient();
     if (!client) return null;

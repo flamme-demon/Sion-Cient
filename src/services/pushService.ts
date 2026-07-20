@@ -35,7 +35,7 @@ export async function syncPushRules(_mode: NotificationMode): Promise<void> {
   try {
     await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_messages").catch(() => {});
     await client.deletePushRule("global", PushRuleKind.Override, "fr.sionchat.suppress_mentions").catch(() => {});
-  } catch {}
+  } catch { /* rules may simply not exist yet */ }
   return;
 }
 

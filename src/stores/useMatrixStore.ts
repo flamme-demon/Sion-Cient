@@ -171,6 +171,7 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
     if (Array.isArray(memberships) && memberships.length > 0) {
       // Filter out expired memberships
       const originTs: number = event.getTs?.() || 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       hasOldFormatActive = memberships.some((m: any) => {
         if (m.expires_ts) return m.expires_ts > now;
         if (m.expires && originTs) return originTs + m.expires > now;
@@ -247,6 +248,7 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
   // Only consider members with active content (non-empty, with application+device_id or memberships[])
   const callMemberEvents = room.currentState?.getStateEvents?.("org.matrix.msc3401.call.member") || [];
   const callMemberArr = Array.isArray(callMemberEvents) ? callMemberEvents : [callMemberEvents];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hasCallMembers = callMemberArr.some((ev: any) => {
     if (!ev?.getContent) return false;
     const c = ev.getContent();
@@ -301,6 +303,7 @@ function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channe
     if (!isDM && room.getJoinedMemberCount() <= 2 && !roomType && !customType) {
       const myUserId = client.getUserId();
       const members = room.getJoinedMembers();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const otherMember = members.find((m: any) => m.userId !== myUserId);
       if (otherMember && members.length === 2) {
         isDM = true;
@@ -716,6 +719,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         // Check device verification status — only show banner if crypto is ready but NOT verified
         const crypto = client.getCrypto();
         if (!crypto) {
+          // Crypto not initialized yet — checked again on the next sync.
         } else {
           verificationChecked = true;
 
@@ -1171,9 +1175,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               onSentCalled = true;
               onSent();
             };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             event.once("Event.localEchoUpdated" as any, guardedOnSent);
             // Fallback: check after a delay
             setTimeout(() => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               event.off("Event.localEchoUpdated" as any, guardedOnSent);
               guardedOnSent();
             }, 3000);
@@ -1521,11 +1527,13 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
             const sender = event.getSender();
             if (sender) {
               try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const directEvent = client.getAccountData("m.direct" as any);
                 const directContent = (directEvent?.getContent() || {}) as Record<string, string[]>;
                 const existing = directContent[sender] || [];
                 if (!existing.includes(roomId)) {
                   directContent[sender] = [...existing, roomId];
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   await client.setAccountData("m.direct" as any, directContent as any);
                 }
               } catch { /* ignore */ }
@@ -1604,7 +1612,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // has changed. We filter to users flagged as "recently joined" and
     // re-share for every room they're in with us. This is the fix for the
     // "newcomer's device keys uploaded after our initial share" race.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     client.on(CryptoEvent.DevicesUpdated, async (userIds: string[]) => {
       if (!userIds || userIds.length === 0) return;
       const myUserId = client.getUserId();
@@ -1648,7 +1656,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // (or simply leaves) — visually noisy, and the room stays alive
     // server-side forever. The peer can re-invite via createOrGetDMRoom's
     // reuseRoom flow if they want to resume the conversation.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     client.on(RoomMemberEvent.Membership, async (event, member) => {
       if (member.membership !== "leave") return;
       const myUserId = client.getUserId();
@@ -1984,7 +1992,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // a backward pagination token only while more events exist on the server.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const liveTimeline = (room as any).getLiveTimeline?.();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const canPaginateBackward = !!liveTimeline?.getPaginationToken?.("b");
 
       set((s) => ({
@@ -2219,7 +2227,7 @@ if (typeof window !== "undefined") {
     // subscribed tracks, and whether audio is actually coming through.
     getLKRoom: () => {
       // Lazy import to avoid a circular dependency at module load.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+       
       return import("../services/livekitService").then(m => m.getCurrentRoom());
     },
     // One-shot dump of LiveKit voice state: self + remotes, with their tracks.

@@ -111,6 +111,7 @@ export function PendingUsers() {
       // Collecter les room IDs qui sont des DM
       const dmRoomIds = new Set<string>();
       try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const directEvent = client?.getAccountData("m.direct" as any);
         const directContent = (directEvent?.getContent() || {}) as Record<string, string[]>;
         for (const ids of Object.values(directContent)) {

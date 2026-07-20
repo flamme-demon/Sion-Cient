@@ -250,6 +250,7 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
       if (client) {
         const myUserId = client.getUserId() || "";
         const myName = client.getUser(myUserId)?.displayName || myUserId;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await client.sendEvent(voiceRoom, "com.sion.voice_kick" as any, {
           kicked_user: matrixUserId,
           kicked_by: myUserId,

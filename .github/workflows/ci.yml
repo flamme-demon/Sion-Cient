@@ -31,6 +31,9 @@ jobs:
         # typecheck of src/ (app) + vite.config.ts (node), tests included.
         run: bunx tsc -b
 
+      - name: Lint
+        run: bun run lint
+
       - name: Unit tests (vitest)
         run: bun run test
 

@@ -246,7 +246,11 @@ export function VerificationBanner() {
             : hasUndecryptableMessages ? t("auth.keysNeeded") : t("auth.verificationNeeded")}
         </span>
         <button
-          onClick={(e) => { e.stopPropagation(); hasActiveIncomingVerification ? cancelVerification() : dismissVerification(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (hasActiveIncomingVerification) cancelVerification();
+            else dismissVerification();
+          }}
           style={{
             background: "transparent", border: "none", cursor: "pointer",
             padding: 4, borderRadius: 8, display: "flex",
