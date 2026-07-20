@@ -92,6 +92,36 @@ bun run dev
 bun run tauri dev
 ```
 
+## Testing
+
+Unit tests cover the non-UI logic: transcript/session store, admin API error
+handling, key-combo parsing, message extraction (edits, replies, reactions,
+polls), mentions, the IndexedDB message cache, and cross-channel voice state
+(`call.member` parsing + the `membershipID` shape that keys MatrixRTC key
+distribution). The Rust side tests the bounded llama runner that guards the
+summariser against runaway output.
+
+```bash
+bun run test              # JS/TS suite (vitest)
+bun run test:watch        # vitest, watch mode
+cd src-tauri && cargo test -j4   # Rust suite
+```
+
+**Typecheck** with `bunx tsc -b` — the root `tsconfig.json` is a solution
+file (references only), so `tsc --noEmit` against it checks nothing.
+
+CI (`.github/workflows/ci.yml`) runs the typecheck + both suites on every
+push and PR to `main`. To run the same gate locally before each push, enable
+the versioned hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The `pre-push` hook typechecks and runs the JS suite on every push, and the
+Rust suite only when something under `src-tauri/` changed. Bypass in a pinch
+with `git push --no-verify`.
+
 ## Build
 
 All build scripts are located in the `build-scripts/` directory.

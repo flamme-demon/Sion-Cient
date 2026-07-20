@@ -25,7 +25,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Typecheck
-        run: bunx tsc --noEmit
+        # `tsc -b` (build mode), NOT `tsc --noEmit`: the root tsconfig is a
+        # solution file (references only), so --noEmit against it checks
+        # nothing. Both referenced projects set noEmit → -b is a pure
+        # typecheck of src/ (app) + vite.config.ts (node), tests included.
+        run: bunx tsc -b
 
       - name: Unit tests (vitest)
         run: bun run test

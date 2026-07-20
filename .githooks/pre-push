@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Pre-push gate for Sion — runs the same checks as .github/workflows/ci.yml
+# locally, so a red push is caught before it leaves the machine instead of
+# after CI reports it. The JS side (tsc + vitest, a few seconds) runs on
+# every push; the Rust side (cargo test) runs only when something under
+# src-tauri/ actually changed, so a TypeScript-only push doesn't pay the
+# cargo test-harness compile.
+#
+# Activated (once per clone) with:  git config core.hooksPath .githooks
+# Bypass in a pinch (discouraged):  git push --no-verify
+set -euo pipefail
+
+ZERO="0000000000000000000000000000000000000000"
+cd "$(git rev-parse --show-toplevel)"
+
+trap 'echo "✖ pre-push : échec — push annulé. Contourner (déconseillé) : git push --no-verify" >&2' ERR
+
+# --- Decide what to test from the ref updates git streams on stdin ---------
+# Each line: <local ref> <local oid> <remote ref> <remote oid>
+rust_changed=0
+js_changed=0
+saw_range=0
+
+while read -r _local_ref local_oid _remote_ref remote_oid; do
+  [ "$local_oid" = "$ZERO" ] && continue   # branch deletion — nothing to test
+
+  if [ "$remote_oid" = "$ZERO" ]; then
+    # New branch on the remote: scope against its merge-base with main. If we
+    # can't resolve one, don't guess — test everything.
+    base="$(git merge-base "$local_oid" origin/main 2>/dev/null || true)"
+    if [ -z "$base" ]; then rust_changed=1; js_changed=1; saw_range=1; continue; fi
+    range="$base..$local_oid"
+  else
+    range="$remote_oid..$local_oid"
+  fi
+  saw_range=1
+
+  files="$(git diff --name-only "$range" 2>/dev/null || true)"
+  if echo "$files" | grep -qE '^src-tauri/.*\.rs$|^src-tauri/Cargo\.(toml|lock)$|^src-tauri/\.cargo/'; then
+    rust_changed=1
+  fi
+  if echo "$files" | grep -qE '\.(ts|tsx)$'; then
+    js_changed=1
+  fi
+done
+
+# Invoked without a range (some GUIs, unusual refspecs): be safe, test all.
+if [ "$saw_range" = 0 ]; then rust_changed=1; js_changed=1; fi
+
+# --- Run the gate ----------------------------------------------------------
+# The JS suite is fast enough to always run — it also guards the many .ts
+# files a "docs only" push might still drag along.
+# `tsc -b` (build mode) is the only form that actually typechecks: the root
+# tsconfig is a solution file (references only), so a plain `tsc --noEmit`
+# against it checks nothing. Both referenced projects set noEmit, so -b is a
+# pure typecheck; its incremental tsbuildinfo keeps repeat runs near-instant.
+echo "▶ pre-push : TypeScript (tsc -b)…"
+bunx tsc -b
+
+echo "▶ pre-push : tests JS (vitest)…"
+bun run test
+
+if [ "$rust_changed" = 1 ]; then
+  echo "▶ pre-push : sources Rust modifiées → cargo test (première fois = compilation)…"
+  ( cd src-tauri && cargo test -j4 )
+else
+  echo "▷ pre-push : aucun changement Rust — cargo test ignoré (la CI le couvre)."
+fi
+
+# js_changed is informational for now (the JS suite always runs); kept so the
+# gate can grow a TS-only fast path later without reworking the detection.
+: "${js_changed}"
+
+echo "✔ pre-push : OK"
