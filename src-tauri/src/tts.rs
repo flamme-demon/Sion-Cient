@@ -264,24 +264,45 @@ pub async fn pick_tts_engine_path() -> Option<String> {
         .map(|h| h.path().to_string_lossy().to_string())
 }
 
-/// Récupère le moteur depuis les releases amont. Windows uniquement : sur les
-/// autres plateformes audio.cpp ne publie pas de binaire, il faut le compiler
-/// (voir le message d'erreur) puis le désigner via `pick_tts_engine_path`.
+/// Archive à récupérer selon la plateforme.
+///
+/// Windows est servi directement par l'amont. Linux et macOS n'ont pas de
+/// binaire publié : ils viennent des releases Sion, alimentées par le workflow
+/// `audiocpp.yml` — qui joint aussi `model_specs/`, indispensable aux modèles
+/// safetensors.
+fn engine_archive_url() -> Option<(&'static str, bool)> {
+    if cfg!(target_os = "windows") {
+        Some((
+            "https://github.com/0xShug0/audio.cpp/releases/latest/download/audiocpp-windows-cpu-balance.zip",
+            true,
+        ))
+    } else if cfg!(target_os = "linux") {
+        Some((
+            "https://github.com/flamme-demon/Sion-Cient/releases/latest/download/audiocpp-linux-x64-vulkan.tar.gz",
+            false,
+        ))
+    } else if cfg!(target_os = "macos") {
+        Some((
+            "https://github.com/flamme-demon/Sion-Cient/releases/latest/download/audiocpp-macos-arm64-metal.tar.gz",
+            false,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Récupère le moteur. En cas d'absence de build publié pour la plateforme,
+/// l'utilisateur peut toujours compiler audio.cpp et désigner son binaire via
+/// `pick_tts_engine_path`.
 #[tauri::command]
 pub async fn download_tts_engine(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
-    if !cfg!(target_os = "windows") {
-        return Err(
-            "audio.cpp ne publie des binaires que pour Windows. Compilez-le \
-             (cmake -B build -DENGINE_ENABLE_VULKAN=ON puis cmake --build build), \
-             puis sélectionnez audiocpp_cli avec le bouton Parcourir."
-                .into(),
-        );
-    }
+    let (url, is_zip) = engine_archive_url().ok_or(
+        "aucun build audio.cpp pour cette plateforme — compilez-le puis \
+         sélectionnez audiocpp_cli avec le bouton Parcourir",
+    )?;
     let dir = engine_dir(&app).ok_or("app-data indisponible")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
-    let url = "https://github.com/0xShug0/audio.cpp/releases/latest/download/\
-               audiocpp-windows-cpu-balance.zip";
     let _ = app.emit("tts-engine-progress", 0u64);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3600))
@@ -291,10 +312,10 @@ pub async fn download_tts_engine(app: tauri::AppHandle<TauriRuntime>) -> Result<
         .map_err(|e| e.to_string())?;
     let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(format!("HTTP {} — build indisponible pour cette plateforme", resp.status()));
     }
     let total = resp.content_length();
-    let archive = dir.join("engine.zip");
+    let archive = dir.join(if is_zip { "engine.zip" } else { "engine.tar.gz" });
     let mut out = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
     let mut got: u64 = 0;
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
@@ -306,23 +327,43 @@ pub async fn download_tts_engine(app: tauri::AppHandle<TauriRuntime>) -> Result<
     }
     drop(out);
 
-    // Décompression déléguée à PowerShell : pas de crate zip dans l'arbre, et
-    // ce chemin n'existe que sous Windows de toute façon.
-    let status = hidden_command("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "Expand-Archive -Force -LiteralPath '{}' -DestinationPath '{}'",
-                archive.display(),
-                dir.display()
-            ),
-        ])
-        .status()
-        .map_err(|e| e.to_string())?;
+    // Décompression déléguée aux outils du système : pas de crate d'archive
+    // dans l'arbre, et `tar` est présent partout (y compris Windows 10+, mais
+    // PowerShell y gère mieux les zip).
+    let status = if is_zip {
+        hidden_command("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Expand-Archive -Force -LiteralPath '{}' -DestinationPath '{}'",
+                    archive.display(),
+                    dir.display()
+                ),
+            ])
+            .status()
+    } else {
+        hidden_command("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&dir)
+            .status()
+    }
+    .map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&archive);
     if !status.success() {
         return Err("décompression échouée".into());
+    }
+    // Le bit exécutable ne survit pas toujours à l'extraction selon l'outil.
+    #[cfg(unix)]
+    if let Some(bin) = crate::find_file(&dir, engine_bin_name()) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&bin) {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o111);
+            let _ = std::fs::set_permissions(&bin, perms);
+        }
     }
     let _ = app.emit("tts-engine-progress", 100u64);
 

@@ -1,0 +1,92 @@
+name: Build audio.cpp
+
+# Produit le moteur des voix générées pour Linux et macOS.
+#
+# audio.cpp ne publie des binaires que pour Windows ; sur les autres
+# plateformes il faut compiler. Ce workflow le fait une fois pour toutes et
+# attache le résultat à une release Sion, d'où `download_tts_engine` peut le
+# récupérer comme il récupère llama-cli.
+#
+# Déclenché à la main : le moteur ne bouge qu'au rythme des mises à jour
+# d'audio.cpp, pas à celui de Sion. Épingler un tag connu bon plutôt que de
+# suivre main — le projet est très actif et un commit de la veille n'a été
+# testé par personne.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag ou commit d'audio.cpp à compiler"
+        required: true
+        default: release-0.4.2
+      release_tag:
+        description: "Tag de release Sion où attacher les binaires (vide = artefacts seulement)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64-vulkan
+            os: ubuntu-24.04
+            cmake_flags: -DENGINE_ENABLE_VULKAN=ON
+          - name: macos-arm64-metal
+            os: macos-14
+            cmake_flags: -DENGINE_ENABLE_METAL=ON
+
+    steps:
+      - name: Checkout audio.cpp
+        uses: actions/checkout@v6
+        with:
+          repository: 0xShug0/audio.cpp
+          ref: ${{ inputs.ref }}
+
+      # spirv-headers fournit <spirv/unified1/spirv.hpp>, inclus par
+      # ggml-vulkan.cpp. Sans lui la compilation s'arrête net — c'est le piège
+      # à ne pas découvrir au moment du packaging.
+      - name: Dépendances Vulkan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build spirv-headers glslc libvulkan-dev
+
+      - name: Dépendances (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_flags }}
+
+      - name: Build
+        run: cmake --build build -j4
+
+      # model_specs/ accompagne obligatoirement le binaire : les modèles
+      # safetensors (Chatterbox, Qwen3) ne démarrent pas sans, seuls les GGUF
+      # embarquent leur spec. Il est placé à côté du binaire, disposition que
+      # `model_specs_dir` (tts.rs) sait retrouver.
+      - name: Assembler l'archive
+        run: |
+          mkdir -p dist/audiocpp
+          cp build/bin/audiocpp_cli dist/audiocpp/
+          find build -name 'libggml*' -o -name 'libonnxruntime*' | xargs -I{} cp {} dist/audiocpp/ || true
+          cp -r model_specs dist/audiocpp/
+          tar -czf audiocpp-${{ matrix.name }}.tar.gz -C dist audiocpp
+
+      - name: Vérifier que le binaire démarre
+        run: ./dist/audiocpp/audiocpp_cli --help | head -5
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audiocpp-${{ matrix.name }}
+          path: audiocpp-${{ matrix.name }}.tar.gz
+
+      - name: Attacher à la release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ inputs.release_tag }}" "audiocpp-${{ matrix.name }}.tar.gz" --clobber
