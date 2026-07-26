@@ -231,6 +231,29 @@ pub fn detect_tts_engine(
     engine_runs(&bin).then(|| bin.to_string_lossy().into_owned())
 }
 
+/// Dossier `model_specs/` associé à un binaire donné.
+///
+/// audio.cpp y lit la description de chaque famille (fichiers requis, préfixes
+/// de tenseurs). Seuls les modèles GGUF embarquent leur spec ; les modèles
+/// safetensors — Chatterbox, Qwen3 — échouent sans lui sur
+/// `model spec not found for family '…'`.
+///
+/// On remonte depuis le binaire parce que les deux dispositions rencontrées le
+/// placent à des profondeurs différentes : `build/bin/audiocpp_cli` avec
+/// `model_specs/` à la racine du dépôt (compilation locale), ou côte à côte
+/// dans l'archive de release.
+fn model_specs_dir(bin: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut cur = bin.parent()?;
+    for _ in 0..4 {
+        let candidate = cur.join("model_specs");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        cur = cur.parent()?;
+    }
+    None
+}
+
 /// Sélecteur natif pour un `audiocpp_cli` compilé soi-même.
 #[tauri::command]
 pub async fn pick_tts_engine_path() -> Option<String> {
@@ -560,6 +583,12 @@ pub fn tts_generate(
     cmd.arg("--text").arg(&text);
     cmd.arg("--voice-ref").arg(&voice_ref);
     cmd.arg("--out").arg(&out_file);
+    // Indispensable pour les familles safetensors (Chatterbox, Qwen3) : sans
+    // spec, audiocpp refuse de charger. Les GGUF l'embarquent, d'où le silence
+    // quand le dossier est absent.
+    if let Some(specs) = model_specs_dir(std::path::Path::new(&engine)) {
+        cmd.arg("--model-spec-override").arg(specs);
+    }
     if m.needs_language {
         cmd.args(["--language", language.as_deref().unwrap_or("fr")]);
     }
@@ -626,6 +655,33 @@ mod tests {
                 assert!(m.model_arg.is_none(), "{} : dossier mais model_arg défini", m.id);
             }
         }
+    }
+
+    /// Les deux dispositions rencontrées : compilation locale
+    /// (`build/bin/audiocpp_cli` + `model_specs/` à la racine) et archive de
+    /// release (côte à côte). Sans ce dossier, Chatterbox et Qwen3 échouent sur
+    /// « model spec not found ».
+    #[test]
+    fn model_specs_trouve_les_deux_dispositions() {
+        let tmp = std::env::temp_dir().join(format!("sion-tts-spec-{}", std::process::id()));
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(repo.join("build").join("bin")).unwrap();
+        std::fs::create_dir_all(repo.join("model_specs")).unwrap();
+        let deep = repo.join("build").join("bin").join("audiocpp_cli");
+        std::fs::write(&deep, b"").unwrap();
+        assert_eq!(model_specs_dir(&deep), Some(repo.join("model_specs")));
+
+        let flat = repo.join("audiocpp_cli");
+        std::fs::write(&flat, b"").unwrap();
+        assert_eq!(model_specs_dir(&flat), Some(repo.join("model_specs")));
+
+        let orphan = tmp.join("ailleurs");
+        std::fs::create_dir_all(&orphan).unwrap();
+        let bin = orphan.join("audiocpp_cli");
+        std::fs::write(&bin, b"").unwrap();
+        assert_eq!(model_specs_dir(&bin), None, "ne doit pas remonter indéfiniment");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
