@@ -599,5 +599,38 @@
     "notTranscribing": "your mic is not being transcribed",
     "sessionActions": "Session actions",
     "joinShort": "Join"
+  },
+  "tts": {
+    "title": "Generate a voice",
+    "model": "Model",
+    "notInstalled": "not installed",
+    "install": "Install model ({{size}} GB)",
+    "installing": "Installing… {{pct}}%",
+    "engineMissing": "audio.cpp engine not found. Install it or set its path in settings.",
+    "reference": "Reference voice",
+    "pickStored": "— Pick a saved voice —",
+    "pickFile": "Local file…",
+    "referenceText": "Transcript of the clip",
+    "referenceTextPlaceholder": "Exactly what the clip says",
+    "referenceTextHint": "Must match word for word: an inaccurate transcript derails generation.",
+    "text": "Text to speak",
+    "generate": "Generate",
+    "generating": "Generating…",
+    "addToSoundboard": "Add to soundboard",
+    "errorNotAudio": "The file must be audio",
+    "ref": {
+      "tooShort": "Short clip (under {{min}}s): the timbre may be poorly captured.",
+      "tooLong": "Long clip (over {{max}}s): only the beginning is used."
+    },
+    "settings": {
+      "title": "Generated voices",
+      "engine": "audio.cpp engine",
+      "browse": "Browse…",
+      "notFound": "Not found",
+      "found": "Detected",
+      "delete": "Delete",
+      "hint": "Models are 4-7 GB and download on demand.",
+      "install": "Install ({{size}} GB)"
+    }
   }
 }

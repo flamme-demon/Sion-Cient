@@ -599,5 +599,38 @@
     "notTranscribing": "votre micro n'est pas transcrit",
     "sessionActions": "Actions de session",
     "joinShort": "Rejoindre"
+  },
+  "tts": {
+    "title": "Générer une voix",
+    "model": "Modèle",
+    "notInstalled": "non installé",
+    "install": "Installer le modèle ({{size}} Go)",
+    "installing": "Installation… {{pct}} %",
+    "engineMissing": "Moteur audio.cpp introuvable. Installez-le ou indiquez son chemin dans les réglages.",
+    "reference": "Voix de référence",
+    "pickStored": "— Choisir une voix enregistrée —",
+    "pickFile": "Fichier local…",
+    "referenceText": "Transcription de l'extrait",
+    "referenceTextPlaceholder": "Ce que dit exactement l'extrait",
+    "referenceTextHint": "Doit correspondre mot pour mot : un texte inexact fait dérailler la génération.",
+    "text": "Texte à prononcer",
+    "generate": "Générer",
+    "generating": "Génération…",
+    "addToSoundboard": "Ajouter à la soundboard",
+    "errorNotAudio": "Le fichier doit être un audio",
+    "ref": {
+      "tooShort": "Extrait court (moins de {{min}} s) : le timbre risque d'être mal capté.",
+      "tooLong": "Extrait long (plus de {{max}} s) : seul le début sera exploité."
+    },
+    "settings": {
+      "title": "Voix générées",
+      "engine": "Moteur audio.cpp",
+      "browse": "Parcourir…",
+      "notFound": "Introuvable",
+      "found": "Détecté",
+      "delete": "Supprimer",
+      "hint": "Les modèles pèsent 4 à 7 Go et se téléchargent à la demande.",
+      "install": "Installer ({{size}} Go)"
+    }
   }
 }

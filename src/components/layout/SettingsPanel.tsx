@@ -14,6 +14,7 @@ import { VoiceCueEditor } from "../chat/VoiceCueEditor";
 import { ExternalAudioImport } from "../chat/ExternalAudioImport";
 import { isModelDownloaded, ensureModelDownloaded, summaryAssetsStatus, ensureSummaryAssets, deleteAsrModel, deleteSummaryAssets } from "../../services/transcriptionService";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
+import { detectTtsEngine, listTtsModels, installTtsModel, deleteTtsModel, pickTtsEnginePath, TTS_MODEL_LABELS, type TtsModelInfo } from "../../services/ttsService";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -80,6 +81,18 @@ export function SettingsPanel() {
       .catch(() => setYtdlpVer(null));
   }, []);
   useEffect(() => { redetectYtdlp(); }, [ytdlpPath, redetectYtdlp]);
+  // Voix générées (audio.cpp) : chemin du moteur + état des modèles.
+  const ttsEnginePath = useSettingsStore((s) => s.ttsEnginePath);
+  const setTtsEnginePath = useSettingsStore((s) => s.setTtsEnginePath);
+  const [ttsEngineDetected, setTtsEngineDetected] = useState<string | null | undefined>(undefined);
+  const [ttsModels, setTtsModels] = useState<TtsModelInfo[]>([]);
+  const [ttsBusy, setTtsBusy] = useState<string | null>(null);
+  const [ttsPct, setTtsPct] = useState<number | null>(null);
+  const refreshTts = useCallback(() => {
+    detectTtsEngine().then((p) => setTtsEngineDetected(p)).catch(() => setTtsEngineDetected(null));
+    listTtsModels().then(setTtsModels).catch(() => setTtsModels([]));
+  }, []);
+  useEffect(() => { refreshTts(); }, [ttsEnginePath, refreshTts]);
   // llama.cpp (IA de résumé) : { current, latest, vulkan } — null pendant le
   // chargement ou hors Tauri.
   const [llamaVer, setLlamaVer] = useState<{ current: string | null; latest: string | null; vulkan: boolean } | null>(null);
@@ -881,6 +894,59 @@ export function SettingsPanel() {
                 </div>
               )}
               </>)}
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 4 }}>{t("tts.settings.title")}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  value={ttsEnginePath}
+                  onChange={(e) => setTtsEnginePath(e.target.value)}
+                  placeholder="ex : /home/moi/audio.cpp/build/bin/audiocpp_cli"
+                  spellCheck={false}
+                  style={{ flex: 1, minWidth: 0, padding: '8px 12px', borderRadius: 10, border: '1px solid var(--color-outline)', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+                />
+                <button
+                  type="button"
+                  onClick={async () => { const p = await pickTtsEnginePath(); if (p) setTtsEnginePath(p); }}
+                  style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >{t("tts.settings.browse")}</button>
+              </div>
+              {ttsEngineDetected !== undefined && (
+                <div style={{ fontSize: 11, marginTop: 4, color: ttsEngineDetected ? 'var(--color-green)' : 'var(--color-error)', wordBreak: 'break-all' }}>
+                  {ttsEngineDetected ? `✓ ${t("tts.settings.found")} : ${ttsEngineDetected}` : `✗ ${t("tts.settings.notFound")}`}
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>{t("tts.settings.hint")}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                {ttsModels.map((m) => (
+                  <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--color-on-surface)' }}>
+                    <span style={{ flex: 1 }}>
+                      {TTS_MODEL_LABELS[m.id] || m.id}
+                      <span style={{ color: 'var(--color-outline)' }}> — {(m.sizeMb / 1000).toFixed(1)} Go</span>
+                    </span>
+                    {m.installed ? (
+                      <button
+                        type="button"
+                        onClick={async () => { await deleteTtsModel(m.id); refreshTts(); }}
+                        style={{ padding: '4px 10px', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)' }}
+                      >{t("tts.settings.delete")}</button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={ttsBusy !== null}
+                        onClick={async () => {
+                          setTtsBusy(m.id); setTtsPct(0);
+                          try { await installTtsModel(m.id, setTtsPct); refreshTts(); }
+                          finally { setTtsBusy(null); setTtsPct(null); }
+                        }}
+                        style={{ padding: '4px 10px', borderRadius: 8, border: 'none', cursor: ttsBusy ? 'default' : 'pointer', fontSize: 12, fontFamily: 'inherit', background: 'var(--color-primary)', color: 'var(--color-on-primary)', opacity: ttsBusy ? 0.6 : 1 }}
+                      >{ttsBusy === m.id ? `${ttsPct ?? 0} %` : t("tts.settings.install", { size: (m.sizeMb / 1000).toFixed(1) })}</button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div style={{ marginBottom: 16 }}>

@@ -1,0 +1,172 @@
+// Voix générées — pont vers le moteur audio.cpp côté Rust.
+//
+// Le clonage se fait à partir d'un extrait de référence (3-10 s) : il n'y a pas
+// de profil intermédiaire à gérer, l'extrait EST la voix. Il est donc stocké
+// dans la room soundboard comme n'importe quel son, via `uploadSound`.
+//
+// Le WAV produit est renvoyé sous forme de File, directement consommable par le
+// pipeline soundboard existant.
+import { useSettingsStore } from "../stores/useSettingsStore";
+
+export interface TtsModelInfo {
+  id: string;
+  family: string;
+  /** Taille approximative du téléchargement, pour prévenir avant d'installer. */
+  sizeMb: number;
+  /** Le modèle exige la transcription exacte de l'extrait (Higgs, Qwen3). */
+  needsReferenceText: boolean;
+  installed: boolean;
+}
+
+/** Libellés d'affichage — le backend ne renvoie que des identifiants. */
+export const TTS_MODEL_LABELS: Record<string, string> = {
+  chatterbox: "Chatterbox",
+  higgs_v3: "Higgs Audio v3",
+  qwen3_tts: "Qwen3-TTS",
+};
+
+type RawModel = {
+  id: string;
+  family: string;
+  size_mb: number;
+  needs_reference_text: boolean;
+  installed: boolean;
+};
+
+export async function listTtsModels(): Promise<TtsModelInfo[]> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const raw = await invoke<RawModel[]>("list_tts_models");
+  return raw.map((m) => ({
+    id: m.id,
+    family: m.family,
+    sizeMb: m.size_mb,
+    needsReferenceText: m.needs_reference_text,
+    installed: m.installed,
+  }));
+}
+
+/** Chemin du moteur s'il est utilisable, sinon null. */
+export async function detectTtsEngine(): Promise<string | null> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return (
+    (await invoke<string | null>("detect_tts_engine", {
+      customPath: useSettingsStore.getState().ttsEnginePath || undefined,
+    })) ?? null
+  );
+}
+
+/** Sélecteur natif — nécessaire sur Linux/macOS où l'amont ne publie pas de binaire. */
+export async function pickTtsEnginePath(): Promise<string | null> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return (await invoke<string | null>("pick_tts_engine_path")) ?? null;
+}
+
+export async function installTtsEngine(onProgress?: (pct: number) => void): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = onProgress
+    ? await listen<number>("tts-engine-progress", (e) => onProgress(e.payload))
+    : null;
+  try {
+    return await invoke<string>("download_tts_engine");
+  } finally {
+    unlisten?.();
+  }
+}
+
+export async function installTtsModel(
+  model: string,
+  onProgress?: (pct: number) => void,
+): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = onProgress
+    ? await listen<number>("tts-model-progress", (e) => onProgress(e.payload))
+    : null;
+  try {
+    return await invoke<string>("download_tts_model", { model });
+  } finally {
+    unlisten?.();
+  }
+}
+
+export async function deleteTtsModel(model: string): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("delete_tts_model", { model });
+}
+
+/**
+ * Génère la parole et renvoie le WAV.
+ *
+ * `voiceRefPath` est un chemin sur disque : le moteur lit le fichier lui-même,
+ * on ne fait pas transiter les octets par l'IPC (un extrait fait plusieurs
+ * centaines de Ko, et le WAV produit revient déjà par ce canal).
+ */
+export async function generateSpeech(
+  model: string,
+  text: string,
+  voiceRefPath: string,
+  referenceText?: string,
+): Promise<File> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const wavPath = await invoke<string>("tts_generate", {
+    model,
+    text,
+    voiceRef: voiceRefPath,
+    referenceText: referenceText || undefined,
+    language: "fr",
+    enginePath: useSettingsStore.getState().ttsEnginePath || undefined,
+  });
+  const b64 = await invoke<string>("read_file_b64", { path: wavPath });
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], "voix.wav", { type: "audio/wav" });
+}
+
+/**
+ * Catégorie soundboard qui marque un son comme extrait de référence.
+ *
+ * C'est tout le stockage dont on a besoin : une voix EST un son de la
+ * soundboard, donc `uploadSound` / `listSounds` la gèrent déjà, et le partage
+ * entre membres passe par la room existante. Aucun namespace Matrix nouveau.
+ */
+export const VOICE_CATEGORY = "Voix";
+
+/**
+ * Écrit un File sur disque et renvoie son chemin — le moteur lit `--voice-ref`
+ * depuis le système de fichiers, pas depuis l'IPC.
+ *
+ * Sert aussi bien pour un fichier choisi localement que pour un extrait
+ * récupéré depuis Matrix : les deux arrivent ici sous forme de File.
+ */
+export async function materializeRef(file: File): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let bin = "";
+  // Par tranches : String.fromCharCode(...buf) dépasse la taille max de pile
+  // sur un extrait de quelques centaines de Ko.
+  for (let i = 0; i < buf.length; i += 0x8000) {
+    bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  }
+  const ext = (file.name.split(".").pop() || "wav").toLowerCase();
+  return await invoke<string>("save_imported_audio", { dataB64: btoa(bin), ext });
+}
+
+/** Durée conseillée pour un extrait de référence (secondes). */
+export const REF_MIN_SEC = 3;
+export const REF_MAX_SEC = 10;
+
+/**
+ * Un extrait trop court ne porte pas assez de timbre, trop long il sort de la
+ * fenêtre exploitée par les encodeurs. Renvoie un message d'avertissement ou
+ * null si la durée convient.
+ *
+ * Volontairement non bloquant : audio.cpp accepte des extraits hors de cette
+ * plage (y compris des montages de fragments, testé), c'est juste moins bon.
+ */
+export function checkRefDuration(seconds: number): string | null {
+  if (seconds < REF_MIN_SEC) return "tooShort";
+  if (seconds > REF_MAX_SEC) return "tooLong";
+  return null;
+}

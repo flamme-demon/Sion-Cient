@@ -310,6 +310,18 @@ async function resolveBlobUrl(mxcUrl: string): Promise<string> {
   return blobUrl;
 }
 
+/**
+ * Récupère un son en File — utilisé par la génération de voix, qui doit
+ * matérialiser l'extrait de référence sur disque pour le moteur audio.cpp.
+ * Passe par le même cache de blobs que la lecture.
+ */
+export async function fetchSoundFile(entry: SoundEntry): Promise<File> {
+  const url = await resolveBlobUrl(entry.mxcUrl);
+  const blob = await (await fetch(url)).blob();
+  const ext = entry.body.includes(".") ? entry.body.split(".").pop() : "ogg";
+  return new File([blob], `ref.${ext}`, { type: entry.mimetype });
+}
+
 export function invalidateSoundCache(mxcUrl: string): void {
   const cached = blobCache.get(mxcUrl);
   if (cached) {

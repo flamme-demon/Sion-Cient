@@ -11,11 +11,13 @@ import {
   setPlaybackVolume,
   deleteSound,
   invalidateSoundCache,
+  fetchSoundFile,
   SOUNDBOARD_MAX_FILE_SIZE,
   type SoundEntry,
 } from "../../services/soundboardService";
 import { canSendMessage, getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { SoundboardUploadModal } from "./SoundboardUploadModal";
+import { VoiceGenerateModal } from "./VoiceGenerateModal";
 import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -79,6 +81,7 @@ export function SoundboardPanel() {
   const [filterMode, setFilterMode] = useState<FilterMode>(() => useSettingsStore.getState().soundboardView.mode);
   const setSoundboardView = useSettingsStore((s) => s.setSoundboardView);
   const [showUpload, setShowUpload] = useState(false);
+  const [showGenerate, setShowGenerate] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [hotkeyTarget, setHotkeyTarget] = useState<SoundEntry | null>(null);
@@ -445,6 +448,17 @@ export function SoundboardPanel() {
             </div>
             {canUpload && (
               <button
+                onClick={() => setShowGenerate(true)}
+                title={t("tts.title")}
+                style={{
+                  width: 38, height: 38, flexShrink: 0, borderRadius: 12, border: 'none',
+                  background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface)', cursor: 'pointer',
+                  fontSize: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+                }}
+              >🗣️</button>
+            )}
+            {canUpload && (
+              <button
                 onClick={() => setShowUpload(true)}
                 title={t("soundboard.upload")}
                 style={{
@@ -633,6 +647,15 @@ export function SoundboardPanel() {
           maxSize={SOUNDBOARD_MAX_FILE_SIZE}
           onClose={() => setShowUpload(false)}
           onUploaded={() => { setShowUpload(false); refreshRef.current(); }}
+        />
+      )}
+
+      {showGenerate && roomId && (
+        <VoiceGenerateModal
+          sounds={sounds}
+          resolveSound={fetchSoundFile}
+          onClose={() => setShowGenerate(false)}
+          onUploaded={() => { setShowGenerate(false); refreshRef.current(); }}
         />
       )}
 

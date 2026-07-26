@@ -64,7 +64,7 @@ const CPU_FALLBACK_MARKER: &str = ".vulkan-upgrade-attempted";
 /// Cheap probe: does the host look Vulkan-capable? (loader present — the
 /// Vulkan build keeps an internal CPU fallback, so a loader without a
 /// usable GPU still runs.)
-fn host_has_vulkan() -> bool {
+pub(crate) fn host_has_vulkan() -> bool {
     #[cfg(target_os = "windows")]
     {
         return std::env::var_os("WINDIR")
