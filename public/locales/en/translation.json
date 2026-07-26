@@ -631,6 +631,7 @@
       "delete": "Delete",
       "hint": "Models are 4-7 GB and download on demand.",
       "install": "Install ({{size}} GB)"
-    }
+    },
+    "refGone": "That voice is no longer available — it may have been deleted."
   }
 }

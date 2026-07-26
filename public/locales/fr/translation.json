@@ -631,6 +631,7 @@
       "delete": "Supprimer",
       "hint": "Les modèles pèsent 4 à 7 Go et se téléchargent à la demande.",
       "install": "Installer ({{size}} Go)"
-    }
+    },
+    "refGone": "Cette voix n'est plus disponible — elle a peut-être été supprimée."
   }
 }

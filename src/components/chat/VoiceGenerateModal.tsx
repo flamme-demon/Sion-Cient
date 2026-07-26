@@ -143,7 +143,14 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     setResult(null);
     setBusy(true);
     try {
-      const refFile = localRef ?? (await resolveSound(voices.find((v) => v.eventId === refSoundId)!));
+      // La voix stockée peut avoir été supprimée par un autre membre entre la
+      // sélection et la génération — on le signale plutôt que de planter.
+      let refFile = localRef;
+      if (!refFile) {
+        const picked = voices.find((v) => v.eventId === refSoundId);
+        if (!picked) throw new Error(t("tts.refGone"));
+        refFile = await resolveSound(picked);
+      }
       const refPath = await materializeRef(refFile);
       const wav = await generateSpeech(
         current.id,
