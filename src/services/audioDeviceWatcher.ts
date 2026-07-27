@@ -107,9 +107,45 @@ async function onDevicesChanged(pulseInputs = -1) {
   }
 }
 
+/** Cadence de contrôle de la piste micro. Assez court pour qu'une coupure ne
+ *  dure pas, assez long pour rester gratuit. */
+const HEALTH_MS = 5000;
+
+/**
+ * Vérifie que la capture est toujours vivante.
+ *
+ * Surveiller la LISTE des périphériques ne suffit pas : un redémarrage de
+ * PulseAudio réexpose les mêmes identifiants, donc la signature ne bouge pas,
+ * alors que les flux sous-jacents sont morts. Le seul témoin fiable est l'état
+ * de la piste elle-même, que le navigateur passe à « ended » quand son
+ * périphérique disparaît sous elle.
+ */
+async function checkMicHealth() {
+  const { getCurrentRoom, refreshMicrophoneForDenoise } = await import("./livekitService");
+  const room = getCurrentRoom();
+  if (!room || !room.localParticipant.isMicrophoneEnabled) return;
+
+  const { Track } = await import("livekit-client");
+  const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const track = pub?.track?.mediaStreamTrack;
+  if (track && track.readyState !== "ended") return;
+
+  console.warn("[Sion][Devices] piste micro morte — réacquisition");
+  try {
+    await refreshMicrophoneForDenoise(true);
+    console.log("[Sion][Devices] micro réacquis après coupure");
+  } catch (err) {
+    console.error("[Sion][Devices] réacquisition impossible:", err);
+  }
+}
+
 export async function installAudioDeviceWatcher() {
   if (installed) return;
   installed = true;
+
+  // Contrôle de vivacité : rattrape les coupures qu'aucune liste ne signale,
+  // au premier rang desquelles le redémarrage du serveur audio.
+  setInterval(() => { void checkMicHealth(); }, HEALTH_MS);
 
   // Chemin standard — inopérant sous CEF, conservé pour les autres cibles.
   navigator.mediaDevices?.addEventListener?.("devicechange", () => {
