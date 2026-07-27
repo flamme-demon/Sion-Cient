@@ -103,4 +103,6 @@ jobs:
         if: inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.release_tag }}" "audiocpp-${{ matrix.name }}.tar.gz" --clobber
+        # `-R` est indispensable : le dossier courant est un checkout d'audio.cpp,
+        # donc gh y déduirait le dépôt et chercherait la release chez l'amont.
+        run: gh release upload "${{ inputs.release_tag }}" "audiocpp-${{ matrix.name }}.tar.gz" --clobber -R ${{ github.repository }}
