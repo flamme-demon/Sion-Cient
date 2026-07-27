@@ -87,6 +87,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [view, setView] = useState<"list" | "generate">("list");
   /** Voix de la galerie en cours d'utilisation (null si extrait local). */
   const [activeVoice, setActiveVoice] = useState<SoundEntry | null>(null);
+  const [saveName, setSaveName] = useState("");
+  const [saveEmoji, setSaveEmoji] = useState("🗣️");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Les voix sont les sons rangés dans la catégorie dédiée — pas de stockage
@@ -151,6 +153,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setRefReady(false);
     setLocalRef(f);
     setRefFile(f);
+    if (!saveName) setSaveName(f.name.replace(/\.[^.]+$/, "").slice(0, 40));
   };
 
   /** Ouvre la génération avec cette voix déjà chargée en référence. */
@@ -184,6 +187,28 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setResult(null);
     setRefText("");
     setView("generate");
+  };
+
+  /**
+   * Publie l'extrait local comme voix de référence réutilisable.
+   *
+   * On enregistre le WAV décodé plutôt que le fichier d'origine : c'est ce que
+   * le moteur consommera de toute façon, et ça évite qu'un format exotique
+   * bloque un futur clonage.
+   */
+  const saveAsVoice = async () => {
+    if (busy || !saveName.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await uploadSound(selectionWav(), saveName.trim(), VOICE_CATEGORY, saveEmoji || "🗣️");
+      onUploaded();
+      setSaveName("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const backToList = () => {
@@ -432,6 +457,33 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           {refFile && <AudioPreview file={refFile} onDecoded={onRefDecoded} />}
           {refWarning && (
             <span style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>{refWarning}</span>
+          )}
+
+          {/* Un extrait local n'existe que dans cette session : sans ça, la
+              galerie reste vide et personne d'autre ne peut s'en servir. */}
+          {localRef && refReady && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+              <input
+                value={saveEmoji}
+                onChange={(e) => setSaveEmoji(Array.from(e.target.value).slice(-1).join(""))}
+                style={{ ...inputStyle, width: 46, textAlign: "center", padding: "8px 4px" }}
+                title={t("tts.saveEmoji")}
+              />
+              <input
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value.slice(0, 40))}
+                placeholder={t("tts.saveNamePlaceholder")}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={saveAsVoice}
+                disabled={busy || !saveName.trim()}
+                style={{ ...btn(false, busy || !saveName.trim()), whiteSpace: "nowrap" }}
+              >
+                {t("tts.saveVoice")}
+              </button>
+            </div>
           )}
         </div>
 
