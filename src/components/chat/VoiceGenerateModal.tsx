@@ -17,7 +17,7 @@ import {
   type TtsModelInfo,
 } from "../../services/ttsService";
 import { uploadSound, type SoundEntry } from "../../services/soundboardService";
-import { AudioTrimmer } from "./AudioTrimmer";
+import { AudioPreview } from "./AudioPreview";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
 const MAX_TEXT = 500;
@@ -75,14 +75,13 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
   const [transcribing, setTranscribing] = useState(false);
   /** Fichier réellement affiché dans le trimmer, quelle que soit sa provenance. */
   const [refFile, setRefFile] = useState<File | null>(null);
-  /** Sélection courante rapportée par <AudioTrimmer>. */
-  const regionRef = useRef<{ start: number; end: number; buffer: AudioBuffer } | null>(null);
+  /** Buffer décodé de la référence, remonté par <AudioPreview>. */
+  const refBufferRef = useRef<AudioBuffer | null>(null);
   // Miroir d'état : la ref seule ne redéclenche pas le rendu, or l'activation
-  // des boutons dépend de la présence d'une sélection décodée.
-  const [hasRegion, setHasRegion] = useState(false);
+  // des boutons dépend de la présence d'un extrait décodé.
+  const [refReady, setRefReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Les voix sont les sons rangés dans la catégorie dédiée — pas de stockage
@@ -101,19 +100,11 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
       .catch(() => setEngineOk(false));
   }, []);
 
-  // Révoque l'URL de prévisualisation au démontage : la garder vivante retient
-  // le File en mémoire jusqu'au GC.
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  /** Le WAV de la sélection courante — seul format accepté par --voice-ref. */
+  /** L'extrait en WAV — seul format accepté par --voice-ref. */
   const selectionWav = (): File => {
-    const r = regionRef.current;
-    if (!r) throw new Error(t("tts.refGone"));
-    return bufferToWav(r.buffer, r.start, r.end);
+    const b = refBufferRef.current;
+    if (!b) throw new Error(t("tts.refGone"));
+    return bufferToWav(b);
   };
 
   /** Pré-remplit la transcription via le moteur ASR déjà présent. On transcrit
@@ -151,8 +142,8 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
       setError(t("tts.errorNotAudio"));
       return;
     }
-    regionRef.current = null;
-    setHasRegion(false);
+    refBufferRef.current = null;
+    setRefReady(false);
     setLocalRef(f);
     setRefFile(f);
     setRefSoundId("");
@@ -164,8 +155,8 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     setRefWarning(null);
     setRefSoundId(eventId);
     setLocalRef(null);
-    regionRef.current = null;
-    setHasRegion(false);
+    refBufferRef.current = null;
+    setRefReady(false);
     setRefFile(null);
     if (!eventId) return;
     const picked = voices.find((v) => v.eventId === eventId);
@@ -182,10 +173,10 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
 
   /** Avertissement seulement : audio.cpp accepte des extraits hors plage
    *  (montages compris), c'est simplement moins fidèle. */
-  const onRegion = (start: number, end: number, buffer: AudioBuffer) => {
-    regionRef.current = { start, end, buffer };
-    setHasRegion(true);
-    const w = checkRefDuration(end - start);
+  const onRefDecoded = (buffer: AudioBuffer) => {
+    refBufferRef.current = buffer;
+    setRefReady(true);
+    const w = checkRefDuration(buffer.duration);
     setRefWarning(w ? t(`tts.ref.${w}`, { min: REF_MIN_SEC, max: REF_MAX_SEC }) : null);
   };
 
@@ -217,8 +208,6 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
         current.needsReferenceText ? refText.trim() : undefined,
       );
       setResult(wav);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(URL.createObjectURL(wav));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -243,7 +232,7 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
 
   // Une sélection décodée est le vrai prérequis : un fichier choisi mais
   // illisible ne doit pas laisser croire qu'on peut générer.
-  const hasRef = hasRegion;
+  const hasRef = refReady;
   const refTextOk = !current?.needsReferenceText || refText.trim().length > 0;
   const canGenerate =
     !!current && current.installed && engineOk === true && hasRef && !!text.trim() && refTextOk && !busy;
@@ -368,11 +357,7 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
               </span>
             )}
           </div>
-          {/* Même trimmer que la soundboard et les sons de canal : écoute avec
-              forme d'onde, et découpe l'extrait sur la fenêtre utile. */}
-          {refFile && (
-            <AudioTrimmer file={refFile} maxSec={REF_MAX_SEC} onChange={onRegion} />
-          )}
+          {refFile && <AudioPreview file={refFile} onDecoded={onRefDecoded} />}
           {refWarning && (
             <span style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>{refWarning}</span>
           )}
@@ -434,7 +419,7 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
           </span>
         )}
 
-        {previewUrl && <audio controls src={previewUrl} style={{ width: "100%" }} />}
+        {result && <AudioPreview file={result} />}
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(false, false)}>
