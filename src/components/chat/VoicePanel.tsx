@@ -411,12 +411,15 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           onCropped={(f) => { setSavePortrait(f); setCropSource(null); }}
         />
       )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <button type="button" onClick={backToList} style={{ ...btn(false, false), padding: "6px 12px" }}>
             ← {t("tts.back")}
           </button>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-on-surface)" }}>
+          <span style={{
+            fontSize: 14, fontWeight: 600, color: "var(--color-on-surface)",
+            minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
             {activeVoice ? `${activeVoice.emoji || "🗣️"} ${activeVoice.label}` : t("tts.useLocal")}
           </span>
         </div>
@@ -479,7 +482,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           </span>
           {/* Le choix de la voix se fait dans la galerie ; ici on ne propose que
               de remplacer l'extrait par un fichier local. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <input
               ref={fileInputRef}
               type="file"
@@ -494,7 +497,14 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
               {t("tts.pickFile")}
             </button>
             {localRef && (
-              <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
+              <span
+                title={localRef.name}
+                style={{
+                  fontSize: 12, color: "var(--color-on-surface-variant)",
+                  flex: "1 1 0", minWidth: 0,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}
+              >
                 {localRef.name}
               </span>
             )}
@@ -507,7 +517,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           {/* Un extrait local n'existe que dans cette session : sans ça, la
               galerie reste vide et personne d'autre ne peut s'en servir. */}
           {localRef && refReady && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2, flexWrap: "wrap" }}>
               <input
                 ref={portraitInputRef}
                 type="file"
@@ -540,7 +550,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value.slice(0, 40))}
                 placeholder={t("tts.saveNamePlaceholder")}
-                style={{ ...inputStyle, flex: 1 }}
+                style={{ ...inputStyle, flex: "1 1 120px", minWidth: 0 }}
               />
               <button
                 type="button"
@@ -560,12 +570,12 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
             <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
               {t("tts.referenceText")}
             </span>
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <input
                 value={refText}
                 onChange={(e) => setRefText(e.target.value)}
                 placeholder={t("tts.referenceTextPlaceholder")}
-                style={{ ...inputStyle, flex: 1 }}
+                style={{ ...inputStyle, flex: "1 1 140px", minWidth: 0 }}
               />
               <button
                 type="button"
