@@ -11,6 +11,7 @@ import {
   bufferToWav,
   checkRefDuration,
   VOICE_CATEGORY,
+  GENERATED_CATEGORY,
   TTS_MODEL_LABELS,
   REF_MIN_SEC,
   REF_MAX_SEC,
@@ -231,7 +232,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
       const { mxcUrl, duration } = await uploadSound(
         result,
         text.trim().slice(0, 60),
-        VOICE_CATEGORY,
+        GENERATED_CATEGORY,
         "🗣️",
       );
       onUploaded();

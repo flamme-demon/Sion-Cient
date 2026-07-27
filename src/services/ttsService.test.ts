@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkRefDuration, VOICE_CATEGORY, REF_MIN_SEC, REF_MAX_SEC, TTS_MODEL_LABELS, bufferToWav } from "./ttsService";
+import { checkRefDuration, VOICE_CATEGORY, REF_MIN_SEC, REF_MAX_SEC, TTS_MODEL_LABELS, bufferToWav, GENERATED_CATEGORY } from "./ttsService";
 
 describe("checkRefDuration", () => {
   it("accepte la plage recommandée", () => {
@@ -37,6 +37,13 @@ describe("catalogue", () => {
   // un namespace Matrix séparé : listSounds/uploadSound les gèrent déjà.
   it("expose une catégorie de voix non vide", () => {
     expect(VOICE_CATEGORY.trim().length).toBeGreaterThan(0);
+  });
+
+  // Confondre les deux faisait apparaître chaque son généré dans le sélecteur
+  // d'extrait de référence, qui se remplissait au fil des essais.
+  it("sépare les extraits de référence des sons générés", () => {
+    expect(GENERATED_CATEGORY.trim().length).toBeGreaterThan(0);
+    expect(GENERATED_CATEGORY).not.toBe(VOICE_CATEGORY);
   });
 });
 
