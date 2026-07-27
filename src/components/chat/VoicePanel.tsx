@@ -21,6 +21,7 @@ import { uploadSound, playSoundLocal, broadcastSound, type SoundEntry } from "..
 import { uploadFile } from "../../services/matrixService";
 import { resolveAvatar } from "../../services/ttsService";
 import { AudioPreview } from "./AudioPreview";
+import { ImageCropper } from "./ImageCropper";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
 const MAX_TEXT = 500;
@@ -93,6 +94,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [saveEmoji, setSaveEmoji] = useState("🗣️");
   /** Portrait choisi pour la voix qu'on s'apprête à enregistrer. */
   const [savePortrait, setSavePortrait] = useState<File | null>(null);
+  /** Image brute en attente de recadrage. */
+  const [cropSource, setCropSource] = useState<File | null>(null);
   const portraitInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -401,6 +404,13 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
 
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+      {cropSource && (
+        <ImageCropper
+          file={cropSource}
+          onCancel={() => setCropSource(null)}
+          onCropped={(f) => { setSavePortrait(f); setCropSource(null); }}
+        />
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button type="button" onClick={backToList} style={{ ...btn(false, false), padding: "6px 12px" }}>
@@ -503,7 +513,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                 type="file"
                 accept="image/*"
                 style={{ display: "none" }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) setSavePortrait(f); }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) setCropSource(f); }}
               />
               {/* Portrait : remplace l'emoji dans la galerie quand il est fourni. */}
               <button

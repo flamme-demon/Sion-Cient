@@ -7,6 +7,7 @@ import * as matrixService from "../../services/matrixService";
 import { UserAvatar } from "./UserAvatar";
 import { ArrowLeftIcon } from "../icons";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { ImageCropper } from "../chat/ImageCropper";
 
 export function AccountPopover() {
   const { t } = useTranslation();
@@ -24,6 +25,8 @@ export function AccountPopover() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordMsg, setPasswordMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  /** Image brute en attente de recadrage avant upload. */
+  const [cropSource, setCropSource] = useState<File | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
@@ -116,9 +119,15 @@ export function AccountPopover() {
     }
   };
 
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (file) setCropSource(file);
+  };
+
+  /** Upload de l'avatar une fois recadré. */
+  const uploadAvatar = async (file: File) => {
+    setCropSource(null);
     setUploadingAvatar(true);
     setProfileMsg(null);
     try {
@@ -129,7 +138,6 @@ export function AccountPopover() {
       setProfileMsg({ type: "error", text: t("settings.errorProfile") });
     } finally {
       setUploadingAvatar(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -164,6 +172,14 @@ export function AccountPopover() {
   };
 
   return (
+    <>
+    {cropSource && (
+      <ImageCropper
+        file={cropSource}
+        onCancel={() => setCropSource(null)}
+        onCropped={uploadAvatar}
+      />
+    )}
     <div
       ref={popoverRef}
       style={isMobile ? {
@@ -625,5 +641,6 @@ export function AccountPopover() {
       )}
       </div>{/* end content wrapper */}
     </div>
+    </>
   );
 }

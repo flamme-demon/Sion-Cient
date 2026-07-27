@@ -652,5 +652,10 @@
     "saveNamePlaceholder": "Nom de la voix",
     "saveEmoji": "Emoji de la voix",
     "savePortrait": "Portrait de la voix (optionnel)"
+  },
+  "cropper": {
+    "title": "Recadrer l'image",
+    "hint": "Faites glisser pour déplacer, molette ou curseur pour zoomer",
+    "confirm": "Utiliser"
   }
 }

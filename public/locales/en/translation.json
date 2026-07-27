@@ -652,5 +652,10 @@
     "saveNamePlaceholder": "Voice name",
     "saveEmoji": "Voice emoji",
     "savePortrait": "Voice portrait (optional)"
+  },
+  "cropper": {
+    "title": "Crop image",
+    "hint": "Drag to move, wheel or slider to zoom",
+    "confirm": "Use"
   }
 }
