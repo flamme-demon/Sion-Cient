@@ -7,6 +7,7 @@ import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
 import { installCefAudioShim } from "./services/cefAudioShim";
 import { installDenoiseShim } from "./services/denoiseShim";
+import { installAudioDeviceWatcher } from "./services/audioDeviceWatcher";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 import { attachConsole } from "@tauri-apps/plugin-log";
 
@@ -20,6 +21,9 @@ attachConsole().catch(() => {});
 // Denoise shim wraps getUserMedia *after* cefAudioShim so both chains compose.
 installCefAudioShim().catch(() => {}).finally(() => {
   installDenoiseShim();
+  // Après les shims : la surveillance réacquiert le micro via la chaîne
+  // getUserMedia complète, donc elle doit être posée une fois celle-ci en place.
+  installAudioDeviceWatcher();
 });
 
 // Intercept all clicks on external links to open in default browser (Tauri/CEF)
