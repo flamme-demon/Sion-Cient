@@ -1105,7 +1105,19 @@ export async function connectToRoom(
     await room.localParticipant.setMicrophoneEnabled(true);
     logAudioProcessingSettings("connect");
   } catch (err) {
-    console.warn("[Sion] Impossible d'activer le microphone automatiquement:", err);
+    // Même cause qu'ailleurs : un périphérique mémorisé qui n'existe plus.
+    // On retente sur le défaut système plutôt que de rejoindre muet.
+    if (err instanceof Error && err.name === "NotFoundError") {
+      try {
+        const track = await createMicTrackWithFallback();
+        await room.localParticipant.publishTrack(track, { source: Track.Source.Microphone });
+        logAudioProcessingSettings("connect-fallback");
+      } catch (err2) {
+        console.warn("[Sion] Micro indisponible même sur le défaut système:", err2);
+      }
+    } else {
+      console.warn("[Sion] Impossible d'activer le microphone automatiquement:", err);
+    }
   }
 
   // Local participant speaking detection — re-attach the detector whenever
@@ -1529,6 +1541,39 @@ export async function updateAudioProcessing(options: {
  *  generator's `ended` event from the stop cascades into the previous
  *  denoise pump's `cancel()` (safety net landed in v1.0.0), so no pump
  *  leak. */
+/**
+ * Fabrique une piste micro en se rabattant sur le périphérique par défaut si
+ * celui mémorisé a disparu.
+ *
+ * Brancher ou retirer un périphérique réordonne les identifiants PulseAudio :
+ * le `deviceId` persisté dans les réglages cesse alors de résoudre et
+ * getUserMedia lève `NotFoundError`. Sans repli, l'utilisateur se retrouve
+ * simplement sans micro — d'autant que l'appelant a déjà dépublié l'ancienne
+ * piste avant d'arriver ici.
+ *
+ * Le réglage fautif est effacé pour que l'interface cesse d'afficher un
+ * périphérique inexistant, et que le prochain démarrage reparte du défaut.
+ */
+async function createMicTrackWithFallback() {
+  const { createLocalAudioTrack } = await import("livekit-client");
+  const defaults = currentRoom?.options.audioCaptureDefaults ?? {};
+  try {
+    return await createLocalAudioTrack(defaults);
+  } catch (err) {
+    const missing = err instanceof Error && err.name === "NotFoundError";
+    if (!missing || !("deviceId" in defaults)) throw err;
+    console.warn("[Sion] Périphérique micro introuvable — repli sur le défaut système");
+    const { deviceId: _gone, ...withoutDevice } = defaults as Record<string, unknown>;
+    const track = await createLocalAudioTrack(withoutDevice);
+    if (currentRoom) currentRoom.options.audioCaptureDefaults = withoutDevice;
+    try {
+      const { useSettingsStore } = await import("../stores/useSettingsStore");
+      useSettingsStore.getState().setAudioInputDevice("");
+    } catch { /* réglages indisponibles : le repli tient quand même */ }
+    return track;
+  }
+}
+
 export async function refreshMicrophoneForDenoise(force = false) {
   if (!currentRoom) return;
   const lp = currentRoom.localParticipant;
@@ -1540,8 +1585,7 @@ export async function refreshMicrophoneForDenoise(force = false) {
     if (micPub?.track) {
       await lp.unpublishTrack(micPub.track, true);
     }
-    const { createLocalAudioTrack } = await import("livekit-client");
-    const newTrack = await createLocalAudioTrack(currentRoom.options.audioCaptureDefaults);
+    const newTrack = await createMicTrackWithFallback();
     await lp.publishTrack(newTrack, {
       source: Track.Source.Microphone,
       audioPreset: currentRoom.options.publishDefaults?.audioPreset,
