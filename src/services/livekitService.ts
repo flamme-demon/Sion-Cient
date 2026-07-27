@@ -1556,22 +1556,42 @@ export async function updateAudioProcessing(options: {
  */
 async function createMicTrackWithFallback() {
   const { createLocalAudioTrack } = await import("livekit-client");
-  const defaults = currentRoom?.options.audioCaptureDefaults ?? {};
+  const { useSettingsStore } = await import("../stores/useSettingsStore");
+  const desired = useSettingsStore.getState().audioInputDevice;
+
+  // Les contraintes sont reconstruites depuis les réglages à chaque essai :
+  // conserver un `audioCaptureDefaults` amputé fossiliserait la dégradation.
+  const base = { ...(currentRoom?.options.audioCaptureDefaults ?? {}) };
+  if (desired) (base as Record<string, unknown>).deviceId = desired;
+  else delete (base as Record<string, unknown>).deviceId;
+
   try {
-    return await createLocalAudioTrack(defaults);
+    const track = await createLocalAudioTrack(base);
+    if (currentRoom) currentRoom.options.audioCaptureDefaults = base;
+    micDegradedFrom = null;
+    return track;
   } catch (err) {
     const missing = err instanceof Error && err.name === "NotFoundError";
-    if (!missing || !("deviceId" in defaults)) throw err;
-    console.warn("[Sion] Périphérique micro introuvable — repli sur le défaut système");
-    const { deviceId: _gone, ...withoutDevice } = defaults as Record<string, unknown>;
+    if (!missing || !desired) throw err;
+    console.warn(`[Sion] Micro « ${desired} » absent — repli temporaire sur le défaut système`);
+    const withoutDevice = { ...base };
+    delete (withoutDevice as Record<string, unknown>).deviceId;
     const track = await createLocalAudioTrack(withoutDevice);
     if (currentRoom) currentRoom.options.audioCaptureDefaults = withoutDevice;
-    try {
-      const { useSettingsStore } = await import("../stores/useSettingsStore");
-      useSettingsStore.getState().setAudioInputDevice("");
-    } catch { /* réglages indisponibles : le repli tient quand même */ }
+    // On NE touche PAS au réglage : c'est un choix délibéré de l'utilisateur.
+    // Le mémoriser ici permet de le rétablir dès que l'appareil réapparaît.
+    micDegradedFrom = desired;
     return track;
   }
+}
+
+/** Périphérique choisi par l'utilisateur mais temporairement indisponible,
+ *  ou null si la capture utilise bien celui demandé. */
+let micDegradedFrom: string | null = null;
+
+/** Le micro tourne-t-il sur le défaut système faute du périphérique choisi ? */
+export function getDegradedMicDeviceId(): string | null {
+  return micDegradedFrom;
 }
 
 export async function refreshMicrophoneForDenoise(force = false) {

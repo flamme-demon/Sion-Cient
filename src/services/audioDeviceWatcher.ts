@@ -41,7 +41,8 @@ const originalEnumerate = navigator.mediaDevices?.enumerateDevices
   : async () => [] as MediaDeviceInfo[];
 
 async function onDevicesChanged(pulseInputs = -1) {
-  const { getCurrentRoom, refreshMicrophoneForDenoise } = await import("./livekitService");
+  const { getCurrentRoom, refreshMicrophoneForDenoise, getDegradedMicDeviceId } =
+    await import("./livekitService");
 
   let inputs = -1;
   try {
@@ -65,6 +66,22 @@ async function onDevicesChanged(pulseInputs = -1) {
   if (!room) {
     console.log(`[Sion][Devices] changement détecté (${inputs} entrée(s)) — hors vocal, rien à faire`);
     return;
+  }
+
+  // Le périphérique choisi est-il revenu ? On tourne alors sur le défaut
+  // système alors que l'utilisateur en avait désigné un autre : il faut le
+  // rétablir, sinon son réglage resterait lettre morte jusqu'au redémarrage.
+  const degradedFrom = getDegradedMicDeviceId();
+  if (degradedFrom) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      if (devices.some((d) => d.kind === "audioinput" && d.deviceId === degradedFrom)) {
+        console.log(`[Sion][Devices] « ${degradedFrom} » est de retour — rétablissement`);
+        await refreshMicrophoneForDenoise(true);
+        console.log("[Sion][Devices] périphérique choisi rétabli");
+        return;
+      }
+    } catch { /* énumération indisponible : on retombe sur la logique ci-dessous */ }
   }
 
   // Une piste peut survivre à la disparition de son périphérique en restant
