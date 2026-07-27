@@ -651,7 +651,13 @@
     "saveVoice": "Enregistrer la voix",
     "saveNamePlaceholder": "Nom de la voix",
     "saveEmoji": "Emoji de la voix",
-    "savePortrait": "Portrait de la voix (optionnel)"
+    "savePortrait": "Portrait de la voix (optionnel)",
+    "source": {
+      "file": "Fichier",
+      "url": "Lien",
+      "sound": "Son existant",
+      "pickSound": "— Choisir un son de la soundboard —"
+    }
   },
   "cropper": {
     "title": "Recadrer l'image",

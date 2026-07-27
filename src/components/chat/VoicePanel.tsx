@@ -22,6 +22,7 @@ import { uploadFile } from "../../services/matrixService";
 import { resolveAvatar } from "../../services/ttsService";
 import { AudioPreview } from "./AudioPreview";
 import { ImageCropper } from "./ImageCropper";
+import { ExternalAudioImport } from "./ExternalAudioImport";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
 const MAX_TEXT = 500;
@@ -90,6 +91,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [view, setView] = useState<"list" | "generate">("list");
   /** Voix de la galerie en cours d'utilisation (null si extrait local). */
   const [activeVoice, setActiveVoice] = useState<SoundEntry | null>(null);
+  /** Provenance de l'extrait quand on ne part pas d'une voix de la galerie. */
+  const [refSource, setRefSource] = useState<"file" | "url" | "sound">("file");
   const [saveName, setSaveName] = useState("");
   const [saveEmoji, setSaveEmoji] = useState("🗣️");
   /** Portrait choisi pour la voix qu'on s'apprête à enregistrer. */
@@ -102,6 +105,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   // Les voix sont des sons marqués `kind: "voice"` — pas de stockage séparé, la
   // room soundboard les partage déjà entre tous les membres.
   const voices = useMemo(() => sounds.filter((s) => s.kind === "voice"), [sounds]);
+  const playableSounds = useMemo(() => sounds.filter((s) => s.kind !== "voice"), [sounds]);
 
   const current = models.find((m) => m.id === ttsModel) || null;
 
@@ -176,6 +180,26 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setLocalRef(f);
     setRefFile(f);
     if (!saveName) setSaveName(f.name.replace(/\.[^.]+$/, "").slice(0, 40));
+  };
+
+  /** Reprend un son de la soundboard comme extrait de référence. */
+  const pickSound = async (eventId: string) => {
+    setError(null);
+    setRefWarning(null);
+    refBufferRef.current = null;
+    setRefReady(false);
+    setRefFile(null);
+    if (!eventId) return;
+    const picked = playableSounds.find((s) => s.eventId === eventId);
+    if (!picked) return;
+    try {
+      const f = await resolveSound(picked);
+      setLocalRef(f);
+      setRefFile(f);
+      if (!saveName) setSaveName(picked.label.slice(0, 40));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   /** Ouvre la génération avec cette voix déjà chargée en référence. */
@@ -477,8 +501,44 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
             {t("tts.reference")}
           </span>
-          {/* Le choix de la voix se fait dans la galerie ; ici on ne propose que
-              de remplacer l'extrait par un fichier local. */}
+          {/* Le choix de la voix se fait dans la galerie ; ici on remplace
+              l'extrait, depuis un fichier, une URL ou un son existant. */}
+          <div style={{ display: "flex", gap: 4, background: "var(--color-surface-container-high)", borderRadius: 10, padding: 3 }}>
+            {(["file", "url", "sound"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => { setRefSource(m); setError(null); }}
+                style={{
+                  flex: 1, padding: "6px 0", borderRadius: 8, border: "none", cursor: "pointer",
+                  fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+                  background: refSource === m ? "var(--color-primary-container)" : "transparent",
+                  color: refSource === m ? "var(--color-on-primary-container)" : "var(--color-on-surface-variant)",
+                }}
+              >{t(`tts.source.${m}`)}</button>
+            ))}
+          </div>
+
+          {refSource === "url" && (
+            <ExternalAudioImport
+              onImported={(f, title) => {
+                pickLocal(f);
+                if (title && !saveName) setSaveName(title.slice(0, 40));
+              }}
+            />
+          )}
+
+          {refSource === "sound" && (
+            <select defaultValue="" onChange={(e) => pickSound(e.target.value)} style={inputStyle}>
+              <option value="">{t("tts.source.pickSound")}</option>
+              {playableSounds.map((s) => (
+                <option key={s.eventId} value={s.eventId}>
+                  {s.emoji ? `${s.emoji} ` : ""}{s.label}
+                </option>
+              ))}
+            </select>
+          )}
+
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <input
               ref={fileInputRef}
@@ -490,9 +550,11 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                 if (f) pickLocal(f);
               }}
             />
-            <button type="button" onClick={() => fileInputRef.current?.click()} style={btn(false, false)}>
-              {t("tts.pickFile")}
-            </button>
+            {refSource === "file" && (
+              <button type="button" onClick={() => fileInputRef.current?.click()} style={btn(false, false)}>
+                {t("tts.pickFile")}
+              </button>
+            )}
             {localRef && (
               <span
                 title={localRef.name}

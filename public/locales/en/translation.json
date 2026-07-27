@@ -651,7 +651,13 @@
     "saveVoice": "Save voice",
     "saveNamePlaceholder": "Voice name",
     "saveEmoji": "Voice emoji",
-    "savePortrait": "Voice portrait (optional)"
+    "savePortrait": "Voice portrait (optional)",
+    "source": {
+      "file": "File",
+      "url": "Link",
+      "sound": "Existing sound",
+      "pickSound": "— Pick a soundboard sound —"
+    }
   },
   "cropper": {
     "title": "Crop image",
