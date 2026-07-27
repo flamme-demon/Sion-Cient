@@ -220,7 +220,11 @@ export function SoundboardPanel() {
     return false;
   };
 
-  const tree = useMemo(() => buildTree(Array.from(new Set(sounds.map((s) => s.category)))), [sounds]);
+  // Les extraits de référence TTS vivent dans la même room mais ne sont pas des
+  // sons jouables : ils sont exclus de la grille, des catégories et du compteur.
+  const playable = useMemo(() => sounds.filter((s) => s.kind !== "voice"), [sounds]);
+
+  const tree = useMemo(() => buildTree(Array.from(new Set(playable.map((s) => s.category)))), [playable]);
   const topLevels = useMemo(() => sortedChildren(tree), [tree]);
   // Sub-category row anchor: if the selected category has children, we're
   // browsing *inside* it (show its children, "Tout X" active). If it's a leaf,
@@ -239,16 +243,16 @@ export function SoundboardPanel() {
       !q || s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
 
     if (filterMode === "favorites") {
-      return sounds.filter((s) => favoritesSet.has(s.eventId) && matchesQuery(s));
+      return playable.filter((s) => favoritesSet.has(s.eventId) && matchesQuery(s));
     }
     if (filterMode === "top") {
       // Most-played first; ties broken by label. Only sounds played at least once.
-      return sounds
+      return playable
         .filter((s) => (playCounts[s.eventId] || 0) > 0 && matchesQuery(s))
         .sort((a, b) => (playCounts[b.eventId] || 0) - (playCounts[a.eventId] || 0) || a.label.localeCompare(b.label));
     }
     // "all" mode: category drill-down + hidden-category handling.
-    return sounds.filter((s) => {
+    return playable.filter((s) => {
       if (selectedCat && !s.category.startsWith(selectedCat)) return false;
       if (isCategoryHidden(s.category)) {
         if (!selectedCat || !s.category.startsWith(selectedCat)) return false;
@@ -260,7 +264,7 @@ export function SoundboardPanel() {
       return matchesQuery(s);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sounds, search, selectedCat, filterMode, hiddenCategoriesSet, favoritesSet, playCounts]);
+  }, [playable, search, selectedCat, filterMode, hiddenCategoriesSet, favoritesSet, playCounts]);
 
   const handlePlay = async (s: SoundEntry) => {
     if (!enabled) return;
@@ -350,7 +354,7 @@ export function SoundboardPanel() {
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)' }}>{t("soundboard.title")}</span>
-          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("soundboard.soundCount", { count: sounds.length })}</span>
+          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("soundboard.soundCount", { count: playable.length })}</span>
         </div>
         <button
           onClick={close}
@@ -641,7 +645,7 @@ export function SoundboardPanel() {
 
       {showUpload && roomId && (
         <SoundboardUploadModal
-          existingCategories={Array.from(new Set(sounds.map((s) => s.category)))}
+          existingCategories={Array.from(new Set(playable.map((s) => s.category)))}
           maxSize={SOUNDBOARD_MAX_FILE_SIZE}
           onClose={() => setShowUpload(false)}
           onUploaded={() => { setShowUpload(false); refreshRef.current(); }}
@@ -659,7 +663,7 @@ export function SoundboardPanel() {
 
       {editTarget && (
         <SoundboardUploadModal
-          existingCategories={Array.from(new Set(sounds.map((s) => s.category)))}
+          existingCategories={Array.from(new Set(playable.map((s) => s.category)))}
           maxSize={SOUNDBOARD_MAX_FILE_SIZE}
           editing={editTarget}
           onClose={() => setEditTarget(null)}

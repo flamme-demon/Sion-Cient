@@ -99,12 +99,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const portraitInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Les voix sont les sons rangés dans la catégorie dédiée — pas de stockage
-  // séparé, la soundboard les partage déjà entre tous les membres.
-  const voices = useMemo(
-    () => sounds.filter((s) => s.category === VOICE_CATEGORY),
-    [sounds],
-  );
+  // Les voix sont des sons marqués `kind: "voice"` — pas de stockage séparé, la
+  // room soundboard les partage déjà entre tous les membres.
+  const voices = useMemo(() => sounds.filter((s) => s.kind === "voice"), [sounds]);
 
   const current = models.find((m) => m.id === ttsModel) || null;
 

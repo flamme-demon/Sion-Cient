@@ -25,6 +25,10 @@ export interface SoundEntry {
   refText: string | null;
   /** Voix de référence : portrait (mxc) affiché dans la galerie. */
   avatarUrl: string | null;
+  /** "voice" = extrait de référence pour la synthèse, jamais listé parmi les
+   *  sons jouables. Le nom de catégorie ne peut pas servir de marqueur : il est
+   *  librement modifiable par l'utilisateur. */
+  kind: "sound" | "voice";
 }
 
 export const SOUNDBOARD_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -51,6 +55,8 @@ type RawContent = {
     ref_text?: string;
     /** Portrait mxc de la voix. */
     avatar?: string;
+    /** "voice" pour un extrait de référence TTS. */
+    kind?: string;
     /** Legacy field from the v1.1.0 initial release — multiplier (1, 2, 3).
      *  Only round integer values landed (Matrix rejected floats), so when
      *  reading we treat any value here as a multiplier and prefer
@@ -108,6 +114,9 @@ function parseSound(ev: {
     gain,
     refText: meta.ref_text || null,
     avatarUrl: meta.avatar || null,
+    // Repli sur la catégorie pour les voix enregistrées avant l'existence du
+    // drapeau, sinon elles disparaîtraient de la galerie.
+    kind: meta.kind === "voice" || normalizeCategory(meta.category) === "Voix" ? "voice" : "sound",
   };
 }
 
@@ -240,7 +249,8 @@ export async function uploadSound(
   category: string,
   emoji: string | null,
   gain: number = 1.0,
-  /** Champs propres aux voix de référence (transcription, portrait). */
+  /** Renseigné pour un extrait de référence TTS : marque le son comme voix et
+   *  porte ses métadonnées propres. */
   voice?: { refText?: string; avatar?: string },
 ): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
   const client = getMatrixClient();
@@ -275,6 +285,7 @@ export async function uploadSound(
       // percentage to satisfy Matrix's js_int constraint — a float gets
       // rejected with M_BAD_JSON.
       ...(gain !== 1.0 ? { gain_pct: Math.round(clampGain(gain) * 100) } : {}),
+      ...(voice ? { kind: "voice" } : {}),
       ...(voice?.refText ? { ref_text: voice.refText } : {}),
       ...(voice?.avatar ? { avatar: voice.avatar } : {}),
     },

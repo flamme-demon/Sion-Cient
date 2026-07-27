@@ -125,12 +125,15 @@ export async function generateSpeech(
 }
 
 /**
- * Catégorie soundboard qui marque un son comme extrait de RÉFÉRENCE, utilisable
- * pour cloner une voix.
+ * Catégorie donnée aux extraits de référence.
  *
- * C'est tout le stockage dont on a besoin : une voix EST un son de la
- * soundboard, donc `uploadSound` / `listSounds` la gèrent déjà, et le partage
- * entre membres passe par la room existante. Aucun namespace Matrix nouveau.
+ * Purement organisationnelle : c'est le drapeau `kind: "voice"` qui les
+ * distingue des sons jouables, parce qu'une catégorie reste librement
+ * renommable par l'utilisateur.
+ *
+ * Une voix EST un son de la room soundboard — `uploadSound` / `listSounds` la
+ * gèrent déjà, et le partage entre membres est acquis. Aucun namespace Matrix
+ * nouveau.
  */
 export const VOICE_CATEGORY = "Voix";
 
