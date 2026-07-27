@@ -69,11 +69,12 @@ jobs:
       # safetensors (Chatterbox, Qwen3) ne démarrent pas sans, seuls les GGUF
       # embarquent leur spec. Il est placé à côté du binaire, disposition que
       # `model_specs_dir` (tts.rs) sait retrouver.
+      # ggml et onnxruntime sont liés statiquement (le CMake ne produit que des
+      # .a) : le binaire de ~76 Mo se suffit à lui-même, rien à copier à côté.
       - name: Assembler l'archive
         run: |
           mkdir -p dist/audiocpp
           cp build/bin/audiocpp_cli dist/audiocpp/
-          find build -name 'libggml*' -o -name 'libonnxruntime*' | xargs -I{} cp {} dist/audiocpp/ || true
           cp -r model_specs dist/audiocpp/
           tar -czf audiocpp-${{ matrix.name }}.tar.gz -C dist audiocpp
 

@@ -636,7 +636,9 @@ pub fn tts_generate(
     if m.needs_reference_text {
         cmd.arg("--reference-text").arg(&ref_text);
     }
-    // Les libs ggml/onnx vivent à côté du binaire dans l'archive amont.
+    // Nos builds lient ggml et onnxruntime statiquement, mais les archives
+    // amont (Windows) livrent des DLL à côté du binaire — et un utilisateur
+    // peut pointer sur une compilation dynamique. Coût nul si inutile.
     #[cfg(not(target_os = "windows"))]
     if let Some(parent) = std::path::Path::new(&engine).parent() {
         cmd.env("LD_LIBRARY_PATH", parent);
