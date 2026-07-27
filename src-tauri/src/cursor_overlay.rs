@@ -231,7 +231,23 @@ fn make_sticky_x11(window: &Window) -> Result<(), Box<dyn std::error::Error>> {
     let root = conn.setup().roots[screen_num].root;
     let net_wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
     let net_wm_state_sticky = conn.intern_atom(false, b"_NET_WM_STATE_STICKY")?.reply()?.atom;
+    let net_wm_state_above = conn.intern_atom(false, b"_NET_WM_STATE_ABOVE")?.reply()?.atom;
     let net_wm_desktop = conn.intern_atom(false, b"_NET_WM_DESKTOP")?.reply()?.atom;
+
+    // La spec EWMH distingue les deux cas : une fenêtre DÉJÀ MAPPÉE se pilote
+    // par ClientMessage, une fenêtre pas encore mappée par la propriété. On
+    // appelle cette fonction juste après `create_window`, donc avant que le
+    // gestionnaire n'ait mappé quoi que ce soit — le message seul était ignoré,
+    // et l'overlay restait cantonné au bureau courant. On pose donc d'abord la
+    // propriété (chemin pré-map), puis on envoie le message (chemin post-map,
+    // utile au ré-appel après affichage).
+    conn.change_property32(
+        PropMode::REPLACE,
+        xid,
+        net_wm_state,
+        AtomEnum::ATOM,
+        &[net_wm_state_sticky, net_wm_state_above],
+    )?;
 
     // _NET_WM_STATE_ADD = 1, source indication 1 = "application".
     let event = ClientMessageEvent::new(
@@ -272,6 +288,12 @@ struct App {
     pixmap: Option<Pixmap>,
     last_frame: Instant,
     frame_counter: u64,
+    /// Le collage sur tous les bureaux a-t-il été rejoué APRÈS le mappage ?
+    /// La propriété posée avant suffit à la plupart des gestionnaires, mais
+    /// certains la réécrivent en mappant — le ClientMessage, lui, n'a d'effet
+    /// qu'une fois la fenêtre mappée.
+    #[cfg(target_os = "linux")]
+    sticky_reapplied: bool,
 }
 
 impl App {
@@ -283,6 +305,8 @@ impl App {
             pixmap: None,
             last_frame: Instant::now(),
             frame_counter: 0,
+            #[cfg(target_os = "linux")]
+            sticky_reapplied: false,
         }
     }
 
@@ -348,6 +372,18 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        // Premier rendu = la fenêtre est mappée : c'est le moment où le
+        // ClientMessage EWMH est pris en compte.
+        #[cfg(target_os = "linux")]
+        if !self.sticky_reapplied {
+            self.sticky_reapplied = true;
+            if let Some(w) = self.window.as_ref() {
+                if let Err(err) = make_sticky_x11(w) {
+                    log::warn!("[Sion][CursorOverlay] sticky re-apply failed: {err:?}");
+                }
+            }
+        }
+
         let (Some(window), Some(surface), Some(pixmap)) = (self.window.as_ref(), self.surface.as_mut(), self.pixmap.as_mut()) else {
             log::warn!("[Sion][CursorOverlay] redraw skipped — window/surface/pixmap not ready");
             return;

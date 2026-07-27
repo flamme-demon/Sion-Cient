@@ -11,11 +11,13 @@ import {
   setPlaybackVolume,
   deleteSound,
   invalidateSoundCache,
+  fetchSoundFile,
   SOUNDBOARD_MAX_FILE_SIZE,
   type SoundEntry,
 } from "../../services/soundboardService";
 import { canSendMessage, getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { SoundboardUploadModal } from "./SoundboardUploadModal";
+import { VoicePanel } from "./VoicePanel";
 import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -79,7 +81,7 @@ export function SoundboardPanel() {
   const [filterMode, setFilterMode] = useState<FilterMode>(() => useSettingsStore.getState().soundboardView.mode);
   const setSoundboardView = useSettingsStore((s) => s.setSoundboardView);
   const [showUpload, setShowUpload] = useState(false);
-  const [showMembers, setShowMembers] = useState(false);
+  const [tab, setTab] = useState<"sounds" | "voices" | "members">("sounds");
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [hotkeyTarget, setHotkeyTarget] = useState<SoundEntry | null>(null);
   const [editTarget, setEditTarget] = useState<SoundEntry | null>(null);
@@ -218,7 +220,11 @@ export function SoundboardPanel() {
     return false;
   };
 
-  const tree = useMemo(() => buildTree(Array.from(new Set(sounds.map((s) => s.category)))), [sounds]);
+  // Les extraits de référence TTS vivent dans la même room mais ne sont pas des
+  // sons jouables : ils sont exclus de la grille, des catégories et du compteur.
+  const playable = useMemo(() => sounds.filter((s) => s.kind !== "voice"), [sounds]);
+
+  const tree = useMemo(() => buildTree(Array.from(new Set(playable.map((s) => s.category)))), [playable]);
   const topLevels = useMemo(() => sortedChildren(tree), [tree]);
   // Sub-category row anchor: if the selected category has children, we're
   // browsing *inside* it (show its children, "Tout X" active). If it's a leaf,
@@ -237,16 +243,16 @@ export function SoundboardPanel() {
       !q || s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
 
     if (filterMode === "favorites") {
-      return sounds.filter((s) => favoritesSet.has(s.eventId) && matchesQuery(s));
+      return playable.filter((s) => favoritesSet.has(s.eventId) && matchesQuery(s));
     }
     if (filterMode === "top") {
       // Most-played first; ties broken by label. Only sounds played at least once.
-      return sounds
+      return playable
         .filter((s) => (playCounts[s.eventId] || 0) > 0 && matchesQuery(s))
         .sort((a, b) => (playCounts[b.eventId] || 0) - (playCounts[a.eventId] || 0) || a.label.localeCompare(b.label));
     }
     // "all" mode: category drill-down + hidden-category handling.
-    return sounds.filter((s) => {
+    return playable.filter((s) => {
       if (selectedCat && !s.category.startsWith(selectedCat)) return false;
       if (isCategoryHidden(s.category)) {
         if (!selectedCat || !s.category.startsWith(selectedCat)) return false;
@@ -258,7 +264,7 @@ export function SoundboardPanel() {
       return matchesQuery(s);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sounds, search, selectedCat, filterMode, hiddenCategoriesSet, favoritesSet, playCounts]);
+  }, [playable, search, selectedCat, filterMode, hiddenCategoriesSet, favoritesSet, playCounts]);
 
   const handlePlay = async (s: SoundEntry) => {
     if (!enabled) return;
@@ -348,7 +354,7 @@ export function SoundboardPanel() {
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
           <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)' }}>{t("soundboard.title")}</span>
-          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("soundboard.soundCount", { count: sounds.length })}</span>
+          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("soundboard.soundCount", { count: playable.length })}</span>
         </div>
         <button
           onClick={close}
@@ -364,27 +370,37 @@ export function SoundboardPanel() {
       )}
 
       {/* Tabs */}
-      {roomId && canManageMembers && (
+      {roomId && (canUpload || canManageMembers) && (
         <div style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)' }}>
           {([
-            { key: false, label: t("soundboard.tabSounds") },
-            { key: true, label: `${t("soundboard.tabMembers")} · ${members.length}` },
-          ] as const).map((tab) => (
+            { key: "sounds" as const, label: t("soundboard.tabSounds"), show: true },
+            { key: "voices" as const, label: t("tts.tab"), show: canUpload },
+            { key: "members" as const, label: `${t("soundboard.tabMembers")} · ${members.length}`, show: canManageMembers },
+          ]).filter((x) => x.show).map((x) => (
             <button
-              key={String(tab.key)}
-              onClick={() => setShowMembers(tab.key)}
+              key={x.key}
+              onClick={() => setTab(x.key)}
               style={{
                 padding: '8px 0', border: 'none', background: 'transparent', cursor: 'pointer',
                 fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-                borderBottom: showMembers === tab.key ? '2px solid var(--color-primary)' : '2px solid transparent',
-                color: showMembers === tab.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                borderBottom: tab === x.key ? '2px solid var(--color-primary)' : '2px solid transparent',
+                color: tab === x.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
               }}
-            >{tab.label}</button>
+            >{x.label}</button>
           ))}
         </div>
       )}
 
-      {roomId && showMembers && canManageMembers && (
+      {roomId && tab === "voices" && canUpload && (
+        <VoicePanel
+          sounds={sounds}
+          resolveSound={fetchSoundFile}
+          onUploaded={() => refreshRef.current()}
+          connectedVoice={!!connectedVoice}
+        />
+      )}
+
+      {roomId && tab === "members" && canManageMembers && (
         <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
           {members.map((m) => {
             const isMe = m.userId === myUserId;
@@ -422,7 +438,7 @@ export function SoundboardPanel() {
         </div>
       )}
 
-      {roomId && !showMembers && (
+      {roomId && tab === "sounds" && (
         <>
           {/* Search + add */}
           <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -629,7 +645,7 @@ export function SoundboardPanel() {
 
       {showUpload && roomId && (
         <SoundboardUploadModal
-          existingCategories={Array.from(new Set(sounds.map((s) => s.category)))}
+          existingCategories={Array.from(new Set(playable.map((s) => s.category)))}
           maxSize={SOUNDBOARD_MAX_FILE_SIZE}
           onClose={() => setShowUpload(false)}
           onUploaded={() => { setShowUpload(false); refreshRef.current(); }}
@@ -647,7 +663,7 @@ export function SoundboardPanel() {
 
       {editTarget && (
         <SoundboardUploadModal
-          existingCategories={Array.from(new Set(sounds.map((s) => s.category)))}
+          existingCategories={Array.from(new Set(playable.map((s) => s.category)))}
           maxSize={SOUNDBOARD_MAX_FILE_SIZE}
           editing={editTarget}
           onClose={() => setEditTarget(null)}

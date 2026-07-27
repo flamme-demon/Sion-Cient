@@ -132,7 +132,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       mobileView: "chat" as MobileView,
     })),
   setConnectedVoice: (id: string | null) => set({ connectedVoiceChannel: id }),
-  disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false, e2eeUnhealthy: false }),
+  // `isScreenSharing` doit retomber ici aussi. Une coupure réseau est réparée
+  // par LiveKit, qui republie les pistes : le partage reprend et l'indicateur
+  // reste juste. Un kick est au contraire une déconnexion définitive suivie
+  // d'une nouvelle session, où rien n'est republié — l'indicateur restait alors
+  // allumé, le bouton passait pour actif, et le premier clic au retour tentait
+  // d'ARRÊTER un partage inexistant au lieu d'en démarrer un.
+  disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false, e2eeUnhealthy: false, isScreenSharing: false }),
   setE2EEUnhealthy: (v: boolean) => set({ e2eeUnhealthy: v }),
   toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;

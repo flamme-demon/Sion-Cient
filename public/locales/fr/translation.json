@@ -599,5 +599,69 @@
     "notTranscribing": "votre micro n'est pas transcrit",
     "sessionActions": "Actions de session",
     "joinShort": "Rejoindre"
+  },
+  "tts": {
+    "title": "Générer une voix",
+    "model": "Modèle",
+    "notInstalled": "non installé",
+    "install": "Installer le modèle ({{size}} Go)",
+    "installing": "Installation… {{pct}} %",
+    "engineMissing": "Moteur audio.cpp introuvable. Installez-le ou indiquez son chemin dans les réglages.",
+    "reference": "Voix de référence",
+    "pickStored": "— Choisir une voix enregistrée —",
+    "pickFile": "Fichier local…",
+    "referenceText": "Transcription de l'extrait",
+    "referenceTextPlaceholder": "Ce que dit exactement l'extrait",
+    "referenceTextHint": "Doit correspondre mot pour mot : un texte inexact fait dérailler la génération.",
+    "text": "Texte à prononcer",
+    "generate": "Générer",
+    "generating": "Génération…",
+    "addToSoundboard": "Ajouter à la soundboard",
+    "errorNotAudio": "Le fichier doit être un audio",
+    "ref": {
+      "tooShort": "Extrait court (moins de {{min}} s) : le timbre risque d'être mal capté.",
+      "tooLong": "Extrait long (plus de {{max}} s) : seul le début sera exploité."
+    },
+    "settings": {
+      "title": "Voix générées",
+      "engine": "Moteur audio.cpp",
+      "browse": "Parcourir…",
+      "notFound": "Introuvable",
+      "found": "Détecté",
+      "delete": "Supprimer",
+      "hint": "Les modèles pèsent 4 à 7 Go et se téléchargent à la demande.",
+      "install": "Installer ({{size}} Go)"
+    },
+    "refGone": "Cette voix n'est plus disponible — elle a peut-être été supprimée.",
+    "installEngine": "Installer le moteur",
+    "playRef": "Écouter l'extrait",
+    "transcribe": "Transcrire",
+    "transcribeHint": "Remplit automatiquement avec le moteur de transcription de Sion",
+    "transcribeBusy": "Transcription de réunion en cours — arrêtez-la d'abord.",
+    "tab": "Voix",
+    "playForAll": "Jouer pour tous",
+    "playNeedsVoice": "Rejoignez un salon vocal pour diffuser",
+    "listHint": "Choisissez une voix pour lui faire dire un texte. La parole est synthétisée par IA à partir d'un court extrait.",
+    "badge": "IA",
+    "cardAction": "Faire parler",
+    "useLocal": "Extrait local",
+    "useLocalHint": "Depuis un fichier",
+    "back": "Voix",
+    "listEmpty": "Aucune voix enregistrée. Ajoutez un extrait dans la soundboard avec la catégorie « Voix ».",
+    "saveVoice": "Enregistrer la voix",
+    "saveNamePlaceholder": "Nom de la voix",
+    "saveEmoji": "Emoji de la voix",
+    "savePortrait": "Portrait de la voix (optionnel)",
+    "source": {
+      "file": "Fichier",
+      "url": "Lien",
+      "sound": "Son existant",
+      "pickSound": "— Choisir un son de la soundboard —"
+    }
+  },
+  "cropper": {
+    "title": "Recadrer l'image",
+    "hint": "Faites glisser pour déplacer, molette ou curseur pour zoomer",
+    "confirm": "Utiliser"
   }
 }

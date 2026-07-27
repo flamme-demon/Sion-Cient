@@ -56,6 +56,12 @@ interface SettingsState {
   /** Absolute path to a yt-dlp binary for importing audio from external-media
    *  URLs (soundboard + voice cues). Empty = app-managed download / PATH. */
   ytdlpPath: string;
+  /** Absolute path to an `audiocpp_cli` binary for generated voices. Upstream
+   *  only ships Windows releases, so Linux/macOS users point at their own
+   *  build. Empty = app-managed download (Windows only). */
+  ttsEnginePath: string;
+  /** Selected TTS model id (see the Rust catalogue in tts.rs). */
+  ttsModel: string;
   defaultChannel: string;
   autoJoinVoice: boolean;
   enableGifs: boolean;
@@ -131,6 +137,8 @@ interface SettingsState {
   setAudioInputDevice: (v: string) => void;
   setFfmpegPath: (v: string) => void;
   setYtdlpPath: (v: string) => void;
+  setTtsEnginePath: (v: string) => void;
+  setTtsModel: (v: string) => void;
   setAudioOutputDevice: (v: string) => void;
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
@@ -177,6 +185,8 @@ export const useSettingsStore = create<SettingsState>()(
       audioInputDevice: "",
       ffmpegPath: "",
       ytdlpPath: "",
+      ttsEnginePath: "",
+      ttsModel: "chatterbox",
       audioOutputDevice: "",
       defaultChannel: "",
       autoJoinVoice: false,
@@ -230,6 +240,8 @@ export const useSettingsStore = create<SettingsState>()(
       setAudioInputDevice: (v) => set({ audioInputDevice: v }),
       setFfmpegPath: (v) => set({ ffmpegPath: v.trim() }),
       setYtdlpPath: (v) => set({ ytdlpPath: v.trim() }),
+      setTtsEnginePath: (v) => set({ ttsEnginePath: v.trim() }),
+      setTtsModel: (v) => set({ ttsModel: v }),
       setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),

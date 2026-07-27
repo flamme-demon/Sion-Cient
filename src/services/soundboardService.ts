@@ -20,6 +20,15 @@ export interface SoundEntry {
    *  Stored in the Matrix metadata so every viewer applies the same boost.
    *  Defaults to 1.0 for sounds uploaded before this field existed. */
   gain: number;
+  /** Voix de référence : transcription exacte de l'extrait. Les modèles qui
+   *  l'exigent la retrouvent ainsi sans que l'utilisateur la ressaisisse. */
+  refText: string | null;
+  /** Voix de référence : portrait (mxc) affiché dans la galerie. */
+  avatarUrl: string | null;
+  /** "voice" = extrait de référence pour la synthèse, jamais listé parmi les
+   *  sons jouables. Le nom de catégorie ne peut pas servir de marqueur : il est
+   *  librement modifiable par l'utilisateur. */
+  kind: "sound" | "voice";
 }
 
 export const SOUNDBOARD_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -42,6 +51,12 @@ type RawContent = {
      *  Required because Matrix enforces js_int on event values; a float
      *  multiplier (2.4) gets rejected with M_BAD_JSON. */
     gain_pct?: number;
+    /** Transcription de l'extrait (voix de référence). */
+    ref_text?: string;
+    /** Portrait mxc de la voix. */
+    avatar?: string;
+    /** "voice" pour un extrait de référence TTS. */
+    kind?: string;
     /** Legacy field from the v1.1.0 initial release — multiplier (1, 2, 3).
      *  Only round integer values landed (Matrix rejected floats), so when
      *  reading we treat any value here as a multiplier and prefer
@@ -97,6 +112,11 @@ function parseSound(ev: {
     senderId: ev.getSender() || "",
     timestamp: ev.getTs() || 0,
     gain,
+    refText: meta.ref_text || null,
+    avatarUrl: meta.avatar || null,
+    // Repli sur la catégorie pour les voix enregistrées avant l'existence du
+    // drapeau, sinon elles disparaîtraient de la galerie.
+    kind: meta.kind === "voice" || normalizeCategory(meta.category) === "Voix" ? "voice" : "sound",
   };
 }
 
@@ -208,6 +228,8 @@ export async function listSounds(): Promise<SoundEntry[]> {
     } else if (edit.meta) {
       s.gain = 1.0;
     }
+    if (edit.meta && "ref_text" in edit.meta) s.refText = edit.meta.ref_text || null;
+    if (edit.meta && "avatar" in edit.meta) s.avatarUrl = edit.meta.avatar || null;
   }
 
   return sounds.sort((a, b) => b.timestamp - a.timestamp);
@@ -227,7 +249,10 @@ export async function uploadSound(
   category: string,
   emoji: string | null,
   gain: number = 1.0,
-): Promise<string> {
+  /** Renseigné pour un extrait de référence TTS : marque le son comme voix et
+   *  porte ses métadonnées propres. */
+  voice?: { refText?: string; avatar?: string },
+): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();
@@ -260,11 +285,17 @@ export async function uploadSound(
       // percentage to satisfy Matrix's js_int constraint — a float gets
       // rejected with M_BAD_JSON.
       ...(gain !== 1.0 ? { gain_pct: Math.round(clampGain(gain) * 100) } : {}),
+      ...(voice ? { kind: "voice" } : {}),
+      ...(voice?.refText ? { ref_text: voice.refText } : {}),
+      ...(voice?.avatar ? { avatar: voice.avatar } : {}),
     },
   };
   const res = await client.sendMessage(roomId, content as never);
+  // L'URL mxc est renvoyée en plus de l'id : diffuser un son fraîchement
+  // uploadé l'exige, et la retrouver via listSounds obligerait à attendre la
+  // synchro de la room.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (res as any).event_id as string;
+  return { eventId: (res as any).event_id as string, mxcUrl, duration };
 }
 
 function probeDuration(file: File): Promise<number> {
@@ -308,6 +339,18 @@ async function resolveBlobUrl(mxcUrl: string): Promise<string> {
   const blobUrl = URL.createObjectURL(blob);
   blobCache.set(mxcUrl, blobUrl);
   return blobUrl;
+}
+
+/**
+ * Récupère un son en File — utilisé par la génération de voix, qui doit
+ * matérialiser l'extrait de référence sur disque pour le moteur audio.cpp.
+ * Passe par le même cache de blobs que la lecture.
+ */
+export async function fetchSoundFile(entry: SoundEntry): Promise<File> {
+  const url = await resolveBlobUrl(entry.mxcUrl);
+  const blob = await (await fetch(url)).blob();
+  const ext = entry.body.includes(".") ? entry.body.split(".").pop() : "ogg";
+  return new File([blob], `ref.${ext}`, { type: entry.mimetype });
 }
 
 export function invalidateSoundCache(mxcUrl: string): void {
