@@ -650,6 +650,7 @@
     "listEmpty": "Aucune voix enregistrée. Ajoutez un extrait dans la soundboard avec la catégorie « Voix ».",
     "saveVoice": "Enregistrer la voix",
     "saveNamePlaceholder": "Nom de la voix",
-    "saveEmoji": "Emoji de la voix"
+    "saveEmoji": "Emoji de la voix",
+    "savePortrait": "Portrait de la voix (optionnel)"
   }
 }

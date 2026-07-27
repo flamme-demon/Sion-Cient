@@ -314,3 +314,26 @@ export function checkRefDuration(seconds: number): string | null {
   if (seconds > REF_MAX_SEC) return "tooLong";
   return null;
 }
+
+/**
+ * Résout un mxc de portrait en URL affichable.
+ *
+ * Les médias Matrix v1.11+ passent par un point d'accès authentifié : un
+ * `<img src="mxc://…">` ou même l'URL http nue renverrait 401. On télécharge
+ * donc avec le jeton et on expose un blob.
+ */
+export async function resolveAvatar(mxcUrl: string): Promise<string | null> {
+  const { getMatrixClient } = await import("./matrixService");
+  const client = getMatrixClient();
+  if (!client) return null;
+  const httpUrl = client.mxcUrlToHttp(mxcUrl, 96, 96, "crop", true, true, true);
+  if (!httpUrl) return null;
+  try {
+    const token = client.getAccessToken();
+    const res = await fetch(httpUrl, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) return null;
+    return URL.createObjectURL(await res.blob());
+  } catch {
+    return null;
+  }
+}

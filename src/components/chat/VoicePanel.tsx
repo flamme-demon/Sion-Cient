@@ -18,6 +18,8 @@ import {
   type TtsModelInfo,
 } from "../../services/ttsService";
 import { uploadSound, playSoundLocal, broadcastSound, type SoundEntry } from "../../services/soundboardService";
+import { uploadFile } from "../../services/matrixService";
+import { resolveAvatar } from "../../services/ttsService";
 import { AudioPreview } from "./AudioPreview";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
@@ -89,6 +91,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [activeVoice, setActiveVoice] = useState<SoundEntry | null>(null);
   const [saveName, setSaveName] = useState("");
   const [saveEmoji, setSaveEmoji] = useState("🗣️");
+  /** Portrait choisi pour la voix qu'on s'apprête à enregistrer. */
+  const [savePortrait, setSavePortrait] = useState<File | null>(null);
+  const portraitInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Les voix sont les sons rangés dans la catégorie dédiée — pas de stockage
@@ -99,6 +104,23 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   );
 
   const current = models.find((m) => m.id === ttsModel) || null;
+
+  /** Portraits résolus en URL affichables, indexés par son. */
+  const [portraits, setPortraits] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    const wanted = voices.filter((v) => v.avatarUrl);
+    if (wanted.length === 0) return;
+    Promise.all(
+      wanted.map(async (v) => [v.eventId, await resolveAvatar(v.avatarUrl!)] as const),
+    )
+      .then((pairs) => {
+        if (!alive) return;
+        setPortraits(Object.fromEntries(pairs.filter(([, url]) => url) as [string, string][]));
+      })
+      .catch(() => { /* portrait absent : l'emoji prend le relais */ });
+    return () => { alive = false; };
+  }, [voices]);
 
   useEffect(() => {
     listTtsModels().then(setModels).catch(() => setModels([]));
@@ -166,7 +188,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setRefReady(false);
     setRefFile(null);
     setResult(null);
-    setRefText("");
+    // La transcription voyage avec la voix : les modèles qui l'exigent la
+    // retrouvent sans que l'utilisateur la ressaisisse à chaque usage.
+    setRefText(v.refText || "");
     setView("generate");
     try {
       setRefFile(await resolveSound(v));
@@ -201,9 +225,18 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setBusy(true);
     setError(null);
     try {
-      await uploadSound(selectionWav(), saveName.trim(), VOICE_CATEGORY, saveEmoji || "🗣️");
+      const avatar = savePortrait ? await uploadFile(savePortrait) : undefined;
+      await uploadSound(
+        selectionWav(),
+        saveName.trim(),
+        VOICE_CATEGORY,
+        saveEmoji || "🗣️",
+        1.0,
+        { refText: refText.trim() || undefined, avatar },
+      );
       onUploaded();
       setSaveName("");
+      setSavePortrait(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -327,8 +360,10 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
               onMouseLeave={(e) => { e.currentTarget.style.background = "var(--color-surface-container)"; e.currentTarget.style.borderColor = "var(--color-outline-variant)"; }}
             >
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-                <div style={{ width: 44, height: 44, borderRadius: 999, background: "var(--color-surface-container-highest)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
-                  {v.emoji || "🗣️"}
+                <div style={{ width: 44, height: 44, borderRadius: 999, background: "var(--color-surface-container-highest)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, overflow: "hidden", flexShrink: 0 }}>
+                  {portraits[v.eventId]
+                    ? <img src={portraits[v.eventId]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    : (v.emoji || "🗣️")}
                 </div>
                 {/* Marqueur explicite : ces voix servent à SYNTHÉTISER de la
                     parole, pas à rejouer un son. */}
@@ -463,6 +498,28 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
               galerie reste vide et personne d'autre ne peut s'en servir. */}
           {localRef && refReady && (
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+              <input
+                ref={portraitInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) setSavePortrait(f); }}
+              />
+              {/* Portrait : remplace l'emoji dans la galerie quand il est fourni. */}
+              <button
+                type="button"
+                onClick={() => portraitInputRef.current?.click()}
+                title={t("tts.savePortrait")}
+                style={{
+                  width: 40, height: 40, flexShrink: 0, borderRadius: 999, border: "1px solid var(--color-outline-variant)",
+                  background: "var(--color-surface-container-high)", cursor: "pointer", padding: 0, overflow: "hidden",
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16,
+                }}
+              >
+                {savePortrait
+                  ? <img src={URL.createObjectURL(savePortrait)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : "🖼"}
+              </button>
               <input
                 value={saveEmoji}
                 onChange={(e) => setSaveEmoji(Array.from(e.target.value).slice(-1).join(""))}

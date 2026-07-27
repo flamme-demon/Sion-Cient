@@ -20,6 +20,11 @@ export interface SoundEntry {
    *  Stored in the Matrix metadata so every viewer applies the same boost.
    *  Defaults to 1.0 for sounds uploaded before this field existed. */
   gain: number;
+  /** Voix de référence : transcription exacte de l'extrait. Les modèles qui
+   *  l'exigent la retrouvent ainsi sans que l'utilisateur la ressaisisse. */
+  refText: string | null;
+  /** Voix de référence : portrait (mxc) affiché dans la galerie. */
+  avatarUrl: string | null;
 }
 
 export const SOUNDBOARD_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -42,6 +47,10 @@ type RawContent = {
      *  Required because Matrix enforces js_int on event values; a float
      *  multiplier (2.4) gets rejected with M_BAD_JSON. */
     gain_pct?: number;
+    /** Transcription de l'extrait (voix de référence). */
+    ref_text?: string;
+    /** Portrait mxc de la voix. */
+    avatar?: string;
     /** Legacy field from the v1.1.0 initial release — multiplier (1, 2, 3).
      *  Only round integer values landed (Matrix rejected floats), so when
      *  reading we treat any value here as a multiplier and prefer
@@ -97,6 +106,8 @@ function parseSound(ev: {
     senderId: ev.getSender() || "",
     timestamp: ev.getTs() || 0,
     gain,
+    refText: meta.ref_text || null,
+    avatarUrl: meta.avatar || null,
   };
 }
 
@@ -208,6 +219,8 @@ export async function listSounds(): Promise<SoundEntry[]> {
     } else if (edit.meta) {
       s.gain = 1.0;
     }
+    if (edit.meta && "ref_text" in edit.meta) s.refText = edit.meta.ref_text || null;
+    if (edit.meta && "avatar" in edit.meta) s.avatarUrl = edit.meta.avatar || null;
   }
 
   return sounds.sort((a, b) => b.timestamp - a.timestamp);
@@ -227,6 +240,8 @@ export async function uploadSound(
   category: string,
   emoji: string | null,
   gain: number = 1.0,
+  /** Champs propres aux voix de référence (transcription, portrait). */
+  voice?: { refText?: string; avatar?: string },
 ): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
@@ -260,6 +275,8 @@ export async function uploadSound(
       // percentage to satisfy Matrix's js_int constraint — a float gets
       // rejected with M_BAD_JSON.
       ...(gain !== 1.0 ? { gain_pct: Math.round(clampGain(gain) * 100) } : {}),
+      ...(voice?.refText ? { ref_text: voice.refText } : {}),
+      ...(voice?.avatar ? { avatar: voice.avatar } : {}),
     },
   };
   const res = await client.sendMessage(roomId, content as never);
