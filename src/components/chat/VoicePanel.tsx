@@ -16,7 +16,7 @@ import {
   REF_MAX_SEC,
   type TtsModelInfo,
 } from "../../services/ttsService";
-import { uploadSound, type SoundEntry } from "../../services/soundboardService";
+import { uploadSound, playSoundLocal, broadcastSound, type SoundEntry } from "../../services/soundboardService";
 import { AudioPreview } from "./AudioPreview";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
@@ -27,9 +27,10 @@ interface Props {
   sounds: SoundEntry[];
   /** Résout un son Matrix en File (téléchargement + cache côté service). */
   resolveSound: (s: SoundEntry) => Promise<File>;
-  onClose: () => void;
   /** Appelé après ajout du résultat à la soundboard. */
   onUploaded: () => void;
+  /** Diffusion possible seulement si l'on est connecté à un salon vocal. */
+  connectedVoice: boolean;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -57,7 +58,7 @@ const btn = (primary: boolean, disabled: boolean): React.CSSProperties => ({
   opacity: disabled ? 0.5 : 1,
 });
 
-export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }: Props) {
+export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }: Props) {
   const { t } = useTranslation();
   const ttsModel = useSettingsStore((s) => s.ttsModel);
   const setTtsModel = useSettingsStore((s) => s.setTtsModel);
@@ -215,14 +216,31 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     }
   };
 
-  const addToSoundboard = async () => {
+  /**
+   * Publie le résultat dans la soundboard, et le diffuse si demandé.
+   *
+   * La diffusion passe forcément par l'upload : `broadcastSound` transmet une
+   * URL mxc que chaque pair va chercher lui-même — on ne pousse pas les octets
+   * dans le canal de données.
+   */
+  const publish = async (alsoPlay: boolean) => {
     if (!result || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await uploadSound(result, text.trim().slice(0, 60), VOICE_CATEGORY, "🗣️");
+      const { mxcUrl, duration } = await uploadSound(
+        result,
+        text.trim().slice(0, 60),
+        VOICE_CATEGORY,
+        "🗣️",
+      );
       onUploaded();
-      onClose();
+      if (alsoPlay) {
+        await playSoundLocal(mxcUrl);
+        broadcastSound(mxcUrl, "🗣️", duration);
+      }
+      setResult(null);
+      setText("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -238,37 +256,8 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     !!current && current.installed && engineOk === true && hasRef && !!text.trim() && refTextOk && !busy;
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 520,
-          maxWidth: "92vw",
-          maxHeight: "88vh",
-          overflowY: "auto",
-          background: "var(--color-surface-container)",
-          borderRadius: 16,
-          padding: 20,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-        }}
-      >
-        <h3 style={{ margin: 0, fontSize: 16, color: "var(--color-on-surface)" }}>
-          {t("tts.title")}
-        </h3>
-
+    <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560 }}>
         {engineOk === false && (
           <div
             style={{
@@ -421,17 +410,25 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
 
         {result && <AudioPreview file={result} />}
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(false, false)}>
-            {t("auth.cancel")}
-          </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={generate} disabled={!canGenerate} style={btn(!result, !canGenerate)}>
             {busy && !result ? t("tts.generating") : t("tts.generate")}
           </button>
           {result && (
-            <button type="button" onClick={addToSoundboard} disabled={busy} style={btn(true, busy)}>
-              {t("tts.addToSoundboard")}
-            </button>
+            <>
+              <button type="button" onClick={() => publish(false)} disabled={busy} style={btn(false, busy)}>
+                {t("tts.addToSoundboard")}
+              </button>
+              <button
+                type="button"
+                onClick={() => publish(true)}
+                disabled={busy || !connectedVoice}
+                style={btn(true, busy || !connectedVoice)}
+                title={connectedVoice ? undefined : t("tts.playNeedsVoice")}
+              >
+                {t("tts.playForAll")}
+              </button>
+            </>
           )}
         </div>
       </div>

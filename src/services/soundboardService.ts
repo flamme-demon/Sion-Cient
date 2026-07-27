@@ -227,7 +227,7 @@ export async function uploadSound(
   category: string,
   emoji: string | null,
   gain: number = 1.0,
-): Promise<string> {
+): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();
@@ -263,8 +263,11 @@ export async function uploadSound(
     },
   };
   const res = await client.sendMessage(roomId, content as never);
+  // L'URL mxc est renvoyée en plus de l'id : diffuser un son fraîchement
+  // uploadé l'exige, et la retrouver via listSounds obligerait à attendre la
+  // synchro de la room.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (res as any).event_id as string;
+  return { eventId: (res as any).event_id as string, mxcUrl, duration };
 }
 
 function probeDuration(file: File): Promise<number> {

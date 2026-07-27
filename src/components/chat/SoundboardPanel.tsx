@@ -17,7 +17,7 @@ import {
 } from "../../services/soundboardService";
 import { canSendMessage, getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { SoundboardUploadModal } from "./SoundboardUploadModal";
-import { VoiceGenerateModal } from "./VoiceGenerateModal";
+import { VoicePanel } from "./VoicePanel";
 import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -81,8 +81,7 @@ export function SoundboardPanel() {
   const [filterMode, setFilterMode] = useState<FilterMode>(() => useSettingsStore.getState().soundboardView.mode);
   const setSoundboardView = useSettingsStore((s) => s.setSoundboardView);
   const [showUpload, setShowUpload] = useState(false);
-  const [showGenerate, setShowGenerate] = useState(false);
-  const [showMembers, setShowMembers] = useState(false);
+  const [tab, setTab] = useState<"sounds" | "voices" | "members">("sounds");
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [hotkeyTarget, setHotkeyTarget] = useState<SoundEntry | null>(null);
   const [editTarget, setEditTarget] = useState<SoundEntry | null>(null);
@@ -367,27 +366,37 @@ export function SoundboardPanel() {
       )}
 
       {/* Tabs */}
-      {roomId && canManageMembers && (
+      {roomId && (canUpload || canManageMembers) && (
         <div style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)' }}>
           {([
-            { key: false, label: t("soundboard.tabSounds") },
-            { key: true, label: `${t("soundboard.tabMembers")} · ${members.length}` },
-          ] as const).map((tab) => (
+            { key: "sounds" as const, label: t("soundboard.tabSounds"), show: true },
+            { key: "voices" as const, label: t("tts.tab"), show: canUpload },
+            { key: "members" as const, label: `${t("soundboard.tabMembers")} · ${members.length}`, show: canManageMembers },
+          ]).filter((x) => x.show).map((x) => (
             <button
-              key={String(tab.key)}
-              onClick={() => setShowMembers(tab.key)}
+              key={x.key}
+              onClick={() => setTab(x.key)}
               style={{
                 padding: '8px 0', border: 'none', background: 'transparent', cursor: 'pointer',
                 fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-                borderBottom: showMembers === tab.key ? '2px solid var(--color-primary)' : '2px solid transparent',
-                color: showMembers === tab.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                borderBottom: tab === x.key ? '2px solid var(--color-primary)' : '2px solid transparent',
+                color: tab === x.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
               }}
-            >{tab.label}</button>
+            >{x.label}</button>
           ))}
         </div>
       )}
 
-      {roomId && showMembers && canManageMembers && (
+      {roomId && tab === "voices" && canUpload && (
+        <VoicePanel
+          sounds={sounds}
+          resolveSound={fetchSoundFile}
+          onUploaded={() => refreshRef.current()}
+          connectedVoice={!!connectedVoice}
+        />
+      )}
+
+      {roomId && tab === "members" && canManageMembers && (
         <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
           {members.map((m) => {
             const isMe = m.userId === myUserId;
@@ -425,7 +434,7 @@ export function SoundboardPanel() {
         </div>
       )}
 
-      {roomId && !showMembers && (
+      {roomId && tab === "sounds" && (
         <>
           {/* Search + add */}
           <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -446,17 +455,6 @@ export function SoundboardPanel() {
                 }}
               />
             </div>
-            {canUpload && (
-              <button
-                onClick={() => setShowGenerate(true)}
-                title={t("tts.title")}
-                style={{
-                  width: 38, height: 38, flexShrink: 0, borderRadius: 12, border: 'none',
-                  background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface)', cursor: 'pointer',
-                  fontSize: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-                }}
-              >🗣️</button>
-            )}
             {canUpload && (
               <button
                 onClick={() => setShowUpload(true)}
@@ -647,15 +645,6 @@ export function SoundboardPanel() {
           maxSize={SOUNDBOARD_MAX_FILE_SIZE}
           onClose={() => setShowUpload(false)}
           onUploaded={() => { setShowUpload(false); refreshRef.current(); }}
-        />
-      )}
-
-      {showGenerate && roomId && (
-        <VoiceGenerateModal
-          sounds={sounds}
-          resolveSound={fetchSoundFile}
-          onClose={() => setShowGenerate(false)}
-          onUploaded={() => { setShowGenerate(false); refreshRef.current(); }}
         />
       )}
 

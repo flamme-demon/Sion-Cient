@@ -637,6 +637,9 @@
     "playRef": "Écouter l'extrait",
     "transcribe": "Transcrire",
     "transcribeHint": "Remplit automatiquement avec le moteur de transcription de Sion",
-    "transcribeBusy": "Transcription de réunion en cours — arrêtez-la d'abord."
+    "transcribeBusy": "Transcription de réunion en cours — arrêtez-la d'abord.",
+    "tab": "Voix",
+    "playForAll": "Jouer pour tous",
+    "playNeedsVoice": "Rejoignez un salon vocal pour diffuser"
   }
 }

@@ -637,6 +637,9 @@
     "playRef": "Play the clip",
     "transcribe": "Transcribe",
     "transcribeHint": "Fills in automatically using Sion's transcription engine",
-    "transcribeBusy": "A meeting transcription is running — stop it first."
+    "transcribeBusy": "A meeting transcription is running — stop it first.",
+    "tab": "Voices",
+    "playForAll": "Play for everyone",
+    "playNeedsVoice": "Join a voice channel to broadcast"
   }
 }
