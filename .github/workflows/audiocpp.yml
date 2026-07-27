@@ -24,6 +24,9 @@ on:
         required: false
         default: audiocpp-0.4.2
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -37,7 +40,15 @@ jobs:
             cmake_flags: -DENGINE_ENABLE_VULKAN=ON
           - name: macos-arm64-metal
             os: macos-14
-            cmake_flags: -DENGINE_ENABLE_METAL=ON
+            # AppleClang ne livre pas OpenMP ; CMake ne trouve libomp que si on
+            # lui passe les chemins de Homebrew à la main.
+            cmake_flags: >-
+              -DENGINE_ENABLE_METAL=ON
+              -DOpenMP_C_FLAGS=-Xclang\ -fopenmp\ -I/opt/homebrew/opt/libomp/include
+              -DOpenMP_C_LIB_NAMES=omp
+              -DOpenMP_CXX_FLAGS=-Xclang\ -fopenmp\ -I/opt/homebrew/opt/libomp/include
+              -DOpenMP_CXX_LIB_NAMES=omp
+              -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib
 
     steps:
       - name: Checkout audio.cpp
@@ -57,7 +68,7 @@ jobs:
 
       - name: Dépendances (macOS)
         if: runner.os == 'macOS'
-        run: brew install ninja
+        run: brew install ninja libomp
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_flags }}
