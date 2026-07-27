@@ -68,7 +68,6 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [engineOk, setEngineOk] = useState<boolean | null>(null);
   const [text, setText] = useState("");
   const [refText, setRefText] = useState("");
-  const [refSoundId, setRefSoundId] = useState<string>("");
   const [localRef, setLocalRef] = useState<File | null>(null);
   const [refWarning, setRefWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,6 +83,10 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [refReady, setRefReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<File | null>(null);
+  /** "list" = galerie des voix, "generate" = formulaire pour la voix choisie. */
+  const [view, setView] = useState<"list" | "generate">("list");
+  /** Voix de la galerie en cours d'utilisation (null si extrait local). */
+  const [activeVoice, setActiveVoice] = useState<SoundEntry | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Les voix sont les sons rangés dans la catégorie dédiée — pas de stockage
@@ -148,29 +151,44 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setRefReady(false);
     setLocalRef(f);
     setRefFile(f);
-    setRefSoundId("");
   };
 
-  /** Charge une voix stockée dans le trimmer. */
-  const pickStored = async (eventId: string) => {
+  /** Ouvre la génération avec cette voix déjà chargée en référence. */
+  const openVoice = async (v: SoundEntry) => {
     setError(null);
     setRefWarning(null);
-    setRefSoundId(eventId);
+    setActiveVoice(v);
     setLocalRef(null);
     refBufferRef.current = null;
     setRefReady(false);
     setRefFile(null);
-    if (!eventId) return;
-    const picked = voices.find((v) => v.eventId === eventId);
-    if (!picked) {
-      setError(t("tts.refGone"));
-      return;
-    }
+    setResult(null);
+    setRefText("");
+    setView("generate");
     try {
-      setRefFile(await resolveSound(picked));
+      setRefFile(await resolveSound(v));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  /** Génération depuis un extrait local, hors galerie. */
+  const openLocal = () => {
+    setError(null);
+    setRefWarning(null);
+    setActiveVoice(null);
+    setLocalRef(null);
+    refBufferRef.current = null;
+    setRefReady(false);
+    setRefFile(null);
+    setResult(null);
+    setRefText("");
+    setView("generate");
+  };
+
+  const backToList = () => {
+    setView("list");
+    setResult(null);
   };
 
   /** Avertissement seulement : audio.cpp accepte des extraits hors plage
@@ -256,9 +274,82 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const canGenerate =
     !!current && current.installed && engineOk === true && hasRef && !!text.trim() && refTextOk && !busy;
 
+  if (view === "list") {
+    return (
+      <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        <div style={{ fontSize: 12, color: "var(--color-on-surface-variant)", marginBottom: 12, lineHeight: 1.5 }}>
+          {t("tts.listHint")}
+        </div>
+        {voices.length === 0 && (
+          <div style={{ fontSize: 12, color: "var(--color-outline)", marginBottom: 12, lineHeight: 1.5 }}>
+            {t("tts.listEmpty")}
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
+          {voices.map((v) => (
+            <div
+              key={v.eventId}
+              onClick={() => openVoice(v)}
+              title={v.label}
+              style={{
+                position: "relative", display: "flex", flexDirection: "column", gap: 8,
+                padding: 12, borderRadius: 14,
+                border: "1px solid var(--color-outline-variant)",
+                background: "var(--color-surface-container)",
+                cursor: "pointer", transition: "background 120ms, border-color 120ms",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--color-surface-container-high)"; e.currentTarget.style.borderColor = "var(--color-primary)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "var(--color-surface-container)"; e.currentTarget.style.borderColor = "var(--color-outline-variant)"; }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                <div style={{ width: 44, height: 44, borderRadius: 999, background: "var(--color-surface-container-highest)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }}>
+                  {v.emoji || "🗣️"}
+                </div>
+                {/* Marqueur explicite : ces voix servent à SYNTHÉTISER de la
+                    parole, pas à rejouer un son. */}
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, padding: "2px 6px", borderRadius: 999, background: "var(--color-primary)", color: "var(--color-on-primary)" }}>
+                  {t("tts.badge")}
+                </span>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-on-surface)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {v.label}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>
+                  {t("tts.cardAction")}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* Extrait local : même place que les voix, sans passer par Matrix. */}
+          <div
+            onClick={openLocal}
+            style={{
+              display: "flex", flexDirection: "column", gap: 8, padding: 12, borderRadius: 14,
+              border: "1px dashed var(--color-outline-variant)", background: "transparent", cursor: "pointer",
+            }}
+          >
+            <div style={{ width: 44, height: 44, borderRadius: 999, background: "var(--color-surface-container-high)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: "var(--color-on-surface-variant)" }}>+</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--color-on-surface)" }}>{t("tts.useLocal")}</div>
+            <div style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>{t("tts.useLocalHint")}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button type="button" onClick={backToList} style={{ ...btn(false, false), padding: "6px 12px" }}>
+            ← {t("tts.back")}
+          </button>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--color-on-surface)" }}>
+            {activeVoice ? `${activeVoice.emoji || "🗣️"} ${activeVoice.label}` : t("tts.useLocal")}
+          </span>
+        </div>
         {engineOk === false && (
           <div
             style={{
@@ -316,17 +407,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
             {t("tts.reference")}
           </span>
-          {voices.length > 0 && (
-            <select value={refSoundId} onChange={(e) => pickStored(e.target.value)} style={inputStyle}>
-              <option value="">{t("tts.pickStored")}</option>
-              {voices.map((v) => (
-                <option key={v.eventId} value={v.eventId}>
-                  {v.emoji ? `${v.emoji} ` : ""}
-                  {v.label}
-                </option>
-              ))}
-            </select>
-          )}
+          {/* Le choix de la voix se fait dans la galerie ; ici on ne propose que
+              de remplacer l'extrait par un fichier local. */}
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input
               ref={fileInputRef}

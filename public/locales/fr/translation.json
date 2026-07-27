@@ -640,6 +640,13 @@
     "transcribeBusy": "Transcription de réunion en cours — arrêtez-la d'abord.",
     "tab": "Voix",
     "playForAll": "Jouer pour tous",
-    "playNeedsVoice": "Rejoignez un salon vocal pour diffuser"
+    "playNeedsVoice": "Rejoignez un salon vocal pour diffuser",
+    "listHint": "Choisissez une voix pour lui faire dire un texte. La parole est synthétisée par IA à partir d'un court extrait.",
+    "badge": "IA",
+    "cardAction": "Faire parler",
+    "useLocal": "Extrait local",
+    "useLocalHint": "Depuis un fichier",
+    "back": "Voix",
+    "listEmpty": "Aucune voix enregistrée. Ajoutez un extrait dans la soundboard avec la catégorie « Voix »."
   }
 }

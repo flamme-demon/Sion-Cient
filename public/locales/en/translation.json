@@ -640,6 +640,13 @@
     "transcribeBusy": "A meeting transcription is running — stop it first.",
     "tab": "Voices",
     "playForAll": "Play for everyone",
-    "playNeedsVoice": "Join a voice channel to broadcast"
+    "playNeedsVoice": "Join a voice channel to broadcast",
+    "listHint": "Pick a voice to make it say something. Speech is AI-synthesised from a short clip.",
+    "badge": "AI",
+    "cardAction": "Make it speak",
+    "useLocal": "Local clip",
+    "useLocalHint": "From a file",
+    "back": "Voices",
+    "listEmpty": "No saved voices. Add a clip in the soundboard under the “Voix” category."
   }
 }
