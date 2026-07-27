@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkRefDuration, VOICE_CATEGORY, REF_MIN_SEC, REF_MAX_SEC, TTS_MODEL_LABELS } from "./ttsService";
+import { checkRefDuration, VOICE_CATEGORY, REF_MIN_SEC, REF_MAX_SEC, TTS_MODEL_LABELS, bufferToWav } from "./ttsService";
 
 describe("checkRefDuration", () => {
   it("accepte la plage recommandée", () => {
@@ -37,5 +37,60 @@ describe("catalogue", () => {
   // un namespace Matrix séparé : listSounds/uploadSound les gèrent déjà.
   it("expose une catégorie de voix non vide", () => {
     expect(VOICE_CATEGORY.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("bufferToWav", () => {
+  /** Fabrique un AudioBuffer minimal sans Web Audio (indisponible en test). */
+  const fakeBuffer = (samples: number[][], sampleRate = 48000): AudioBuffer =>
+    ({
+      sampleRate,
+      length: samples[0].length,
+      duration: samples[0].length / sampleRate,
+      numberOfChannels: samples.length,
+      getChannelData: (c: number) => Float32Array.from(samples[c]),
+    }) as unknown as AudioBuffer;
+
+  const header = async (f: File) => new Uint8Array(await f.arrayBuffer());
+
+  // audio.cpp rejette tout ce qui n'est pas du WAV sur --voice-ref
+  // (« invalid WAV RIFF header ») : l'en-tête est donc la garantie critique.
+  it("produit un en-tête RIFF/WAVE valide", async () => {
+    const b = await header(bufferToWav(fakeBuffer([[0, 0.5, -0.5, 0]])));
+    expect(String.fromCharCode(...b.slice(0, 4))).toBe("RIFF");
+    expect(String.fromCharCode(...b.slice(8, 12))).toBe("WAVE");
+    expect(String.fromCharCode(...b.slice(12, 16))).toBe("fmt ");
+    expect(String.fromCharCode(...b.slice(36, 40))).toBe("data");
+  });
+
+  it("annonce du PCM 16 bits mono au bon débit", async () => {
+    const b = await header(bufferToWav(fakeBuffer([[0, 0, 0, 0]], 24000)));
+    const v = new DataView(b.buffer);
+    expect(v.getUint16(20, true)).toBe(1); // PCM entier
+    expect(v.getUint16(22, true)).toBe(1); // mono
+    expect(v.getUint32(24, true)).toBe(24000);
+    expect(v.getUint16(34, true)).toBe(16);
+  });
+
+  it("ne garde que la sélection demandée", async () => {
+    const buf = fakeBuffer([Array.from({ length: 48000 }, () => 0)], 48000);
+    const whole = await header(bufferToWav(buf));
+    const half = await header(bufferToWav(buf, 0, 0.5));
+    expect(half.length).toBeLessThan(whole.length);
+    expect(new DataView(half.buffer).getUint32(40, true)).toBe(24000 * 2);
+  });
+
+  // Un buffer peut sortir de [-1, 1] après un gain ; le repli entier
+  // produirait un craquement au lieu d'une saturation propre.
+  it("écrête au lieu de replier les échantillons hors plage", async () => {
+    const b = await header(bufferToWav(fakeBuffer([[5, -5]])));
+    const v = new DataView(b.buffer);
+    expect(v.getInt16(44, true)).toBe(32767);
+    expect(v.getInt16(46, true)).toBe(-32768);
+  });
+
+  it("mixe les canaux en mono", async () => {
+    const b = await header(bufferToWav(fakeBuffer([[1], [-1]])));
+    expect(new DataView(b.buffer).getInt16(44, true)).toBe(0);
   });
 });

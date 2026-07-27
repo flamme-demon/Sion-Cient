@@ -134,6 +134,55 @@ export async function generateSpeech(
 export const VOICE_CATEGORY = "Voix";
 
 /**
+ * Encode une portion d'AudioBuffer en WAV PCM 16 bits mono.
+ *
+ * `--voice-ref` n'accepte QUE du WAV : lui passer le mp3/ogg d'origine échoue
+ * sur « invalid WAV RIFF header ». Et `trimToClip` (soundboard) produit du
+ * webm/opus via MediaRecorder, donc inutilisable ici.
+ *
+ * Mono parce que les encodeurs de locuteur ne lisent que le premier canal :
+ * autant faire la moyenne nous-mêmes plutôt que de jeter la moitié du signal.
+ */
+export function bufferToWav(buffer: AudioBuffer, startSec = 0, endSec?: number): File {
+  const rate = buffer.sampleRate;
+  const from = Math.max(0, Math.floor(startSec * rate));
+  const to = Math.min(buffer.length, Math.floor((endSec ?? buffer.duration) * rate));
+  const n = Math.max(1, to - from);
+
+  const chans = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
+  const bytes = new ArrayBuffer(44 + n * 2);
+  const view = new DataView(bytes);
+  const ascii = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + n * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true); // taille du bloc fmt
+  view.setUint16(20, 1, true); // PCM entier
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true); // octets par seconde
+  view.setUint16(32, 2, true); // alignement de bloc
+  view.setUint16(34, 16, true); // bits par échantillon
+  ascii(36, "data");
+  view.setUint32(40, n * 2, true);
+
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    for (const ch of chans) s += ch[from + i] || 0;
+    s /= chans.length;
+    // Écrêtage avant conversion : un buffer peut dépasser [-1, 1] après un
+    // gain, et le repli entier produirait un craquement.
+    s = Math.max(-1, Math.min(1, s));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new File([bytes], "ref.wav", { type: "audio/wav" });
+}
+
+/**
  * Écrit un File sur disque et renvoie son chemin — le moteur lit `--voice-ref`
  * depuis le système de fichiers, pas depuis l'IPC.
  *

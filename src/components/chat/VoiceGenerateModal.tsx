@@ -8,6 +8,7 @@ import {
   installTtsModel,
   installTtsEngine,
   transcribeRef,
+  bufferToWav,
   checkRefDuration,
   VOICE_CATEGORY,
   TTS_MODEL_LABELS,
@@ -16,6 +17,7 @@ import {
   type TtsModelInfo,
 } from "../../services/ttsService";
 import { uploadSound, type SoundEntry } from "../../services/soundboardService";
+import { AudioTrimmer } from "./AudioTrimmer";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
 const MAX_TEXT = 500;
@@ -71,7 +73,13 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
   const [installPct, setInstallPct] = useState<number | null>(null);
   const [enginePct, setEnginePct] = useState<number | null>(null);
   const [transcribing, setTranscribing] = useState(false);
-  const [refPreview, setRefPreview] = useState<string | null>(null);
+  /** Fichier réellement affiché dans le trimmer, quelle que soit sa provenance. */
+  const [refFile, setRefFile] = useState<File | null>(null);
+  /** Sélection courante rapportée par <AudioTrimmer>. */
+  const regionRef = useRef<{ start: number; end: number; buffer: AudioBuffer } | null>(null);
+  // Miroir d'état : la ref seule ne redéclenche pas le rendu, or l'activation
+  // des boutons dépend de la présence d'une sélection décodée.
+  const [hasRegion, setHasRegion] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -101,40 +109,20 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     };
   }, [previewUrl]);
 
-  useEffect(() => {
-    return () => {
-      if (refPreview) URL.revokeObjectURL(refPreview);
-    };
-  }, [refPreview]);
-
-  /** Résout la référence courante en File, quelle que soit sa provenance. */
-  const currentRefFile = async (): Promise<File> => {
-    if (localRef) return localRef;
-    const picked = voices.find((v) => v.eventId === refSoundId);
-    if (!picked) throw new Error(t("tts.refGone"));
-    return await resolveSound(picked);
+  /** Le WAV de la sélection courante — seul format accepté par --voice-ref. */
+  const selectionWav = (): File => {
+    const r = regionRef.current;
+    if (!r) throw new Error(t("tts.refGone"));
+    return bufferToWav(r.buffer, r.start, r.end);
   };
 
-  /** Écoute de la référence — indispensable pour vérifier qu'on a le bon
-   *  extrait avant d'en transcrire le contenu ou de générer avec. */
-  const playRef = async () => {
-    setError(null);
-    try {
-      const f = await currentRefFile();
-      if (refPreview) URL.revokeObjectURL(refPreview);
-      setRefPreview(URL.createObjectURL(f));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  /** Pré-remplit la transcription via le moteur ASR déjà présent. */
+  /** Pré-remplit la transcription via le moteur ASR déjà présent. On transcrit
+   *  la sélection, pas le fichier entier : c'est elle qui sert de référence. */
   const autoTranscribe = async () => {
     setError(null);
     setTranscribing(true);
     try {
-      const f = await currentRefFile();
-      setRefText(await transcribeRef(f));
+      setRefText(await transcribeRef(selectionWav()));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg === "busy" ? t("tts.transcribeBusy") : msg);
@@ -163,24 +151,42 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
       setError(t("tts.errorNotAudio"));
       return;
     }
+    regionRef.current = null;
+    setHasRegion(false);
     setLocalRef(f);
+    setRefFile(f);
     setRefSoundId("");
-    // Avertissement seulement : audio.cpp accepte des extraits hors plage
-    // (montages compris), c'est simplement moins fidèle.
-    try {
-      const url = URL.createObjectURL(f);
-      const probe = new Audio();
-      probe.preload = "metadata";
-      probe.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        const w = checkRefDuration(probe.duration);
-        setRefWarning(w ? t(`tts.ref.${w}`, { min: REF_MIN_SEC, max: REF_MAX_SEC }) : null);
-      };
-      probe.onerror = () => URL.revokeObjectURL(url);
-      probe.src = url;
-    } catch {
-      /* la sonde de durée est un confort, pas un prérequis */
+  };
+
+  /** Charge une voix stockée dans le trimmer. */
+  const pickStored = async (eventId: string) => {
+    setError(null);
+    setRefWarning(null);
+    setRefSoundId(eventId);
+    setLocalRef(null);
+    regionRef.current = null;
+    setHasRegion(false);
+    setRefFile(null);
+    if (!eventId) return;
+    const picked = voices.find((v) => v.eventId === eventId);
+    if (!picked) {
+      setError(t("tts.refGone"));
+      return;
     }
+    try {
+      setRefFile(await resolveSound(picked));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /** Avertissement seulement : audio.cpp accepte des extraits hors plage
+   *  (montages compris), c'est simplement moins fidèle. */
+  const onRegion = (start: number, end: number, buffer: AudioBuffer) => {
+    regionRef.current = { start, end, buffer };
+    setHasRegion(true);
+    const w = checkRefDuration(end - start);
+    setRefWarning(w ? t(`tts.ref.${w}`, { min: REF_MIN_SEC, max: REF_MAX_SEC }) : null);
   };
 
   const install = async () => {
@@ -203,7 +209,7 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     setResult(null);
     setBusy(true);
     try {
-      const refPath = await materializeRef(await currentRefFile());
+      const refPath = await materializeRef(selectionWav());
       const wav = await generateSpeech(
         current.id,
         text.trim(),
@@ -235,7 +241,9 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     }
   };
 
-  const hasRef = !!localRef || !!refSoundId;
+  // Une sélection décodée est le vrai prérequis : un fichier choisi mais
+  // illisible ne doit pas laisser croire qu'on peut générer.
+  const hasRef = hasRegion;
   const refTextOk = !current?.needsReferenceText || refText.trim().length > 0;
   const canGenerate =
     !!current && current.installed && engineOk === true && hasRef && !!text.trim() && refTextOk && !busy;
@@ -330,15 +338,7 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
             {t("tts.reference")}
           </span>
           {voices.length > 0 && (
-            <select
-              value={refSoundId}
-              onChange={(e) => {
-                setRefSoundId(e.target.value);
-                setLocalRef(null);
-                setRefWarning(null);
-              }}
-              style={inputStyle}
-            >
+            <select value={refSoundId} onChange={(e) => pickStored(e.target.value)} style={inputStyle}>
               <option value="">{t("tts.pickStored")}</option>
               {voices.map((v) => (
                 <option key={v.eventId} value={v.eventId}>
@@ -362,16 +362,17 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
             <button type="button" onClick={() => fileInputRef.current?.click()} style={btn(false, false)}>
               {t("tts.pickFile")}
             </button>
-            <button type="button" onClick={playRef} disabled={!hasRef} style={btn(false, !hasRef)} title={t("tts.playRef")}>
-              ▶
-            </button>
             {localRef && (
               <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
                 {localRef.name}
               </span>
             )}
           </div>
-          {refPreview && <audio controls src={refPreview} style={{ width: "100%" }} />}
+          {/* Même trimmer que la soundboard et les sons de canal : écoute avec
+              forme d'onde, et découpe l'extrait sur la fenêtre utile. */}
+          {refFile && (
+            <AudioTrimmer file={refFile} maxSec={REF_MAX_SEC} onChange={onRegion} />
+          )}
           {refWarning && (
             <span style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>{refWarning}</span>
           )}
