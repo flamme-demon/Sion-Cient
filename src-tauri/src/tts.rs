@@ -264,28 +264,37 @@ pub async fn pick_tts_engine_path() -> Option<String> {
         .map(|h| h.path().to_string_lossy().to_string())
 }
 
+/// Tag de la release Sion qui héberge le moteur.
+///
+/// Volontairement figé, et distinct des releases applicatives : le moteur ne
+/// bouge qu'au rythme d'audio.cpp. Pointer `/releases/latest/` obligerait à
+/// ré-attacher 76 Mo à chaque version de Sion, sous peine de casser le
+/// téléchargement dès la publication suivante.
+///
+/// Pour le mettre à jour : relancer le workflow `audiocpp.yml` sur un nouveau
+/// tag d'audio.cpp, publier une release `audiocpp-<version>`, puis changer
+/// cette constante.
+const ENGINE_RELEASE_TAG: &str = "audiocpp-0.4.2";
+
 /// Archive à récupérer selon la plateforme.
 ///
 /// Windows est servi directement par l'amont. Linux et macOS n'ont pas de
-/// binaire publié : ils viennent des releases Sion, alimentées par le workflow
-/// `audiocpp.yml` — qui joint aussi `model_specs/`, indispensable aux modèles
-/// safetensors.
-fn engine_archive_url() -> Option<(&'static str, bool)> {
+/// binaire publié : ils viennent d'une release Sion dédiée, alimentée par le
+/// workflow `audiocpp.yml` — qui joint aussi `model_specs/`, indispensable aux
+/// modèles safetensors.
+fn engine_archive_url() -> Option<(String, bool)> {
+    let sion = |asset: &str| {
+        format!("https://github.com/flamme-demon/Sion-Cient/releases/download/{ENGINE_RELEASE_TAG}/{asset}")
+    };
     if cfg!(target_os = "windows") {
         Some((
-            "https://github.com/0xShug0/audio.cpp/releases/latest/download/audiocpp-windows-cpu-balance.zip",
+            "https://github.com/0xShug0/audio.cpp/releases/latest/download/audiocpp-windows-cpu-balance.zip".to_string(),
             true,
         ))
     } else if cfg!(target_os = "linux") {
-        Some((
-            "https://github.com/flamme-demon/Sion-Cient/releases/latest/download/audiocpp-linux-x64-vulkan.tar.gz",
-            false,
-        ))
+        Some((sion("audiocpp-linux-x64-vulkan.tar.gz"), false))
     } else if cfg!(target_os = "macos") {
-        Some((
-            "https://github.com/flamme-demon/Sion-Cient/releases/latest/download/audiocpp-macos-arm64-metal.tar.gz",
-            false,
-        ))
+        Some((sion("audiocpp-macos-arm64-metal.tar.gz"), false))
     } else {
         None
     }
@@ -310,7 +319,7 @@ pub async fn download_tts_engine(app: tauri::AppHandle<TauriRuntime>) -> Result<
         .user_agent("Mozilla/5.0 (Sion TTS installer)")
         .build()
         .map_err(|e| e.to_string())?;
-    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let mut resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {} — build indisponible pour cette plateforme", resp.status()));
     }

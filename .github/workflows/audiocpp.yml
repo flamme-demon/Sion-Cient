@@ -20,9 +20,9 @@ on:
         required: true
         default: release-0.4.2
       release_tag:
-        description: "Tag de release Sion où attacher les binaires (vide = artefacts seulement)"
+        description: "Release Sion dédiée où attacher les binaires (vide = artefacts seulement)"
         required: false
-        default: ""
+        default: audiocpp-0.4.2
 
 jobs:
   build:
@@ -76,6 +76,8 @@ jobs:
           mkdir -p dist/audiocpp
           cp build/bin/audiocpp_cli dist/audiocpp/
           cp -r model_specs dist/audiocpp/
+          # Apache-2.0 : la licence doit accompagner toute redistribution du binaire.
+          cp LICENSE dist/audiocpp/
           tar -czf audiocpp-${{ matrix.name }}.tar.gz -C dist audiocpp
 
       - name: Vérifier que le binaire démarre
