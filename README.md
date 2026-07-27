@@ -11,6 +11,7 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 - **URL media import** (yt-dlp) — bring audio/video from a link into chat or the soundboard
 - **Screen sharing** in voice channels with dedicated viewer, system-audio capture (Linux), and a native cursor overlay
 - **Soundboard** — shared server-wide sound library with per-sound category/emoji/hotkey/gain, in-app trimmer, LiveKit broadcast to voice participants
+- **Generated voices** — clone a voice from a short reference clip and make it say anything, entirely locally (audio.cpp / ggml, Vulkan-accelerated; Chatterbox, Higgs Audio v3 or Qwen3-TTS, engine and models downloaded on demand). Reference clips live in the soundboard, so they are shared server-wide; results play through the existing soundboard pipeline
 - **Meeting transcription** — consent-based (≥2 participants), each one transcribing their own mic locally (whisper.cpp / Parakeet v3 via transcribe.cpp); live panel, session history, and AI meeting minutes generated locally (llama.cpp + Qwen3.5-4B, Vulkan-accelerated)
 - **Voice & event sounds** — customizable join/leave/timeout cues plus poke / kicked / member-kicked notifications (custom file or URL per sound)
 - **Link previews** with OG metadata extraction (YouTube oEmbed, GitHub, etc.)
@@ -73,6 +74,7 @@ build-scripts/
 - CMake + Ninja (for CEF compilation)
 - [ffmpeg](https://ffmpeg.org/) (for video transcoding in chat — can also be auto-downloaded in-app)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) (optional — for URL audio/video import; auto-downloadable in-app)
+- [audio.cpp](https://github.com/0xShug0/audio.cpp) (optional — engine for generated voices; auto-downloadable in-app on Windows/Linux/macOS). Building it yourself on Linux additionally needs `spirv-headers` and `glslc` for the Vulkan backend
 - A Matrix homeserver (tested with [Continuwuity](https://github.com/continuwuation/continuwuity))
 - A LiveKit server for voice/video
 
