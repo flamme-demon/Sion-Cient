@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkRefDuration, VOICE_CATEGORY, REF_MIN_SEC, REF_MAX_SEC, TTS_MODEL_LABELS, bufferToWav, GENERATED_CATEGORY } from "./ttsService";
+import { checkRefDuration, VOICE_CATEGORY, REF_MIN_SEC, REF_MAX_SEC, TTS_MODEL_LABELS, bufferToWav, GENERATED_CATEGORY, REF_SAMPLE_RATE } from "./ttsService";
 
 describe("checkRefDuration", () => {
   it("accepte la plage recommandée", () => {
@@ -99,5 +99,35 @@ describe("bufferToWav", () => {
   it("mixe les canaux en mono", async () => {
     const b = await header(bufferToWav(fakeBuffer([[1], [-1]])));
     expect(new DataView(b.buffer).getInt16(44, true)).toBe(0);
+  });
+});
+
+describe("taille des extraits de référence", () => {
+  const SOUNDBOARD_CAP = 1024 * 1024;
+
+  const silence = (seconds: number, rate: number): AudioBuffer =>
+    ({
+      sampleRate: rate,
+      length: seconds * rate,
+      duration: seconds,
+      numberOfChannels: 1,
+      getChannelData: () => new Float32Array(seconds * rate),
+    }) as unknown as AudioBuffer;
+
+  /**
+   * Régression : le WAV était encodé au taux du décodage (48 kHz), soit
+   * ~96 Ko/s — au-delà de 11 s l'upload échouait sur « Fichier trop lourd ».
+   * À 24 kHz, la fenêtre recommandée passe très largement.
+   */
+  it("un extrait de 10 s à 24 kHz tient sous le plafond de la soundboard", () => {
+    expect(bufferToWav(silence(10, REF_SAMPLE_RATE)).size).toBeLessThan(SOUNDBOARD_CAP);
+  });
+
+  it("même la durée maximale d'un son tient", () => {
+    expect(bufferToWav(silence(20, REF_SAMPLE_RATE)).size).toBeLessThan(SOUNDBOARD_CAP);
+  });
+
+  it("le taux d'origine 48 kHz, lui, débordait", () => {
+    expect(bufferToWav(silence(12, 48000)).size).toBeGreaterThan(SOUNDBOARD_CAP);
   });
 });

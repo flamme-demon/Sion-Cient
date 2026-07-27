@@ -8,7 +8,7 @@ import {
   installTtsModel,
   installTtsEngine,
   transcribeRef,
-  bufferToWav,
+  encodeRefWav,
   checkRefDuration,
   VOICE_CATEGORY,
   GENERATED_CATEGORY,
@@ -99,6 +99,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [savePortrait, setSavePortrait] = useState<File | null>(null);
   /** Image brute en attente de recadrage. */
   const [cropSource, setCropSource] = useState<File | null>(null);
+  /** Aperçu du portrait, créé une seule fois par image et révoqué ensuite. */
+  const [portraitPreview, setPortraitPreview] = useState<string | null>(null);
   const portraitInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -133,11 +135,12 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
       .catch(() => setEngineOk(false));
   }, []);
 
-  /** L'extrait en WAV — seul format accepté par --voice-ref. */
-  const selectionWav = (): File => {
+  /** L'extrait en WAV 24 kHz — seul format accepté par --voice-ref, et le
+   *  seul qui tienne sous le plafond de taille de la soundboard. */
+  const selectionWav = (): Promise<File> => {
     const b = refBufferRef.current;
     if (!b) throw new Error(t("tts.refGone"));
-    return bufferToWav(b);
+    return encodeRefWav(b);
   };
 
   /** Pré-remplit la transcription via le moteur ASR déjà présent. On transcrit
@@ -146,7 +149,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setError(null);
     setTranscribing(true);
     try {
-      setRefText(await transcribeRef(selectionWav()));
+      setRefText(await transcribeRef(await selectionWav()));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg === "busy" ? t("tts.transcribeBusy") : msg);
@@ -251,7 +254,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     try {
       const avatar = savePortrait ? await uploadFile(savePortrait) : undefined;
       await uploadSound(
-        selectionWav(),
+        await selectionWav(),
         saveName.trim(),
         VOICE_CATEGORY,
         saveEmoji || "🗣️",
@@ -261,6 +264,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
       onUploaded();
       setSaveName("");
       setSavePortrait(null);
+      setPortraitPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -302,7 +306,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     setResult(null);
     setBusy(true);
     try {
-      const refPath = await materializeRef(selectionWav());
+      const refPath = await materializeRef(await selectionWav());
       const wav = await generateSpeech(
         current.id,
         text.trim(),
@@ -429,7 +433,11 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
         <ImageCropper
           file={cropSource}
           onCancel={() => setCropSource(null)}
-          onCropped={(f) => { setSavePortrait(f); setCropSource(null); }}
+          onCropped={(f) => {
+            setSavePortrait(f);
+            setPortraitPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(f); });
+            setCropSource(null);
+          }}
         />
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560, minWidth: 0 }}>
@@ -595,8 +603,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                   display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16,
                 }}
               >
-                {savePortrait
-                  ? <img src={URL.createObjectURL(savePortrait)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                {portraitPreview
+                  ? <img src={portraitPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   : "🖼"}
               </button>
               <input

@@ -196,6 +196,40 @@ export function bufferToWav(buffer: AudioBuffer, startSec = 0, endSec?: number):
 }
 
 /**
+ * Taux d'échantillonnage des extraits de référence.
+ *
+ * Les modèles travaillent en 24 kHz (Chatterbox s3gen, Higgs) et n'exploitent
+ * rien au-delà — garder les 48 kHz du décodage double le poids sans rien
+ * apporter. À 48 Ko/s, un extrait de 10 s tient largement sous le plafond de
+ * 1 Mo de la soundboard, que le WAV brut dépassait dès 11 secondes.
+ */
+export const REF_SAMPLE_RATE = 24000;
+
+/**
+ * Rééchantillonne puis encode l'extrait en WAV prêt pour le moteur.
+ *
+ * Le rééchantillonnage passe par un OfflineAudioContext : c'est le seul moyen
+ * correct côté navigateur, une décimation naïve replierait les aigus.
+ */
+export async function encodeRefWav(
+  buffer: AudioBuffer,
+  startSec = 0,
+  endSec?: number,
+): Promise<File> {
+  const from = Math.max(0, startSec);
+  const to = Math.min(buffer.duration, endSec ?? buffer.duration);
+  const frames = Math.max(1, Math.round((to - from) * REF_SAMPLE_RATE));
+  if (buffer.sampleRate === REF_SAMPLE_RATE) return bufferToWav(buffer, from, to);
+
+  const ctx = new OfflineAudioContext(1, frames, REF_SAMPLE_RATE);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  src.start(0, from, to - from);
+  return bufferToWav(await ctx.startRendering());
+}
+
+/**
  * Écrit un File sur disque et renvoie son chemin — le moteur lit `--voice-ref`
  * depuis le système de fichiers, pas depuis l'IPC.
  *
