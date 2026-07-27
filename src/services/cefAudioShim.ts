@@ -26,20 +26,37 @@ function extractDeviceId(constraint: unknown): string | undefined {
 
 export async function installCefAudioShim() {
   if (shimInstalled) return;
-  if (!window.__TAURI_INTERNALS__) return;
+  if (!window.__TAURI_INTERNALS__) {
+    console.log("[Sion][AudioShim] hors Tauri — shim inutile");
+    return;
+  }
 
   // Quick check: does the browser return real device IDs?
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioIn = devices.filter((d) => d.kind === "audioinput");
     const hasRealIds = devices.some(
       (d) => d.deviceId && d.deviceId !== "" && d.deviceId !== "default" && d.label !== "",
     );
-    if (hasRealIds) return;
-  } catch {
-    return;
+    console.log(
+      `[Sion][AudioShim] énumération native : ${devices.length} périphérique(s), ` +
+      `${audioIn.length} entrée(s) audio, ids exploitables=${hasRealIds}`,
+    );
+    if (hasRealIds) {
+      // CEF sait énumérer : on ne s'interpose pas… sauf s'il ne voit aucune
+      // entrée audio, auquel cas getUserMedia échouerait et le shim est le
+      // seul recours (PulseAudio, lui, les voit).
+      if (audioIn.length > 0) return;
+      console.warn("[Sion][AudioShim] ids corrects mais AUCUNE entrée audio — shim activé quand même");
+    }
+  } catch (err) {
+    // Une énumération qui lève est précisément ce que le shim répare : y
+    // renoncer ici laissait CEF sans micro, sans la moindre trace.
+    console.warn("[Sion][AudioShim] énumération native en échec — shim activé:", err);
   }
 
   shimInstalled = true;
+  console.log("[Sion][AudioShim] shim installé (énumération + getUserMedia via PulseAudio)");
   const { invoke } = await import("@tauri-apps/api/core");
 
   // ── Override enumerateDevices ──────────────────────────────────────────
