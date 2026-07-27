@@ -55,6 +55,10 @@ interface AppState {
    *  i.e. we can't decrypt a peer). Best available proxy for "voice E2EE is
    *  unhealthy right now"; surfaces the manual republish-presence recovery. */
   e2eeUnhealthy: boolean;
+  /** CEF a perdu sa connexion au serveur audio : PulseAudio annonce des entrées
+   *  mais CEF n'en voit aucune. Chromium ne rétablit jamais ce lien et n'expose
+   *  rien pour le forcer — seul un redémarrage répare, d'où le bandeau. */
+  audioBackendLost: boolean;
   /** Globally-positioned user context menu, opened from sidebar voice list, mention pills, etc. */
   userContextMenu: UserContextMenuState | null;
   /** Download completion toast */
@@ -94,6 +98,7 @@ interface AppState {
   setIsSpeaking: (v: boolean) => void;
   setPendingAutoJoinVoice: (roomId: string | null) => void;
   setE2EEUnhealthy: (v: boolean) => void;
+  setAudioBackendLost: (v: boolean) => void;
   openUserContextMenu: (state: UserContextMenuState) => void;
   closeUserContextMenu: () => void;
   showDownloadNotification: (filename: string, path: string) => void;
@@ -122,6 +127,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingAutoJoinVoice: null,
   connectingVoiceChannel: null,
   e2eeUnhealthy: false,
+  audioBackendLost: false,
   userContextMenu: null,
   downloadNotification: null,
   downloadedFiles: new Set<string>(JSON.parse(localStorage.getItem("sion-downloaded-files") || "[]")),
@@ -140,6 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // d'ARRÊTER un partage inexistant au lieu d'en démarrer un.
   disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false, e2eeUnhealthy: false, isScreenSharing: false }),
   setE2EEUnhealthy: (v: boolean) => set({ e2eeUnhealthy: v }),
+  setAudioBackendLost: (v: boolean) => set({ audioBackendLost: v }),
   toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });

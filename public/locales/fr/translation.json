@@ -52,7 +52,8 @@
     "speaking": "Parle...",
     "connecting": "Connexion...",
     "reconnect": "Reconnecter",
-    "republishPresence": "Republier ma présence (si on ne m'entend pas)"
+    "republishPresence": "Republier ma présence (si on ne m'entend pas)",
+    "audioBackendLost": "Périphériques audio perdus : Sion ne voit plus votre micro alors que le système le détecte. Redémarrez l'application pour rétablir le son."
   },
   "controls": {
     "mute": "Mute",

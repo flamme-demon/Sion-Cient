@@ -16,7 +16,31 @@ const DEBOUNCE_MS = 800;
 let installed = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 
-async function onDevicesChanged() {
+/**
+ * Le backend audio de CEF est-il mort ?
+ *
+ * PulseAudio annonce des entrées mais CEF n'en voit aucune : sa connexion au
+ * serveur audio est perdue, typiquement après un rechargement du service
+ * PipeWire. Chromium ne la rétablit jamais et n'expose aucun moyen de la
+ * relancer — seul un redémarrage du processus répare.
+ */
+async function cefAudioIsDead(pulseInputs: number): Promise<boolean> {
+  if (pulseInputs <= 0) return false;
+  try {
+    const devices = await originalEnumerate();
+    return devices.filter((d) => d.kind === "audioinput").length === 0;
+  } catch {
+    return true;
+  }
+}
+
+/** Capturée avant que le shim ne surcharge l'API, pour pouvoir interroger CEF
+ *  lui-même plutôt que la liste PulseAudio que le shim substitue. */
+const originalEnumerate = navigator.mediaDevices?.enumerateDevices
+  ? navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices)
+  : async () => [] as MediaDeviceInfo[];
+
+async function onDevicesChanged(pulseInputs = -1) {
   const { getCurrentRoom, refreshMicrophoneForDenoise } = await import("./livekitService");
 
   let inputs = -1;
@@ -25,6 +49,16 @@ async function onDevicesChanged() {
     inputs = devices.filter((d) => d.kind === "audioinput").length;
   } catch {
     /* l'énumération peut échouer sous CEF ; le compte reste indicatif */
+  }
+
+  if (await cefAudioIsDead(pulseInputs)) {
+    console.error(
+      `[Sion][Devices] backend audio CEF perdu : ${pulseInputs} entrée(s) côté système, ` +
+      `aucune côté CEF. Un redémarrage de Sion est nécessaire.`,
+    );
+    const { useAppStore } = await import("../stores/useAppStore");
+    useAppStore.getState().setAudioBackendLost(true);
+    return;
   }
 
   const room = getCurrentRoom();
@@ -56,12 +90,27 @@ async function onDevicesChanged() {
   }
 }
 
-export function installAudioDeviceWatcher() {
-  if (installed || !navigator.mediaDevices?.addEventListener) return;
+export async function installAudioDeviceWatcher() {
+  if (installed) return;
   installed = true;
-  navigator.mediaDevices.addEventListener("devicechange", () => {
+
+  // Chemin standard — inopérant sous CEF, conservé pour les autres cibles.
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => { timer = null; void onDevicesChanged(); }, DEBOUNCE_MS);
   });
-  console.log("[Sion][Devices] surveillance du branchement à chaud active");
+
+  // Chemin réel sous CEF : Rust sonde PulseAudio et nous prévient, parce que
+  // `devicechange` n'y est jamais émis (vérifié par débranchement physique).
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<number>("audio-devices-changed", (e) => {
+      if (timer) clearTimeout(timer);
+      const inputs = e.payload;
+      timer = setTimeout(() => { timer = null; void onDevicesChanged(inputs); }, DEBOUNCE_MS);
+    });
+    console.log("[Sion][Devices] surveillance active (devicechange + sondage PulseAudio)");
+  } catch {
+    console.log("[Sion][Devices] surveillance active (devicechange seul)");
+  }
 }

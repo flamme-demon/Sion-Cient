@@ -1,0 +1,689 @@
+ Download the React DevTools for a better development experience: https://react.dev/link/react-devtools
+ 🌐 i18next is made possible by our own product, Locize — consider powering your project with managed localization (AI, CDN, integrations): https://locize.com 💙
+ [2026-07-27][20:39:33][app_lib][INFO] [Sion] Global shortcuts updated: mute=F8, deafen=F9
+ [Sion][AudioShim] énumération native : 1 périphérique(s), 0 entrée(s) audio, ids exploitables=false
+ [Sion][AudioShim] shim installé (énumération + getUserMedia via PulseAudio)
+ [2026-07-27][20:39:33][app_lib][INFO] [Sion] WS shortcut client connected
+ [2026-07-27][20:39:33][app_lib::portal_shortcuts][INFO] [Sion] Portal host-app registration unavailable: ZBus Error: org.freedesktop.portal.Error.Failed: Could not register app ID: Connection already associated with an application ID
+ [Sion][Devices] surveillance du branchement à chaud active
+ [2026-07-27][20:39:33][app_lib::portal_shortcuts][INFO] [Sion] Portal shortcut bound: deafen-f9 → F9
+ [2026-07-27][20:39:33][app_lib::portal_shortcuts][INFO] [Sion] Portal shortcut bound: mute-f8 → F8
+ INFO matrix_sdk_crypto::backups: Activated a backup
+    backup_key=MegolmV1BackupKey { key: "qt9VBMS/1wT5ypQZ3OfKtIOrCulwXxg2pNNkSiAZiEo", version: Some("192") }
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/backups/mod.rs:389
+ Missing default global override push rule .m.rule.contains_display_name
+ Missing default global override push rule .m.rule.roomnotif
+ Adding default global override push rule .org.matrix.msc3786.rule.room.server_acl
+ Adding default global underride push rule .org.matrix.msc3914.rule.room.call
+ Missing default global override push rule .m.rule.contains_display_name
+ Missing default global override push rule .m.rule.roomnotif
+ Adding default global override push rule .org.matrix.msc3786.rule.room.server_acl
+ Adding default global underride push rule .org.matrix.msc3914.rule.room.call
+ [2026-07-27][20:39:34][app_lib][INFO] [Sion] Global shortcuts updated: mute=F8, deafen=F9
+ [2026-07-27][20:39:34][app_lib::portal_shortcuts][INFO] [Sion] Portal host-app registration unavailable: ZBus Error: org.freedesktop.portal.Error.Failed: Could not register app ID: Connection already associated with an application ID
+ [2026-07-27][20:39:34][app_lib::portal_shortcuts][INFO] [Sion] Portal shortcut bound: mute-f8 → F8
+ [2026-07-27][20:39:34][app_lib::portal_shortcuts][INFO] [Sion] Portal shortcut bound: deafen-f9 → F9
+ Resuming queue after resumed sync
+ [CallMembership @flamme:sionchat.fr:hbuLjC5ILP] use slotId compat hack emptyString -> ROOM
+ [CallMembership @pierre:sionchat.fr:EJYuuPVUT0] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/EJYuuPVUT0
+ [CallMembership @flammemob:sionchat.fr:S8243DxQwp] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/S8243DxQwp
+ [CallMembership @picsou:sionchat.fr:uppjqQyg8Z] use slotId compat hack emptyString -> ROOM
+ [CallMembership @pierre:sionchat.fr:IafW1rZfZF] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/IafW1rZfZF
+ [CallMembership @flammemob:sionchat.fr:61bwI4lGS6] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/61bwI4lGS6
+ [CallMembership @picsou:sionchat.fr:vharjwKQuH] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @picsou:sionchat.fr/vharjwKQuH
+ [CallMembership @flammemob:sionchat.fr:LDM8061bNA] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/LDM8061bNA
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM] Memberships for call in room !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo have changed: emitting (2 members)
+ [CallMembership @picsou:sionchat.fr:PgG5IqixWQ] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @picsou:sionchat.fr/PgG5IqixWQ
+ [CallMembership @flamme:sionchat.fr:yICGlkC2xg] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flamme:sionchat.fr/yICGlkC2xg
+ [CallMembership @flammemob:sionchat.fr:T2tDNRQL9w] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/T2tDNRQL9w
+ [CallMembership @pierre:sionchat.fr:IafW1rZfZF] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/IafW1rZfZF
+ [CallMembership @flamme:sionchat.fr:hbuLjC5ILP] use slotId compat hack emptyString -> ROOM
+ [CallMembership @picsou:sionchat.fr:uppjqQyg8Z] use slotId compat hack emptyString -> ROOM
+ [CallMembership @flammemob:sionchat.fr:S8243DxQwp] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/S8243DxQwp
+ [CallMembership @flammemob:sionchat.fr:61bwI4lGS6] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/61bwI4lGS6
+ [CallMembership @flammemob:sionchat.fr:LDM8061bNA] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/LDM8061bNA
+ [CallMembership @flamme:sionchat.fr:yICGlkC2xg] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flamme:sionchat.fr/yICGlkC2xg
+ [CallMembership @pierre:sionchat.fr:IafW1rZfZF] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/IafW1rZfZF
+  DELETE https://sionchat.fr/_matrix/client/v3/pushrules/global/override/fr.sionchat.suppress_messages 404 (Not Found)
+ Stopping queue 'message' as it is now empty
+  DELETE https://sionchat.fr/_matrix/client/v3/pushrules/global/override/fr.sionchat.suppress_mentions 404 (Not Found)
+ [CallMembership @pierre:sionchat.fr:EJYuuPVUT0] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/EJYuuPVUT0
+ [CallMembership @flamme:sionchat.fr:hbuLjC5ILP] use slotId compat hack emptyString -> ROOM
+ [CallMembership @flammemob:sionchat.fr:S8243DxQwp] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/S8243DxQwp
+ [CallMembership @pierre:sionchat.fr:IafW1rZfZF] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/IafW1rZfZF
+ [CallMembership @picsou:sionchat.fr:uppjqQyg8Z] use slotId compat hack emptyString -> ROOM
+ [CallMembership @flammemob:sionchat.fr:61bwI4lGS6] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/61bwI4lGS6
+ [CallMembership @picsou:sionchat.fr:vharjwKQuH] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @picsou:sionchat.fr/vharjwKQuH
+ [CallMembership @flammemob:sionchat.fr:LDM8061bNA] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/LDM8061bNA
+ [CallMembership @picsou:sionchat.fr:PgG5IqixWQ] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @picsou:sionchat.fr/PgG5IqixWQ
+ [CallMembership @flamme:sionchat.fr:yICGlkC2xg] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @flamme:sionchat.fr/yICGlkC2xg
+ [CallMembership @flammemob:sionchat.fr:T2tDNRQL9w] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !SF5jYR82aK7tRHVrI1:sionchat.fr m.call#ROOM] Ignoring expired device membership @flammemob:sionchat.fr/T2tDNRQL9w
+ [CallMembership @pierre:sionchat.fr:IafW1rZfZF] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !ttCWHmuDAFvEJTEZ76:sionchat.fr m.call#ROOM] Ignoring expired device membership @pierre:sionchat.fr/IafW1rZfZF
+  GET https://sionchat.fr/_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/%40_test_flow_%3Asionchat.fr 403 (Forbidden)
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+  GET https://sionchat.fr/_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/%40_test_suspend_%3Asionchat.fr 403 (Forbidden)
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+  GET https://sionchat.fr/_matrix/client/unstable/uk.timedout.msc4323/admin/suspend/%40pompom%3Asionchat.fr 403 (Forbidden)
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Received a megolm room key that we already have, discarding
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:693
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ WARN matrix_sdk_crypto::store: Received a megolm room key that we already have a better version of, discarding
+    index_comparison=Equal trust_level_comparison=Less
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:682
+ INFO matrix_sdk_crypto::store: Successfully imported room keys
+    total_count=108 imported_count=0 room_keys={}
+    at :5173/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/store/mod.rs:1538
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM][EncryptionManager] Joining room
+ [CallMembership @flamme:sionchat.fr:hbuLjC5ILP] use slotId compat hack emptyString -> ROOM
+ [CallMembership @picsou:sionchat.fr:uppjqQyg8Z] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM] Memberships for call in room !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo have changed: emitting (2 members)
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM][MembershipManager] Missing own membership: force re-join
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM][MembershipManager] tried adding another `SendDelayedEvent` actions even though we already have one in the Queue
+ActionQueueOnMemberUpdate: [{…}]
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM][MembershipManager] Not using delayed event because the endpoint is not supported
+ connection state changed: disconnected -> connecting {room: '', roomID: undefined, participant: '', participantID: ''}
+ room event connectionStateChanged {room: '', roomID: undefined, participant: '', participantID: '', event: 'connectionStateChanged', …}
+ encryptToDeviceMessages: Checking for missing Olm sessions
+ signal connecting to wss://livekit.sionchat.fr/rtc/v1?access_token=%3Credacted%3E&join_request=CAESzg0fiwgAAAAAAAAD7Vvbbhy5EYUCJFgImADx0z7WD1DDItk3GvOg1WXXgO0Isa28ptXNGTU8fUk3RzPaf9i_yw_kTwL2zHha06TWjh1gkeWbdFhVh1XFalIH0Omfvzt58Sd2xugZ-_4v_zh58YfvTti_fzk5_WM9n6v2xb9-OXmY0clpPSMgMIiDMI6COIkQGRVBAAxevYVXNwKQRWf0jJ7h5LSbkcmpnlGgk9N0pja6TBuSLpf1mpTFRuUGLbsiJ50q00oXmQT4-5t3Bl609aqRP3x4e_n6CiggMOAgIIBwclrO0lVe1JDAh8ub6fvX76Z_e38zfXd-e3MNiAghhwQoxIAcECkgCyen2Wy3P9rvrt9Rq5sybaTxqZtVNxUxpXTKBkshh1blloUEfowYmxp8gFK4uXjz4RiNDXp-jCKHi7cjEClotVTNfV0poh5UpbfkQxsWjmz2JvNSb_Mpi6rRRalmSF-uOlVUd2mVz1U2w09moakOThFxGzwzWdmKlDVkftdH1W1adU3dapJlh5ZKhFVbyULpuWzSNi072eqG3Oet2mjZdW1G-oaRpXpQy4Efg3utGzmdrtfrs7W6a3V2VreLqdo0qi1KVelueog0Te860qkqJyaxQRg-DGN20Qcp8mnepnNN7utlqVrSllmqySGDdZErkmVEbbSquqKuOkJxEFU8m1SuOlkW_QnulF41Ms10k3Zdf6SLXG5Lp7KHulo-mp-LTJHVvE0Xsrujr_ZIs84lvVzdrh5erVvEJvrnT28WP9abv26a132jimqh2qYtKi27-5SwIITzaykuJL-Q4YWMI_nDubyK5WUkAyF5LOm1vLiSwZUxEInESAaBDFFGVAoukcuAyvNrmVzLKJGxkAxlgpJTGQYyvpLB9X5rdaNNUaRui-zjUn06CuVq8-nntit-Vn4g_UD-9gcS_UD6gfQD-dsZSPb7GsiHIlf2gUxCSCJIYkgSQEoBKQIPgIfAI-Ax8AQEBYEgGCDlgFQA0giQxoA0AUQBgoMQgBgAYgiIESDGgJgAMjPeCMgYIOOAzDzRAxDBsxOfhHB7E08T-nSykghavRnDMdzeJGM4sVqbJG3mJnGbPQ-s5jy0W0d269huncD5LY5gQa3WAu3WzJEnh59YKCwLwuEQuRzsuzfttzugnUE4diQcG8LAFd9efHPyHA6ODNCVAbO3wJxlh4OjC2x7Q41xR84sgNWymatsXKUA5ku1mauMUH5Y7e-KJIK00bMkPCAxNG09L5aKFPlsYJlsLePDdUTp0JQNFrC3xQERD4a2h8uKh70pDw5INLTkBzzeWkYHJIH-5iFFvpkFL3deM_pSF6odbF3QrWdyQNDqiSNP1nsKHOTGd65p91iWSrePW21A5TN82aTZR6WLn1PziSVlnZuY-2z2jDPBKMX5IKTYlYsPsOjLaOhn0MQ7mmiAJV-fTf6UBvfZDMr9hTWzJfOURWxJxKBiGHx1KqE4SmV7OBGDAfb1jRnR7BqDg8bgN2gMU09oGN3RJAMMv8ExO6LZzgyywdCw3Zlgh36JAFrVpEVL1kWV12vztaCHL9evPFqTEBZ1vSCtKu-O8OO37GApy0qYF-0RWqXZRwsEzbJ4AscOythNGVsp4zFlbKU0X1grp1lwkZo1C6uBj2n32DEvD-y0PHCy8sBGyoMR5w4aUUYOyshNGVkpozFlZKdMHJSJmzKxUiZjysRKKdBOKcZ_gg2WLJQCR5Q7aHyGuOsM8WfOELefIW45Q9zB6-ioWXDzWntq4DGvvavmSnPwuvtq1qy8487usVFrHWUW7ioLa5HFuMbCUWJ0zKlZcKaK1kk18ChVtM-quQMdvM-0Fu2tRUtr0dFadLUWn2kt2luLltaivbXmlrTzMvfcmjUbLxtP7h4bHSlHe8W4u3vB5llxQ9fzeaf05JsLNch7Wr5oGtkrBqRuC1Xp_uEw-V8LOsGXJdEs08d6pUmulunjIEz4ZWG2eWZ1pVWliX5shgWJ_ptYuiiLajGIEn9ZlKxe1i3pmjQbbuWz5a59L-mvOpjfO92qtCRPXZ_XC3vX_smncjKKYVXb-ueiV9u82ubVNq-2ebXNq21ebfNqm1fbvNrm1Tavtnm1zattXm3zaptX27za5tW2b6C2iYlX27za5tW2J7hX27za5tU2r7Z5tc2rbV5t82qbV9u82ubVNq-2Ha95tc2rbV5t82rbZ6tt_bv796O2pU2zLLJ-anaa26UR3d5dvL-Bbf9Jnuo0u0-ryvwzsU0Js9Yx_H-pXZfphpivggx2fyqU6YaUquvShSKmjpKFDIWYnH5_8h_PaLbW-UYAAA%3D%3D {room: undefined, roomID: undefined, participant: undefined, participantID: undefined, reconnect: undefined, …}
+ ping config {room: undefined, roomID: undefined, participant: undefined, participantID: undefined, timeout: 15, …}
+ signal connected {room: undefined, roomID: undefined, participant: undefined, participantID: undefined}
+ clearing ping interval {room: undefined, roomID: undefined, participant: undefined, participantID: undefined}
+ start ping interval {room: undefined, roomID: undefined, participant: undefined, participantID: undefined}
+ updating rtc configuration {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', iceRestart: undefined}
+ connected to Livekit Server edition: 0, version: 1.13.4, protocol: 17, region: , nodeId: ND_X994X4bBZnC4, debugInfo: , agentProtocol: 1 {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ update publication info {trackID: 'TR_AMvS38itKHEfnu', enabled: true, muted: false, trackInfo: {…}, info: TrackInfo}
+ update publication info {trackID: 'TR_AMvS38itKHEfnu', enabled: true, muted: false, trackInfo: {…}, info: TrackInfo}
+ adding track publication {room: '', roomID: undefined, participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', remoteParticipantID: 'PA_B4EQqne9ozdL', …}
+ room event signalConnected {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'signalConnected', …}
+ negotiation required, start negotiating {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ [CallMembership @flamme:sionchat.fr:hbuLjC5ILP] use slotId compat hack emptyString -> ROOM
+ [CallMembership @picsou:sionchat.fr:uppjqQyg8Z] use slotId compat hack emptyString -> ROOM
+ [CallMembership @flamme:sionchat.fr:RlaayFNbHh] use slotId compat hack emptyString -> ROOM
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM] Memberships for call in room !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo have changed: emitting (3 members)
+ received server answer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', RTCSdpType: 'answer', …}
+ setting pending initial offer before processing answer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ setting munged local description {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 1}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 2}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 3}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 4}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 5}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 6}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 7}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 8}
+ got ICE candidate from peer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: {…}, …}
+ adding remote ICE candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', target: 0, …}
+ queuing remote ICE candidate until remote description applied {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', pendingCount: 9}
+ starting to negotiate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ signaling state: have-local-offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ setting munged remote description {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ original offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', sdp: 'v=0\r\no=- 4158568758971120455 3 IN IP4 127.0.0.1\r\ns…:6\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n'}
+ setting munged local description {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ signaling state: stable {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ flushing queued ICE candidates {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', count: 9}
+ signaling state: have-local-offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ sending offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', offerSdp: 'v=0\r\no=- 4158568758971120455 3 IN IP4 127.0.0.1\r\ns…le\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n'}
+ local ICE candidate gathered {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: 'candidate:2979074927 1 udp 1677729535 192.168.254.… rport 0 generation 0 ufrag sb0I network-cost 999'}
+ sending ice candidate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', candidate: RTCIceCandidate}
+ ICE connection state: checking {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ ICE connection state: connected {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ connection state: connecting {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ pc state change: from NEW to CONNECTING {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ primary PC state changed 1 {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ connection state: connected {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ pc state change: from CONNECTING to CONNECTED {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ primary PC state changed 2 {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ updating track subscription permissions {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', allParticipantsAllowed: true, …}
+ connection state changed: connecting -> connected {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ room event connectionStateChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionStateChanged', …}
+ room event connected {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connected', …}
+ deferring on track for later {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', mediaTrackId: 'ae743e34-f128-46bf-bcc3-599de22a9456', …}
+ room event trackSubscribed {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'trackSubscribed', …}
+ [Sion][deafen] attachAudioTrack pid=@picsou:sionchat.fr:uppjqQyg8Z sid=TR_AMvS38itKHEfnu src=microphone → muted=false (isCurrentlyDeafened=false)
+ room event trackSubscriptionStatusChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'trackSubscriptionStatusChanged', …}
+ setTrackEnabled {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', source: 'microphone', …}
+ received server answer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', RTCSdpType: 'answer', …}
+ setting munged remote description {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ room event mediaDevicesError {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'mediaDevicesError', …}
+ signaling state: stable {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ starting to negotiate {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ original offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', sdp: 'v=0\r\no=- 4158568758971120455 4 IN IP4 127.0.0.1\r\ns…:6\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n'}
+ setting munged local description {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ signaling state: have-local-offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ sending offer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', offerSdp: 'v=0\r\no=- 4158568758971120455 4 IN IP4 127.0.0.1\r\ns…le\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n'}
+ [Sion] Périphérique micro introuvable — repli sur le défaut système
+ [Sion] Micro indisponible même sur le défaut système:
+ [Sion][e2ee] startup reshare planned for 29 (room, user) pairs
+ received server answer {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', RTCSdpType: 'answer', …}
+ setting munged remote description {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ signaling state: stable {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux'}
+ WARN matrix_sdk_crypto::machine: Received an unexpected encrypted to-device event
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/machine/mod.rs:1421
+    in matrix_sdk_crypto::machine::handle_decrypted_to_device_event with sender_key="curve25519:MvNmQQsjL2zZlD2XsRgiaJ+gS7D0gPiWlqVNviLFnkI" event_type="io.element.call.encryption_keys"
+    in matrix_sdk_crypto::machine::receive_to_device_event with sender="@narkow:sionchat.fr" event_type="m.room.encrypted" message_id="0f557737c50249d88b43c3e172f0ccc7"
+    in matrix_sdk_crypto::machine::receive_sync_changes
+ encryptToDeviceMessages: Olm sessions prepared
+ WARN matrix_sdk_crypto::machine: Received an unexpected encrypted to-device event
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/machine/mod.rs:1421
+    in matrix_sdk_crypto::machine::handle_decrypted_to_device_event with sender_key="curve25519:GOLv9je5M/itTW5fG3fVxabpQ4ymlW0TY1hb5ydgXQs" event_type="io.element.call.encryption_keys"
+    in matrix_sdk_crypto::machine::receive_to_device_event with sender="@picsou:sionchat.fr" event_type="m.room.encrypted" message_id="7ffd29d1e3d04bc5aeeb44fcb7aaf38f"
+    in matrix_sdk_crypto::machine::receive_sync_changes
+ [MatrixRTCSession !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo m.call#ROOM][EncryptionManager] No matching RTC membership for key from @narkow:sionchat.fr:qoNoEwRrbw, delaying key addition
+ Enqueuing batch of to-device messages. type=m.room.encrypted txnid=m1785184778207.1 (2) ['@flamme:sionchat.fr/hbuLjC5ILP (msgid 035a8f750bd846ac9c5ec82ef8e75343)', '@picsou:sionchat.fr/uppjqQyg8Z (msgid 042b0d2e304b4d8a8e2e95215e4f69f1)']
+ Sending batch of 2 to-device messages with ID 0 and txnId m1785184778207.1
+ [ToDeviceKeyTransport] No targets found for sending key
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @conduit:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @narkow:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @pierre:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @lemouketty:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @picsou:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @flammemob:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @narkow:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @pierre:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @lemouketty:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @picsou:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!3l4kVkWII9gXLKySKf:sionchat.fr, @narkow:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!UhllAfb0XolyVZ0vSM:sionchat.fr, @picsou:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!iRP7BEOn4IeDV2L3xF:sionchat.fr, @flammemob:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @flammemob:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @narkow:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @pierre:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @lemouketty:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @picsou:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!lyCUPGcaRiElqdarza:sionchat.fr, @pierre:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @flammemob:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @narkow:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @pierre:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @lemouketty:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @picsou:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @flammemob:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @narkow:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @pierre:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @lemouketty:sionchat.fr): Sharing message history
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @picsou:sionchat.fr): Sharing message history
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @conduit:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @conduit:sionchat.fr in !DgXvmZS9uolMChy4UJ:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @narkow:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @narkow:sionchat.fr in !DgXvmZS9uolMChy4UJ:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @pierre:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @pierre:sionchat.fr in !DgXvmZS9uolMChy4UJ:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @lemouketty:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @lemouketty:sionchat.fr in !DgXvmZS9uolMChy4UJ:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!DgXvmZS9uolMChy4UJ:sionchat.fr, @picsou:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @picsou:sionchat.fr in !DgXvmZS9uolMChy4UJ:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @flammemob:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @flammemob:sionchat.fr in !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @narkow:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @narkow:sionchat.fr in !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @pierre:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @pierre:sionchat.fr in !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @lemouketty:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @lemouketty:sionchat.fr in !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo, @picsou:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @picsou:sionchat.fr in !YIT4BJsKqouM_3sUh7tWhEGznv9Iterqi4jWCVBJIQo (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!3l4kVkWII9gXLKySKf:sionchat.fr, @narkow:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @narkow:sionchat.fr in !3l4kVkWII9gXLKySKf:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!UhllAfb0XolyVZ0vSM:sionchat.fr, @picsou:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @picsou:sionchat.fr in !UhllAfb0XolyVZ0vSM:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!iRP7BEOn4IeDV2L3xF:sionchat.fr, @flammemob:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @flammemob:sionchat.fr in !iRP7BEOn4IeDV2L3xF:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @flammemob:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @flammemob:sionchat.fr in !iuOM7JshMp77jLMrIC:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @narkow:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @narkow:sionchat.fr in !iuOM7JshMp77jLMrIC:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @pierre:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @pierre:sionchat.fr in !iuOM7JshMp77jLMrIC:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @lemouketty:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @lemouketty:sionchat.fr in !iuOM7JshMp77jLMrIC:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!iuOM7JshMp77jLMrIC:sionchat.fr, @picsou:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @picsou:sionchat.fr in !iuOM7JshMp77jLMrIC:sionchat.fr (startup-sync)
+ INFO matrix_sdk_crypto_wasm::machine: No keys to share
+    at :5173/src/machine.rs:1940
+ shareRoomHistoryWithUser(!lyCUPGcaRiElqdarza:sionchat.fr, @pierre:sionchat.fr): No keys to share
+ [Sion][e2ee] shared history to @pierre:sionchat.fr in !lyCUPGcaRiElqdarza:sionchat.fr (startup-sync)
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @flammemob:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/acLCSChVEukNEXKZdbn7nKpANwXfwAzt"}
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @narkow:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/rBhMCoXNEAasU43mVc03xlPeoZEvIpFP"}
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @pierre:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/wMQd9NcvIEJckDP11qRsQ844n8E5Txz9"}
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @lemouketty:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/2cnuLbztktB6mY2Z4u7s1gO6e2LObJne"}
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @picsou:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/SnFgo3jYFTzt9Yz6d1LhHPhIIklG9Mf6"}
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @flammemob:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/5QqelZJgEJFkukbGi4IFxaS1LOCzY5QS"}
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @narkow:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/CnbxAq8dr5LWkcElVmJORbK0PNu6ex77"}
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @pierre:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/EgW5RJmfuWN6Gcd7fk60jk7jv7sS36km"}
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @lemouketty:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/kyBoI8rhpnTXWHHMMuj6GptqpYlC43fB"}
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @picsou:sionchat.fr): Uploaded encrypted key blob: {"content_uri":"mxc://sionchat.fr/tdmqymcSUXzCMLeBteXz9kKepnZa49uy"}
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @flammemob:sionchat.fr): Checking for missing Olm sessions
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @flammemob:sionchat.fr): Olm sessions prepared
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @narkow:sionchat.fr): Checking for missing Olm sessions
+ INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@flammemob:sionchat.fr": {"T2tDNRQL9w", "xyJocM2MJu"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@flammemob:sionchat.fr" collect_strategy=IdentityBasedStrategy
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @narkow:sionchat.fr): Olm sessions prepared
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @pierre:sionchat.fr): Checking for missing Olm sessions
+ Sending batch of to-device messages. type=m.room.encrypted txnid=09f9107cbb054c0888b35063faaed723 (2) ['@flammemob:sionchat.fr/T2tDNRQL9w (msgid ace033da9f1b4596a4e2b2ebb256f83a)', '@flammemob:sionchat.fr/xyJocM2MJu (msgid ae72e888ca464cb089d610377ff3235c)']
+ INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@narkow:sionchat.fr": {"9RsjImlTac", "qoNoEwRrbw"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@narkow:sionchat.fr" collect_strategy=IdentityBasedStrategy
+ Sending batch of to-device messages. type=m.room.encrypted txnid=c37ec1fa9ef84eb1b65d6c019bb6cf1a (2) ['@narkow:sionchat.fr/9RsjImlTac (msgid 92f6d0d937c14c85b7df827e1b09becd)', '@narkow:sionchat.fr/qoNoEwRrbw (msgid db788b047009433aac284c9553080376)']
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @pierre:sionchat.fr): Olm sessions prepared
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @lemouketty:sionchat.fr): Checking for missing Olm sessions
+ INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@pierre:sionchat.fr": {"IafW1rZfZF"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@pierre:sionchat.fr" collect_strategy=IdentityBasedStrategy
+ [Sion][e2ee] shared history to @flammemob:sionchat.fr in !SF5jYR82aK7tRHVrI1:sionchat.fr (startup-sync)
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @lemouketty:sionchat.fr): Olm sessions prepared
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @picsou:sionchat.fr): Checking for missing Olm sessions
+ Sending batch of to-device messages. type=m.room.encrypted txnid=90e10c7d49f648fabca8f4ac8d258110 ['@pierre:sionchat.fr/IafW1rZfZF (msgid 59305c518a6946beb329f38060999b73)']
+ shareRoomHistoryWithUser(!SF5jYR82aK7tRHVrI1:sionchat.fr, @picsou:sionchat.fr): Olm sessions prepared
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @pierre:sionchat.fr): Checking for missing Olm sessions
+ [Sion][e2ee] shared history to @narkow:sionchat.fr in !SF5jYR82aK7tRHVrI1:sionchat.fr (startup-sync)
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @pierre:sionchat.fr): Olm sessions prepared
+ shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @flammemob:sionchat.fr): Checking for missing Olm sessions
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@lemouketty:sionchat.fr": {"fgovwANg2j"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@lemouketty:sionchat.fr" collect_strategy=IdentityBasedStrategy
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @flammemob:sionchat.fr): Olm sessions prepared
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @narkow:sionchat.fr): Checking for missing Olm sessions
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@picsou:sionchat.fr": {"B91sa2lZsW", "PgG5IqixWQ", "XTBOJJBs3J", "uppjqQyg8Z", "vharjwKQuH"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@picsou:sionchat.fr" collect_strategy=IdentityBasedStrategy
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @narkow:sionchat.fr): Olm sessions prepared
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @lemouketty:sionchat.fr): Checking for missing Olm sessions
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=11be20cfcf8f43ffa5b8e55681109271 ['@lemouketty:sionchat.fr/fgovwANg2j (msgid d8dcc2f63c514447a27986087abe0e5d)']
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@pierre:sionchat.fr": {"IafW1rZfZF"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@pierre:sionchat.fr" collect_strategy=IdentityBasedStrategy
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @lemouketty:sionchat.fr): Olm sessions prepared
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @picsou:sionchat.fr): Checking for missing Olm sessions
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=0cd8c953d3674c318afb62be88ba69f5 (5) ['@picsou:sionchat.fr/B91sa2lZsW (msgid 5b12753f1f924a30919d19fcac547f3f)', '@picsou:sionchat.fr/PgG5IqixWQ (msgid 86cf77d611894ff68f38bdc15d39e41a)', '@picsou:sionchat.fr/XTBOJJBs3J (msgid 0da72e2212aa49b3a4e8c6dd975a4af6)', '@picsou:sionchat.fr/uppjqQyg8Z (msgid 8d82e1f1d22e4d76b9aae1b113f21027)', '@picsou:sionchat.fr/vharjwKQuH (msgid 06337a528c0946bf9f20a2a187da0565)']
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@flammemob:sionchat.fr": {"T2tDNRQL9w", "xyJocM2MJu"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@flammemob:sionchat.fr" collect_strategy=IdentityBasedStrategy
+chunk-PLRORX4J.js?v=6812ddc1:10569 shareRoomHistoryWithUser(!ttCWHmuDAFvEJTEZ76:sionchat.fr, @picsou:sionchat.fr): Olm sessions prepared
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @pierre:sionchat.fr in !SF5jYR82aK7tRHVrI1:sionchat.fr (startup-sync)
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=6f86cbe7f6364750bfc4be40ffdc51ca ['@pierre:sionchat.fr/IafW1rZfZF (msgid 3b9feb30fb1c4e6c9df59ef93574d0fd)']
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@narkow:sionchat.fr": {"9RsjImlTac", "qoNoEwRrbw"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@narkow:sionchat.fr" collect_strategy=IdentityBasedStrategy
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=233c437277d54286a29e2a24bde098c7 (2) ['@flammemob:sionchat.fr/T2tDNRQL9w (msgid 85da7c709a1e4557ad7c6fe695f76667)', '@flammemob:sionchat.fr/xyJocM2MJu (msgid be7c4234021947f981e266b3359f5770)']
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@lemouketty:sionchat.fr": {"fgovwANg2j"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@lemouketty:sionchat.fr" collect_strategy=IdentityBasedStrategy
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=91578debb8064aa5bd88dc0f7871e157 (2) ['@narkow:sionchat.fr/9RsjImlTac (msgid 43a47894455846faa12b1dde22f1b920)', '@narkow:sionchat.fr/qoNoEwRrbw (msgid 5ec29bd3d121479aa9cf8044dd613730)']
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @lemouketty:sionchat.fr in !SF5jYR82aK7tRHVrI1:sionchat.fr (startup-sync)
+chunk-PLRORX4J.js?v=6812ddc1:10569 INFO matrix_sdk_crypto::session_manager::group_sessions: Encrypting content of type m.room_key_bundle
+    recipients={"@picsou:sionchat.fr": {"B91sa2lZsW", "PgG5IqixWQ", "XTBOJJBs3J", "uppjqQyg8Z", "vharjwKQuH"}}
+    at /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/matrix-sdk-crypto-0.18.0/src/session_manager/group_sessions/mod.rs:893
+    in matrix_sdk_crypto::session_manager::group_sessions::share_room_key_bundle_data with user_id="@picsou:sionchat.fr" collect_strategy=IdentityBasedStrategy
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @picsou:sionchat.fr in !SF5jYR82aK7tRHVrI1:sionchat.fr (startup-sync)
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=59cce0cdf3cb4971a46c8f29461ee777 ['@lemouketty:sionchat.fr/fgovwANg2j (msgid c3af1f84b0af44c5968cc7362eec0160)']
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @pierre:sionchat.fr in !ttCWHmuDAFvEJTEZ76:sionchat.fr (startup-sync)
+chunk-PLRORX4J.js?v=6812ddc1:10569 Sending batch of to-device messages. type=m.room.encrypted txnid=79b49358c55543febd2fa967cc0cbb62 (5) ['@picsou:sionchat.fr/B91sa2lZsW (msgid c6d1f46c455e41ed8b97ed5f0ce4dfce)', '@picsou:sionchat.fr/PgG5IqixWQ (msgid 9a75db55f294439b82277c1d43658b94)', '@picsou:sionchat.fr/XTBOJJBs3J (msgid 34941aae97624207818ffa0ec607a2dd)', '@picsou:sionchat.fr/uppjqQyg8Z (msgid 18a7d9fc0b7947e78f14554c0cd47a36)', '@picsou:sionchat.fr/vharjwKQuH (msgid cdc34421b1bd407294dc6258be5b1541)']
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @flammemob:sionchat.fr in !ttCWHmuDAFvEJTEZ76:sionchat.fr (startup-sync)
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @narkow:sionchat.fr in !ttCWHmuDAFvEJTEZ76:sionchat.fr (startup-sync)
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @lemouketty:sionchat.fr in !ttCWHmuDAFvEJTEZ76:sionchat.fr (startup-sync)
+useMatrixStore.ts:1592 [Sion][e2ee] shared history to @picsou:sionchat.fr in !ttCWHmuDAFvEJTEZ76:sionchat.fr (startup-sync)
+livekit-client.js?v=7f66c2b7:7304 room event dataReceived {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'dataReceived', …}
+livekitService.ts:1973 [Sion][deafen] AFK rx pid=@picsou:sionchat.fr:uppjqQyg8Z remoteDeafened=false — selfDeafened=false elements: [sid=TR_AMvS38itKHEfnu src=microphone muted=false vol=1]
+livekit-client.js?v=7f66c2b7:7304 room event dataReceived {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'dataReceived', …}
+livekitService.ts:1973 [Sion][deafen] AFK rx pid=@picsou:sionchat.fr:uppjqQyg8Z remoteDeafened=false — selfDeafened=false elements: [sid=TR_AMvS38itKHEfnu src=microphone muted=false vol=1]
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+chunk-PLRORX4J.js?v=6812ddc1:10569 Stopping queue 'message' as it is now empty
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}
+livekit-client.js?v=7f66c2b7:7304 room event connectionQualityChanged {room: 'b6mgVHjOPKJLHRnSNLoGhBAaGObQBn7Vvysatd+nXl0', roomID: 'RM_LpujesWdg7Sb', participant: '@flamme:sionchat.fr:RlaayFNbHh', participantID: 'PA_vW5QRDZpR9ux', event: 'connectionQualityChanged', …}

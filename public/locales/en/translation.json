@@ -52,7 +52,8 @@
     "speaking": "Speaking...",
     "connecting": "Connecting...",
     "reconnect": "Reconnect",
-    "republishPresence": "Re-publish my presence (if others can't hear me)"
+    "republishPresence": "Re-publish my presence (if others can't hear me)",
+    "audioBackendLost": "Audio devices lost: Sion no longer sees your microphone although the system does. Restart the app to restore sound."
   },
   "controls": {
     "mute": "Mute",

@@ -389,6 +389,52 @@ fn resolve_pa_name(cpal_id: &str, kind: &str) -> Result<String, String> {
     Err(format!("No PulseAudio {} matching '{}'", pa_type, card_name))
 }
 
+/// Surveille la topologie audio et prévient le front quand elle change.
+///
+/// CEF n'émet pas `devicechange` : brancher un casque ne déclenche rien côté
+/// webview (vérifié par débranchement physique, aucun événement reçu). On sonde
+/// donc PulseAudio nous-mêmes, seule source fiable ici.
+///
+/// Le sondage sert aussi de détecteur de panne : quand PulseAudio annonce des
+/// entrées et que CEF n'en voit aucune, c'est que son backend audio est mort —
+/// typiquement après un rechargement du service PipeWire. Il ne s'en remet
+/// jamais, et rien ne le signalait : l'utilisateur restait sans micro sans le
+/// moindre indice.
+///
+/// Cadence volontairement basse : un `pactl` toutes les 3 s coûte quelques
+/// millisecondes, et personne ne rebranche son casque plus vite.
+#[cfg(not(target_os = "android"))]
+fn spawn_audio_device_watcher(app: tauri::AppHandle<TauriRuntime>) {
+    std::thread::Builder::new()
+        .name("sion-audio-devices".into())
+        .spawn(move || {
+            let signature = |devs: &[AudioDevice]| -> String {
+                let mut ids: Vec<&str> = devs
+                    .iter()
+                    .filter(|d| d.kind == "input")
+                    .map(|d| d.id.as_str())
+                    .collect();
+                ids.sort_unstable();
+                ids.join("|")
+            };
+
+            let mut previous = signature(&list_audio_devices());
+            loop {
+                std::thread::sleep(Duration::from_secs(3));
+                let devices = list_audio_devices();
+                let current = signature(&devices);
+                if current == previous {
+                    continue;
+                }
+                let inputs = devices.iter().filter(|d| d.kind == "input").count();
+                log::info!("[Sion][Devices] topologie audio modifiee ({inputs} entree(s))");
+                previous = current;
+                let _ = app.emit("audio-devices-changed", inputs);
+            }
+        })
+        .ok();
+}
+
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 fn list_audio_devices() -> Vec<AudioDevice> {
@@ -2220,6 +2266,11 @@ pub fn run() {
             // WebSocket server for global shortcuts (bypasses CEF JS throttling)
             #[cfg(not(target_os = "android"))]
             start_ws_server();
+
+            // Sondage de la topologie audio : CEF n'émet pas `devicechange`,
+            // donc c'est notre seule chance de voir un casque apparaître.
+            #[cfg(not(target_os = "android"))]
+            spawn_audio_device_watcher(app.handle().clone());
 
             // Re-apply the saved window size shortly after launch. Two CEF
             // quirks force this manual path instead of the window-state

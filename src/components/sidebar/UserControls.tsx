@@ -64,6 +64,7 @@ export function UserControls() {
   const channels = useMatrixStore((s) => s.channels);
   const credentials = useAuthStore((s) => s.credentials);
   const e2eeUnhealthy = useAppStore((s) => s.e2eeUnhealthy);
+  const audioBackendLost = useAppStore((s) => s.audioBackendLost);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
   const transcriptPanelOpen = useTranscriptStore((s) => s.panelOpen);
@@ -129,6 +130,20 @@ export function UserControls() {
       position: 'relative',
     }}>
       <AccountPopover />
+
+      {/* Backend audio perdu : la panne est invisible autrement — l'utilisateur
+          constate seulement qu'il n'a plus de micro, sans savoir pourquoi ni
+          quoi faire. Affiché hors vocal aussi, puisque c'est précisément ce
+          qui empêche de rejoindre. */}
+      {audioBackendLost && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px', borderRadius: 12,
+          background: 'var(--color-error-container)', color: 'var(--color-on-error-container)',
+          fontSize: 11, lineHeight: 1.4,
+        }}>
+          {t("voice.audioBackendLost")}
+        </div>
+      )}
 
       {inVoice && (
         <div style={{
