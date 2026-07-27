@@ -6,6 +6,8 @@ import {
   generateSpeech,
   materializeRef,
   installTtsModel,
+  installTtsEngine,
+  transcribeRef,
   checkRefDuration,
   VOICE_CATEGORY,
   TTS_MODEL_LABELS,
@@ -67,6 +69,9 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
   const [refWarning, setRefWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [installPct, setInstallPct] = useState<number | null>(null);
+  const [enginePct, setEnginePct] = useState<number | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [refPreview, setRefPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -95,6 +100,61 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
       if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (refPreview) URL.revokeObjectURL(refPreview);
+    };
+  }, [refPreview]);
+
+  /** Résout la référence courante en File, quelle que soit sa provenance. */
+  const currentRefFile = async (): Promise<File> => {
+    if (localRef) return localRef;
+    const picked = voices.find((v) => v.eventId === refSoundId);
+    if (!picked) throw new Error(t("tts.refGone"));
+    return await resolveSound(picked);
+  };
+
+  /** Écoute de la référence — indispensable pour vérifier qu'on a le bon
+   *  extrait avant d'en transcrire le contenu ou de générer avec. */
+  const playRef = async () => {
+    setError(null);
+    try {
+      const f = await currentRefFile();
+      if (refPreview) URL.revokeObjectURL(refPreview);
+      setRefPreview(URL.createObjectURL(f));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /** Pré-remplit la transcription via le moteur ASR déjà présent. */
+  const autoTranscribe = async () => {
+    setError(null);
+    setTranscribing(true);
+    try {
+      const f = await currentRefFile();
+      setRefText(await transcribeRef(f));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg === "busy" ? t("tts.transcribeBusy") : msg);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const installEngine = async () => {
+    setError(null);
+    setEnginePct(0);
+    try {
+      await installTtsEngine(setEnginePct);
+      setEngineOk(!!(await detectTtsEngine()));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEnginePct(null);
+    }
+  };
 
   const pickLocal = async (f: File) => {
     setError(null);
@@ -143,15 +203,7 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
     setResult(null);
     setBusy(true);
     try {
-      // La voix stockée peut avoir été supprimée par un autre membre entre la
-      // sélection et la génération — on le signale plutôt que de planter.
-      let refFile = localRef;
-      if (!refFile) {
-        const picked = voices.find((v) => v.eventId === refSoundId);
-        if (!picked) throw new Error(t("tts.refGone"));
-        refFile = await resolveSound(picked);
-      }
-      const refPath = await materializeRef(refFile);
+      const refPath = await materializeRef(await currentRefFile());
       const wav = await generateSpeech(
         current.id,
         text.trim(),
@@ -223,6 +275,9 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
         {engineOk === false && (
           <div
             style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
               fontSize: 12,
               color: "var(--color-on-error-container)",
               background: "var(--color-error-container)",
@@ -230,7 +285,15 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
               borderRadius: 8,
             }}
           >
-            {t("tts.engineMissing")}
+            <span>{t("tts.engineMissing")}</span>
+            <button
+              type="button"
+              onClick={installEngine}
+              disabled={enginePct !== null}
+              style={{ ...btn(true, enginePct !== null), alignSelf: "flex-start" }}
+            >
+              {enginePct !== null ? t("tts.installing", { pct: enginePct }) : t("tts.installEngine")}
+            </button>
           </div>
         )}
 
@@ -299,12 +362,16 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
             <button type="button" onClick={() => fileInputRef.current?.click()} style={btn(false, false)}>
               {t("tts.pickFile")}
             </button>
+            <button type="button" onClick={playRef} disabled={!hasRef} style={btn(false, !hasRef)} title={t("tts.playRef")}>
+              ▶
+            </button>
             {localRef && (
               <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
                 {localRef.name}
               </span>
             )}
           </div>
+          {refPreview && <audio controls src={refPreview} style={{ width: "100%" }} />}
           {refWarning && (
             <span style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>{refWarning}</span>
           )}
@@ -316,12 +383,23 @@ export function VoiceGenerateModal({ sounds, resolveSound, onClose, onUploaded }
             <span style={{ fontSize: 12, color: "var(--color-on-surface-variant)" }}>
               {t("tts.referenceText")}
             </span>
-            <input
-              value={refText}
-              onChange={(e) => setRefText(e.target.value)}
-              placeholder={t("tts.referenceTextPlaceholder")}
-              style={inputStyle}
-            />
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                value={refText}
+                onChange={(e) => setRefText(e.target.value)}
+                placeholder={t("tts.referenceTextPlaceholder")}
+                style={{ ...inputStyle, flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={autoTranscribe}
+                disabled={!hasRef || transcribing}
+                style={{ ...btn(false, !hasRef || transcribing), whiteSpace: "nowrap" }}
+                title={t("tts.transcribeHint")}
+              >
+                {transcribing ? "…" : t("tts.transcribe")}
+              </button>
+            </div>
             <span style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>
               {t("tts.referenceTextHint")}
             </span>

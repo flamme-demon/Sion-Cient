@@ -153,6 +153,91 @@ export async function materializeRef(file: File): Promise<string> {
   return await invoke<string>("save_imported_audio", { dataB64: btoa(bin), ext });
 }
 
+/**
+ * Transcrit l'extrait de référence avec le moteur ASR déjà embarqué
+ * (`transcribe-cpp`, Parakeet/Whisper GGUF), pour pré-remplir `--reference-text`.
+ *
+ * Higgs et Qwen3 exigent une transcription EXACTE : un texte approximatif fait
+ * dériver la génération sans le signaler. Faire relire une proposition à
+ * l'utilisateur vaut mieux que lui faire tout saisir.
+ *
+ * Réutilise le serveur WebSocket du moteur de réunion : on lui pousse le
+ * fichier décodé en PCM 16 kHz au lieu du micro, puis on recolle les segments.
+ *
+ * Refuse de tourner pendant une transcription de réunion : `transcribe_start`
+ * recharge le modèle et couperait la session en cours.
+ */
+export async function transcribeRef(file: File): Promise<string> {
+  const { isTranscribing, ensureModelDownloaded } = await import("./transcriptionService");
+  if (isTranscribing()) throw new Error("busy");
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  const { transcribeModel, transcribeLang } = useSettingsStore.getState();
+  const modelPath = await ensureModelDownloaded(transcribeModel);
+  const port = await invoke<number>("transcribe_start", { modelPath, lang: transcribeLang });
+
+  // Le moteur attend du 16 kHz mono : on laisse decodeAudioData rééchantillonner.
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  let pcm: Float32Array;
+  try {
+    const buf = await ctx.decodeAudioData(await file.arrayBuffer());
+    pcm = buf.getChannelData(0).slice();
+  } finally {
+    await ctx.close().catch(() => {});
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    ws.binaryType = "arraybuffer";
+    const parts: string[] = [];
+    // Le moteur n'annonce pas la fin d'un flux : on clôt un court instant après
+    // le dernier segment reçu, ou au plus tard au bout de 60 s.
+    let idle: ReturnType<typeof setTimeout> | null = null;
+    const finish = () => {
+      if (idle) clearTimeout(idle);
+      clearTimeout(hard);
+      try { ws.close(); } catch { /* déjà fermé */ }
+      void invoke("transcribe_stop").catch(() => {});
+      resolve(parts.join(" ").replace(/\s+/g, " ").trim());
+    };
+    const hard = setTimeout(finish, 60_000);
+
+    ws.onopen = () => {
+      // Tranches de ~1 s : le VAD travaille sur des trames courtes et le
+      // moteur borne sa file d'attente de segments.
+      const CHUNK = 16000;
+      for (let i = 0; i < pcm.length; i += CHUNK) {
+        ws.send(pcm.slice(i, i + CHUNK).buffer);
+      }
+      ws.send(JSON.stringify({ type: "flush" }));
+    };
+    ws.onmessage = (ev) => {
+      if (typeof ev.data !== "string") return;
+      try {
+        const msg = JSON.parse(ev.data) as { type: string; text?: string; message?: string };
+        if (msg.type === "segment" && msg.text) {
+          parts.push(msg.text);
+          if (idle) clearTimeout(idle);
+          idle = setTimeout(finish, 2500);
+        } else if (msg.type === "error") {
+          clearTimeout(hard);
+          try { ws.close(); } catch { /* déjà fermé */ }
+          void invoke("transcribe_stop").catch(() => {});
+          reject(new Error(msg.message || "engine error"));
+        } else if (msg.type === "ready" && !idle) {
+          // Rien reçu passé ce délai = extrait sans parole détectable.
+          idle = setTimeout(finish, 15_000);
+        }
+      } catch { /* trame malformée */ }
+    };
+    ws.onerror = () => {
+      clearTimeout(hard);
+      void invoke("transcribe_stop").catch(() => {});
+      reject(new Error("websocket"));
+    };
+  });
+}
+
 /** Durée conseillée pour un extrait de référence (secondes). */
 export const REF_MIN_SEC = 3;
 export const REF_MAX_SEC = 10;

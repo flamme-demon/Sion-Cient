@@ -632,6 +632,11 @@
       "hint": "Models are 4-7 GB and download on demand.",
       "install": "Install ({{size}} GB)"
     },
-    "refGone": "That voice is no longer available — it may have been deleted."
+    "refGone": "That voice is no longer available — it may have been deleted.",
+    "installEngine": "Install engine",
+    "playRef": "Play the clip",
+    "transcribe": "Transcribe",
+    "transcribeHint": "Fills in automatically using Sion's transcription engine",
+    "transcribeBusy": "A meeting transcription is running — stop it first."
   }
 }
