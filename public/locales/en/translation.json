@@ -658,7 +658,8 @@
       "url": "Link",
       "sound": "Existing sound",
       "pickSound": "— Pick a soundboard sound —"
-    }
+    },
+    "cpuFallback": "Not enough GPU memory: generating on CPU, expect it to take considerably longer."
   },
   "cropper": {
     "title": "Crop image",

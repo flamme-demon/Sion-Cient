@@ -93,6 +93,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [activeVoice, setActiveVoice] = useState<SoundEntry | null>(null);
   /** Provenance de l'extrait quand on ne part pas d'une voix de la galerie. */
   const [refSource, setRefSource] = useState<"file" | "url" | "sound">("file");
+  /** Le moteur a basculé sur CPU faute de VRAM : la génération sera longue. */
+  const [cpuFallback, setCpuFallback] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [saveEmoji, setSaveEmoji] = useState("🗣️");
   /** Portrait choisi pour la voix qu'on s'apprête à enregistrer. */
@@ -133,6 +135,17 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     detectTtsEngine()
       .then((p) => setEngineOk(!!p))
       .catch(() => setEngineOk(false));
+  }, []);
+
+  // Le repli CPU se décide côté moteur, en cours de génération : sans ce
+  // signal, l'utilisateur verrait seulement une attente anormalement longue.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("tts-cpu-fallback", () => setCpuFallback(true)))
+      .then((un) => { stop = un; })
+      .catch(() => { /* hors Tauri */ });
+    return () => stop?.();
   }, []);
 
   /** L'extrait en WAV 24 kHz — seul format accepté par --voice-ref, et le
@@ -304,6 +317,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     if (!current || busy) return;
     setError(null);
     setResult(null);
+    setCpuFallback(false);
     setBusy(true);
     try {
       const refPath = await materializeRef(await selectionWav());
@@ -684,6 +698,15 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
             }}
           >
             {error}
+          </span>
+        )}
+
+        {cpuFallback && (
+          <span style={{
+            fontSize: 11, lineHeight: 1.4, padding: "6px 10px", borderRadius: 8,
+            background: "var(--color-surface-container-high)", color: "var(--color-on-surface-variant)",
+          }}>
+            {t("tts.cpuFallback")}
           </span>
         )}
 

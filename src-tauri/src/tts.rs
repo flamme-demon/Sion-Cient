@@ -693,6 +693,9 @@ pub async fn tts_generate(
         if let Err(err) = &stdout {
             if is_gpu_oom(err) {
                 log::warn!("[Sion][tts] VRAM insuffisante — nouvelle tentative sur CPU");
+                // Prévenir l'interface : la génération va prendre bien plus
+                // longtemps, et une attente inexpliquée passe pour un blocage.
+                let _ = app.emit("tts-cpu-fallback", ());
                 let cmd = build("cpu");
                 stdout = tauri::async_runtime::spawn_blocking(move || run_bounded(cmd))
                     .await

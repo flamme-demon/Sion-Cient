@@ -658,7 +658,8 @@
       "url": "Lien",
       "sound": "Son existant",
       "pickSound": "— Choisir un son de la soundboard —"
-    }
+    },
+    "cpuFallback": "Mémoire graphique insuffisante : génération sur processeur, comptez nettement plus de temps."
   },
   "cropper": {
     "title": "Recadrer l'image",
