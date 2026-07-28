@@ -556,6 +556,21 @@ fn run_bounded(mut cmd: std::process::Command) -> Result<String, String> {
     }
 }
 
+/// L'échec vient-il d'un manque de mémoire GPU ?
+///
+/// ggml remonte l'échec d'allocation Vulkan/CUDA sous plusieurs libellés selon
+/// l'étage qui abandonne (allocation directe, réservation de graphe, allocateur
+/// de tenseurs) : on les reconnaît tous plutôt que d'en privilégier un.
+fn is_gpu_oom(err: &str) -> bool {
+    const MARKERS: [&str; 4] = [
+        "ErrorOutOfDeviceMemory",
+        "failed to allocate",
+        "out of memory",
+        "OutOfDeviceMemory",
+    ];
+    MARKERS.iter().any(|m| err.contains(m))
+}
+
 /// Le backend est choisi ici plutôt que via `--backend best` : la sonde Vulkan
 /// est déjà celle des résumés, et un backend explicite rend les logs lisibles
 /// quand un utilisateur remonte un problème.
@@ -630,37 +645,62 @@ pub async fn tts_generate(
             .unwrap_or(0)
     ));
 
-    let mut cmd = hidden_command(&engine);
-    cmd.args(["--task", m.task, "--family", m.family]);
-    cmd.arg("--model").arg(&model_arg);
-    cmd.args(["--backend", backend()]);
-    cmd.arg("--text").arg(&text);
-    cmd.arg("--voice-ref").arg(&voice_ref);
-    cmd.arg("--out").arg(&out_file);
-    // Indispensable pour les familles safetensors (Chatterbox, Qwen3) : sans
-    // spec, audiocpp refuse de charger. Les GGUF l'embarquent, d'où le silence
-    // quand le dossier est absent.
-    if let Some(specs) = model_specs_dir(std::path::Path::new(&engine)) {
-        cmd.arg("--model-spec-override").arg(specs);
-    }
-    if m.needs_language {
-        cmd.args(["--language", language.as_deref().unwrap_or("fr")]);
-    }
-    if m.needs_reference_text {
-        cmd.arg("--reference-text").arg(&ref_text);
-    }
-    // Nos builds lient ggml et onnxruntime statiquement, mais les archives
-    // amont (Windows) livrent des DLL à côté du binaire — et un utilisateur
-    // peut pointer sur une compilation dynamique. Coût nul si inutile.
-    #[cfg(not(target_os = "windows"))]
-    if let Some(parent) = std::path::Path::new(&engine).parent() {
-        cmd.env("LD_LIBRARY_PATH", parent);
-    }
+    // Fabrique la commande pour un backend donné : on peut avoir à la rejouer
+    // sur CPU si le GPU manque de mémoire.
+    let build = |backend: &str| {
+        let mut cmd = hidden_command(&engine);
+        cmd.args(["--task", m.task, "--family", m.family]);
+        cmd.arg("--model").arg(&model_arg);
+        cmd.args(["--backend", backend]);
+        cmd.arg("--text").arg(&text);
+        cmd.arg("--voice-ref").arg(&voice_ref);
+        cmd.arg("--out").arg(&out_file);
+        // Indispensable pour les familles safetensors (Chatterbox, Qwen3) : sans
+        // spec, audiocpp refuse de charger. Les GGUF l'embarquent, d'où le silence
+        // quand le dossier est absent.
+        if let Some(specs) = model_specs_dir(std::path::Path::new(&engine)) {
+            cmd.arg("--model-spec-override").arg(specs);
+        }
+        if m.needs_language {
+            cmd.args(["--language", language.as_deref().unwrap_or("fr")]);
+        }
+        if m.needs_reference_text {
+            cmd.arg("--reference-text").arg(&ref_text);
+        }
+        // Nos builds lient ggml et onnxruntime statiquement, mais les archives
+        // amont (Windows) livrent des DLL à côté du binaire — et un utilisateur
+        // peut pointer sur une compilation dynamique. Coût nul si inutile.
+        #[cfg(not(target_os = "windows"))]
+        if let Some(parent) = std::path::Path::new(&engine).parent() {
+            cmd.env("LD_LIBRARY_PATH", parent);
+        }
+        cmd
+    };
 
-    log::info!("[Sion][tts] génération {} sur {}", m.id, backend());
-    let stdout = tauri::async_runtime::spawn_blocking(move || run_bounded(cmd))
+    let first = backend();
+    log::info!("[Sion][tts] génération {} sur {}", m.id, first);
+    let cmd = build(first);
+    let mut stdout = tauri::async_runtime::spawn_blocking(move || run_bounded(cmd))
         .await
-        .map_err(|e| format!("tâche interrompue: {e}"))??;
+        .map_err(|e| format!("tâche interrompue: {e}"))?;
+
+    // La VRAM disponible ne se devine pas : ces modèles réclament 1 à 3 Go
+    // d'un seul tenant, et une carte occupée par un jeu ou un navigateur les
+    // refuse. Plutôt que d'infliger une erreur Vulkan brute à l'utilisateur, on
+    // rejoue sur CPU — plus lent, mais la génération est hors-ligne de toute
+    // façon, donc personne n'attend devant.
+    if first != "cpu" {
+        if let Err(err) = &stdout {
+            if is_gpu_oom(err) {
+                log::warn!("[Sion][tts] VRAM insuffisante — nouvelle tentative sur CPU");
+                let cmd = build("cpu");
+                stdout = tauri::async_runtime::spawn_blocking(move || run_bounded(cmd))
+                    .await
+                    .map_err(|e| format!("tâche interrompue: {e}"))?;
+            }
+        }
+    }
+    let stdout = stdout?;
     if !out_file.exists() {
         return Err(format!(
             "aucun fichier produit — sortie: {}",

@@ -121,6 +121,22 @@ for f in "${CEF_FILES[@]}"; do
     fi
 done
 
+# Variantes CPU de ggml + transcribe (moteur ASR). Sans elles le binaire ne
+# demarre pas : il est lie dynamiquement pour que ggml choisisse son noyau selon
+# le processeur de l'utilisateur. Un lien statique embarquerait le jeu
+# d'instructions de la MACHINE DE BUILD (AVX-512 sur les runners Intel) et
+# planterait en SIGILL sur tout CPU plus modeste.
+ggml_count=0
+for f in "$RELEASE_DIR"/libggml*.so* "$RELEASE_DIR"/libtranscribe.so*; do
+    [ -f "$f" ] || continue
+    cp -P "$f" "$APPDIR/usr/lib/sion-client/"
+    ggml_count=$((ggml_count + 1))
+done
+echo "  $ggml_count bibliotheques ggml/transcribe copiees"
+if [ "$ggml_count" -eq 0 ]; then
+    echo "  ATTENTION: aucune variante ggml trouvee — la transcription ne demarrera pas"
+fi
+
 if [ -d "$CEF_SRC/locales" ]; then
     cp "$CEF_SRC/locales/"* "$APPDIR/usr/lib/sion-client/locales/"
 fi

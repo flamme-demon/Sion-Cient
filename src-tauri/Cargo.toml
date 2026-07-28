@@ -58,7 +58,7 @@ cpal = "0.15"
 # WebRTC VAD — gates what audio reaches the model so silence/noise never
 # triggers a (costly, hallucination-prone) inference. Pinned to 0.1: later
 # earshot versions require rustc 1.87 > our rust-version.
-transcribe-cpp = "0.1.3"
+transcribe-cpp = { version = "0.1.3", features = ["dynamic-backends"] }
 earshot = "0.1"
 
 # Native cursor-overlay window: the Tauri-CEF fork doesn't propagate
