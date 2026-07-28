@@ -782,6 +782,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Chaînes relevées chez un utilisateur en RTX 2080 Ti. On teste le message
+    /// COMPLET tel que `run_bounded` le compose, pas un extrait choisi : c'est
+    /// lui que `tts_generate` inspecte pour décider du repli.
+    #[test]
+    fn oom_gpu_reconnu_sur_les_erreurs_reelles() {
+        let higgs = "audiocpp a échoué (1): ggml_vulkan: Found 1 Vulkan devices: \
+            ggml_vulkan: 0 = NVIDIA GeForce RTX 2080 Ti (NVIDIA) | uma: 0 | fp16: 1 \
+            ggml_vulkan: Device memory allocation of size 1071755264 failed. \
+            ggml_vulkan: vk::Device::allocateMemory: ErrorOutOfDeviceMemory \
+            alloc_tensor_range: failed to allocate Vulkan0 buffer of size 1071755264 \
+            audiocpp_cli failed: failed to allocate Higgs TTS AR prefill graph";
+        let qwen = "audiocpp a échoué (1): ggml_vulkan: Device memory allocation of \
+            size 1476034560 failed. ggml_vulkan: vk::Device::allocateMemory: \
+            ErrorOutOfDeviceMemory ggml_gallocr_reserve_n_impl: failed to allocate \
+            Vulkan0 buffer of size 3233301504 \
+            audiocpp_cli failed: failed to allocate Qwen3 speech decoder graph";
+        assert!(is_gpu_oom(higgs));
+        assert!(is_gpu_oom(qwen));
+    }
+
+    /// Un échec ordinaire ne doit pas déclencher de seconde tentative : elle
+    /// coûterait une génération complète sur CPU pour rien.
+    #[test]
+    fn oom_gpu_ne_confond_pas_les_autres_echecs() {
+        assert!(!is_gpu_oom("audiocpp a échoué (1): invalid WAV RIFF header"));
+        assert!(!is_gpu_oom("model spec not found for family 'qwen3_tts'"));
+        assert!(!is_gpu_oom("génération interrompue (délai dépassé)"));
+    }
+
     #[test]
     fn aucun_chemin_local_absolu_ni_remontant() {
         for m in MODELS {
