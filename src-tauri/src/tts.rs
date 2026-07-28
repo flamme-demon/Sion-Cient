@@ -561,6 +561,18 @@ fn run_bounded(mut cmd: std::process::Command) -> Result<String, String> {
 /// ggml remonte l'échec d'allocation Vulkan/CUDA sous plusieurs libellés selon
 /// l'étage qui abandonne (allocation directe, réservation de graphe, allocateur
 /// de tenseurs) : on les reconnaît tous plutôt que d'en privilégier un.
+/// La génération s'est-elle arrêtée faute d'avoir su conclure ?
+///
+/// Le modèle doit émettre une marque de fin de clip ; il lui arrive de ne
+/// jamais la produire et de buter sur son plafond de jetons. C'est aléatoire —
+/// deux tentatives de reproduction sur des textes de 143 et 399 caractères ont
+/// abouti normalement, la seconde produisant 19 s d'audio d'une traite. Rien ne
+/// distingue donc en amont un texte qui passera d'un texte qui bloquera : seule
+/// une nouvelle tentative répond.
+fn is_runaway(err: &str) -> bool {
+    err.contains("before EOC") || err.contains("reached max_tokens")
+}
+
 fn is_gpu_oom(err: &str) -> bool {
     const MARKERS: [&str; 4] = [
         "ErrorOutOfDeviceMemory",
@@ -690,6 +702,19 @@ pub async fn tts_generate(
     // manque, ce qui est le cas de toute la génération Turing. Constaté sur une
     // RTX 2080 Ti avec 7,3 Go libres : libérer davantage n'y changerait rien.
     // On rejoue donc sur CPU, plus lent mais hors-ligne de toute façon.
+    // Non-terminaison : on rejoue à l'identique. L'échantillonnage étant
+    // stochastique, la tentative suivante a toutes les chances d'aboutir, et
+    // aucun réglage connu ne rend le phénomène évitable.
+    if let Err(err) = &stdout {
+        if is_runaway(err) {
+            log::warn!("[Sion][tts] génération sans marque de fin — nouvelle tentative");
+            let cmd = build(first);
+            stdout = tauri::async_runtime::spawn_blocking(move || run_bounded(cmd))
+                .await
+                .map_err(|e| format!("tâche interrompue: {e}"))?;
+        }
+    }
+
     if first != "cpu" {
         if let Err(err) = &stdout {
             if is_gpu_oom(err) {
@@ -813,6 +838,24 @@ mod tests {
         assert!(!is_gpu_oom("audiocpp a échoué (1): invalid WAV RIFF header"));
         assert!(!is_gpu_oom("model spec not found for family 'qwen3_tts'"));
         assert!(!is_gpu_oom("génération interrompue (délai dépassé)"));
+    }
+
+    /// Message relevé sur la machine de Grégory (deux Radeon), là où la même
+    /// génération aboutissait quelques minutes plus tôt.
+    #[test]
+    fn non_terminaison_reconnue() {
+        assert!(is_runaway(
+            "audiocpp a échoué (1): ggml_vulkan: Found 2 Vulkan devices: \
+             audiocpp_cli failed: Higgs TTS generation reached max_tokens before EOC"
+        ));
+    }
+
+    /// Une VRAM insuffisante n'est PAS une non-terminaison : la rejouer à
+    /// l'identique échouerait pareil, c'est le repli CPU qui répond.
+    #[test]
+    fn non_terminaison_ne_recouvre_pas_les_autres_echecs() {
+        assert!(!is_runaway("vk::Device::allocateMemory: ErrorOutOfDeviceMemory"));
+        assert!(!is_runaway("audiocpp a échoué (1): invalid WAV RIFF header"));
     }
 
     #[test]
