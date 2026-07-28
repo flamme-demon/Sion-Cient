@@ -684,11 +684,12 @@ pub async fn tts_generate(
         .await
         .map_err(|e| format!("tâche interrompue: {e}"))?;
 
-    // La VRAM disponible ne se devine pas : ces modèles réclament 1 à 3 Go
-    // d'un seul tenant, et une carte occupée par un jeu ou un navigateur les
-    // refuse. Plutôt que d'infliger une erreur Vulkan brute à l'utilisateur, on
-    // rejoue sur CPU — plus lent, mais la génération est hors-ligne de toute
-    // façon, donc personne n'attend devant.
+    // L'échec n'est PAS une question de mémoire libre. Ces modèles demandent
+    // ~1 Go d'un seul tenant dans le tas à la fois DEVICE_LOCAL et HOST_VISIBLE,
+    // c'est-à-dire la fenêtre BAR — plafonnée à 256 Mo tant que le Resizable BAR
+    // manque, ce qui est le cas de toute la génération Turing. Constaté sur une
+    // RTX 2080 Ti avec 7,3 Go libres : libérer davantage n'y changerait rien.
+    // On rejoue donc sur CPU, plus lent mais hors-ligne de toute façon.
     if first != "cpu" {
         if let Err(err) = &stdout {
             if is_gpu_oom(err) {

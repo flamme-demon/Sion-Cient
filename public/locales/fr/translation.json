@@ -659,7 +659,7 @@
       "sound": "Son existant",
       "pickSound": "— Choisir un son de la soundboard —"
     },
-    "cpuFallback": "Mémoire graphique insuffisante : génération sur processeur, comptez nettement plus de temps."
+    "cpuFallback": "La carte graphique ne peut pas satisfaire cette allocation : génération sur processeur, comptez nettement plus de temps. Libérer de la mémoire vidéo n'y changerait rien."
   },
   "cropper": {
     "title": "Recadrer l'image",

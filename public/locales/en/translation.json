@@ -659,7 +659,7 @@
       "sound": "Existing sound",
       "pickSound": "— Pick a soundboard sound —"
     },
-    "cpuFallback": "Not enough GPU memory: generating on CPU, expect it to take considerably longer."
+    "cpuFallback": "The GPU cannot satisfy this allocation: generating on CPU, expect it to take considerably longer. Freeing video memory would not help."
   },
   "cropper": {
     "title": "Crop image",
