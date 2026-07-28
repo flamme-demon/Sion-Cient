@@ -224,7 +224,29 @@ fn json_escape(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// Enregistre les modules de calcul avant tout chargement de modèle.
+///
+/// La construction en `dynamic-backends` compile une variante du noyau CPU par
+/// palier SIMD et les livre en bibliothèques séparées : sans cet appel, aucun
+/// périphérique n'est enregistré et le chargement échoue sur « backend error
+/// (status 8) ». `init_backends_default` résout lui-même le dossier de
+/// libtranscribe, où le build les dépose.
+///
+/// L'appel est idempotent mais NON rejouable dans le même processus, d'où le
+/// `Once` — et c'est un no-op en construction statique.
+fn ensure_backends() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| match transcribe_cpp::init_backends_default() {
+        Ok(()) => log::info!(
+            "[Sion][transcribe] backends enregistrés ({} périphérique(s))",
+            transcribe_cpp::device_count()
+        ),
+        Err(e) => log::error!("[Sion][transcribe] init_backends_default: {e}"),
+    });
+}
+
 fn asr_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
+    ensure_backends();
     let model = match Model::load(&model_path) {
         Ok(m) => m,
         Err(e) => {
