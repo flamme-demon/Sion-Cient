@@ -573,10 +573,14 @@ fn backend() -> &'static str {
 /// fournir à Chatterbox serait au mieux ignoré. Inversement son absence sur
 /// Higgs/Qwen3 est une erreur explicite plutôt qu'une génération incohérente —
 /// un `--reference-text` faux fait dériver ces modèles silencieusement.
-/// Commande synchrone : Tauri l'exécute déjà hors du thread principal, et
-/// `run_bounded` borne la durée. Même choix que `summarize_transcript`.
+/// Asynchrone, et le travail bloquant part sur le pool dédié.
+///
+/// Une commande Tauri synchrone s'exécute sur le thread principal : la
+/// génération y gelait toute l'interface une vingtaine de secondes, au point de
+/// faire passer l'application pour plantée. `spawn_blocking` est fourni par
+/// Tauri lui-même, sans dépendance supplémentaire.
 #[tauri::command]
-pub fn tts_generate(
+pub async fn tts_generate(
     app: tauri::AppHandle<TauriRuntime>,
     model: String,
     text: String,
@@ -654,7 +658,9 @@ pub fn tts_generate(
     }
 
     log::info!("[Sion][tts] génération {} sur {}", m.id, backend());
-    let stdout = run_bounded(cmd)?;
+    let stdout = tauri::async_runtime::spawn_blocking(move || run_bounded(cmd))
+        .await
+        .map_err(|e| format!("tâche interrompue: {e}"))??;
     if !out_file.exists() {
         return Err(format!(
             "aucun fichier produit — sortie: {}",
