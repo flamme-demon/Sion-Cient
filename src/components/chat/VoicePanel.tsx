@@ -17,7 +17,7 @@ import {
   REF_MAX_SEC,
   type TtsModelInfo,
 } from "../../services/ttsService";
-import { uploadSound, playSoundLocal, broadcastSound, type SoundEntry } from "../../services/soundboardService";
+import { uploadSound, editSound, deleteSound, playSoundLocal, broadcastSound, type SoundEntry } from "../../services/soundboardService";
 import { uploadFile } from "../../services/matrixService";
 import { resolveAvatar } from "../../services/ttsService";
 import { AudioPreview } from "./AudioPreview";
@@ -26,6 +26,49 @@ import { ExternalAudioImport } from "./ExternalAudioImport";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 
 const MAX_TEXT = 500;
+
+const dlgLabel: React.CSSProperties = { fontSize: 11, color: "var(--color-on-surface-variant)" };
+const dlgInput: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--color-outline-variant)",
+  background: "var(--color-surface-container-high)",
+  color: "var(--color-on-surface)",
+  fontSize: 13,
+  outline: "none",
+};
+
+/** Boîte modale centrée, partagée par l'édition et la suppression. */
+function Dialog({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000, padding: 16,
+    }}>
+      <div style={{
+        width: 380, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto",
+        background: "var(--color-surface-container)", borderRadius: 20, padding: 24,
+        display: "flex", flexDirection: "column", gap: 10,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
+      }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: "var(--color-on-surface)" }}>{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Petits boutons d'action posés au pied d'une carte de voix. */
+const cardActionStyle = (): React.CSSProperties => ({
+  flex: 1,
+  padding: "4px 0",
+  borderRadius: 8,
+  border: "1px solid var(--color-outline-variant)",
+  background: "var(--color-surface-container-high)",
+  cursor: "pointer",
+  fontSize: 12,
+  lineHeight: 1.2,
+});
 
 interface Props {
   /** Sons de la soundboard : ceux de la catégorie Voix servent de références. */
@@ -103,6 +146,10 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   const [cropSource, setCropSource] = useState<File | null>(null);
   /** Aperçu du portrait, créé une seule fois par image et révoqué ensuite. */
   const [portraitPreview, setPortraitPreview] = useState<string | null>(null);
+  /** Voix de la galerie en cours de modification (null = aucune). */
+  const [editingVoice, setEditingVoice] = useState<SoundEntry | null>(null);
+  /** Voix dont la suppression attend confirmation. */
+  const [pendingDelete, setPendingDelete] = useState<SoundEntry | null>(null);
   const portraitInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -239,6 +286,76 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     }
   };
 
+  /**
+   * Ouvre la fiche d'une voix pour modification.
+   *
+   * Le portrait n'est pas rechargé : le remplacer suppose d'en choisir un
+   * nouveau, et le conserver ne demande rien. On ne garde donc que son
+   * existence, pour savoir si le bouton « retirer » a un sens.
+   */
+  const startEditVoice = (v: SoundEntry) => {
+    setError(null);
+    setEditingVoice(v);
+    setSaveName(v.label);
+    setSaveEmoji(v.emoji || "🗣️");
+    setRefText(v.refText || "");
+    setSavePortrait(null);
+    setPortraitPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+  };
+
+  const cancelEditVoice = () => {
+    setEditingVoice(null);
+    setSavePortrait(null);
+    setRefText("");
+    setPortraitPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+  };
+
+  /**
+   * Applique la modification. Le portrait n'est réenvoyé que s'il a changé —
+   * `undefined` laisse l'ancien en place, là où `null` l'effacerait.
+   */
+  const commitEditVoice = async () => {
+    if (!editingVoice || busy || !saveName.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const avatar = savePortrait ? await uploadFile(savePortrait) : undefined;
+      await editSound(
+        editingVoice,
+        saveName.trim(),
+        editingVoice.category,
+        saveEmoji || "🗣️",
+        editingVoice.gain,
+        { refText: refText.trim() || null, ...(avatar ? { avatar } : {}) },
+      );
+      onUploaded();
+      cancelEditVoice();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Supprime la voix. La room soundboard est partagée : l'extrait disparaît
+   * pour tout le monde, d'où la confirmation.
+   */
+  const confirmDeleteVoice = async () => {
+    if (!pendingDelete || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteSound(pendingDelete.eventId);
+      onUploaded();
+      setPendingDelete(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /** Génération depuis un extrait local, hors galerie. */
   const openLocal = () => {
     setError(null);
@@ -273,6 +390,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
         saveEmoji || "🗣️",
         1.0,
         { refText: refText.trim() || undefined, avatar },
+        ttsModel || undefined,
       );
       onUploaded();
       setSaveName("");
@@ -352,6 +470,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
         text.trim().slice(0, 60),
         GENERATED_CATEGORY,
         "🗣️",
+        1.0,
+        undefined,
+        ttsModel || undefined,
       );
       onUploaded();
       if (alsoPlay) {
@@ -377,6 +498,91 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   if (view === "list") {
     return (
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        {cropSource && (
+          <ImageCropper
+            file={cropSource}
+            onCancel={() => setCropSource(null)}
+            onCropped={(f) => {
+              setSavePortrait(f);
+              setPortraitPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(f); });
+              setCropSource(null);
+            }}
+          />
+        )}
+
+        {editingVoice && (
+          <Dialog title={t("tts.editVoice")}>
+            <label style={dlgLabel}>{t("tts.saveName")}</label>
+            <input
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              maxLength={60}
+              style={dlgInput}
+            />
+            <label style={dlgLabel}>{t("tts.saveEmoji")}</label>
+            <input
+              value={saveEmoji}
+              onChange={(e) => setSaveEmoji(e.target.value)}
+              maxLength={8}
+              style={{ ...dlgInput, width: 80 }}
+            />
+            <label style={dlgLabel}>{t("tts.refText")}</label>
+            <textarea
+              value={refText}
+              onChange={(e) => setRefText(e.target.value)}
+              rows={2}
+              style={{ ...dlgInput, resize: "vertical", fontFamily: "inherit" }}
+            />
+            <label style={dlgLabel}>{t("tts.savePortrait")}</label>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ width: 44, height: 44, borderRadius: 999, overflow: "hidden", background: "var(--color-surface-container-highest)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>
+                {portraitPreview
+                  ? <img src={portraitPreview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  : portraits[editingVoice.eventId]
+                    ? <img src={portraits[editingVoice.eventId]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    : (saveEmoji || "🗣️")}
+              </div>
+              <button type="button" onClick={() => portraitInputRef.current?.click()} style={{ ...btn(false, false), padding: "6px 12px" }}>
+                {t("tts.choosePortrait")}
+              </button>
+            </div>
+            {/* Le modèle n'est pas modifiable : il dit avec quoi la voix a été
+                mise au point, pas ce qu'il faudra employer ensuite. */}
+            {editingVoice.ttsModel && (
+              <div style={{ fontSize: 11, color: "var(--color-outline)" }}>
+                {t("tts.modelUsed", { model: TTS_MODEL_LABELS[editingVoice.ttsModel] || editingVoice.ttsModel })}
+              </div>
+            )}
+            {error && <div style={{ fontSize: 12, color: "var(--color-error)" }}>{error}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button type="button" onClick={cancelEditVoice} disabled={busy} style={{ ...btn(false, busy), padding: "6px 14px" }}>
+                {t("auth.cancel")}
+              </button>
+              <button type="button" onClick={commitEditVoice} disabled={busy || !saveName.trim()} style={{ ...btn(true, busy || !saveName.trim()), padding: "6px 14px" }}>
+                {t("tts.save")}
+              </button>
+            </div>
+          </Dialog>
+        )}
+
+        {pendingDelete && (
+          <Dialog title={t("tts.deleteVoice")}>
+            {/* La room soundboard est commune : l'extrait disparaît pour tous. */}
+            <div style={{ fontSize: 13, color: "var(--color-on-surface)", lineHeight: 1.5 }}>
+              {t("tts.deleteConfirm", { name: pendingDelete.label })}
+            </div>
+            {error && <div style={{ fontSize: 12, color: "var(--color-error)" }}>{error}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setPendingDelete(null)} disabled={busy} style={{ ...btn(false, busy), padding: "6px 14px" }}>
+                {t("auth.cancel")}
+              </button>
+              <button type="button" onClick={confirmDeleteVoice} disabled={busy} style={{ ...btn(true, busy), padding: "6px 14px", background: "var(--color-error)", color: "var(--color-on-error)" }}>
+                {t("tts.deleteVoice")}
+              </button>
+            </div>
+          </Dialog>
+        )}
+
         <div style={{ fontSize: 12, color: "var(--color-on-surface-variant)", marginBottom: 12, lineHeight: 1.5 }}>
           {t("tts.listHint")}
         </div>
@@ -420,6 +626,29 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                 <div style={{ fontSize: 11, color: "var(--color-on-surface-variant)" }}>
                   {t("tts.cardAction")}
                 </div>
+                {/* Indication seule : rien n'oblige à régénérer avec ce
+                    modèle-là, mais retrouver celui qui a donné un bon résultat
+                    évite de le chercher à l'aveugle. */}
+                {v.ttsModel && (
+                  <div style={{ fontSize: 10, color: "var(--color-outline)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {TTS_MODEL_LABELS[v.ttsModel] || v.ttsModel}
+                  </div>
+                )}
+              </div>
+              {/* `stopPropagation` : la carte entière ouvre la génération. */}
+              <div style={{ display: "flex", gap: 4 }}>
+                <button
+                  type="button"
+                  title={t("tts.editVoice")}
+                  onClick={(e) => { e.stopPropagation(); startEditVoice(v); }}
+                  style={cardActionStyle()}
+                >✏️</button>
+                <button
+                  type="button"
+                  title={t("tts.deleteVoice")}
+                  onClick={(e) => { e.stopPropagation(); setPendingDelete(v); }}
+                  style={cardActionStyle()}
+                >🗑️</button>
               </div>
             </div>
           ))}

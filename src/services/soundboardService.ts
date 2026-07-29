@@ -29,6 +29,11 @@ export interface SoundEntry {
    *  sons jouables. Le nom de catégorie ne peut pas servir de marqueur : il est
    *  librement modifiable par l'utilisateur. */
   kind: "sound" | "voice";
+  /** Modèle audio.cpp associé : celui retenu pour une voix de référence, celui
+   *  qui a produit le clip pour un son généré. Purement informatif — la
+   *  génération reste libre d'en employer un autre. Null pour tout ce qui a été
+   *  publié avant l'existence du champ. */
+  ttsModel: string | null;
 }
 
 export const SOUNDBOARD_MAX_FILE_SIZE = 1024 * 1024; // 1 MB
@@ -57,6 +62,8 @@ type RawContent = {
     avatar?: string;
     /** "voice" pour un extrait de référence TTS. */
     kind?: string;
+    /** Identifiant du modèle audio.cpp associé, à titre informatif. */
+    tts_model?: string;
     /** Legacy field from the v1.1.0 initial release — multiplier (1, 2, 3).
      *  Only round integer values landed (Matrix rejected floats), so when
      *  reading we treat any value here as a multiplier and prefer
@@ -117,6 +124,7 @@ function parseSound(ev: {
     // Repli sur la catégorie pour les voix enregistrées avant l'existence du
     // drapeau, sinon elles disparaîtraient de la galerie.
     kind: meta.kind === "voice" || normalizeCategory(meta.category) === "Voix" ? "voice" : "sound",
+    ttsModel: meta.tts_model || null,
   };
 }
 
@@ -230,6 +238,7 @@ export async function listSounds(): Promise<SoundEntry[]> {
     }
     if (edit.meta && "ref_text" in edit.meta) s.refText = edit.meta.ref_text || null;
     if (edit.meta && "avatar" in edit.meta) s.avatarUrl = edit.meta.avatar || null;
+    if (edit.meta && "tts_model" in edit.meta) s.ttsModel = edit.meta.tts_model || null;
   }
 
   return sounds.sort((a, b) => b.timestamp - a.timestamp);
@@ -252,6 +261,8 @@ export async function uploadSound(
   /** Renseigné pour un extrait de référence TTS : marque le son comme voix et
    *  porte ses métadonnées propres. */
   voice?: { refText?: string; avatar?: string },
+  /** Modèle audio.cpp à mémoriser, pour une voix comme pour un son généré. */
+  ttsModel?: string,
 ): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
@@ -288,6 +299,7 @@ export async function uploadSound(
       ...(voice ? { kind: "voice" } : {}),
       ...(voice?.refText ? { ref_text: voice.refText } : {}),
       ...(voice?.avatar ? { avatar: voice.avatar } : {}),
+      ...(ttsModel ? { tts_model: ttsModel } : {}),
     },
   };
   const res = await client.sendMessage(roomId, content as never);
@@ -371,6 +383,9 @@ export async function editSound(
   category: string,
   emoji: string | null,
   gain: number = original.gain,
+  /** Champs propres aux voix de référence. Omettre une clé la laisse
+   *  inchangée ; la passer à null l'efface. */
+  voice?: { refText?: string | null; avatar?: string | null },
 ): Promise<void> {
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
@@ -378,14 +393,24 @@ export async function editSound(
   if (!roomId) throw new Error("Soundboard room not created");
 
   const clamped = clampGain(gain);
-  const newMeta = {
+  // Une édition est un remplacement : ce que newMeta omet, la relecture va le
+  // chercher dans l'événement d'origine. D'où la reprise explicite de `kind` et
+  // du modèle — sans elle, renommer une voix la rendrait à la soundboard, où
+  // elle n'a rien à faire.
+  const newMeta: Record<string, unknown> = {
     label: label.trim().slice(0, 60) || original.label,
     category: normalizeCategory(category),
     ...(emoji ? { emoji } : {}),
     // See uploadSound: gain_pct is an integer percentage to comply with
     // Matrix's js_int validation.
     ...(clamped !== 1.0 ? { gain_pct: Math.round(clamped * 100) } : {}),
+    ...(original.kind === "voice" ? { kind: "voice" } : {}),
+    ...(original.ttsModel ? { tts_model: original.ttsModel } : {}),
   };
+  // `undefined` = ne pas toucher, `null` = effacer. Les distinguer impose de
+  // tester la présence de la clé, pas sa véracité.
+  if (voice && "refText" in voice) newMeta.ref_text = voice.refText || "";
+  if (voice && "avatar" in voice) newMeta.avatar = voice.avatar || "";
 
   // m.replace edit — keep the same url/info/body, only patch the com.sion field.
   const newContent: Record<string, unknown> = {

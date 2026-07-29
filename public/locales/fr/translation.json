@@ -660,7 +660,16 @@
       "sound": "Son existant",
       "pickSound": "— Choisir un son de la soundboard —"
     },
-    "cpuFallback": "La carte graphique ne peut pas satisfaire cette allocation : génération sur processeur, comptez nettement plus de temps. Libérer de la mémoire vidéo n'y changerait rien."
+    "cpuFallback": "La carte graphique ne peut pas satisfaire cette allocation : génération sur processeur, comptez nettement plus de temps. Libérer de la mémoire vidéo n'y changerait rien.",
+    "editVoice": "Modifier la voix",
+    "deleteVoice": "Supprimer la voix",
+    "deleteConfirm": "Supprimer « {{name}} » ? L'extrait disparaîtra pour tous les membres du serveur.",
+    "saveName": "Nom de la voix",
+    "refText": "Transcription de l'extrait",
+    "choosePortrait": "Choisir une image",
+    "save": "Enregistrer",
+    "modelUsed": "Mis au point avec {{model}}",
+    "generatedWith": "Généré par {{model}}"
   },
   "cropper": {
     "title": "Recadrer l'image",

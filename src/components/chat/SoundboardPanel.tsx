@@ -18,6 +18,7 @@ import {
 import { canSendMessage, getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { SoundboardUploadModal } from "./SoundboardUploadModal";
 import { VoicePanel } from "./VoicePanel";
+import { TTS_MODEL_LABELS } from "../../services/ttsService";
 import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -533,7 +534,7 @@ export function SoundboardPanel() {
                       className="sound-card"
                       onClick={() => handlePlay(s)}
                       onContextMenu={(ev) => { ev.preventDefault(); setHotkeyTarget(s); }}
-                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: formatCombo(hotkey) })}` : ""}`}
+                      title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}${s.ttsModel ? `\n${t("tts.generatedWith", { model: TTS_MODEL_LABELS[s.ttsModel] || s.ttsModel })}` : ""}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: formatCombo(hotkey) })}` : ""}`}
                       style={{
                         position: 'relative', display: 'flex', flexDirection: 'column', gap: 8,
                         padding: 12, borderRadius: 14,
