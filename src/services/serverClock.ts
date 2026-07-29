@@ -1,4 +1,4 @@
-// Estimation de l'écart entre l'horloge locale et celle du serveur.
+// Écart entre l'horloge locale et celle du serveur.
 //
 // Les appartenances vocales portent une durée de validité relative à
 // `origin_server_ts`, horodatage posé par le SERVEUR. Les comparer à
@@ -7,47 +7,94 @@
 // expirées depuis neuf heures et disparaissaient — sans le moindre message,
 // l'utilisateur se retrouvant seul dans un salon peuplé.
 //
-// `Date.now()` étant en UTC, on pourrait croire les fuseaux hors de cause. Le
-// cas réel montre le contraire, par un détour : la machine était réglée sur
-// UTC-8 alors qu'elle se trouvait en UTC+2, et son heure avait été posée à la
-// main pour que l'AFFICHAGE tombe juste. L'écran indiquait 15 h 52, exact, pour
-// un epoch de 23 h 52 — dix heures d'avance en UTC, invisibles à l'œil.
-//
-// D'où le libellé du bandeau, qui parle de fuseau avant de parler d'heure :
-// celui qui subit la panne voit une horloge correcte et n'a aucune raison de la
-// soupçonner.
+// Le cas réel — Windows 11 — cumulait trois pannes : fuseau corrompu (`Id:
+// Local`, décalage nul, libellé vide, signature d'une clé de registre abîmée),
+// service de temps arrêté (0x80070426, donc rien ne recale jamais), et horloge
+// en avance de dix heures. Aucune n'est visible depuis le navigateur ; seule la
+// troisième se mesure, et c'est celle qui casse la voix.
 //
 // Ce module ne sauve que l'affichage des participants de Sion. Le SDK juge
 // l'expiration avec son propre `Date.now()` (CallMembership.getMsUntilExpiry,
 // sans horloge injectable, l'ajustement d'écart ayant été RETIRÉ en amont) : la
 // session RTC et l'échange de clés restent cassés tant que l'horloge l'est.
-// La seule vraie réparation est côté machine.
+// La seule vraie réparation est côté machine, d'où le bandeau.
 
 /** Au-delà, on cesse de faire confiance à l'horloge locale et on prévient. */
 export const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 
-/** Horodatage serveur le plus récent observé, tous salons confondus. */
-let newestServerTs = 0;
-/** `Date.now()` au moment où on l'a observé. */
-let observedAt = 0;
+/** Au-delà, la mesure est refaite : une horloge peut être réparée en cours de route. */
+const PROBE_TTL_MS = 10 * 60 * 1000;
+
+/** Écart mesuré sur l'en-tête `Date` d'une réponse du serveur. */
+let measured: { skewMs: number; at: number } | null = null;
+/** Borne inférieure déduite d'un événement daté dans le futur. */
+let provenBehindMs = 0;
+/** Sonde en vol, pour n'en garder qu'une seule à la fois. */
+let inFlight: Promise<number | null> | null = null;
 
 /**
- * Enregistre un horodatage serveur. Les événements arrivant par la synchro en
- * quasi-temps réel, le plus récent d'entre eux approche l'heure du serveur.
+ * Mesure l'écart sur l'en-tête `Date` de la réponse du serveur.
+ *
+ * C'est la seule source fiable. Un horodatage d'événement ne dit rien de
+ * l'heure courante — il dit quand l'événement a été créé, ce qui peut remonter
+ * à des heures. L'en-tête `Date`, lui, est produit à l'instant de la réponse.
+ *
+ * L'aller-retour est encadré par deux lectures de l'horloge locale et on retient
+ * leur milieu : l'imprécision se limite à la moitié du temps de trajet, plus la
+ * seconde de granularité de l'en-tête. Négligeable face à une tolérance de cinq
+ * minutes.
+ *
+ * `/_matrix/client/versions` est choisi pour ne demander aucune authentification :
+ * la sonde doit pouvoir tourner avant même que la session soit prête.
  */
-export function noteServerTimestamp(ts: number): void {
-  if (!Number.isFinite(ts) || ts <= newestServerTs) return;
-  newestServerTs = ts;
-  observedAt = Date.now();
+export async function probeServerClock(baseUrl: string): Promise<number | null> {
+  if (inFlight) return inFlight;
+  inFlight = (async () => {
+    try {
+      const url = `${baseUrl.replace(/\/+$/, "")}/_matrix/client/versions`;
+      const before = Date.now();
+      const resp = await fetch(url, { method: "GET", cache: "no-store" });
+      const after = Date.now();
+      const header = resp.headers.get("date");
+      if (!header) return null;
+      const serverMs = Date.parse(header); // toujours interprété en UTC
+      if (!Number.isFinite(serverMs)) return null;
+      const skewMs = (before + after) / 2 - serverMs;
+      measured = { skewMs, at: after };
+      return skewMs;
+    } catch {
+      return null; // hors ligne : on garde ce qu'on avait
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
 }
 
 /**
- * Écart estimé, en millisecondes : positif si l'horloge locale AVANCE sur le
- * serveur. Zéro tant qu'aucun horodatage n'a été observé.
+ * Enregistre un horodatage serveur vu au fil de la synchro.
+ *
+ * Signal volontairement à SENS UNIQUE. Un événement daté dans le futur prouve
+ * que l'horloge locale est en retard : rien ne peut avoir été créé après
+ * maintenant. Un événement ancien, lui, ne prouve rien du tout — il peut l'être
+ * légitimement. Estimer l'écart par `maintenant - dernier horodatage` ferait
+ * donc crier au décalage dans tout salon resté calme quelques minutes.
+ */
+export function noteServerTimestamp(ts: number): void {
+  if (!Number.isFinite(ts) || ts <= 0) return;
+  const behind = Date.now() - ts;
+  if (behind < -CLOCK_SKEW_TOLERANCE_MS && behind < provenBehindMs) {
+    provenBehindMs = behind;
+  }
+}
+
+/**
+ * Écart connu, en millisecondes : positif si l'horloge locale AVANCE sur le
+ * serveur. Zéro tant que rien n'est établi.
  */
 export function getClockSkewMs(): number {
-  if (!newestServerTs) return 0;
-  return observedAt - newestServerTs;
+  if (measured) return measured.skewMs;
+  return provenBehindMs;
 }
 
 /**
@@ -68,12 +115,15 @@ export function serverNow(): number {
 }
 
 /**
- * Remonte la dérive à l'interface quand elle dépasse la tolérance.
+ * Remonte la dérive à l'interface, en rafraîchissant la mesure si elle a vieilli.
  *
- * Appelé au fil des synchros : c'est le seul endroit qui dispose à la fois de
- * l'heure serveur et de l'heure locale.
+ * `baseUrl` absent, on se contente de ce qui est déjà connu : la sonde ne doit
+ * jamais bloquer un chemin de synchro.
  */
-export async function publishClockSkew(): Promise<void> {
+export async function publishClockSkew(baseUrl?: string): Promise<void> {
+  if (baseUrl && (!measured || Date.now() - measured.at > PROBE_TTL_MS)) {
+    await probeServerClock(baseUrl);
+  }
   const skew = getClockSkewMs();
   const minutes = Math.abs(skew) > CLOCK_SKEW_TOLERANCE_MS ? Math.round(skew / 60000) : 0;
   const { useAppStore } = await import("../stores/useAppStore");
@@ -83,4 +133,11 @@ export async function publishClockSkew(): Promise<void> {
     }
     useAppStore.getState().setClockSkewMin(minutes);
   }
+}
+
+/** Remet le module à zéro — tests, et changement de compte. */
+export function resetServerClock(): void {
+  measured = null;
+  provenBehindMs = 0;
+  inFlight = null;
 }

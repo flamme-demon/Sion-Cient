@@ -647,6 +647,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     client.on(ClientEvent.Sync, async (state: string) => {
       if (state === "PREPARED" && !hasPrepared) {
         hasPrepared = true;
+        // Mesure l'écart d'horloge dès la connexion, sans attendre qu'un salon
+        // vocal soit parcouru : une horloge fausse casse la voix ET le SDK, et
+        // l'utilisateur doit être prévenu avant d'essayer de parler.
+        void publishClockSkew(client.getHomeserverUrl());
         const rooms = getJoinedRooms(client);
         const channels = rooms.map((room) => mapRoomToChannel(room, client));
 
