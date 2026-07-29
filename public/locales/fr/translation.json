@@ -53,7 +53,8 @@
     "connecting": "Connexion...",
     "reconnect": "Reconnecter",
     "republishPresence": "Republier ma présence (si on ne m'entend pas)",
-    "audioBackendLost": "Périphériques audio perdus : Sion ne voit plus votre micro alors que le système le détecte. Redémarrez l'application pour rétablir le son."
+    "audioBackendLost": "Périphériques audio perdus : Sion ne voit plus votre micro alors que le système le détecte. Redémarrez l'application pour rétablir le son.",
+    "clockSkew": "Horloge de votre machine décalée d'environ {{minutes}} min par rapport au serveur — la voix ne fonctionnera pas correctement. Vérifiez le FUSEAU HORAIRE puis activez la synchronisation automatique : l'heure affichée peut être juste alors que le réglage est faux."
   },
   "controls": {
     "mute": "Mute",

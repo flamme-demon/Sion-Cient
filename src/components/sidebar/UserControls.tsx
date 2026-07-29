@@ -65,6 +65,7 @@ export function UserControls() {
   const credentials = useAuthStore((s) => s.credentials);
   const e2eeUnhealthy = useAppStore((s) => s.e2eeUnhealthy);
   const audioBackendLost = useAppStore((s) => s.audioBackendLost);
+  const clockSkewMin = useAppStore((s) => s.clockSkewMin);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
   const transcriptPanelOpen = useTranscriptStore((s) => s.panelOpen);
@@ -142,6 +143,18 @@ export function UserControls() {
           fontSize: 11, lineHeight: 1.4,
         }}>
           {t("voice.audioBackendLost")}
+        </div>
+      )}
+
+      {/* Horloge décalée : l'utilisateur ne voit plus personne en vocal et les
+          autres ne le voient plus non plus, sans qu'aucun symptôme ne l'explique. */}
+      {clockSkewMin !== 0 && (
+        <div style={{
+          marginBottom: 10, padding: '8px 10px', borderRadius: 12,
+          background: 'var(--color-error-container)', color: 'var(--color-on-error-container)',
+          fontSize: 11, lineHeight: 1.4,
+        }}>
+          {t("voice.clockSkew", { minutes: Math.abs(clockSkewMin) })}
         </div>
       )}
 

@@ -12,6 +12,7 @@ import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messag
 import { playMessageReceived } from "../services/soundService";
 import { playPokeCue, playKickCue, playMemberKickedCue, noteKicked } from "../services/voiceChannelSounds";
 import { findAdminRoom } from "../services/adminCommandService";
+import { noteServerTimestamp, serverNow, publishClockSkew } from "../services/serverClock";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
@@ -160,11 +161,18 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
     const content = event.getContent();
     const stateKey = event.getStateKey?.();
 
+    // L'horodatage vient du serveur : il alimente l'estimation d'écart qui
+    // sert juste après, et que `serverNow` applique quand l'horloge locale
+    // s'avère fausse.
+    noteServerTimestamp(event.getTs?.() || 0);
+
     // Determine if this user is active in the call:
     // - New per-device format (MSC4143): content has {application, device_id, ...} directly — empty {} means left
     // - Old format: content has memberships[] array — empty array means left
     // In both cases, check expiration (expires_ts absolute or origin_server_ts + expires relative)
-    const now = Date.now();
+    // PAS `Date.now()` : comparer un horodatage serveur à une horloge locale
+    // fausse faisait disparaître tous les autres participants.
+    const now = serverNow();
     const memberships = content?.memberships;
 
     let hasOldFormatActive = false;
@@ -220,6 +228,10 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
       deafened: sionDeafened,
     });
   }
+
+  // La dérive n'est connue qu'après avoir vu des horodatages serveur : c'est le
+  // moment de la remonter, et ce chemin est parcouru à chaque synchro.
+  void publishClockSkew();
 
   return users;
 }

@@ -59,6 +59,10 @@ interface AppState {
    *  mais CEF n'en voit aucune. Chromium ne rétablit jamais ce lien et n'expose
    *  rien pour le forcer — seul un redémarrage répare, d'où le bandeau. */
   audioBackendLost: boolean;
+  /** Écart estimé entre l'horloge locale et le serveur, en minutes. 0 = aligné.
+   *  Au-delà de la tolérance, l'utilisateur disparaît des salons vocaux des
+   *  autres et n'y voit plus personne — sans le moindre indice. */
+  clockSkewMin: number;
   /** Globally-positioned user context menu, opened from sidebar voice list, mention pills, etc. */
   userContextMenu: UserContextMenuState | null;
   /** Download completion toast */
@@ -99,6 +103,7 @@ interface AppState {
   setPendingAutoJoinVoice: (roomId: string | null) => void;
   setE2EEUnhealthy: (v: boolean) => void;
   setAudioBackendLost: (v: boolean) => void;
+  setClockSkewMin: (v: number) => void;
   openUserContextMenu: (state: UserContextMenuState) => void;
   closeUserContextMenu: () => void;
   showDownloadNotification: (filename: string, path: string) => void;
@@ -128,6 +133,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   connectingVoiceChannel: null,
   e2eeUnhealthy: false,
   audioBackendLost: false,
+  clockSkewMin: 0,
   userContextMenu: null,
   downloadNotification: null,
   downloadedFiles: new Set<string>(JSON.parse(localStorage.getItem("sion-downloaded-files") || "[]")),
@@ -147,6 +153,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false, e2eeUnhealthy: false, isScreenSharing: false }),
   setE2EEUnhealthy: (v: boolean) => set({ e2eeUnhealthy: v }),
   setAudioBackendLost: (v: boolean) => set({ audioBackendLost: v }),
+  setClockSkewMin: (v: number) => set({ clockSkewMin: v }),
   toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;
     set({ isMuted: newMuted });
