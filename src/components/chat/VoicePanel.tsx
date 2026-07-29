@@ -175,6 +175,18 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   // room soundboard les partage déjà entre tous les membres.
   const voices = useMemo(() => sounds.filter((s) => s.kind === "voice"), [sounds]);
   const playableSounds = useMemo(() => sounds.filter((s) => s.kind !== "voice"), [sounds]);
+  /** Filtre du choix d'un son existant : une liste déroulante de deux cents
+   *  entrées est inexploitable. */
+  const [soundQuery, setSoundQuery] = useState("");
+  const matchingSounds = useMemo(() => {
+    const q = soundQuery.trim().toLowerCase();
+    if (!q) return playableSounds;
+    // La catégorie compte autant que le nom : c'est souvent par elle qu'on se
+    // souvient d'un son.
+    return playableSounds.filter(
+      (s) => s.label.toLowerCase().includes(q) || s.category.toLowerCase().includes(q),
+    );
+  }, [playableSounds, soundQuery]);
 
   const current = models.find((m) => m.id === ttsModel) || null;
 
@@ -820,14 +832,54 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           )}
 
           {refSource === "sound" && (
-            <select defaultValue="" onChange={(e) => pickSound(e.target.value)} style={inputStyle}>
-              <option value="">{t("tts.source.pickSound")}</option>
-              {playableSounds.map((s) => (
-                <option key={s.eventId} value={s.eventId}>
-                  {s.emoji ? `${s.emoji} ` : ""}{s.label}
-                </option>
-              ))}
-            </select>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <input
+                value={soundQuery}
+                onChange={(e) => setSoundQuery(e.target.value)}
+                placeholder={t("tts.source.searchSound")}
+                style={inputStyle}
+              />
+              {/* Liste plutôt que <select> : elle se filtre, montre la catégorie
+                  et garde une hauteur bornée quelle que soit la collection. */}
+              <div style={{
+                maxHeight: 220, overflowY: "auto",
+                border: "1px solid var(--color-outline-variant)", borderRadius: 10,
+              }}>
+                {matchingSounds.length === 0 && (
+                  <div style={{ padding: "10px 12px", fontSize: 12, color: "var(--color-on-surface-variant)" }}>
+                    {t("tts.source.noSound")}
+                  </div>
+                )}
+                {matchingSounds.map((s) => (
+                  <button
+                    key={s.eventId}
+                    type="button"
+                    onClick={() => pickSound(s.eventId)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, width: "100%",
+                      padding: "8px 12px", border: "none", background: "transparent",
+                      color: "var(--color-on-surface)", fontSize: 13, fontFamily: "inherit",
+                      cursor: "pointer", textAlign: "left",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "var(--color-surface-container-high)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span style={{ flexShrink: 0 }}>{s.emoji || "🔊"}</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {s.label}
+                    </span>
+                    <span style={{ flexShrink: 0, fontSize: 11, color: "var(--color-on-surface-variant)" }}>
+                      {s.category}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {/* Repère de volume : sans lui, un filtre trop large passe
+                  inaperçu et on croit la collection incomplète. */}
+              <div style={{ fontSize: 11, color: "var(--color-outline)" }}>
+                {t("tts.source.soundCount", { shown: matchingSounds.length, total: playableSounds.length })}
+              </div>
+            </div>
           )}
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

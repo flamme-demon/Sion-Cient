@@ -658,7 +658,10 @@
       "file": "Fichier",
       "url": "Lien",
       "sound": "Son existant",
-      "pickSound": "— Choisir un son de la soundboard —"
+      "pickSound": "— Choisir un son de la soundboard —",
+      "searchSound": "Rechercher un son…",
+      "noSound": "Aucun son ne correspond",
+      "soundCount": "{{shown}} sur {{total}} sons"
     },
     "cpuFallback": "La carte graphique ne peut pas satisfaire cette allocation : génération sur processeur, comptez nettement plus de temps. Libérer de la mémoire vidéo n'y changerait rien.",
     "editVoice": "Modifier la voix",

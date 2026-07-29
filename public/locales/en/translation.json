@@ -658,7 +658,10 @@
       "file": "File",
       "url": "Link",
       "sound": "Existing sound",
-      "pickSound": "— Pick a soundboard sound —"
+      "pickSound": "— Pick a soundboard sound —",
+      "searchSound": "Search a sound…",
+      "noSound": "No matching sound",
+      "soundCount": "{{shown}} of {{total}} sounds"
     },
     "cpuFallback": "The GPU cannot satisfy this allocation: generating on CPU, expect it to take considerably longer. Freeing video memory would not help.",
     "editVoice": "Edit voice",
