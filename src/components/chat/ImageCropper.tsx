@@ -35,9 +35,20 @@ export function ImageCropper({ file, round = true, onCancel, onCropped }: Props)
   useEffect(() => {
     const url = URL.createObjectURL(file);
     const image = new Image();
-    image.onload = () => setImg(image);
+    // Révoquer dans le nettoyage annulait un chargement encore en vol, et le
+    // navigateur consignait un `net::ERR_FILE_NOT_FOUND` sur l'URL blob. On
+    // libère donc une fois l'image décodée — après quoi l'URL ne sert plus —
+    // et le nettoyage ne s'en charge que si ce moment n'est jamais venu.
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      URL.revokeObjectURL(url);
+    };
+    image.onload = () => { setImg(image); release(); };
+    image.onerror = release;
     image.src = url;
-    return () => URL.revokeObjectURL(url);
+    return release;
   }, [file]);
 
   /** Échelle minimale pour que l'image couvre toute la zone : en-dessous, on
@@ -114,6 +125,11 @@ export function ImageCropper({ file, round = true, onCancel, onCropped }: Props)
   return (
     <div
       onClick={onCancel}
+      // Cette boîte est en `fixed` : dans l'arbre React elle est souvent voisine
+      // du panneau qui l'a ouverte, jamais dedans. Les fermetures « au clic en
+      // dehors » doivent pouvoir la reconnaître, sans quoi chaque clic dedans
+      // referme ce qui l'a ouverte.
+      data-overlay="true"
       style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100,
         display: "flex", alignItems: "center", justifyContent: "center",

@@ -55,6 +55,10 @@ export function AccountPopover() {
       setNewPassword("");
       setShowSessions(false);
       setSessionMsg(null);
+      // Le panneau se contente d'un retour `null` quand il est fermé : son état
+      // survit. Sans cette remise à zéro, un recadrage abandonné rouvrait sa
+      // boîte à la visite suivante, sur une image qu'on ne demandait plus.
+      setCropSource(null);
     }
   }, [showAccountPanel, credentials?.displayName]);
 
@@ -94,7 +98,14 @@ export function AccountPopover() {
   useEffect(() => {
     if (!showAccountPanel) return;
     function handleClick(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const target = e.target as Element | null;
+      // Le recadreur est rendu en `fixed`, à côté du panneau et non dedans :
+      // `contains` le voyait donc comme l'extérieur, et le moindre clic à
+      // l'intérieur — « Utiliser » compris — refermait le panneau. Sur
+      // « Utiliser » le mal était double, la fermeture devançant le rendu
+      // asynchrone du recadrage, qui n'était jamais appliqué.
+      if (target?.closest?.("[data-overlay]")) return;
+      if (popoverRef.current && !popoverRef.current.contains(target as Node)) {
         toggleAccountPanel();
       }
     }
