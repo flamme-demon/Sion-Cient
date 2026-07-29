@@ -58,16 +58,31 @@ function Dialog({ title, children }: { title: string; children: React.ReactNode 
   );
 }
 
-/** Petits boutons d'action posés au pied d'une carte de voix. */
-const cardActionStyle = (): React.CSSProperties => ({
-  flex: 1,
-  padding: "4px 0",
-  borderRadius: 8,
-  border: "1px solid var(--color-outline-variant)",
-  background: "var(--color-surface-container-high)",
+/**
+ * Petits boutons d'action d'une carte de voix.
+ *
+ * Sion n'embarque aucune bibliothèque d'icônes : les actions s'écrivent en
+ * glyphes typographiques monochromes, colorés par les jetons du thème. Un emoji
+ * porte ses propres couleurs et resterait identique en clair comme en sombre.
+ * Mêmes formes et mêmes jetons que la soundboard, à un détail près : ici les
+ * boutons ne se cachent pas au survol — c'est leur invisibilité qui rendait la
+ * gestion des voix introuvable.
+ */
+const cardActionStyle = (danger: boolean): React.CSSProperties => ({
+  width: 22,
+  height: 22,
+  borderRadius: 11,
+  border: "none",
+  background: danger ? "var(--color-error-container)" : "var(--color-secondary-container)",
+  color: danger ? "var(--color-error)" : "var(--color-on-secondary-container)",
   cursor: "pointer",
-  fontSize: 12,
-  lineHeight: 1.2,
+  fontSize: danger ? 12 : 11,
+  fontWeight: danger ? 700 : 400,
+  lineHeight: 1,
+  padding: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
 });
 
 interface Props {
@@ -636,19 +651,19 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                 )}
               </div>
               {/* `stopPropagation` : la carte entière ouvre la génération. */}
-              <div style={{ display: "flex", gap: 4 }}>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                 <button
                   type="button"
                   title={t("tts.editVoice")}
                   onClick={(e) => { e.stopPropagation(); startEditVoice(v); }}
-                  style={cardActionStyle()}
-                >✏️</button>
+                  style={cardActionStyle(false)}
+                >✎</button>
                 <button
                   type="button"
                   title={t("tts.deleteVoice")}
                   onClick={(e) => { e.stopPropagation(); setPendingDelete(v); }}
-                  style={cardActionStyle()}
-                >🗑️</button>
+                  style={cardActionStyle(true)}
+                >×</button>
               </div>
             </div>
           ))}
