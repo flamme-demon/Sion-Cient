@@ -225,6 +225,26 @@ if ($cefDir) {
 # --- 10. Bundle (MSI + NSIS) — re-utilise le cache cargo ---
 Write-Host "[10/10] Generation des installeurs (MSI + NSIS)..." -ForegroundColor Yellow
 
+# Variantes CPU de ggml + moteur transcribe. Elles sont liees dynamiquement
+# pour que ggml choisisse son noyau selon le processeur de l'utilisateur : un
+# lien statique embarquerait le jeu d'instructions de la MACHINE DE BUILD
+# (AVX-512 sur les runners) et planterait en SIGILL ailleurs. build.rs les depose
+# a cote du binaire ; il faut encore les faire entrer dans l'installeur, sinon
+# l'application ne demarre pas du tout ("transcribe.dll est introuvable").
+# On les stage dans cef-dist pour que le glob cef-dist/*.dll ci-dessous les
+# embarque sans carte de ressources supplementaire.
+$asrCount = 0
+foreach ($pattern in @("ggml*.dll", "libggml*.dll", "transcribe*.dll", "libtranscribe*.dll")) {
+    Get-ChildItem -Path $releaseDir -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName "$cefDist\" -Force
+        $asrCount++
+    }
+}
+Write-Host "  $asrCount DLL ggml/transcribe copiees dans cef-dist/" -ForegroundColor Green
+if ($asrCount -eq 0) {
+    Write-Host "  ATTENTION: aucune DLL ggml/transcribe — l'application ne demarrera pas" -ForegroundColor Red
+}
+
 # Backup tauri.conf.json
 Copy-Item $tauriConf "$tauriConf.bak"
 

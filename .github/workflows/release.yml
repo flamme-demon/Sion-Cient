@@ -174,6 +174,27 @@ jobs:
           }
           Write-Host "CEF staged from $($cefDir.FullName)"
 
+          # Variantes CPU de ggml + moteur transcribe. Elles sont liees
+          # dynamiquement pour que ggml choisisse son noyau selon le processeur
+          # de l'utilisateur ; un lien statique embarquerait le jeu
+          # d'instructions du RUNNER (AVX-512) et planterait en SIGILL ailleurs.
+          # build.rs les depose a cote du binaire, mais le bundler ne les
+          # connait pas : sans cette etape l'application ne demarre pas du tout
+          # (« transcribe.dll est introuvable »). Le glob cef-dist/*.dll ci-
+          # dessous les embarque ensuite sans carte supplementaire.
+          $asr = 0
+          foreach ($pattern in @("ggml*.dll", "libggml*.dll", "transcribe*.dll", "libtranscribe*.dll")) {
+            Get-ChildItem -Path "src-tauri/target/release" -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+              Copy-Item $_.FullName "$cefDist/" -Force
+              $asr++
+            }
+          }
+          Write-Host "$asr DLL ggml/transcribe staged"
+          if ($asr -eq 0) {
+            Write-Error "Aucune DLL ggml/transcribe — l'installeur produirait une application qui ne demarre pas"
+            exit 1
+          }
+
           Copy-Item "src-tauri/tauri.conf.json" "src-tauri/tauri.conf.json.bak"
           $conf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
           $conf.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
