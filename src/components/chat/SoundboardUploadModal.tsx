@@ -14,6 +14,10 @@ import { ExternalAudioImport } from "./ExternalAudioImport";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { trimToClip } from "../../services/audioTrim";
 
+/** Hauteur du sélecteur d'emoji, et marge qui le sépare du bouton. */
+const EMOJI_PANEL_H = 300;
+const EMOJI_PANEL_GAP = 8;
+
 // Soundboard sounds are capped at 20s; the trimmer cuts longer files down to a
 // chosen ≤20s window + re-encodes to opus, so the input file can be large even
 // though the uploaded clip must stay under `maxSize`. Cap the input only to
@@ -43,6 +47,44 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
   const [busy, setBusy] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiRowRef = useRef<HTMLDivElement>(null);
+  const [pickerBox, setPickerBox] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  /**
+   * Ancre le sélecteur d'emoji dans le repère de la fenêtre.
+   *
+   * Le modal défile désormais et rogne ce qui déborde, donc un panneau en
+   * `absolute` y serait coupé — c'est exactement le symptôme signalé. En
+   * `fixed`, il échappe au rognage ; en contrepartie sa position doit être
+   * calculée à la main, et recalculée quand le modal défile.
+   *
+   * Il s'ouvre sous le bouton, et bascule au-dessus quand la place manque en
+   * dessous — le champ emoji est proche du bas du modal, c'est le cas courant.
+   */
+  const placePicker = () => {
+    const r = emojiRowRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const roomBelow = window.innerHeight - r.bottom - EMOJI_PANEL_GAP;
+    const top =
+      roomBelow >= EMOJI_PANEL_H
+        ? r.bottom + EMOJI_PANEL_GAP
+        : Math.max(EMOJI_PANEL_GAP, r.top - EMOJI_PANEL_H - EMOJI_PANEL_GAP);
+    setPickerBox({ left: r.left, top, width: r.width });
+  };
+
+  // Le modal défile sous un panneau `fixed`, qui resterait sinon collé à
+  // l'écran pendant que son bouton s'en va. `capture` est indispensable : le
+  // défilement du modal ne remonte pas jusqu'à la fenêtre.
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const onMove = () => placePicker();
+    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("resize", onMove);
+    return () => {
+      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("resize", onMove);
+    };
+  }, [showEmojiPicker]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Current trim selection + decoded buffer, reported by <AudioTrimmer>.
   const regionRef = useRef<{ start: number; end: number; buffer: AudioBuffer } | null>(null);
@@ -133,6 +175,11 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
           flexDirection: 'column',
           gap: 12,
           boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          // En mode « lien externe », forme d'onde et rogneur allongent le
+          // contenu au-delà de l'écran : sans ces deux lignes, le bas du modal
+          // — gain, emoji, bouton d'enregistrement — devient inatteignable.
+          maxHeight: '90vh',
+          overflowY: 'auto',
         }}
       >
         <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--color-on-surface)' }}>
@@ -241,11 +288,11 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
         <label style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
           {t("soundboard.emoji")}
         </label>
-        <div style={{ position: 'relative' }}>
+        <div ref={emojiRowRef}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <button
               type="button"
-              onClick={() => setShowEmojiPicker((v) => !v)}
+              onClick={() => { if (!showEmojiPicker) placePicker(); setShowEmojiPicker((v) => !v); }}
               style={{
                 width: 44, height: 44,
                 borderRadius: 10,
@@ -277,19 +324,19 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
             )}
           </div>
 
-          {showEmojiPicker && (
+          {showEmojiPicker && pickerBox && (
             <>
-              <div onClick={() => setShowEmojiPicker(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+              <div onClick={() => setShowEmojiPicker(false)} style={{ position: 'fixed', inset: 0, zIndex: 10001 }} />
               <div style={{
-                position: 'absolute',
-                top: 52,
-                left: 0,
-                right: 0,
-                height: 300,
+                position: 'fixed',
+                top: pickerBox.top,
+                left: pickerBox.left,
+                width: pickerBox.width,
+                height: EMOJI_PANEL_H,
+                zIndex: 10002,
                 background: 'var(--color-surface-container-high)',
                 border: '1px solid var(--color-outline-variant)',
                 borderRadius: 12,
-                zIndex: 10,
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
