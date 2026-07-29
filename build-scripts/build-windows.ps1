@@ -245,9 +245,14 @@ Write-Host "  DLL ggml/transcribe copiees ($($staged.Count)) : $($staged -join '
 # unique, si bien qu'un lot ampute d'elle seule passait la garde tout en
 # reproduisant la panne de la 1.6.2. Chaque famille est donc exigee a part.
 $hasEngine = @($staged | Where-Object { $_ -like "transcribe*.dll" -or $_ -like "libtranscribe*.dll" }).Count
+# Les variantes CPU comptent a part : `ggml*.dll` est deja satisfait par
+# ggml-base.dll et ggml.dll, toujours presentes car liees a l'edition des liens.
+# Les ggml-cpu-*.dll sont chargees a l'execution et leur absence ne se voit qu'au
+# demarrage du moteur (« backend error (status 8) »).
+$hasCpu = @($staged | Where-Object { $_ -like "ggml-cpu-*.dll" -or $_ -like "libggml-cpu-*.dll" }).Count
 $hasGgml = @($staged | Where-Object { $_ -like "ggml*.dll" -or $_ -like "libggml*.dll" }).Count
-if ($hasEngine -eq 0 -or $hasGgml -eq 0) {
-    Write-Host "  ATTENTION: DLL manquantes (transcribe: $hasEngine, ggml: $hasGgml) — l'application ne demarrera pas" -ForegroundColor Red
+if ($hasEngine -eq 0 -or $hasGgml -eq 0 -or $hasCpu -eq 0) {
+    Write-Host "  ATTENTION: DLL manquantes (transcribe: $hasEngine, ggml: $hasGgml, variantes CPU: $hasCpu)" -ForegroundColor Red
 }
 
 # Backup tauri.conf.json

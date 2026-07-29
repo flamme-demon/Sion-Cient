@@ -198,11 +198,18 @@ jobs:
           # en 1.6.2 (« transcribe.dll est introuvable »). On exige donc chaque
           # famille separement.
           $hasEngine = @($staged | Where-Object { $_ -like "transcribe*.dll" -or $_ -like "libtranscribe*.dll" }).Count
+          # Les variantes CPU comptent a part. `ggml*.dll` est satisfait par les
+          # seules ggml-base.dll et ggml.dll, liees a l'edition des liens et donc
+          # toujours la ; les ggml-cpu-*.dll, elles, sont chargees a l'execution
+          # et leur absence ne se voit qu'au demarrage du moteur — c'est le
+          # « backend error (status 8) » de la 1.6.2, pas une erreur de chargement.
+          $hasCpu = @($staged | Where-Object { $_ -like "ggml-cpu-*.dll" -or $_ -like "libggml-cpu-*.dll" }).Count
           $hasGgml = @($staged | Where-Object { $_ -like "ggml*.dll" -or $_ -like "libggml*.dll" }).Count
-          if ($hasEngine -eq 0 -or $hasGgml -eq 0) {
-            Write-Error "DLL manquantes (transcribe: $hasEngine, ggml: $hasGgml) — l'installeur produirait une application qui ne demarre pas"
+          if ($hasEngine -eq 0 -or $hasGgml -eq 0 -or $hasCpu -eq 0) {
+            Write-Error "DLL manquantes (transcribe: $hasEngine, ggml: $hasGgml, variantes CPU: $hasCpu) — la transcription ne demarrerait pas"
             exit 1
           }
+          Write-Host "Controle OK — transcribe: $hasEngine, ggml: $hasGgml, variantes CPU: $hasCpu"
 
           Copy-Item "src-tauri/tauri.conf.json" "src-tauri/tauri.conf.json.bak"
           $conf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
