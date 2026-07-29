@@ -10,7 +10,15 @@ vi.mock("../services/adminCommandService", () => ({ findAdminRoom: vi.fn() }));
 vi.mock("../utils/messageCache", () => ({
   setCachedRoom: vi.fn(), appendCachedEventIds: vi.fn(), clearCache: vi.fn(),
 }));
-vi.mock("./useAppStore", () => ({ useAppStore: { getState: () => ({}), subscribe: vi.fn() } }));
+// `extractVoiceUsers` remonte l'écart d'horloge au store : le mock doit porter
+// ce setter, faute de quoi le test s'appuierait sur un store que la production
+// ne connaît pas.
+vi.mock("./useAppStore", () => ({
+  useAppStore: {
+    getState: () => ({ clockSkewMin: 0, setClockSkewMin: vi.fn() }),
+    subscribe: vi.fn(),
+  },
+}));
 vi.mock("./useSettingsStore", () => ({ useSettingsStore: { getState: () => ({}), subscribe: vi.fn() } }));
 
 import { extractVoiceUsers } from "./useMatrixStore";

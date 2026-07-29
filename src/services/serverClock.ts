@@ -126,12 +126,20 @@ export async function publishClockSkew(baseUrl?: string): Promise<void> {
   }
   const skew = getClockSkewMs();
   const minutes = Math.abs(skew) > CLOCK_SKEW_TOLERANCE_MS ? Math.round(skew / 60000) : 0;
-  const { useAppStore } = await import("../stores/useAppStore");
-  if (useAppStore.getState().clockSkewMin !== minutes) {
+  // Appelé sans être attendu depuis le parcours des salons : une exception ici
+  // remonterait en rejet non capturé et ferait tomber ce que ce module se
+  // contente d'observer. Un écart d'horloge non signalé est un moindre mal
+  // qu'une liste de participants qui ne se construit plus.
+  try {
+    const { useAppStore } = await import("../stores/useAppStore");
+    const state = useAppStore.getState();
+    if (state.clockSkewMin === minutes) return;
     if (minutes !== 0) {
       console.warn(`[Sion][Clock] horloge locale décalée de ${minutes} min par rapport au serveur`);
     }
-    useAppStore.getState().setClockSkewMin(minutes);
+    state.setClockSkewMin(minutes);
+  } catch (e) {
+    console.warn("[Sion][Clock] remontée de l'écart impossible", e);
   }
 }
 
