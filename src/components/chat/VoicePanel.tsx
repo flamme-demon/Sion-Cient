@@ -166,6 +166,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   /** Voix dont la suppression attend confirmation. */
   const [pendingDelete, setPendingDelete] = useState<SoundEntry | null>(null);
   const portraitInputRef = useRef<HTMLInputElement>(null);
+  /** Second champ fichier, propre à la fenêtre d'édition : `portraitInputRef`
+   *  ne vit que dans la vue de génération, où l'édition ne passe jamais. */
+  const editPortraitInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Les voix sont des sons marqués `kind: "voice"` — pas de stockage séparé, la
@@ -560,7 +563,20 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                     ? <img src={portraits[editingVoice.eventId]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     : (saveEmoji || "🗣️")}
               </div>
-              <button type="button" onClick={() => portraitInputRef.current?.click()} style={{ ...btn(false, false), padding: "6px 12px" }}>
+              <input
+                ref={editPortraitInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setCropSource(f);
+                  // Remis à zéro pour que rechoisir le même fichier après un
+                  // recadrage abandonné déclenche bien un nouvel événement.
+                  e.target.value = "";
+                }}
+              />
+              <button type="button" onClick={() => editPortraitInputRef.current?.click()} style={{ ...btn(false, false), padding: "6px 12px" }}>
                 {t("tts.choosePortrait")}
               </button>
             </div>

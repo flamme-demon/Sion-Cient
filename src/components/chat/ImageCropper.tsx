@@ -131,7 +131,12 @@ export function ImageCropper({ file, round = true, onCancel, onCropped }: Props)
       // referme ce qui l'a ouverte.
       data-overlay="true"
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1100,
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+        // Au-dessus de tout le reste : le recadreur s'ouvre DEPUIS une boîte
+        // modale — édition d'une voix, panneau de compte — et se serait
+        // retrouvé derrière elle. Le plan le plus haut employé ailleurs est
+        // 10002, celui du sélecteur d'emoji.
+        zIndex: 11000,
         display: "flex", alignItems: "center", justifyContent: "center",
       }}
     >
