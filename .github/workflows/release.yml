@@ -182,16 +182,25 @@ jobs:
           # connait pas : sans cette etape l'application ne demarre pas du tout
           # (« transcribe.dll est introuvable »). Le glob cef-dist/*.dll ci-
           # dessous les embarque ensuite sans carte supplementaire.
-          $asr = 0
+          $staged = @()
           foreach ($pattern in @("ggml*.dll", "libggml*.dll", "transcribe*.dll", "libtranscribe*.dll")) {
             Get-ChildItem -Path "src-tauri/target/release" -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
               Copy-Item $_.FullName "$cefDist/" -Force
-              $asr++
+              $staged += $_.Name
             }
           }
-          Write-Host "$asr DLL ggml/transcribe staged"
-          if ($asr -eq 0) {
-            Write-Error "Aucune DLL ggml/transcribe — l'installeur produirait une application qui ne demarre pas"
+          # Noms journalises, pas seulement leur nombre : c'est la seule trace
+          # consultable apres coup pour savoir ce que l'installeur embarquait.
+          Write-Host "DLL ggml/transcribe staged ($($staged.Count)) : $($staged -join ', ')"
+          # Compter les fichiers ne suffit pas. Les variantes ggml sont
+          # nombreuses et transcribe.dll unique : un lot ampute d'elle seule
+          # passait la garde tout en reproduisant exactement la panne signalee
+          # en 1.6.2 (« transcribe.dll est introuvable »). On exige donc chaque
+          # famille separement.
+          $hasEngine = @($staged | Where-Object { $_ -like "transcribe*.dll" -or $_ -like "libtranscribe*.dll" }).Count
+          $hasGgml = @($staged | Where-Object { $_ -like "ggml*.dll" -or $_ -like "libggml*.dll" }).Count
+          if ($hasEngine -eq 0 -or $hasGgml -eq 0) {
+            Write-Error "DLL manquantes (transcribe: $hasEngine, ggml: $hasGgml) — l'installeur produirait une application qui ne demarre pas"
             exit 1
           }
 
