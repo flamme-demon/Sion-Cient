@@ -64,11 +64,12 @@ function Dialog({ title, children }: { title: string; children: React.ReactNode 
  * Sion n'embarque aucune bibliothèque d'icônes : les actions s'écrivent en
  * glyphes typographiques monochromes, colorés par les jetons du thème. Un emoji
  * porte ses propres couleurs et resterait identique en clair comme en sombre.
- * Mêmes formes et mêmes jetons que la soundboard, à un détail près : ici les
- * boutons ne se cachent pas au survol — c'est leur invisibilité qui rendait la
- * gestion des voix introuvable.
+ * Mêmes formes, mêmes jetons et même révélation au survol que les cartes de la
+ * soundboard.
  */
 const cardActionStyle = (danger: boolean): React.CSSProperties => ({
+  // Révélé au survol par `.voice-card:hover`, comme sur les cartes de son.
+  display: "none",
   width: 22,
   height: 22,
   borderRadius: 11,
@@ -80,7 +81,6 @@ const cardActionStyle = (danger: boolean): React.CSSProperties => ({
   fontWeight: danger ? 700 : 400,
   lineHeight: 1,
   padding: 0,
-  display: "flex",
   alignItems: "center",
   justifyContent: "center",
 });
@@ -513,6 +513,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   if (view === "list") {
     return (
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+        <style>{`
+          .voice-card:hover .voice-card-btn { display: flex !important; }
+        `}</style>
         {cropSource && (
           <ImageCropper
             file={cropSource}
@@ -610,6 +613,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
           {voices.map((v) => (
             <div
               key={v.eventId}
+              className="voice-card"
               onClick={() => openVoice(v)}
               title={v.label}
               style={{
@@ -651,15 +655,20 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
                 )}
               </div>
               {/* `stopPropagation` : la carte entière ouvre la génération. */}
-              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              {/* Hauteur réservée : les boutons apparaissent au survol, et sans
+                  cela la carte grandirait sous le curseur. Les cartes de son
+                  n'ont pas ce souci, leurs boutons étant en position absolue. */}
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", height: 22 }}>
                 <button
                   type="button"
+                  className="voice-card-btn"
                   title={t("tts.editVoice")}
                   onClick={(e) => { e.stopPropagation(); startEditVoice(v); }}
                   style={cardActionStyle(false)}
                 >✎</button>
                 <button
                   type="button"
+                  className="voice-card-btn"
                   title={t("tts.deleteVoice")}
                   onClick={(e) => { e.stopPropagation(); setPendingDelete(v); }}
                   style={cardActionStyle(true)}
