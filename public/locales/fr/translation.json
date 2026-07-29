@@ -661,7 +661,8 @@
       "pickSound": "— Choisir un son de la soundboard —",
       "searchSound": "Rechercher un son…",
       "noSound": "Aucun son ne correspond",
-      "soundCount": "{{shown}} sur {{total}} sons"
+      "soundCount": "{{shown}} sur {{total}} sons",
+      "changeSound": "Changer"
     },
     "cpuFallback": "La carte graphique ne peut pas satisfaire cette allocation : génération sur processeur, comptez nettement plus de temps. Libérer de la mémoire vidéo n'y changerait rien.",
     "editVoice": "Modifier la voix",

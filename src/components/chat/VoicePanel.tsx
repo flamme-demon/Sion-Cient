@@ -178,6 +178,9 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
   /** Filtre du choix d'un son existant : une liste déroulante de deux cents
    *  entrées est inexploitable. */
   const [soundQuery, setSoundQuery] = useState("");
+  /** Son retenu comme référence : la liste se replie derrière lui une fois le
+   *  choix fait, deux cents entrées n'ayant plus rien à dire à ce moment-là. */
+  const [pickedSound, setPickedSound] = useState<SoundEntry | null>(null);
   const matchingSounds = useMemo(() => {
     const q = soundQuery.trim().toLowerCase();
     if (!q) return playableSounds;
@@ -270,6 +273,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
     }
     refBufferRef.current = null;
     setRefReady(false);
+    setPickedSound(null);
     setLocalRef(f);
     setRefFile(f);
     if (!saveName) setSaveName(f.name.replace(/\.[^.]+$/, "").slice(0, 40));
@@ -289,8 +293,11 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
       const f = await resolveSound(picked);
       setLocalRef(f);
       setRefFile(f);
+      setPickedSound(picked);
       if (!saveName) setSaveName(picked.label.slice(0, 40));
     } catch (e) {
+      // Replier la liste sur un échec laisserait sans moyen de réessayer.
+      setPickedSound(null);
       setError(e instanceof Error ? e.message : String(e));
     }
   };
@@ -811,7 +818,7 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
               <button
                 key={m}
                 type="button"
-                onClick={() => { setRefSource(m); setError(null); }}
+                onClick={() => { setRefSource(m); setError(null); setPickedSound(null); }}
                 style={{
                   flex: 1, padding: "6px 0", borderRadius: 8, border: "none", cursor: "pointer",
                   fontSize: 12, fontWeight: 600, fontFamily: "inherit",
@@ -833,6 +840,25 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
 
           {refSource === "sound" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {pickedSound ? (
+                // Choix fait : on n'affiche plus que lui, avec de quoi revenir.
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
+                  border: "1px solid var(--color-primary)", borderRadius: 10,
+                  background: "var(--color-surface-container-high)",
+                }}>
+                  <span style={{ flexShrink: 0 }}>{pickedSound.emoji || "🔊"}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, color: "var(--color-on-surface)" }}>
+                    {pickedSound.label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPickedSound(null)}
+                    style={{ ...btn(false, false), padding: "4px 10px", fontSize: 12 }}
+                  >{t("tts.source.changeSound")}</button>
+                </div>
+              ) : (
+              <>
               <input
                 value={soundQuery}
                 onChange={(e) => setSoundQuery(e.target.value)}
@@ -879,6 +905,8 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
               <div style={{ fontSize: 11, color: "var(--color-outline)" }}>
                 {t("tts.source.soundCount", { shown: matchingSounds.length, total: playableSounds.length })}
               </div>
+              </>
+              )}
             </div>
           )}
 
