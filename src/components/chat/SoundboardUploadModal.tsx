@@ -13,6 +13,7 @@ import { AudioTrimmer } from "./AudioTrimmer";
 import { ExternalAudioImport } from "./ExternalAudioImport";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { trimToClip } from "../../services/audioTrim";
+import { TTS_MODEL_LABELS } from "../../services/ttsService";
 
 /** Hauteur du sélecteur d'emoji, et marge qui le sépare du bouton. */
 const EMOJI_PANEL_H = 300;
@@ -284,6 +285,22 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
         <datalist id="soundboard-categories">
           {existingCategories.map((c) => <option key={c} value={c} />)}
         </datalist>
+
+        {/* Origine du son, en lecture seule : elle constate ce qui l'a produit
+            et n'a pas à être réécrite après coup. */}
+        {editing?.ttsModel && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 10,
+            background: 'var(--color-surface-container-high)', fontSize: 11,
+            color: 'var(--color-on-surface-variant)',
+          }}>
+            <span style={{
+              fontSize: 9, fontWeight: 700, letterSpacing: 0.4, padding: '1px 5px', borderRadius: 999,
+              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+            }}>{t("tts.badge")}</span>
+            {t("tts.generatedWith", { model: TTS_MODEL_LABELS[editing.ttsModel] || editing.ttsModel })}
+          </div>
+        )}
 
         <label style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
           {t("soundboard.emoji")}

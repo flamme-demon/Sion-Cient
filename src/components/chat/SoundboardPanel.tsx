@@ -550,6 +550,16 @@ export function SoundboardPanel() {
                         <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--color-surface-container-highest)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
                           {s.emoji || '🔊'}
                         </div>
+                        {/* Un son de synthèse ne se distingue autrement en rien
+                            d'un extrait enregistré : sans marqueur, l'origine
+                            se perd dès la séance suivante. */}
+                        {s.ttsModel && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, letterSpacing: 0.4, padding: '1px 5px',
+                            borderRadius: 999, background: 'var(--color-primary)',
+                            color: 'var(--color-on-primary)', alignSelf: 'flex-start', marginLeft: 'auto', marginRight: 4,
+                          }}>{t("tts.badge")}</span>
+                        )}
                         <button
                           onClick={(e) => { e.stopPropagation(); toggleFavorite(s.eventId); }}
                           title={isFav ? t("soundboard.unfavorite") : t("soundboard.favorite")}
@@ -565,6 +575,12 @@ export function SoundboardPanel() {
                           fontSize: 11, color: 'var(--color-on-surface-variant)',
                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>{subtitle}</div>
+                        {s.ttsModel && (
+                          <div style={{
+                            fontSize: 10, color: 'var(--color-outline)', marginTop: 2,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>{TTS_MODEL_LABELS[s.ttsModel] || s.ttsModel}</div>
+                        )}
                       </div>
                       {hotkey && (
                         <span style={{
