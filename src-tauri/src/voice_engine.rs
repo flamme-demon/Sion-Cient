@@ -20,6 +20,7 @@ use base64::Engine as _;
 use livekit::prelude::*;
 use livekit::track::VideoQuality;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
+use livekit::webrtc::video_frame::native::VideoFrameBufferExt as _;
 use livekit::webrtc::video_stream::native::NativeVideoStream;
 use livekit::options::TrackPublishOptions;
 use tauri::Emitter as _;
@@ -326,49 +327,47 @@ fn video_emit_dims(width: u32, height: u32) -> (u32, u32) {
     (w.max(2), h.max(2))
 }
 
-/// I420 (strides arbitraires) → RGB24 entrelacé, BT.601 plage limitée
-/// (c'est ce que WebRTC produit : noir = Y 16, blanc = Y 235). Fonction
-/// pure (testée).
-fn i420_to_rgb(
-    width: u32,
-    height: u32,
-    y: &[u8],
-    u: &[u8],
-    v: &[u8],
-    stride_y: u32,
-    stride_u: u32,
-    stride_v: u32,
-) -> Vec<u8> {
-    let (w, h) = (width as usize, height as usize);
-    let (sy, su, sv) = (stride_y as usize, stride_u as usize, stride_v as usize);
-    let mut rgb = vec![0u8; w * h * 3];
-    for row in 0..h {
-        for col in 0..w {
-            let c = y[row * sy + col] as i32 - 16;
-            let d = u[(row / 2) * su + col / 2] as i32 - 128;
-            let e = v[(row / 2) * sv + col / 2] as i32 - 128;
-            let r = (298 * c + 409 * e + 128) >> 8;
-            let g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-            let b = (298 * c + 516 * d + 128) >> 8;
-            let o = (row * w + col) * 3;
-            rgb[o] = r.clamp(0, 255) as u8;
-            rgb[o + 1] = g.clamp(0, 255) as u8;
-            rgb[o + 2] = b.clamp(0, 255) as u8;
-        }
-    }
-    rgb
+/// RGB24 → JPEG à qualité donnée (0-100). `jpeg-rusturbo` (SIMD, ~5×
+/// l'encodeur scalaire de `image`). Réservé aux tests : la pompe utilise
+/// directement le RGBA sorti de libyuv.
+#[cfg(test)]
+fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8], quality: u8) -> Result<Vec<u8>, String> {
+    encode_jpeg_rgba(width, height, &rgb_to_rgba(rgb), quality, true)
 }
 
-/// RGB24 → JPEG à qualité donnée (0-100). `jpeg-rusturbo` (SIMD, ~5×
-/// l'encodeur scalaire de `image`) en 4:4:4 : pas de sous-échantillonnage
-/// chroma, le texte reste net là où le 4:2:0 bave.
-fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8], quality: u8) -> Result<Vec<u8>, String> {
+/// RGB24 → RGBA32 (canal alpha opaque). La conversion I420→RGBA se fait
+/// déjà en SIMD (libyuv) ; ce pont ne sert qu'au test unitaire.
+#[cfg(test)]
+fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
+    rgb.chunks_exact(3)
+        .flat_map(|px| [px[0], px[1], px[2], 255])
+        .collect()
+}
+
+/// RGBA32 → JPEG à qualité donnée. `full_chroma` = 4:4:4 (texte net, ~2×
+/// plus gros) sinon 4:2:0 (mouvement : imperceptible à 12 im/s, 2× moins
+/// de données à encoder et à faire passer).
+fn encode_jpeg_rgba(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    quality: u8,
+    full_chroma: bool,
+) -> Result<Vec<u8>, String> {
+    use jpeg_rusturbo::ChromaSubsampling::{Yuv420, Yuv444};
     let mut out = Vec::new();
     let mut enc = jpeg_rusturbo::JpegEncoder::new_with_quality(&mut out, quality);
-    enc.set_subsampling(jpeg_rusturbo::ChromaSubsampling::Yuv444);
-    enc.encode_rgb(rgb, width, height)
+    enc.set_subsampling(if full_chroma { Yuv444 } else { Yuv420 });
+    enc.encode_rgba(rgba, width, height)
         .map_err(|e| format!("jpeg: {}", e))?;
     Ok(out)
+}
+
+/// Écran en mouvement (oui/non) d'après les émissions des 2 dernières
+/// secondes : au-delà de ~3 im/s, le 4:2:0 est invisible et 2× moins cher.
+/// Fonction pure (testée).
+fn screen_in_motion(emits_last_2s: usize) -> bool {
+    emits_last_2s >= 6
 }
 
 /// Échantillonne le plan Y (1 octet sur 32) pour la détection de changement.
@@ -450,12 +449,12 @@ fn spawn_video_pump(
         let mut latest: Option<livekit::webrtc::video_frame::BoxVideoFrame> = None;
         // Encodage en cours (un seul à la fois) : (échantillons Y, dims
         // source, JPEG émis ou None si image strictement inchangée, avec
-        // temps conversion et encodage en ms pour le diagnostic).
+        // temps conversion et encodage en ms + mode chroma pour le diagnostic).
         let mut pending: Option<
             tokio::task::JoinHandle<(
                 Vec<u8>,
                 (u32, u32),
-                Option<(Vec<u8>, u32, u32, u128, u128)>,
+                Option<(Vec<u8>, u32, u32, u128, u128, bool)>,
             )>,
         > = None;
         let mut prev_samples: Vec<u8> = Vec::new();
@@ -484,7 +483,7 @@ fn spawn_video_pump(
                                     prev_samples = samples;
                                     // Image inchangée (emitted = None) : on
                                     // garde simplement l'affichée.
-                                    if let Some((jpeg, dw, dh, conv_ms, enc_ms)) = emitted {
+                                    if let Some((jpeg, dw, dh, conv_ms, enc_ms, full_chroma)) = emitted {
                                         let now = tokio::time::Instant::now();
                                         window.push_back((now, jpeg.len()));
                                         while window.front().is_some_and(|(t, _)| now.duration_since(*t).as_secs() >= 2) {
@@ -505,8 +504,9 @@ fn spawn_video_pump(
                                         if first {
                                             first = false;
                                             log::info!(
-                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{}, conv {}ms enc {}ms)",
-                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality, conv_ms, enc_ms
+                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{} {}, conv {}ms enc {}ms)",
+                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality,
+                                                if full_chroma { "444" } else { "420" }, conv_ms, enc_ms
                                             );
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
@@ -550,6 +550,9 @@ fn spawn_video_pump(
                     // Nouvel encodage si une frame fraîche attend.
                     if let Some(frame) = latest.take() {
                         let q = budget.quality;
+                        // 4:4:4 quand l'écran est calme (texte net), 4:2:0 en
+                        // plein mouvement (imperceptible, 2× moins cher).
+                        let full_chroma = !screen_in_motion(window.len());
                         let prev = std::mem::take(&mut prev_samples);
                         pending = Some(tokio::task::spawn_blocking(move || {
                             let buf = frame.buffer.as_ref();
@@ -566,14 +569,21 @@ fn spawn_video_pump(
                             if dw == 0 || (!prev.is_empty() && prev == samples) {
                                 return (samples, (sw, sh), None);
                             }
-                            let (sy, su, sv) = i420.strides();
-                            let (dy, du, dv) = i420.data();
+                            // Conversion SIMD libyuv (remplace la boucle
+                            // scalaire : ~68 ms → quelques ms en 1920px).
                             let t0 = std::time::Instant::now();
-                            let rgb = i420_to_rgb(dw, dh, dy, du, dv, sy, su, sv);
+                            let mut rgba = vec![0u8; (dw * dh * 4) as usize];
+                            i420.to_argb(
+                                livekit::webrtc::video_frame::VideoFormatType::RGBA,
+                                &mut rgba,
+                                dw * 4,
+                                dw as i32,
+                                dh as i32,
+                            );
                             let conv_ms = t0.elapsed().as_millis();
-                            let emitted = encode_jpeg_rgb(dw, dh, &rgb, q)
+                            let emitted = encode_jpeg_rgba(dw, dh, &rgba, q, full_chroma)
                                 .ok()
-                                .map(|jpeg| (jpeg, dw, dh, conv_ms, t0.elapsed().as_millis()));
+                                .map(|jpeg| (jpeg, dw, dh, conv_ms, t0.elapsed().as_millis(), full_chroma));
                             (samples, (sw, sh), emitted)
                         }));
                     }
@@ -1403,35 +1413,37 @@ mod tests {
     }
 
     #[test]
-    fn i420_to_rgb_noir_et_blanc() {
-        // 2x2 : Y plein blanc / noir, chroma neutre.
-        let y = vec![235u8, 235, 16, 16];
-        let u = vec![128u8];
-        let v = vec![128u8];
-        let rgb = i420_to_rgb(2, 2, &y, &u, &v, 2, 1, 1);
-        assert_eq!(rgb.len(), 12);
-        // Blanc ≈ 255, noir ≈ 0 (tolérance d'arrondi).
-        assert!(rgb[0] > 240 && rgb[1] > 240 && rgb[2] > 240);
-        assert!(rgb[9] < 16 && rgb[10] < 16 && rgb[11] < 16);
-    }
-
-    #[test]
-    fn i420_to_rgb_respecte_les_strides() {
-        // Stride Y = 4 pour 2 px utiles (padding ignoré).
-        let y = vec![235u8, 235, 0, 0, 16, 16, 0, 0];
-        let u = vec![128u8];
-        let v = vec![128u8];
-        let rgb = i420_to_rgb(2, 2, &y, &u, &v, 4, 1, 1);
-        assert!(rgb[0] > 240);
-        assert!(rgb[9] < 16);
-    }
-
-    #[test]
     fn jpeg_encode_produit_un_vrai_jpeg() {
         let rgb = vec![128u8; 8 * 8 * 3];
         let jpeg = encode_jpeg_rgb(8, 8, &rgb, 80).expect("encode jpeg");
         assert!(jpeg.len() > 2);
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8]);
+    }
+
+    #[test]
+    fn jpeg_rgba_420_plus_petit_que_444() {
+        // Damier haute fréquence : le 4:2:0 doit compacter plus fort.
+        let mut rgba = vec![0u8; 64 * 64 * 4];
+        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+            let v = if (i / 64 + i % 64) % 2 == 0 { 30 } else { 220 };
+            px[0] = v;
+            px[1] = 255 - v;
+            px[2] = 128;
+            px[3] = 255;
+        }
+        let j444 = encode_jpeg_rgba(64, 64, &rgba, 80, true).expect("444");
+        let j420 = encode_jpeg_rgba(64, 64, &rgba, 80, false).expect("420");
+        assert_eq!(&j444[0..2], &[0xFF, 0xD8]);
+        assert_eq!(&j420[0..2], &[0xFF, 0xD8]);
+        assert!(j420.len() < j444.len(), "420={} 444={}", j420.len(), j444.len());
+    }
+
+    #[test]
+    fn screen_in_motion_seuil_3_images_seconde() {
+        assert!(!screen_in_motion(0));
+        assert!(!screen_in_motion(5));
+        assert!(screen_in_motion(6));
+        assert!(screen_in_motion(25));
     }
 
     #[test]
