@@ -428,8 +428,13 @@ fn with_engine<R>(
         Some(engine) => {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(engine))) {
                 Ok(r) => r,
-                Err(_) => {
-                    log::error!("[Sion][voix-native] {} : panique SDK isolée", label);
+                Err(payload) => {
+                    let msg = payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "panique SDK".to_string());
+                    log::error!("[Sion][voix-native] {} : panique SDK isolée: {}", label, msg);
                     lost = true;
                     Err(format!("{} (panique SDK isolée)", label))
                 }

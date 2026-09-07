@@ -373,7 +373,7 @@ impl LiveKitEngine {
     /// Parité JS : suppression de bruit Chromium forcée à off (la pipeline
     /// RNNoise du projet la remplace, cf. `connectToRoom`).
     pub fn publish_microphone(&self) -> Result<(), String> {
-        let room_guard = self.room.lock().map_err(|e| e.to_string())?;
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
         let audio = PlatformAudio::new().map_err(|e| format!("audio natif: {}", e))?;
         // Best-effort : un ADM qui refuse ce réglage ne doit pas bloquer l'appel.
@@ -402,9 +402,13 @@ impl LiveKitEngine {
             .map_err(|e| format!("publish mic: {}", e))?;
         let sid = publication.sid();
         log::info!("[Sion][voix-native] micro publié sid={}", sid);
-        *self.mic_sid.lock().map_err(|e| e.to_string())? = Some(sid);
-        // L'ADM coupe parfois son playout tout seul (observé : muet côté
-        // PipeWire alors que tout le reste est OK) — on ré-impose démute.
+        *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = Some(sid);
+        // Garder l'ADM vivant tant que la session vit : sans ce garde, le
+        // refcount retombe à zéro dès la fin de cette fonction et l'ADM
+        // démonte son playout quelques secondes après le join (sink-input
+        // "playout absent" alors que les frames continuent = silence total).
+        *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(audio);
+        // Filet résiduel : si l'ADM s'est déjà muté tout seul, on démute.
         ensure_playout_unmuted();
         Ok(())
     }
@@ -426,7 +430,7 @@ impl LiveKitEngine {
                 Self::run_local_meter(&tx, &identity, &stop_rx);
             })
             .map_err(|e| format!("thread meter: {}", e))?;
-        *self.local_meter_stop.lock().map_err(|e| e.to_string())? = Some(stop_tx);
+        *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(stop_tx);
         Ok(())
     }
 
@@ -575,20 +579,20 @@ impl LiveKitEngine {
     /// start + re-publish de l'autre.
     pub fn set_microphone_enabled(&self, enabled: bool) -> Result<(), String> {
         if enabled {
-            let audio_guard = self.audio.lock().map_err(|e| e.to_string())?;
+            let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(audio) = audio_guard.as_ref() {
                 let _ = audio.start_recording();
             }
             drop(audio_guard);
             self.publish_microphone()
         } else {
-            let sid = self.mic_sid.lock().map_err(|e| e.to_string())?.take();
-            let room_guard = self.room.lock().map_err(|e| e.to_string())?;
+            let sid = self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
             if let (Some(room), Some(sid)) = (room_guard.as_ref(), sid) {
                 let _ = self.rt.block_on(room.local_participant().unpublish_track(&sid));
             }
             drop(room_guard);
-            let audio_guard = self.audio.lock().map_err(|e| e.to_string())?;
+            let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(audio) = audio_guard.as_ref() {
                 let _ = audio.stop_recording();
             }
@@ -604,7 +608,7 @@ impl LiveKitEngine {
     pub fn set_deafened(&self, deafened: bool) -> Result<usize, String> {
         self.deafened
             .store(deafened, std::sync::atomic::Ordering::Relaxed);
-        let room_guard = self.room.lock().map_err(|e| e.to_string())?;
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let Some(room) = room_guard.as_ref() else {
             return Ok(0);
         };
@@ -817,10 +821,10 @@ impl VoiceEngine for LiveKitEngine {
             .map(|mut a| a.clear())
             .unwrap_or_default();
         self.spawn_event_pump(events);
-        *self.room.lock().map_err(|e| e.to_string())? = Some(room);
+        *self.room.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
         // Le démute one-shot au publish ne suffit pas (l'ADM se remute
         // parfois en cours d'appel) : garde périodique jusqu'au disconnect.
-        *self.watchdog_stop.lock().map_err(|e| e.to_string())? =
+        *self.watchdog_stop.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(start_playout_watchdog(&self.deafened));
         Ok(identity)
     }
