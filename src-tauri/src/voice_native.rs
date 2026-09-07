@@ -749,11 +749,16 @@ fn connect_engine(
     engine.set_event_app(app.clone());
     let rx = engine.subscribe();
     spawn_forward_task(app.clone(), rx);
+    let t_join = std::time::Instant::now();
     let identity = engine.connect(url, token)?;
     if let Err(e) = engine.publish_microphone() {
         engine.disconnect();
         return Err(e);
     }
+    log::info!(
+        "[Sion][voix-native] join complet en {}ms (connect+micro)",
+        t_join.elapsed().as_millis()
+    );
     // Rond vert local : mesure cpal parallèle (best-effort — un défaut
     // d'entrée indisponible ne doit pas faire échouer le join).
     if let Err(e) = engine.start_local_meter(identity.clone()) {

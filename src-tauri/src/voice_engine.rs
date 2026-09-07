@@ -1503,10 +1503,18 @@ impl VoiceEngine for LiveKitEngine {
         if token.trim().is_empty() {
             return Err("Token LiveKit vide".into());
         }
+        // Chronométrage du join (diagnostic : les pairs renvoient leur état
+        // ~500 ms après nous avoir vus — si ce connect dépasse ça, leurs
+        // rebroadcasts tombent avant que notre data-channel soit prêt).
+        let t0 = std::time::Instant::now();
         let (room, events) = self
             .rt
             .block_on(Room::connect(url, token, RoomOptions::default()))
             .map_err(|e| format!("connect LiveKit: {}", e))?;
+        log::info!(
+            "[Sion][voix-native] session SFU établie en {}ms (signal+PC+data-channel)",
+            t0.elapsed().as_millis()
+        );
         let identity = room.local_participant().identity().to_string();
         self.deafened
             .store(false, std::sync::atomic::Ordering::Relaxed);
