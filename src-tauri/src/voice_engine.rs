@@ -71,8 +71,40 @@ pub fn platform_audio_snapshot() -> Result<
 }
 
 /// Extrait les index des sink-inputs de playout de l'ADM WebRTC depuis un
-/// `pactl -f json list sink-inputs`. Fonction pure (testée).
+/// `pactl -f json list sink-inputs`. Fonction pure (testée). Conservée pour
+/// les tests ; le chemin réel utilise `adm_playout_states` (plus riche).
+#[allow(dead_code)]
 fn adm_playout_indices(pactl_json: &str) -> Vec<u64> {
+    adm_playout_states(pactl_json)
+        .into_iter()
+        .map(|s| s.index)
+        .collect()
+}
+
+/// État d'un sink-input ADM (diagnostic du silence : muet, bouchonné,
+/// routage, volume). Parsing défensif : toute forme inattendue donne
+/// des `None`/`false`, jamais d'erreur.
+#[derive(Debug, PartialEq, Eq)]
+struct AdmuiPlayoutState {
+    index: u64,
+    muted: bool,
+    corked: bool,
+    sink: Option<u64>,
+    media: Option<String>,
+    volume_display: Option<String>,
+}
+
+fn find_volume_display(volume: &serde_json::Value) -> Option<String> {
+    let obj = volume.as_object()?;
+    for channel in obj.values() {
+        if let Some(display) = channel.get("display").and_then(|d| d.as_str()) {
+            return Some(display.to_string());
+        }
+    }
+    None
+}
+
+fn adm_playout_states(pactl_json: &str) -> Vec<AdmuiPlayoutState> {
     let mut out = Vec::new();
     let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(pactl_json) else {
         return out;
@@ -86,17 +118,39 @@ fn adm_playout_indices(pactl_json: &str) -> Vec<u64> {
         if !is_adm {
             continue;
         }
-        if let Some(idx) = entry.get("index").and_then(|i| i.as_u64()) {
-            out.push(idx);
-        }
+        let Some(index) = entry.get("index").and_then(|i| i.as_u64()) else {
+            continue;
+        };
+        out.push(AdmuiPlayoutState {
+            index,
+            muted: entry
+                .get("mute")
+                .and_then(|m| m.as_bool())
+                .unwrap_or(false),
+            corked: entry
+                .get("corked")
+                .and_then(|c| c.as_bool())
+                .unwrap_or(false),
+            sink: entry.get("sink").and_then(|s| s.as_u64()),
+            media: props
+                .and_then(|p| p.get("media.name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string()),
+            volume_display: entry
+                .get("volume")
+                .and_then(find_volume_display),
+        });
     }
     out
 }
 
 /// L'ADM WebRTC coupe parfois son propre playout (sink-input muet côté
-/// PipeWire — observé en prod : frames reçues, casque OK, silence total).
-/// On ré-impose démute + on le journalise pour traquer le motif.
-/// Best-effort, Linux uniquement (pactl).
+/// PipeWire — observé en prod : frames reçues, casque OK, silence total,
+/// parfois APRÈS un démute réussi au join). On ré-impose démute + on
+/// journalise l'état complet (corké ? routé où ? volume ?) pour traquer
+/// le motif. Best-effort, Linux uniquement (pactl). Ne touche jamais au
+/// volume ni à l'état corké : démute seul (correctif prouvé), le reste
+/// est journalisé pour diagnostic.
 fn ensure_playout_unmuted() {
     #[cfg(target_os = "linux")]
     {
@@ -104,22 +158,72 @@ fn ensure_playout_unmuted() {
             .args(["-f", "json", "list", "sink-inputs"])
             .output();
         let Ok(list) = list else { return };
-        let indices = adm_playout_indices(&String::from_utf8_lossy(&list.stdout));
-        for idx in indices {
+        let states = adm_playout_states(&String::from_utf8_lossy(&list.stdout));
+        if states.is_empty() {
+            log::warn!("[Sion][voix-native] aucun sink-input ADM (playout absent)");
+            return;
+        }
+        for st in states {
+            log::info!(
+                "[Sion][voix-native] playout ADM sink-input {}: muet={} corke={} sink={:?} media={:?} volume={:?}",
+                st.index,
+                st.muted,
+                st.corked,
+                st.sink,
+                st.media,
+                st.volume_display,
+            );
+            if st.corked {
+                log::warn!(
+                    "[Sion][voix-native] playout ADM {} corké (bouchonné côté système)",
+                    st.index
+                );
+            }
+            if !st.muted {
+                continue;
+            }
             let status = std::process::Command::new("pactl")
-                .args(["set-sink-input-mute", &idx.to_string(), "0"])
+                .args(["set-sink-input-mute", &st.index.to_string(), "0"])
                 .status();
             match status {
                 Ok(s) if s.success() => {
-                    log::info!("[Sion][voix-native] playout ADM démute (sink-input {})", idx)
+                    log::info!("[Sion][voix-native] playout ADM démute (sink-input {})", st.index)
                 }
                 _ => log::warn!(
                     "[Sion][voix-native] impossible de démuter le playout {}",
-                    idx
+                    st.index
                 ),
             }
         }
     }
+}
+
+/// Chien de garde playout : l'ADM se remute parfois EN COURS d'appel
+/// (démute au join insuffisant — silence alors que tout est vert).
+/// Tant que la session vit, on ré-impose démute toutes les 5 s (no-op
+/// loggé quand tout est déjà OK). Même motif stop que le meter local :
+/// fermer le canal stop (disconnect / remplacement moteur) tue le thread.
+fn start_playout_watchdog(
+    deafened: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::sync::mpsc::Sender<()> {
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let deafened = std::sync::Arc::clone(deafened);
+    std::thread::Builder::new()
+        .name("sion-voice-playout-watchdog".into())
+        .spawn(move || {
+            loop {
+                match stop_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if !deafened.load(std::sync::atomic::Ordering::Relaxed) {
+                            ensure_playout_unmuted();
+                        }
+                    }
+                }
+            }
+        })
+        .ok();
+    stop_tx
 }
 pub fn connection_quality_str(q: &ConnectionQuality) -> &'static str {
     match q {
@@ -210,6 +314,9 @@ pub struct LiveKitEngine {
     /// `cpal::Stream` n'étant ni Send ni Sync, il vit dans un thread
     /// propriétaire qui meurt quand le canal stop se ferme (disconnect).
     local_meter_stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Chien de garde playout ADM (re-démute si l'ADM se remute en cours
+    /// d'appel). Même cycle de vie que le meter local.
+    watchdog_stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     /// Sourdine casque : les nouvelles pistes audio sont désinscrites d'office.
     deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
@@ -234,6 +341,7 @@ impl LiveKitEngine {
             audio: Mutex::new(None),
             mic_sid: Mutex::new(None),
             local_meter_stop: Mutex::new(None),
+            watchdog_stop: Mutex::new(None),
             deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             event_tx,
@@ -710,6 +818,10 @@ impl VoiceEngine for LiveKitEngine {
             .unwrap_or_default();
         self.spawn_event_pump(events);
         *self.room.lock().map_err(|e| e.to_string())? = Some(room);
+        // Le démute one-shot au publish ne suffit pas (l'ADM se remute
+        // parfois en cours d'appel) : garde périodique jusqu'au disconnect.
+        *self.watchdog_stop.lock().map_err(|e| e.to_string())? =
+            Some(start_playout_watchdog(&self.deafened));
         Ok(identity)
     }
 
@@ -723,6 +835,7 @@ impl VoiceEngine for LiveKitEngine {
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.watchdog_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.deafened
             .store(false, std::sync::atomic::Ordering::Relaxed);
     }
@@ -785,6 +898,40 @@ mod tests {
         assert_eq!(adm_playout_indices(fixture), vec![22, 33]);
         assert!(adm_playout_indices("pas du json").is_empty());
         assert!(adm_playout_indices("{}").is_empty());
+    }
+
+    #[test]
+    fn adm_playout_states_rapporte_muet_bouche_routage() {
+        let fixture = r#"[
+            {"index": 11, "mute": false, "properties": {"application.name": "Firefox"}},
+            {"index": 22, "mute": true, "corked": false, "sink": 31,
+             "volume": {"front-left": {"value": 65536, "display": "100%"}},
+             "properties": {"application.name": "WEBRTC VoiceEngine", "media.name": "playStream"}},
+            {"index": 33, "mute": false, "corked": true, "sink": 117,
+             "properties": {"application.name": "WEBRTC VoiceEngine", "media.name": "recStream"}},
+            {"index": 44, "properties": {"application.name": "WEBRTC VoiceEngine"}}
+        ]"#;
+        let states = adm_playout_states(fixture);
+        assert_eq!(states.len(), 3);
+        assert_eq!(
+            states[0],
+            AdmuiPlayoutState {
+                index: 22,
+                muted: true,
+                corked: false,
+                sink: Some(31),
+                media: Some("playStream".to_string()),
+                volume_display: Some("100%".to_string()),
+            }
+        );
+        assert_eq!(states[1].index, 33);
+        assert!(!states[1].muted);
+        assert!(states[1].corked);
+        assert_eq!(states[1].sink, Some(117));
+        // Pas d'index → ignoré (comme indices).
+        assert_eq!(states[2].index, 44);
+        assert!(!states[2].muted);
+        assert!(adm_playout_states("pas du json").is_empty());
     }
 
     #[test]
