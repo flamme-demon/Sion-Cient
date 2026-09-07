@@ -158,6 +158,14 @@ native-voice = ["dep:livekit", "dep:tokio", "dep:futures-util", "dep:image", "de
 [profile.dev.package.serde_json]
 opt-level = 3
 
+# Pont vidéo du partage d'écran : l'encodage JPEG tourne dans le binaire dev
+# (non optimisé) — sans ça, ~300 ms/frame mesurés en prod contre ~15 ms
+# attendus (SIMD inutilisable sans optimisation). Même logique que serde_json.
+[profile.dev.package.jpeg-rusturbo]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+
 # Patches CEF — nécessaire pour le build desktop
 # Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive le CEF
 [patch.crates-io]
