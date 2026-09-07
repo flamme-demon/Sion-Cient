@@ -606,10 +606,11 @@ pub fn voice_native_connect(
             return Err(format!("Session déjà active ({:?})", inner.state));
         }
         inner.state = VoiceConnectionState::Connecting;
-        inner.room_name = Some(room_name);
+        inner.room_name = Some(room_name.clone());
         inner.identity = None;
         emit_status(&app, &snapshot(&inner));
     }
+    log::info!("[Sion][voix-native] connect room={} (moteur Rust)", room_name);
 
     #[cfg(not(feature = "native-voice"))]
     {
@@ -624,6 +625,7 @@ pub fn voice_native_connect(
     #[cfg(feature = "native-voice")]
     match connect_engine(&app, &url, &token) {
         Ok(identity) => {
+            log::info!("[Sion][voix-native] session SFU ouverte identite={}", identity);
             let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
             inner.state = VoiceConnectionState::Connected;
             inner.identity = Some(identity);
@@ -632,6 +634,7 @@ pub fn voice_native_connect(
             Ok(status)
         }
         Err(e) => {
+            log::warn!("[Sion][voix-native] echec connect: {}", e);
             let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
             inner.state = VoiceConnectionState::Disconnected;
             inner.room_name = None;

@@ -38,6 +38,7 @@ export function useLiveKit() {
   /** Chemin natif (chantier no-CEF) : la Room vit en Rust, le store reçoit
    *  la même forme `ParticipantInfo` via `voice-native-participants`. */
   const connectNative = useCallback(async (url: string, token: string, room: string) => {
+    console.info(`[Sion][voix-native] join natif ${room} (SDK Rust, pas de livekit-client)`);
     const native = await import("../services/voiceNativeService");
     await native.voiceNativeConnect(url, token, room);
     storeConnect(room);
