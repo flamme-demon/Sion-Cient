@@ -236,6 +236,39 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
   return users;
 }
 
+/** mapRoomToChannel ne doit jamais faire tomber tout le sync : un salon
+ *  aux données corrompues est sauté (avec trace) au lieu de vider toute
+ *  la sidebar. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeMapRoomToChannel(room: any, client: MatrixClient): Channel | null {
+  try {
+    return mapRoomToChannel(room, client);
+  } catch (err) {
+    console.error(`[Sion] salon ignoré (${room?.roomId}):`, err);
+    return null;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapRoomsToChannels(rooms: any[], client: MatrixClient): Channel[] {
+  const out: Channel[] = [];
+  for (const room of rooms) {
+    const ch = safeMapRoomToChannel(room, client);
+    if (ch) out.push(ch);
+  }
+  return out;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractMessagesSafe(room: any): ChatMessage[] {
+  try {
+    return extractMessagesFromRoom(room);
+  } catch (err) {
+    console.error(`[Sion] messages ignorés (${room?.roomId}):`, err);
+    return [];
+  }
+}
+
 /** Filter rooms to only include those where the user has joined membership */
 function getJoinedRooms(client: MatrixClient): ReturnType<MatrixClient["getRooms"]> {
   return client.getRooms()
@@ -652,12 +685,15 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         // l'utilisateur doit être prévenu avant d'essayer de parler.
         void publishClockSkew(client.getHomeserverUrl());
         const rooms = getJoinedRooms(client);
-        const channels = rooms.map((room) => mapRoomToChannel(room, client));
+        const channels = mapRoomsToChannels(rooms, client);
+        if (channels.length === 0 && rooms.length > 0) {
+          console.warn(`[Sion][sync] PREPARED: ${rooms.length} salon(s) joint(s) mais 0 converti(s)`);
+        }
 
         // Collect initial messages from timeline
         const messages: Record<string, ChatMessage[]> = {};
         for (const room of rooms) {
-          const msgs = extractMessagesFromRoom(room);
+          const msgs = extractMessagesSafe(room);
           if (msgs.length > 0) {
             messages[room.roomId] = msgs;
           }
@@ -724,8 +760,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           useAppStore.getState().setMobileView(prevMobileView);
 
           // Auto-join voice if the default channel is a voice channel and option is enabled
+          // NOTE: on ne pose PAS connectingVoice ici — ce marqueur appartient
+          // au join réel (joinVoiceChannel le pose/efface). Le poser ici
+          // figeait la sidebar sur l'overlay "Connexion..." quand l'auto-join
+          // était ensuite ignoré par le garde d'App.tsx.
           if (autoJoinVoice && defaultCh.hasVoice && !connectedVoice) {
-            useAppStore.getState().setConnectingVoice(defaultCh.id);
             useAppStore.getState().setPendingAutoJoinVoice(defaultCh.id);
           }
         }
@@ -795,7 +834,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
       } else if (state === "SYNCING") {
         const rooms = getJoinedRooms(client);
-        const channels = rooms.map((room) => mapRoomToChannel(room, client));
+        const channels = mapRoomsToChannels(rooms, client);
+        if (channels.length === 0 && rooms.length > 0) {
+          console.warn(`[Sion][sync] SYNCING: ${rooms.length} salon(s) joint(s) mais 0 converti(s)`);
+        }
         set({ channels, connectionStatus: "connected" });
 
         // Retry verification check if crypto wasn't ready during PREPARED
@@ -1564,7 +1606,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // Listen for membership changes
     client.on(RoomMemberEvent.Membership, () => {
       const rooms = getJoinedRooms(client);
-      const channels = rooms.map((room) => mapRoomToChannel(room, client));
+      const channels = mapRoomsToChannels(rooms, client);
       set({ channels });
     });
 
