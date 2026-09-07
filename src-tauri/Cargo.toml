@@ -45,6 +45,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"], optio
 futures-util = { version = "0.3", optional = true }
 # JPEG seul (rendu partage d'écran natif) : pas de décodeurs/format lourds.
 image = { version = "0.25", optional = true, default-features = false, features = ["jpeg"] }
+# Encodeur JPEG SIMD pur Rust (~5× l'encodeur scalaire de `image` sur x86,
+# 4:4:4 pour du texte net) : le pont JPEG du partage d'écran y passe.
+jpeg-rusturbo = { version = "0.9", optional = true }
 
 # Desktop-only dependencies (all platforms except Android)
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -149,7 +152,7 @@ default = ["cef"]
 cef = ["tauri/cef", "tauri-runtime-cef", "dep:cef"]
 # Voix LiveKit native (sans Chromium) : `cargo check --features native-voice`.
 # Hors défaut tant que le chemin JS reste la voix de production.
-native-voice = ["dep:livekit", "dep:tokio", "dep:futures-util", "dep:image"]
+native-voice = ["dep:livekit", "dep:tokio", "dep:futures-util", "dep:image", "dep:jpeg-rusturbo"]
 
 # serde_json is on the IPC hot path; keep it optimized even in dev builds.
 [profile.dev.package.serde_json]

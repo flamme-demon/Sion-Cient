@@ -639,7 +639,8 @@ fn spawn_forward_task(
                         // (AFK, curseurs, transcribe-arm).
                         let _ = app.emit("voice-native-data", &ev);
                     }
-                    VoiceEngineEvent::RoomDisconnected { .. } => {
+                    VoiceEngineEvent::RoomDisconnected { reason } => {
+                        log::warn!("[Sion][voix-native] session SFU perdue ({})", reason);
                         let mut inner =
                             manager().lock().unwrap_or_else(|e| e.into_inner());
                         inner.state = VoiceConnectionState::Disconnected;

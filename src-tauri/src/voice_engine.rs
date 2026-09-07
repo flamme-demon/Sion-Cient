@@ -18,6 +18,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 use livekit::prelude::*;
+use livekit::track::VideoQuality;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::video_stream::native::NativeVideoStream;
 use livekit::options::TrackPublishOptions;
@@ -358,11 +359,14 @@ fn i420_to_rgb(
     rgb
 }
 
-/// RGB24 → JPEG à qualité donnée (0-100, clampée par l'encodeur).
+/// RGB24 → JPEG à qualité donnée (0-100). `jpeg-rusturbo` (SIMD, ~5×
+/// l'encodeur scalaire de `image`) en 4:4:4 : pas de sous-échantillonnage
+/// chroma, le texte reste net là où le 4:2:0 bave.
 fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8], quality: u8) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
-        .encode(rgb, width, height, image::ExtendedColorType::Rgb8)
+    let mut enc = jpeg_rusturbo::JpegEncoder::new_with_quality(&mut out, quality);
+    enc.set_subsampling(jpeg_rusturbo::ChromaSubsampling::Yuv444);
+    enc.encode_rgb(rgb, width, height)
         .map_err(|e| format!("jpeg: {}", e))?;
     Ok(out)
 }
@@ -446,7 +450,7 @@ fn spawn_video_pump(
         // Encodage en cours (un seul à la fois) : (échantillons Y, dims
         // source, JPEG émis ou None si image strictement inchangée).
         let mut pending: Option<
-            tokio::task::JoinHandle<(Vec<u8>, (u32, u32), Option<(Vec<u8>, u32, u32)>)>,
+            tokio::task::JoinHandle<(Vec<u8>, (u32, u32), Option<(Vec<u8>, u32, u32, u128)>)>,
         > = None;
         let mut prev_samples: Vec<u8> = Vec::new();
         let mut budget = VideoBudget { quality: 86, tick_step: 0 };
@@ -455,6 +459,7 @@ fn spawn_video_pump(
         let mut first = true;
         let mut stat_count: u64 = 0;
         let mut stat_bytes: u64 = 0;
+        let mut stat_enc_ms: u128 = 0;
         let mut stat_since = tokio::time::Instant::now();
         loop {
             tokio::select! {
@@ -472,7 +477,7 @@ fn spawn_video_pump(
                                     prev_samples = samples;
                                     // Image inchangée (emitted = None) : on
                                     // garde simplement l'affichée.
-                                    if let Some((jpeg, dw, dh)) = emitted {
+                                    if let Some((jpeg, dw, dh, enc_ms)) = emitted {
                                         let now = tokio::time::Instant::now();
                                         window.push_back((now, jpeg.len()));
                                         while window.front().is_some_and(|(t, _)| now.duration_since(*t).as_secs() >= 2) {
@@ -488,26 +493,29 @@ fn spawn_video_pump(
                                         budget = next;
                                         stat_count += 1;
                                         stat_bytes += jpeg.len() as u64;
+                                        stat_enc_ms += enc_ms;
                                         if first {
                                             first = false;
                                             log::info!(
-                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{})",
-                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality
+                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{}, enc {}ms)",
+                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality, enc_ms
                                             );
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s",
+                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, enc {}ms",
                                                 sender,
                                                 stat_count as f64 / secs,
                                                 budget.quality,
                                                 VIDEO_TICKS_MS[budget.tick_step],
                                                 "ms",
-                                                stat_bytes as f64 / secs / 1024.0
+                                                stat_bytes as f64 / secs / 1024.0,
+                                                stat_enc_ms / stat_count.max(1) as u128
                                             );
                                             stat_count = 0;
                                             stat_bytes = 0;
+                                            stat_enc_ms = 0;
                                             stat_since = tokio::time::Instant::now();
                                         }
                                         use base64::Engine as _;
@@ -550,10 +558,11 @@ fn spawn_video_pump(
                             }
                             let (sy, su, sv) = i420.strides();
                             let (dy, du, dv) = i420.data();
+                            let t0 = std::time::Instant::now();
                             let rgb = i420_to_rgb(dw, dh, dy, du, dv, sy, su, sv);
                             let emitted = encode_jpeg_rgb(dw, dh, &rgb, q)
                                 .ok()
-                                .map(|jpeg| (jpeg, dw, dh));
+                                .map(|jpeg| (jpeg, dw, dh, t0.elapsed().as_millis()));
                             (samples, (sw, sh), emitted)
                         }));
                     }
@@ -751,7 +760,8 @@ impl LiveKitEngine {
         self.rt
             .block_on(room.local_participant().publish_data(packet))
             .map_err(|e| format!("publish data: {}", e))?;
-        log::info!("[Sion][voix-native] data publié topic={} ({} o)", topic, len);
+        // Debug : à 60 Hz (curseur), l'info spammerait le log.
+        log::debug!("[Sion][voix-native] data publié topic={} ({} o)", topic, len);
         Ok(())
     }
 
@@ -1100,6 +1110,11 @@ impl LiveKitEngine {
                         }
                     }
                     RoomEvent::ParticipantConnected(p) => {
+                        log::info!(
+                            "[Sion][voix-native] participant rejoint {} ({})",
+                            p.identity(),
+                            p.name()
+                        );
                         let _ = tx.send(VoiceEngineEvent::ParticipantJoined {
                             identity: p.identity().to_string(),
                             name: p.name(),
@@ -1107,8 +1122,26 @@ impl LiveKitEngine {
                     }
                     RoomEvent::ParticipantDisconnected(p) => {
                         let id = p.identity().to_string();
+                        log::info!("[Sion][voix-native] participant parti {}", id);
                         stop_remote_video_pump(&video_stops, &id);
                         let _ = tx.send(VoiceEngineEvent::ParticipantLeft { identity: id });
+                    }
+                    RoomEvent::TrackPublished { publication, participant } => {
+                        log::info!(
+                            "[Sion][voix-native] piste publiée {} ({}, {:?}/{:?}, muette={})",
+                            publication.sid(),
+                            participant.identity(),
+                            publication.kind(),
+                            publication.source(),
+                            publication.is_muted()
+                        );
+                    }
+                    RoomEvent::TrackUnpublished { publication, participant } => {
+                        log::info!(
+                            "[Sion][voix-native] piste dépubliée {} ({})",
+                            publication.sid(),
+                            participant.identity()
+                        );
                     }
                     RoomEvent::TrackSubscribed {
                         track: RemoteTrack::Audio(audio_track),
@@ -1153,6 +1186,11 @@ impl LiveKitEngine {
                     } => {
                         let sender = participant.identity().to_string();
                         if publication.source() == TrackSource::Screenshare {
+                            // Couche haute + dimensions de rendu : sans ça le
+                            // SFU ne sert que la sous-couche (ex. 1280px pour
+                            // un écran 2560px) et le texte est illisible.
+                            publication.set_video_quality(VideoQuality::High);
+                            publication.update_video_dimensions(TrackDimension(1920, 1080));
                             log::info!(
                                 "[Sion][voix-native] partage d'écran souscrit {} ({})",
                                 publication.sid(),
@@ -1178,11 +1216,16 @@ impl LiveKitEngine {
                         }
                     }
                     RoomEvent::TrackUnsubscribed {
-                        track: RemoteTrack::Video(_),
+                        track: RemoteTrack::Video(video_track),
                         participant,
                         ..
                     } => {
                         let sender = participant.identity().to_string();
+                        log::info!(
+                            "[Sion][voix-native] partage désinscrit {} ({})",
+                            video_track.sid(),
+                            sender
+                        );
                         stop_remote_video_pump(&video_stops, &sender);
                         let _ = tx.send(VoiceEngineEvent::VideoPresence {
                             sender,
