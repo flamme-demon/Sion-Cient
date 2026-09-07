@@ -625,6 +625,10 @@ impl LiveKitEngine {
     /// (le registre `attached` est purgé : d'éventuelles tâches orphelines
     /// n'émettent que des booléens idempotents).
     pub fn set_deafened(&self, deafened: bool) -> Result<usize, String> {
+        // Les commandes Tauri sync tournent hors runtime Tokio, mais le SDK
+        // exige un contexte (`Handle::current()` dans `set_subscribed`) —
+        // sans ça, panique "there is no reactor running" + session tuée.
+        let _rt_enter = self.rt.enter();
         self.deafened
             .store(deafened, std::sync::atomic::Ordering::Relaxed);
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());

@@ -394,8 +394,9 @@ fn store_engine(engine: Option<LiveKitEngine>) {
         .unwrap_or_else(|e| e.into_inner()) = engine;
 }
 
-/// Session locale réinitialisée après la perte du moteur (panique SDK
-/// isolée) : pas de fantôme, le front repart d'un état propre.
+/// Session locale réinitialisée quand le moteur a disparu (jamais créé,
+/// déjà pris par une autre commande) : pas de fantôme, le front repart
+/// d'un état propre.
 #[cfg(feature = "native-voice")]
 fn drop_dead_session(app: &tauri::AppHandle<TauriRuntime>) {
     store_engine(None);
@@ -415,7 +416,9 @@ fn drop_dead_session(app: &tauri::AppHandle<TauriRuntime>) {
 /// Exécute `op` sur le moteur sorti du holder puis le repose — sans jamais
 /// verrouiller pendant l'appel SDK (une panique LiveKit ne doit plus
 /// empoisonner les commandes suivantes). En cas de panique, le moteur est
-/// abandonné et la session locale réinitialisée.
+/// REPOSÉ (pas jeté) : la panique est généralement incidente (ex. contexte
+/// Tokio manquant, déjà corrigé) et jeter le moteur tuait l'appel en cours.
+/// L'erreur est retournée (le front garde son état précédent) et loggée fort.
 #[cfg(feature = "native-voice")]
 fn with_engine<R>(
     app: &tauri::AppHandle<TauriRuntime>,
@@ -423,7 +426,6 @@ fn with_engine<R>(
     op: impl FnOnce(&mut LiveKitEngine) -> Result<R, String>,
 ) -> Result<R, String> {
     let mut slot = take_engine();
-    let mut lost = false;
     let res = match slot.as_mut() {
         Some(engine) => {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(engine))) {
@@ -434,18 +436,20 @@ fn with_engine<R>(
                         .cloned()
                         .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "panique SDK".to_string());
-                    log::error!("[Sion][voix-native] {} : panique SDK isolée: {}", label, msg);
-                    lost = true;
+                    // `slot` garde le moteur (emprunt seulement) : on le
+                    // repose tel quel, la session survit à la panique.
+                    log::error!(
+                        "[Sion][voix-native] {} : panique SDK isolée (moteur conservé): {}",
+                        label,
+                        msg
+                    );
                     Err(format!("{} (panique SDK isolée)", label))
                 }
             }
         }
         None => Err("pas de moteur natif".to_string()),
     };
-    if lost {
-        slot = None;
-    }
-    let lost = lost || slot.is_none();
+    let lost = slot.is_none();
     store_engine(slot);
     if lost {
         drop_dead_session(app);
