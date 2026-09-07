@@ -92,10 +92,11 @@ export function bytesToB64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** Envoie un paquet data-channel sur la session native (soundboard, AFK…).
- *  Miroir de `publishData` JS (reliable). */
-export function voiceNativePublishData(topic: string, payloadB64: string): Promise<void> {
-  return tauriInvoke<void>("voice_native_publish_data", { topic, payloadB64 });
+/** Envoie un paquet data-channel sur la session native (soundboard, AFK,
+ *  curseurs…). Miroir de `publishData` JS — `reliable: false` pour le
+ *  curseur (60 Hz), `true` partout ailleurs. */
+export function voiceNativePublishData(topic: string, payloadB64: string, reliable = true): Promise<void> {
+  return tauriInvoke<void>("voice_native_publish_data", { topic, payloadB64, reliable });
 }
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {

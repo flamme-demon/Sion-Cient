@@ -39,19 +39,20 @@ function ChevronRightIcon() {
 const CURSOR_BROADCAST_HZ = 60;
 const CURSOR_BROADCAST_INTERVAL = Math.floor(1000 / CURSOR_BROADCAST_HZ);
 
-/** Rect of the video *content* (after `object-contain` letterbox/pillarbox)
+/** Rect of the media *content* (after `object-contain` letterbox/pillarbox)
  *  in viewport coordinates. When the element's aspect doesn't match the
  *  stream's (common when the sharer's screen is ultrawide and we render in
  *  a ~16:9 slot), the rect of the element itself includes black bars; using
  *  it for coordinate math puts the cursor in those bars, and broadcasts
  *  coords that fall outside what the sharer's native overlay can honour.
- *  Derived from `videoWidth`/`videoHeight`, which carry the stream's
- *  intrinsic dimensions. Falls back to the element rect when metadata
- *  hasn't loaded yet. */
-function getVideoContentRect(video: HTMLVideoElement) {
-  const elRect = video.getBoundingClientRect();
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
+ *  Derived from the intrinsic dimensions (`videoWidth`/`videoHeight` for
+ *  <video>, `naturalWidth`/`naturalHeight` for the native <img>), which
+ *  carry the stream's intrinsic dimensions. Falls back to the element rect
+ *  when metadata hasn't loaded yet. */
+function getVideoContentRect(el: HTMLVideoElement | HTMLImageElement) {
+  const elRect = el.getBoundingClientRect();
+  const vw = el instanceof HTMLVideoElement ? el.videoWidth : el.naturalWidth;
+  const vh = el instanceof HTMLVideoElement ? el.videoHeight : el.naturalHeight;
   if (!vw || !vh || elRect.width === 0 || elRect.height === 0) {
     return { left: elRect.left, top: elRect.top, width: elRect.width, height: elRect.height };
   }
@@ -214,11 +215,13 @@ export function ScreenShareView() {
   }, [activeIdentity]);
 
   // Capture local cursor and broadcast normalised coords. Throttled to
-  // CURSOR_BROADCAST_HZ so the data channel stays light.
+  // CURSOR_BROADCAST_HZ so the data channel stays light. En natif, l'élément
+  // est l'<img> des frames JPEG (même géométrie object-contain).
   useEffect(() => {
     if (!activeIdentity) return;
-    const video = videoRef.current;
-    if (!video) return;
+    const media: HTMLVideoElement | HTMLImageElement | null = videoRef.current ?? imgRef.current;
+    if (!media) return;
+    const video = media;
 
     let lastBroadcast = 0;
     let insideVideo = false;
@@ -286,20 +289,20 @@ export function ScreenShareView() {
       }
     };
 
-    video.addEventListener("mousemove", onMove);
+    video.addEventListener("mousemove", onMove as EventListener);
     video.addEventListener("mouseleave", onLeave);
-    video.addEventListener("click", onClick);
-    video.addEventListener("dblclick", onDblClick);
+    video.addEventListener("click", onClick as EventListener);
+    video.addEventListener("dblclick", onDblClick as EventListener);
     window.addEventListener("blur", onLeave);
     return () => {
-      video.removeEventListener("mousemove", onMove);
+      video.removeEventListener("mousemove", onMove as EventListener);
       video.removeEventListener("mouseleave", onLeave);
-      video.removeEventListener("click", onClick);
-      video.removeEventListener("dblclick", onDblClick);
+      video.removeEventListener("click", onClick as EventListener);
+      video.removeEventListener("dblclick", onDblClick as EventListener);
       window.removeEventListener("blur", onLeave);
       if (insideVideo) broadcastCursorHide(activeIdentity);
     };
-  }, [activeIdentity]);
+  }, [activeIdentity, isNative]);
 
   // Track the content-area box so the absolute-positioned overlays (cursors,
   // click ripples) sit exactly over the pixels the sharer captured, not over
@@ -309,15 +312,15 @@ export function ScreenShareView() {
   // single-frame flash of overlays positioned against stale measurements.
   useLayoutEffect(() => {
     if (!activeIdentity) { setContentBox(null); return; }
-    const video = videoRef.current;
+    const media: HTMLVideoElement | HTMLImageElement | null = videoRef.current ?? imgRef.current;
     const container = containerRef.current;
-    if (!video || !container) return;
+    if (!media || !container) return;
 
     const measure = () => {
-      const v = videoRef.current;
+      const m: HTMLVideoElement | HTMLImageElement | null = videoRef.current ?? imgRef.current;
       const c = containerRef.current;
-      if (!v || !c) return;
-      const rect = getVideoContentRect(v);
+      if (!m || !c) return;
+      const rect = getVideoContentRect(m);
       const parent = c.getBoundingClientRect();
       setContentBox({
         left: rect.left - parent.left,
@@ -329,16 +332,24 @@ export function ScreenShareView() {
 
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(video);
+    ro.observe(media);
     ro.observe(container);
-    video.addEventListener("loadedmetadata", measure);
-    video.addEventListener("resize", measure);
+    if (media instanceof HTMLVideoElement) {
+      media.addEventListener("loadedmetadata", measure);
+      media.addEventListener("resize", measure);
+      return () => {
+        ro.disconnect();
+        media.removeEventListener("loadedmetadata", measure);
+        media.removeEventListener("resize", measure);
+      };
+    }
+    // <img> natif : les dimensions intrinsèques arrivent avec `load`.
+    media.addEventListener("load", measure);
     return () => {
       ro.disconnect();
-      video.removeEventListener("loadedmetadata", measure);
-      video.removeEventListener("resize", measure);
+      media.removeEventListener("load", measure);
     };
-  }, [activeIdentity]);
+  }, [activeIdentity, isNative]);
 
   const handleToggleAudioMute = () => {
     if (!activeIdentity) return;

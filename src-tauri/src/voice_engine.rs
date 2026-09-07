@@ -308,14 +308,15 @@ fn spawn_rms_task(
     });
 }
 
-/// Dimensions d'émission d'une frame vidéo : largeur plafonnée à 1280,
+/// Dimensions d'émission d'une frame vidéo : largeur plafonnée à 1920
+/// (un 2560px d'ultrawide écrasé à 1280 rend le texte illisible),
 /// dimensions paires (exigées par le scale I420). Fonction pure (testée).
 fn video_emit_dims(width: u32, height: u32) -> (u32, u32) {
     if width == 0 || height == 0 {
         return (0, 0);
     }
-    let (mut w, mut h) = if width > 1280 {
-        (1280, height.saturating_mul(1280) / width)
+    let (mut w, mut h) = if width > 1920 {
+        (1920, height.saturating_mul(1920) / width)
     } else {
         (width, height)
     };
@@ -357,10 +358,11 @@ fn i420_to_rgb(
     rgb
 }
 
-/// RGB24 → JPEG (qualité 70 : un 1280x720 d'écran tient ~50-120 Ko).
+/// RGB24 → JPEG (qualité 82 : le texte d'un écran reste lisible ; un
+/// 1920px d'écran tient ~150-300 Ko à 4 im/s, soit ~1 Mo/s max).
 fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82)
         .encode(rgb, width, height, image::ExtendedColorType::Rgb8)
         .map_err(|e| format!("jpeg: {}", e))?;
     Ok(out)
@@ -606,15 +608,17 @@ impl LiveKitEngine {
     }
 
     /// Publie un paquet data-channel (soundboard, AFK, curseurs…).
-    /// `reliable: true` comme le chemin JS (`publishData { reliable: true }`).
-    pub fn publish_data(&self, topic: &str, payload: Vec<u8>) -> Result<(), String> {
+    /// `reliable: true` comme le chemin JS (`publishData { reliable: true }`) ;
+    /// `false` = LOSSY pour les flux à 60 Hz (curseur) où le prochain paquet
+    /// répare la perte.
+    pub fn publish_data(&self, topic: &str, payload: Vec<u8>, reliable: bool) -> Result<(), String> {
         let len = payload.len();
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
         let packet = DataPacket {
             payload,
             topic: Some(topic.to_string()),
-            reliable: true,
+            reliable,
             destination_identities: Vec::new(),
         };
         self.rt
@@ -1186,7 +1190,7 @@ mod tests {
         // Mute sans session : unpublish inexistant = no-op OK.
         assert!(engine.set_microphone_enabled(false).is_ok());
         // Data sans session : erreur propre, pas de panique.
-        assert!(engine.publish_data("sion-soundboard", vec![1, 2, 3]).is_err());
+        assert!(engine.publish_data("sion-soundboard", vec![1, 2, 3], true).is_err());
     }
 
     #[test]
@@ -1207,13 +1211,14 @@ mod tests {
     #[test]
     fn video_emit_dims_plafonne_et_pairise() {
         assert_eq!(video_emit_dims(0, 0), (0, 0));
-        assert_eq!(video_emit_dims(1920, 1080), (1280, 720));
+        assert_eq!(video_emit_dims(2560, 1072), (1920, 804));
+        assert_eq!(video_emit_dims(1920, 1080), (1920, 1080));
         assert_eq!(video_emit_dims(1280, 720), (1280, 720));
         assert_eq!(video_emit_dims(640, 480), (640, 480));
         // Dimensions impaires → pairisées (I420).
         assert_eq!(video_emit_dims(641, 481), (640, 480));
         // Ultrawide : ratio conservé.
-        assert_eq!(video_emit_dims(2560, 1080), (1280, 540));
+        assert_eq!(video_emit_dims(3440, 1440), (1920, 802));
     }
 
     #[test]

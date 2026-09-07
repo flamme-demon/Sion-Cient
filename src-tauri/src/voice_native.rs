@@ -724,7 +724,7 @@ fn connect_engine(
     if let Err(e) = with_engine(app, "afk initial natif", |e| {
         let payload = serde_json::to_vec(&AfkPayload { deafened: false })
             .map_err(|e| e.to_string())?;
-        e.publish_data(TOPIC_AFK, payload)
+        e.publish_data(TOPIC_AFK, payload, true)
     }) {
         log::warn!("[Sion][voix-native] {}", e);
     }
@@ -1002,7 +1002,7 @@ pub fn voice_native_set_deafened(
                 // autres clients ne voient jamais notre sourdine.
                 let payload = serde_json::to_vec(&AfkPayload { deafened })
                     .map_err(|e| e.to_string())?;
-                e.publish_data(TOPIC_AFK, payload)
+                e.publish_data(TOPIC_AFK, payload, true)
             }) {
                 log::warn!("[Sion][voix-native] {}", e);
                 applied = false;
@@ -1018,13 +1018,16 @@ pub fn voice_native_set_deafened(
     status
 }
 
-/// Envoie un paquet data-channel sur la session native (soundboard, AFK…).
-/// Payload base64 (binaire arbitraire). Miroir de `publishData` JS.
+/// Envoie un paquet data-channel sur la session native (soundboard, AFK,
+/// curseurs…). Payload base64 (binaire arbitraire). Miroir de `publishData`
+/// JS — `reliable: false` pour le curseur (60 Hz, la perte se répare toute
+/// seule), `true` partout ailleurs.
 #[tauri::command]
 pub fn voice_native_publish_data(
     app: tauri::AppHandle<TauriRuntime>,
     topic: String,
     payload_b64: String,
+    reliable: Option<bool>,
 ) -> Result<(), String> {
     #[cfg(feature = "native-voice")]
     {
@@ -1032,13 +1035,14 @@ pub fn voice_native_publish_data(
         let payload = base64::engine::general_purpose::STANDARD
             .decode(&payload_b64)
             .map_err(|e| format!("payload base64: {}", e))?;
+        let reliable = reliable.unwrap_or(true);
         return with_engine(&app, "publish data natif", |e| {
-            e.publish_data(&topic, payload)
+            e.publish_data(&topic, payload, reliable)
         });
     }
     #[allow(unreachable_code)]
     {
-        let _ = (&app, &topic, &payload_b64);
+        let _ = (&app, &topic, &payload_b64, &reliable);
         Err("voix native indisponible".to_string())
     }
 }

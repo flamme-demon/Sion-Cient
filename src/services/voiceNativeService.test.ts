@@ -148,12 +148,19 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(new TextDecoder().decode(back)).toBe('{"mxc":"mxc://h/snd","emoji":"🔊"}');
   });
 
-  it("voiceNativePublishData transmet topic + payloadB64 (Tauri convertit en payload_b64)", async () => {
+  it("voiceNativePublishData transmet topic + payloadB64 + reliable", async () => {
     invokeMock.mockResolvedValue(undefined);
     await voiceNativePublishData("sion-soundboard", "e30=");
     expect(invokeMock).toHaveBeenCalledWith("voice_native_publish_data", {
       topic: "sion-soundboard",
       payloadB64: "e30=",
+      reliable: true,
+    });
+    await voiceNativePublishData("sion-cursor", "e30=", false);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_publish_data", {
+      topic: "sion-cursor",
+      payloadB64: "e30=",
+      reliable: false,
     });
   });
 

@@ -64,13 +64,19 @@ export function useLiveKit() {
       }
       pushThrottled(updatedParticipants);
     });
-    // Relais data-channel natif → handlers existants (soundboard…). Miroir du
-    // `RoomEvent.DataReceived` branché dans `livekitService` (chemin JS).
+    // Relais data-channel natif → handlers existants (soundboard, curseurs…).
+    // Miroir du `RoomEvent.DataReceived` branché dans `livekitService` (JS).
     cleanupNativeData.current = await native.onVoiceNativeData((ev) => {
       if (!ev.topic || !ev.sender) return;
+      const sender = ev.sender;
       import("../services/soundboardService").then(({ SOUNDBOARD_TOPIC, handleRemoteBroadcast }) => {
         if (ev.topic !== SOUNDBOARD_TOPIC || !ev.sender) return;
         handleRemoteBroadcast(native.b64ToBytes(ev.payload_b64), ev.sender);
+      }).catch(() => {});
+      import("../services/livekitService").then(({ CURSOR_TOPIC, CURSOR_CLICK_TOPIC, handleNativeCursorData }) => {
+        if ((ev.topic !== CURSOR_TOPIC && ev.topic !== CURSOR_CLICK_TOPIC) || !sender) return;
+        const name = useLiveKitStore.getState().participants.find((p) => p.identity === sender)?.name ?? sender;
+        handleNativeCursorData(ev.topic, sender, name, native.b64ToBytes(ev.payload_b64));
       }).catch(() => {});
     });
   }, [storeConnect, pushThrottled]);

@@ -56,8 +56,8 @@ const AFK_TOPIC = "sion-afk";
 // position in [0, 1] relative to the shared video rect. Stored per-identity
 // and auto-expired so stale cursors disappear when a viewer stops moving or
 // closes the share view.
-const CURSOR_TOPIC = "sion-cursor";
-const CURSOR_CLICK_TOPIC = "sion-cursor-click";
+export const CURSOR_TOPIC = "sion-cursor";
+export const CURSOR_CLICK_TOPIC = "sion-cursor-click";
 // Transcription arming: "I want the meeting transcribed" — ephemeral per
 // call, so it rides the data channel like AFK (re-broadcast to newcomers,
 // forgotten on leave). The session itself (uuid + dates) is DURABLE and
@@ -1399,7 +1399,6 @@ let lastCursorRxLog = 0;
  *  Unreliable delivery is fine — cursor is throttled to ~30Hz so the next
  *  update makes up for any dropped packet. The caller throttles. */
 export function broadcastCursor(x: number, y: number, target: string) {
-  if (!currentRoom) return;
   if (!target) {
     // An untargeted cursor is ambiguous with several concurrent shares —
     // never send one. Every ≥1.4.8 caller passes the share's identity.
@@ -1408,6 +1407,11 @@ export function broadcastCursor(x: number, y: number, target: string) {
       lastCursorTxLog = Date.now();
       console.warn("[Sion][Cursor] tx move SKIPPED — empty target");
     }
+    return;
+  }
+  // Chemin natif (pas de room JS) : data-channel Rust, lossy comme ici.
+  if (!currentRoom) {
+    publishNativeCursor(CURSOR_TOPIC, { x, y, t: target }, false);
     return;
   }
   try {
@@ -1429,9 +1433,13 @@ export function broadcastCursor(x: number, y: number, target: string) {
  *  Reliable delivery: drops would miss the single visual cue, unlike the
  *  continuous cursor stream which is idempotent. */
 export function broadcastCursorClick(x: number, y: number, target: string) {
-  if (!currentRoom) return;
   if (!target) {
     console.warn("[Sion][Cursor] tx click SKIPPED — empty target");
+    return;
+  }
+  // Chemin natif (pas de room JS) : data-channel Rust, reliable comme ici.
+  if (!currentRoom) {
+    publishNativeCursor(CURSOR_CLICK_TOPIC, { click: true, x, y, t: target }, true);
     return;
   }
   try {
@@ -1441,12 +1449,26 @@ export function broadcastCursorClick(x: number, y: number, target: string) {
   } catch { /* ignore */ }
 }
 
+/** Envoi curseur via la session native (pas de room JS). Best-effort :
+ *  silencieux si le moteur natif n'est pas actif. */
+function publishNativeCursor(topic: string, body: unknown, reliable: boolean) {
+  import("./voiceNativeService").then(({ getActiveVoiceEngine, voiceNativePublishData, bytesToB64 }) => {
+    if (getActiveVoiceEngine() !== "native") return;
+    const payload = new TextEncoder().encode(JSON.stringify(body));
+    voiceNativePublishData(topic, bytesToB64(payload), reliable).catch(() => { /* best-effort */ });
+  }).catch(() => {});
+}
+
 /** Signal to viewers that our cursor is no longer over the share. Sending
  *  `{expire: true}` lets peers remove our cursor immediately instead of
  *  waiting for the TTL to fire. `target` is optional — omit to clear from
  *  every share we might have been pointing at (e.g. on teardown). */
 export function broadcastCursorHide(target?: string) {
-  if (!currentRoom) return;
+  // Chemin natif (pas de room JS) : data-channel Rust, reliable comme ici.
+  if (!currentRoom) {
+    publishNativeCursor(CURSOR_TOPIC, { expire: true, t: target }, true);
+    return;
+  }
   try {
     const payload = afkEncoder.encode(JSON.stringify({ expire: true, t: target }));
     currentRoom.localParticipant.publishData(payload, { reliable: true, topic: CURSOR_TOPIC }).catch(() => { /* best-effort */ });
@@ -1488,6 +1510,57 @@ export function onCursorClick(callback: (click: RemoteCursorClick) => void): () 
   return () => {
     if (cursorClickCallback === callback) cursorClickCallback = null;
   };
+}
+
+/** Ingère un paquet curseur reçu sur la session native (`voice-native-data`).
+ *  Miroir des branches `CURSOR_TOPIC` / `CURSOR_CLICK_TOPIC` de `handleAfkData`
+ *  (chemin JS), sans le renvoi vers l'overlay Tauri : le client natif ne
+ *  partage jamais son propre écran (MVP), il n'y a donc rien à y projeter.
+ *  `senderName` vient de la liste des participants natifs (repli identité).
+ *  Les curseurs orphelins (leave) expirent via le TTL comme en JS. */
+export function handleNativeCursorData(
+  topic: string,
+  senderIdentity: string,
+  senderName: string,
+  payload: Uint8Array,
+): void {
+  if (topic === CURSOR_CLICK_TOPIC) {
+    try {
+      const parsed = JSON.parse(afkDecoder.decode(payload)) as { click?: boolean; x?: number; y?: number; t?: string };
+      if (parsed.click && typeof parsed.x === "number" && typeof parsed.y === "number") {
+        cursorClickCallback?.({
+          id: `${senderIdentity}:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`,
+          identity: senderIdentity,
+          name: senderName,
+          x: parsed.x,
+          y: parsed.y,
+          target: parsed.t ?? "",
+          expiresAt: Date.now() + CLICK_TTL_MS,
+        });
+      }
+    } catch { /* ignore malformed */ }
+    return;
+  }
+  if (topic === CURSOR_TOPIC) {
+    try {
+      const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean; t?: string };
+      if (parsed.expire) {
+        if (remoteCursors.delete(senderIdentity)) {
+          cursorCallback?.(Array.from(remoteCursors.values()));
+        }
+      } else if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+        remoteCursors.set(senderIdentity, {
+          identity: senderIdentity,
+          name: senderName,
+          x: parsed.x,
+          y: parsed.y,
+          target: parsed.t ?? "",
+          expiresAt: Date.now() + CURSOR_TTL_MS,
+        });
+        cursorCallback?.(Array.from(remoteCursors.values()));
+      }
+    } catch { /* ignore malformed */ }
+  }
 }
 
 export async function updateAudioProcessing(options: {
