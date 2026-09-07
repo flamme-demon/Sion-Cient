@@ -310,15 +310,16 @@ fn spawn_rms_task(
     });
 }
 
-/// Dimensions d'émission d'une frame vidéo : largeur plafonnée à 1920
-/// (un 2560px d'ultrawide écrasé à 1280 rend le texte illisible),
-/// dimensions paires (exigées par le scale I420). Fonction pure (testée).
+/// Dimensions d'émission d'une frame vidéo : largeur plafonnée à 2560
+/// (un écran 2560px réduit à 1920 reste flou en plein écran ; le CPU
+/// encaisse ~2,8 Mpx en SIMD), dimensions paires (exigées par le scale
+/// I420). Fonction pure (testée).
 fn video_emit_dims(width: u32, height: u32) -> (u32, u32) {
     if width == 0 || height == 0 {
         return (0, 0);
     }
-    let (mut w, mut h) = if width > 1920 {
-        (1920, height.saturating_mul(1920) / width)
+    let (mut w, mut h) = if width > 2560 {
+        (2560, height.saturating_mul(2560) / width)
     } else {
         (width, height)
     };
@@ -379,13 +380,13 @@ fn y_samples(y: &[u8]) -> Vec<u8> {
 /// Qualité JPEG + cadence adaptatives (contrôleur pur, testé).
 ///
 /// Ce flux JPEG ne touche jamais le réseau (IPC local vers la webview) :
-/// la cible (~2,5 Mo/s) ne protège que le CPU d'encodage et le décodage
+/// la cible (~4 Mo/s) ne protège que le CPU d'encodage et le décodage
 /// image de Chromium. Ordre de dégradation volontaire :
 /// 1. baisser la qualité (90 → 75) — le texte reste lisible ;
 /// 2. PUIS SEULEMENT baisser la cadence (10 → 5 → 2,5 im/s).
 /// L'inverse (écraser la qualité à plancher en gardant 12 im/s) donne du
 /// pixelisé permanent même sur écran fixe — observé en prod.
-const VIDEO_TARGET_BPS: u64 = 2_500_000;
+const VIDEO_TARGET_BPS: u64 = 4_000_000;
 const VIDEO_Q_MIN: u8 = 75;
 const VIDEO_Q_MAX: u8 = 90;
 /// Paliers de cadence (ms entre frames) : on ne descend que coincé au
@@ -1412,14 +1413,14 @@ mod tests {
     #[test]
     fn video_emit_dims_plafonne_et_pairise() {
         assert_eq!(video_emit_dims(0, 0), (0, 0));
-        assert_eq!(video_emit_dims(2560, 1072), (1920, 804));
+        assert_eq!(video_emit_dims(2560, 1072), (2560, 1072));
         assert_eq!(video_emit_dims(1920, 1080), (1920, 1080));
         assert_eq!(video_emit_dims(1280, 720), (1280, 720));
         assert_eq!(video_emit_dims(640, 480), (640, 480));
         // Dimensions impaires → pairisées (I420).
         assert_eq!(video_emit_dims(641, 481), (640, 480));
-        // Ultrawide : ratio conservé.
-        assert_eq!(video_emit_dims(3440, 1440), (1920, 802));
+        // Ultrawide large : ratio conservé sous le plafond.
+        assert_eq!(video_emit_dims(3440, 1440), (2560, 1070));
     }
 
     #[test]
@@ -1507,7 +1508,7 @@ mod tests {
     #[test]
     fn adapt_budget_degrade_qualite_avant_cadence() {
         let start = VideoBudget { quality: 86, tick_step: 0 };
-        // Sous la cible (~2,5 Mo/s sur 2 s) : qualité remonte, cadence intacte.
+        // Sous la cible (~4 Mo/s sur 2 s) : qualité remonte, cadence intacte.
         assert_eq!(
             adapt_budget(&start, 100_000, 2),
             VideoBudget { quality: 88, tick_step: 0 }
