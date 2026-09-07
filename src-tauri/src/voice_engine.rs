@@ -571,10 +571,14 @@ fn spawn_video_pump(
                             }
                             // Conversion SIMD libyuv (remplace la boucle
                             // scalaire : ~68 ms → quelques ms en 1920px).
+                            // ATTENTION : le binding inverse RGBA↔ABGR et
+                            // BGRA↔ARGB (vérifié empiriquement, test
+                            // `libyuv_to_argb_ordre_des_canaux`) — on demande
+                            // ABGR pour obtenir des octets RGBA.
                             let t0 = std::time::Instant::now();
                             let mut rgba = vec![0u8; (dw * dh * 4) as usize];
                             i420.to_argb(
-                                livekit::webrtc::video_frame::VideoFormatType::RGBA,
+                                livekit::webrtc::video_frame::VideoFormatType::ABGR,
                                 &mut rgba,
                                 dw * 4,
                                 dw as i32,
@@ -1444,6 +1448,54 @@ mod tests {
         assert!(!screen_in_motion(5));
         assert!(screen_in_motion(6));
         assert!(screen_in_motion(25));
+    }
+
+    /// Pinpoint d'un swap de canaux (écran rouge en prod) : YUV connus →
+    /// `to_argb(RGBA)` doit sortir R,G,B dans l'ordre, alpha 255.
+    /// Tolérance ±25 (arrondis libyuv + plage limitée).
+    /// Garde-fou du swap RGBA↔ABGR / BGRA↔ARGB du binding (écran rouge en
+    /// prod) : on demande ABGR et on DOIT lire du RGBA. Tolérance ±25
+    /// (arrondis libyuv + plage limitée BT.601).
+    #[test]
+    fn libyuv_to_argb_ordre_des_canaux() {
+        use livekit::webrtc::video_frame::{I420Buffer, VideoFormatType};
+        fn convert(y: u8, u: u8, v: u8) -> [u8; 4] {
+            let mut buf = I420Buffer::new(2, 2);
+            let (dy, du, dv) = buf.data_mut();
+            dy.fill(y);
+            du.fill(u);
+            dv.fill(v);
+            let mut out = [0u8; 16];
+            buf.to_argb(VideoFormatType::ABGR, &mut out, 8, 2, 2);
+            [out[0], out[1], out[2], out[3]]
+        }
+        let near = |got: [u8; 4], exp: [u8; 4]| {
+            got.iter()
+                .zip(exp.iter())
+                .all(|(g, e)| (*g as i16 - *e as i16).abs() <= 25)
+        };
+        // Rouge / vert / bleu purs + blanc, lus en ordre RGBA.
+        assert!(near(convert(82, 90, 240), [255, 0, 0, 255]), "rouge");
+        assert!(near(convert(145, 54, 34), [0, 255, 0, 255]), "vert");
+        assert!(near(convert(41, 240, 110), [0, 0, 255, 255]), "bleu");
+        assert!(near(convert(235, 128, 128), [255, 255, 255, 255]), "blanc");
+    }
+
+    /// L'encodeur lit bien du RGBA dans l'ordre (rouge encodé = rouge
+    /// décodé, via le décodeur `image` en référence).
+    #[test]
+    fn jpeg_rgba_conserve_les_canaux() {
+        let mut rgba = vec![0u8; 16 * 16 * 4];
+        for px in rgba.chunks_exact_mut(4) {
+            px[0] = 220;
+            px[1] = 30;
+            px[2] = 40;
+            px[3] = 255;
+        }
+        let jpeg = encode_jpeg_rgba(16, 16, &rgba, 85, true).expect("encode");
+        let img = image::load_from_memory(&jpeg).expect("decode").to_rgb8();
+        let px = img.get_pixel(8, 8);
+        assert!(px[0] > 150 && px[1] < 110 && px[2] < 120, "px={:?}", px);
     }
 
     #[test]
