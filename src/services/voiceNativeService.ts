@@ -101,6 +101,26 @@ export function getVoiceNativeStatus(): Promise<VoiceNativeStatus> {
   return tauriInvoke<VoiceNativeStatus>("voice_native_status");
 }
 
+export interface VoiceNativeDebug {
+  state: VoiceNativeState;
+  room_name: string | null;
+  muted: boolean;
+  deafened: boolean;
+  identity: string | null;
+  has_engine: boolean;
+  engine_connected: boolean;
+  recording_devices: { id: string; name: string; index: number }[];
+  playout_devices: { id: string; name: string; index: number }[];
+  attached_tracks: number;
+  participants: number;
+}
+
+/** Diagnostic instantané (DevTools : `await getVoiceNativeDebug()` après
+ *  import du service, ou via les réglages quand le panneau debug arrive). */
+export function getVoiceNativeDebug(): Promise<VoiceNativeDebug> {
+  return tauriInvoke<VoiceNativeDebug>("voice_native_debug");
+}
+
 export function voiceNativeConnect(
   url: string,
   token: string,

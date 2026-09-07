@@ -628,6 +628,70 @@ pub fn voice_native_status() -> VoiceNativeStatus {
     snapshot(&inner)
 }
 
+/// Périphérique audio vu par l'ADM natif.
+#[derive(Debug, Clone, Serialize)]
+pub struct NativeAudioDevice {
+    pub id: String,
+    pub name: String,
+    pub index: usize,
+}
+
+/// Diagnostic instantané de la voix native (DevTools, futurs réglages) :
+/// état, flags, périphériques ADM, pistes branchées au RMS, participants.
+#[derive(Debug, Clone, Serialize)]
+pub struct VoiceNativeDebug {
+    pub state: VoiceConnectionState,
+    pub room_name: Option<String>,
+    pub muted: bool,
+    pub deafened: bool,
+    pub identity: Option<String>,
+    pub has_engine: bool,
+    pub engine_connected: bool,
+    pub recording_devices: Vec<NativeAudioDevice>,
+    pub playout_devices: Vec<NativeAudioDevice>,
+    pub attached_tracks: usize,
+    pub participants: usize,
+}
+
+#[tauri::command]
+pub fn voice_native_debug() -> VoiceNativeDebug {
+    let inner = manager().lock().unwrap_or_else(|e| e.into_inner());
+    let mut dbg = VoiceNativeDebug {
+        state: inner.state,
+        room_name: inner.room_name.clone(),
+        muted: inner.muted,
+        deafened: inner.deafened,
+        identity: inner.identity.clone(),
+        has_engine: false,
+        engine_connected: false,
+        recording_devices: Vec::new(),
+        playout_devices: Vec::new(),
+        attached_tracks: 0,
+        participants: 0,
+    };
+    #[cfg(feature = "native-voice")]
+    {
+        if let Some(holder) = ENGINE.get() {
+            if let Ok(guard) = holder.lock() {
+                if let Some(engine) = guard.as_ref() {
+                    dbg.has_engine = true;
+                    dbg.engine_connected = engine.is_connected();
+                    dbg.attached_tracks = engine.attached_count();
+                    if let Ok(audio) = crate::voice_engine::platform_audio_snapshot() {
+                        dbg.recording_devices = audio.0;
+                        dbg.playout_devices = audio.1;
+                    }
+                }
+            }
+        }
+        dbg.participants = participants_map()
+            .lock()
+            .map(|m| m.len())
+            .unwrap_or_default();
+    }
+    dbg
+}
+
 /// Ouvre la session vocale native : `Connecting`, puis `Room::connect` +
 /// publish micro (feature `native-voice`). Sans la feature, erreur explicite
 /// (le chemin JS reste le défaut).

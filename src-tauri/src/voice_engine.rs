@@ -40,6 +40,36 @@ pub enum VoiceEngineEvent {
     RoomReconnected,
 }
 
+/// Snapshot des périphériques vus par l'ADM (diagnostic + futurs réglages).
+/// Crée un `PlatformAudio` temporaire (refcount +1 le temps de l'appel).
+pub fn platform_audio_snapshot() -> Result<
+    (
+        Vec<crate::voice_native::NativeAudioDevice>,
+        Vec<crate::voice_native::NativeAudioDevice>,
+    ),
+    String,
+> {
+    use crate::voice_native::NativeAudioDevice;
+    let audio = PlatformAudio::new().map_err(|e| format!("audio natif: {}", e))?;
+    let recording = audio
+        .recording_devices()
+        .map(|d| NativeAudioDevice {
+            id: d.id.as_str().to_string(),
+            name: d.name.clone(),
+            index: d.index,
+        })
+        .collect();
+    let playout = audio
+        .playout_devices()
+        .map(|d| NativeAudioDevice {
+            id: d.id.as_str().to_string(),
+            name: d.name.clone(),
+            index: d.index,
+        })
+        .collect();
+    Ok((recording, playout))
+}
+
 /// Vocabulaire qualité partagé avec le front (`ConnectionQuality` TS).
 pub fn connection_quality_str(q: &ConnectionQuality) -> &'static str {
     match q {
@@ -159,6 +189,14 @@ impl LiveKitEngine {
         self.room.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
+    /// Nombre de pistes audio distantes branchées au détecteur RMS.
+    pub fn attached_count(&self) -> usize {
+        self.attached
+            .lock()
+            .map(|a| a.len())
+            .unwrap_or_default()
+    }
+
     /// Publie le micro via l'ADM natif. Équivalent de `createLocalAudioTrack`
     /// + `publishTrack` côté JS, sans `getUserMedia` ni shim PulseAudio :
     /// la sélection de périphérique passe par `PlatformAudio`.
@@ -171,6 +209,20 @@ impl LiveKitEngine {
         let audio = PlatformAudio::new().map_err(|e| format!("audio natif: {}", e))?;
         // Best-effort : un ADM qui refuse ce réglage ne doit pas bloquer l'appel.
         let _ = audio.set_noise_suppression(false, false);
+        // Diagnostic routage : quels périphériques l'ADM voit-il ?
+        log::info!(
+            "[Sion][voix-native] ADM entree=[{}] sortie=[{}]",
+            audio
+                .recording_devices()
+                .map(|d| d.name.clone())
+                .collect::<Vec<_>>()
+                .join(" | "),
+            audio
+                .playout_devices()
+                .map(|d| d.name.clone())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
         let track = LocalAudioTrack::create_audio_track("microphone", audio.rtc_source());
         let publication = self
             .rt
