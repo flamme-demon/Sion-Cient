@@ -358,20 +358,69 @@ fn i420_to_rgb(
     rgb
 }
 
-/// RGB24 → JPEG (qualité 82 : le texte d'un écran reste lisible ; un
-/// 1920px d'écran tient ~150-300 Ko à 4 im/s, soit ~1 Mo/s max).
-fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, String> {
+/// RGB24 → JPEG à qualité donnée (0-100, clampée par l'encodeur).
+fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8], quality: u8) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
         .encode(rgb, width, height, image::ExtendedColorType::Rgb8)
         .map_err(|e| format!("jpeg: {}", e))?;
     Ok(out)
 }
 
-/// Pompe vidéo : partage d'écran distant → JPEG ~4 im/s vers le front
-/// (`voice-native-frame`). File "latest" (1 frame) : aucun backlog, le
-/// réseau lent fait juste baisser le débit effectif. Se termine sur `stop`
-/// (unsubscribe, leave, disconnect) ou fin de piste.
+/// Échantillonne le plan Y (1 octet sur 32) pour la détection de changement.
+/// Fonction pure (testée).
+fn y_samples(y: &[u8]) -> Vec<u8> {
+    y.iter().step_by(32).copied().collect()
+}
+
+/// Somme des différences absolues entre deux échantillons. Fonction pure.
+fn samples_sad(a: &[u8], b: &[u8]) -> u64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x as i64 - *y as i64).unsigned_abs())
+        .sum()
+}
+
+/// Une frame vaut-elle un ré-encodage ? Non si mêmes dimensions et SAD sous
+/// le seuil (bruit d'encodeur sur écran fixe). Seuil = 3 niveaux moyens par
+/// échantillon : un curseur qui bouge (~centaines de px bien changés) passe
+/// largement, le bruit non. Fonction pure (testée).
+fn frame_changed(prev: &[u8], y: &[u8]) -> bool {
+    let cur = y_samples(y);
+    if prev.len() != cur.len() {
+        return true;
+    }
+    samples_sad(prev, &cur) > cur.len() as u64 * 3
+}
+
+/// Qualité JPEG adaptative (contrôleur AIMD pur, testé) : on vise
+/// `TARGET_BPS` en baissant vite (congestion) et remontant doucement.
+const VIDEO_TARGET_BPS: u64 = 350_000;
+const VIDEO_Q_MIN: u8 = 55;
+const VIDEO_Q_MAX: u8 = 88;
+
+fn adapt_quality(current: u8, bytes_last_window: u64, window_secs: u64) -> u8 {
+    if window_secs == 0 {
+        return current;
+    }
+    if bytes_last_window > VIDEO_TARGET_BPS * window_secs {
+        current.saturating_sub(6).max(VIDEO_Q_MIN)
+    } else {
+        (current.saturating_add(2)).min(VIDEO_Q_MAX)
+    }
+}
+
+/// Pompe vidéo : partage d'écran distant → JPEG ~12 im/s vers le front
+/// (`voice-native-frame`). Le flux décodé par libwebrtc EST fluide et net
+/// (vrai codec adaptatif côté SFU) ; le pont JPEG n'en garde que l'essentiel :
+/// - tick 80 ms + file "latest" (1 frame) : aucun backlog, le réseau ou le
+///   CPU lent fait juste baisser le débit effectif ;
+/// - détection de changement (SAD échantillonné) : écran fixe = 0 encodage,
+///   le mouvement (curseur, frappe, vidéo) repart au quart de tour ;
+/// - qualité JPEG adaptative (55-88, cible ~350 Ko/s) : le texte reste net
+///   quand rien ne bouge, ça se dégrade gracieusement en plein mouvement ;
+/// - conversion + encodage (CPU) dans `spawn_blocking`, jamais sur le runtime.
+/// Se termine sur `stop` (unsubscribe, leave, disconnect) ou fin de piste.
 #[allow(clippy::too_many_arguments)]
 fn spawn_video_pump(
     rt: &tokio::runtime::Handle,
@@ -384,51 +433,111 @@ fn spawn_video_pump(
         use futures_util::StreamExt as _;
         let mut stream = NativeVideoStream::new(rtc_track);
         log::info!("[Sion][voix-native] partage d'écran reçu de {}", sender);
-        let mut last_emit = tokio::time::Instant::now() - std::time::Duration::from_secs(60);
         let mut stop = stop;
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(80));
+        // `latest` = dernière frame décodée (écrase la précédente : pas de
+        // backlog) ; `pending` = encodage en cours (un seul à la fois).
+        let mut latest: Option<livekit::webrtc::video_frame::BoxVideoFrame> = None;
+        // Encodage en cours (un seul à la fois) : (échantillons Y, dims
+        // source, JPEG émis ou None si image inchangée).
+        let mut pending: Option<
+            tokio::task::JoinHandle<(Vec<u8>, (u32, u32), Option<(Vec<u8>, u32, u32)>)>,
+        > = None;
+        let mut prev_samples: Vec<u8> = Vec::new();
+        let mut quality: u8 = 80;
+        let mut window: std::collections::VecDeque<(tokio::time::Instant, usize)> =
+            std::collections::VecDeque::new();
         let mut first = true;
+        let mut stat_count: u64 = 0;
+        let mut stat_bytes: u64 = 0;
+        let mut stat_since = tokio::time::Instant::now();
         loop {
             tokio::select! {
                 _ = &mut stop => break,
                 frame = stream.next() => {
                     let Some(frame) = frame else { break };
-                    if last_emit.elapsed() < std::time::Duration::from_millis(250) {
-                        continue;
-                    }
-                    let buf = frame.buffer.as_ref();
-                    let (dw, dh) = video_emit_dims(buf.width(), buf.height());
-                    if dw == 0 {
-                        continue;
-                    }
-                    let mut i420 = buf.to_i420();
-                    if dw != buf.width() || dh != buf.height() {
-                        i420 = i420.scale(dw as i32, dh as i32);
-                    }
-                    let (sy, su, sv) = i420.strides();
-                    let (dy, du, dv) = i420.data();
-                    let rgb = i420_to_rgb(dw, dh, dy, du, dv, sy, su, sv);
-                    match encode_jpeg_rgb(dw, dh, &rgb) {
-                        Ok(jpeg) => {
-                            last_emit = tokio::time::Instant::now();
-                            if first {
-                                first = false;
-                                log::info!(
-                                    "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg)",
-                                    sender, buf.width(), buf.height(), dw, dh, jpeg.len()
-                                );
+                    latest = Some(frame);
+                }
+                _ = ticker.tick() => {
+                    // Récolte de l'encodage précédent (sans attendre).
+                    if let Some(h) = pending.take() {
+                        if h.is_finished() {
+                            match h.await {
+                                Ok((samples, src_dims, emitted)) => {
+                                    prev_samples = samples;
+                                    // Image inchangée (emitted = None) : on
+                                    // garde simplement l'affichée.
+                                    if let Some((jpeg, dw, dh)) = emitted {
+                                        let now = tokio::time::Instant::now();
+                                        window.push_back((now, jpeg.len()));
+                                        while window.front().is_some_and(|(t, _)| now.duration_since(*t).as_secs() >= 2) {
+                                            window.pop_front();
+                                        }
+                                        let win_bytes: usize = window.iter().map(|(_, n)| n).sum();
+                                        quality = adapt_quality(quality, win_bytes as u64, 2);
+                                        stat_count += 1;
+                                        stat_bytes += jpeg.len() as u64;
+                                        if first {
+                                            first = false;
+                                            log::info!(
+                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{})",
+                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), quality
+                                            );
+                                        }
+                                        if stat_since.elapsed().as_secs() >= 30 {
+                                            let secs = stat_since.elapsed().as_secs_f64();
+                                            log::info!(
+                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, {:.0} Ko/s",
+                                                sender, stat_count as f64 / secs, quality, stat_bytes as f64 / secs / 1024.0
+                                            );
+                                            stat_count = 0;
+                                            stat_bytes = 0;
+                                            stat_since = tokio::time::Instant::now();
+                                        }
+                                        use base64::Engine as _;
+                                        let _ = app.emit(
+                                            "voice-native-frame",
+                                            &serde_json::json!({
+                                                "sender": sender,
+                                                "width": dw,
+                                                "height": dh,
+                                                "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
+                                            }),
+                                        );
+                                    }
+                                }
+                                Err(e) => log::warn!("[Sion][voix-native] encodage vidéo {} : {}", sender, e),
                             }
-                            use base64::Engine as _;
-                            let _ = app.emit(
-                                "voice-native-frame",
-                                &serde_json::json!({
-                                    "sender": sender,
-                                    "width": dw,
-                                    "height": dh,
-                                    "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
-                                }),
-                            );
+                        } else {
+                            pending = Some(h);
+                            continue;
                         }
-                        Err(e) => log::warn!("[Sion][voix-native] frame vidéo {} : {}", sender, e),
+                    }
+                    // Nouvel encodage si une frame fraîche attend.
+                    if let Some(frame) = latest.take() {
+                        let q = quality;
+                        let prev = std::mem::take(&mut prev_samples);
+                        pending = Some(tokio::task::spawn_blocking(move || {
+                            let buf = frame.buffer.as_ref();
+                            let (sw, sh) = (buf.width(), buf.height());
+                            let (dw, dh) = video_emit_dims(sw, sh);
+                            let mut i420 = buf.to_i420();
+                            if dw != 0 && (dw != sw || dh != sh) {
+                                i420 = i420.scale(dw as i32, dh as i32);
+                            }
+                            let (dy, _, _) = i420.data();
+                            let samples = y_samples(dy);
+                            if dw == 0 || (!prev.is_empty() && !frame_changed(&prev, dy)) {
+                                return (samples, (sw, sh), None);
+                            }
+                            let (sy, su, sv) = i420.strides();
+                            let (dy, du, dv) = i420.data();
+                            let rgb = i420_to_rgb(dw, dh, dy, du, dv, sy, su, sv);
+                            let emitted = encode_jpeg_rgb(dw, dh, &rgb, q)
+                                .ok()
+                                .map(|jpeg| (jpeg, dw, dh));
+                            (samples, (sw, sh), emitted)
+                        }));
                     }
                 }
             }
@@ -1248,9 +1357,44 @@ mod tests {
     #[test]
     fn jpeg_encode_produit_un_vrai_jpeg() {
         let rgb = vec![128u8; 8 * 8 * 3];
-        let jpeg = encode_jpeg_rgb(8, 8, &rgb).expect("encode jpeg");
+        let jpeg = encode_jpeg_rgb(8, 8, &rgb, 80).expect("encode jpeg");
         assert!(jpeg.len() > 2);
         assert_eq!(&jpeg[0..2], &[0xFF, 0xD8]);
+    }
+
+    #[test]
+    fn frame_changed_ignore_le_bruit_garde_le_mouvement() {
+        // Écran fixe : que du bruit d'encodeur (±1) → pas de ré-encodage.
+        let base = vec![100u8; 4096];
+        let mut noisy = base.clone();
+        for (i, v) in noisy.iter_mut().enumerate() {
+            *v = v.wrapping_add((i % 3) as u8);
+        }
+        assert!(!frame_changed(&y_samples(&base), &noisy));
+        // Curseur qui bouge : bloc bien changé → ré-encodage.
+        let mut moved = base.clone();
+        for v in moved.iter_mut().take(512) {
+            *v = 200;
+        }
+        assert!(frame_changed(&y_samples(&base), &moved));
+        // Dimensions changées (échantillons de taille différente) → toujours.
+        assert!(frame_changed(&y_samples(&base), &vec![100u8; 2048]));
+        // Premier échantillon vide (pas de référence) : l'appelant émet.
+        assert!(y_samples(&[]).is_empty());
+    }
+
+    #[test]
+    fn adapt_quality_vise_le_debit_cible() {
+        // Sous la cible (~350 Ko/s sur 2 s) : remonte doucement.
+        assert_eq!(adapt_quality(80, 100_000, 2), 82);
+        // Au-dessus : baisse vite.
+        assert_eq!(adapt_quality(80, 900_000, 2), 74);
+        // Bornes : jamais sous 55 ni sur 88.
+        assert_eq!(adapt_quality(55, 9_000_000, 2), 55);
+        assert_eq!(adapt_quality(88, 0, 2), 88);
+        assert_eq!(adapt_quality(87, 0, 2), 88);
+        // Fenêtre vide : pas de division par zéro, inchangé.
+        assert_eq!(adapt_quality(70, 0, 0), 70);
     }
     #[test]
     fn adm_playout_indices_filtre_livraison() {
