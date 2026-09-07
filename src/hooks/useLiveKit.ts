@@ -11,6 +11,7 @@ export function useLiveKit() {
   const cleanupParticipantChange = useRef<(() => void) | null>(null);
   const cleanupNative = useRef<(() => void) | null>(null);
   const cleanupNativeData = useRef<(() => void) | null>(null);
+  const nativeAfkHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null);
   const knownNativeIdentities = useRef<Set<string> | null>(null);
 
   const pushThrottled = useCallback((updatedParticipants: typeof participants) => {
@@ -79,6 +80,20 @@ export function useLiveKit() {
         handleNativeCursorData(ev.topic, sender, name, native.b64ToBytes(ev.payload_b64));
       }).catch(() => {});
     });
+    // Heartbeat AFK natif (miroir du heartbeat JS) : tout état manqué ou
+    // rassis chez les pairs se répare sous 30 s.
+    if (nativeAfkHeartbeat.current) clearInterval(nativeAfkHeartbeat.current);
+    nativeAfkHeartbeat.current = setInterval(() => {
+      import("../stores/useAppStore").then(({ useAppStore }) => {
+        const deafened = useAppStore.getState().isDeafened;
+        import("../services/voiceNativeService").then((svc) => {
+          if (svc.getActiveVoiceEngine() !== "native") return;
+          console.log(`[Sion][deafen] AFK tx natif deafened=${deafened}`);
+          const payload = new TextEncoder().encode(JSON.stringify({ deafened }));
+          svc.voiceNativePublishData("sion-afk", svc.bytesToB64(payload)).catch(() => {});
+        }).catch(() => {});
+      }).catch(() => {});
+    }, 30_000);
   }, [storeConnect, pushThrottled]);
 
   const disconnect = useCallback(async () => {
@@ -103,6 +118,10 @@ export function useLiveKit() {
     if (cleanupNativeData.current) {
       cleanupNativeData.current();
       cleanupNativeData.current = null;
+    }
+    if (nativeAfkHeartbeat.current) {
+      clearInterval(nativeAfkHeartbeat.current);
+      nativeAfkHeartbeat.current = null;
     }
     if (throttleRef.current) {
       clearTimeout(throttleRef.current);

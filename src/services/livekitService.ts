@@ -93,6 +93,8 @@ const remoteCursors = new Map<string, RemoteCursor>();
 let cursorCallback: ((cursors: RemoteCursor[]) => void) | null = null;
 let cursorClickCallback: ((click: RemoteCursorClick) => void) | null = null;
 let cursorSweepTimer: ReturnType<typeof setInterval> | null = null;
+/** Heartbeat AFK (voir onParticipantChange) : arrêté au leave/deconnect. */
+let afkHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 const afkEncoder = new TextEncoder();
 const afkDecoder = new TextDecoder();
 // Map of remote audio elements: trackSid -> HTMLAudioElement
@@ -1216,6 +1218,7 @@ export async function disconnectFromRoom() {
     clearAllPlayingSounds();
     remoteCursors.clear();
     if (cursorSweepTimer) { clearInterval(cursorSweepTimer); cursorSweepTimer = null; }
+    if (afkHeartbeatTimer) { clearInterval(afkHeartbeatTimer); afkHeartbeatTimer = null; }
     cursorCallback?.([]);
     await currentRoom.disconnect();
     currentRoom = null;
@@ -1379,6 +1382,7 @@ function publishArmedPeers() {
 function broadcastAfk() {
   if (!currentRoom) return;
   try {
+    console.log(`[Sion][deafen] AFK tx deafened=${isCurrentlyDeafened}`);
     const payload = afkEncoder.encode(JSON.stringify({ deafened: isCurrentlyDeafened }));
     currentRoom.localParticipant.publishData(payload, { reliable: true, topic: AFK_TOPIC }).catch((err) => {
       console.warn("[Sion] Failed to broadcast AFK state:", err);
@@ -2178,6 +2182,13 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
   currentRoom.on(RoomEvent.ParticipantConnected, rebroadcastOnJoin);
   currentRoom.on(RoomEvent.ParticipantDisconnected, forgetOnLeave);
 
+  // Heartbeat AFK : un broadcast manqué (join en course, paquet perdu) ou un
+  // état rassis (pair qui a raté le undeafen) se répare tout seul sous 30 s.
+  // Un paquet de 18 o toutes les 30 s par client est négligeable. Singleton
+  // module (comme cursorSweepTimer) : ré-abonnement sans cleanup ne fuit pas.
+  if (afkHeartbeatTimer) clearInterval(afkHeartbeatTimer);
+  afkHeartbeatTimer = setInterval(() => broadcastAfk(), 30_000);
+
   // Local participant events
   currentRoom.on(RoomEvent.LocalTrackPublished, update);
   currentRoom.on(RoomEvent.LocalTrackUnpublished, update);
@@ -2186,6 +2197,7 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
   update();
 
   return () => {
+    if (afkHeartbeatTimer) { clearInterval(afkHeartbeatTimer); afkHeartbeatTimer = null; }
     if (!currentRoom) return;
     if (participantUpdateCallback === update) participantUpdateCallback = null;
     currentRoom.off(RoomEvent.ParticipantConnected, update);

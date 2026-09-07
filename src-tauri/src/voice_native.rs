@@ -1030,7 +1030,9 @@ pub fn voice_native_set_deafened(
                 // autres clients ne voient jamais notre sourdine.
                 let payload = serde_json::to_vec(&AfkPayload { deafened })
                     .map_err(|e| e.to_string())?;
-                e.publish_data(TOPIC_AFK, payload, true)
+                e.publish_data(TOPIC_AFK, payload, true)?;
+                log::info!("[Sion][voix-native] AFK tx deafened={}", deafened);
+                Ok(())
             }) {
                 log::warn!("[Sion][voix-native] {}", e);
                 applied = false;
