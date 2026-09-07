@@ -373,52 +373,57 @@ fn y_samples(y: &[u8]) -> Vec<u8> {
     y.iter().step_by(32).copied().collect()
 }
 
-/// Somme des différences absolues entre deux échantillons. Fonction pure.
-fn samples_sad(a: &[u8], b: &[u8]) -> u64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (*x as i64 - *y as i64).unsigned_abs())
-        .sum()
+/// Qualité JPEG + cadence adaptatives (contrôleur pur, testé).
+///
+/// Ce flux JPEG ne touche jamais le réseau (IPC local vers la webview) :
+/// la cible (~2,5 Mo/s) ne protège que le CPU d'encodage et le décodage
+/// image de Chromium. Ordre de dégradation volontaire :
+/// 1. baisser la qualité (90 → 75) — le texte reste lisible ;
+/// 2. PUIS SEULEMENT baisser la cadence (10 → 5 → 2,5 im/s).
+/// L'inverse (écraser la qualité à plancher en gardant 12 im/s) donne du
+/// pixelisé permanent même sur écran fixe — observé en prod.
+const VIDEO_TARGET_BPS: u64 = 2_500_000;
+const VIDEO_Q_MIN: u8 = 75;
+const VIDEO_Q_MAX: u8 = 90;
+/// Paliers de cadence (ms entre frames) : on ne descend que coincé au
+/// plancher qualité, on remonte dès que le budget le permet.
+const VIDEO_TICKS_MS: [u64; 3] = [100, 200, 400];
+
+/// État du contrôleur : qualité + palier de cadence courants.
+#[derive(Debug, PartialEq, Eq)]
+struct VideoBudget {
+    quality: u8,
+    tick_step: usize,
 }
 
-/// Une frame vaut-elle un ré-encodage ? Non si mêmes dimensions et SAD sous
-/// le seuil (bruit d'encodeur sur écran fixe). Seuil = 3 niveaux moyens par
-/// échantillon : un curseur qui bouge (~centaines de px bien changés) passe
-/// largement, le bruit non. Fonction pure (testée).
-fn frame_changed(prev: &[u8], y: &[u8]) -> bool {
-    let cur = y_samples(y);
-    if prev.len() != cur.len() {
-        return true;
-    }
-    samples_sad(prev, &cur) > cur.len() as u64 * 3
-}
-
-/// Qualité JPEG adaptative (contrôleur AIMD pur, testé) : on vise
-/// `TARGET_BPS` en baissant vite (congestion) et remontant doucement.
-const VIDEO_TARGET_BPS: u64 = 350_000;
-const VIDEO_Q_MIN: u8 = 55;
-const VIDEO_Q_MAX: u8 = 88;
-
-fn adapt_quality(current: u8, bytes_last_window: u64, window_secs: u64) -> u8 {
+fn adapt_budget(current: &VideoBudget, bytes_last_window: u64, window_secs: u64) -> VideoBudget {
     if window_secs == 0 {
-        return current;
+        return VideoBudget { quality: current.quality, tick_step: current.tick_step };
     }
-    if bytes_last_window > VIDEO_TARGET_BPS * window_secs {
-        current.saturating_sub(6).max(VIDEO_Q_MIN)
+    let over = bytes_last_window > VIDEO_TARGET_BPS * window_secs;
+    if over {
+        if current.quality > VIDEO_Q_MIN {
+            VideoBudget { quality: current.quality.saturating_sub(6).max(VIDEO_Q_MIN), tick_step: current.tick_step }
+        } else if current.tick_step + 1 < VIDEO_TICKS_MS.len() {
+            VideoBudget { quality: current.quality, tick_step: current.tick_step + 1 }
+        } else {
+            VideoBudget { quality: current.quality, tick_step: current.tick_step }
+        }
+    } else if current.tick_step > 0 {
+        VideoBudget { quality: current.quality, tick_step: current.tick_step - 1 }
     } else {
-        (current.saturating_add(2)).min(VIDEO_Q_MAX)
+        VideoBudget { quality: current.quality.saturating_add(2).min(VIDEO_Q_MAX), tick_step: current.tick_step }
     }
 }
 
-/// Pompe vidéo : partage d'écran distant → JPEG ~12 im/s vers le front
+/// Pompe vidéo : partage d'écran distant → JPEG ~10 im/s vers le front
 /// (`voice-native-frame`). Le flux décodé par libwebrtc EST fluide et net
 /// (vrai codec adaptatif côté SFU) ; le pont JPEG n'en garde que l'essentiel :
-/// - tick 80 ms + file "latest" (1 frame) : aucun backlog, le réseau ou le
+/// - tick 100 ms + file "latest" (1 frame) : aucun backlog, le réseau ou le
 ///   CPU lent fait juste baisser le débit effectif ;
-/// - détection de changement (SAD échantillonné) : écran fixe = 0 encodage,
-///   le mouvement (curseur, frappe, vidéo) repart au quart de tour ;
-/// - qualité JPEG adaptative (55-88, cible ~350 Ko/s) : le texte reste net
-///   quand rien ne bouge, ça se dégrade gracieusement en plein mouvement ;
+/// - écran strictement fixe (échantillons Y identiques) = 0 encodage ;
+/// - qualité JPEG + cadence adaptatives (v3 : cible ~2,5 Mo/s d'IPC local,
+///   on dégrade la qualité 90 → 75 AVANT de toucher à la cadence) ;
 /// - conversion + encodage (CPU) dans `spawn_blocking`, jamais sur le runtime.
 /// Se termine sur `stop` (unsubscribe, leave, disconnect) ou fin de piste.
 #[allow(clippy::too_many_arguments)]
@@ -434,17 +439,17 @@ fn spawn_video_pump(
         let mut stream = NativeVideoStream::new(rtc_track);
         log::info!("[Sion][voix-native] partage d'écran reçu de {}", sender);
         let mut stop = stop;
-        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(80));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(VIDEO_TICKS_MS[0]));
         // `latest` = dernière frame décodée (écrase la précédente : pas de
         // backlog) ; `pending` = encodage en cours (un seul à la fois).
         let mut latest: Option<livekit::webrtc::video_frame::BoxVideoFrame> = None;
         // Encodage en cours (un seul à la fois) : (échantillons Y, dims
-        // source, JPEG émis ou None si image inchangée).
+        // source, JPEG émis ou None si image strictement inchangée).
         let mut pending: Option<
             tokio::task::JoinHandle<(Vec<u8>, (u32, u32), Option<(Vec<u8>, u32, u32)>)>,
         > = None;
         let mut prev_samples: Vec<u8> = Vec::new();
-        let mut quality: u8 = 80;
+        let mut budget = VideoBudget { quality: 86, tick_step: 0 };
         let mut window: std::collections::VecDeque<(tokio::time::Instant, usize)> =
             std::collections::VecDeque::new();
         let mut first = true;
@@ -474,21 +479,32 @@ fn spawn_video_pump(
                                             window.pop_front();
                                         }
                                         let win_bytes: usize = window.iter().map(|(_, n)| n).sum();
-                                        quality = adapt_quality(quality, win_bytes as u64, 2);
+                                        let next = adapt_budget(&budget, win_bytes as u64, 2);
+                                        if next.tick_step != budget.tick_step {
+                                            ticker = tokio::time::interval(std::time::Duration::from_millis(
+                                                VIDEO_TICKS_MS[next.tick_step],
+                                            ));
+                                        }
+                                        budget = next;
                                         stat_count += 1;
                                         stat_bytes += jpeg.len() as u64;
                                         if first {
                                             first = false;
                                             log::info!(
                                                 "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{})",
-                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), quality
+                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality
                                             );
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, {:.0} Ko/s",
-                                                sender, stat_count as f64 / secs, quality, stat_bytes as f64 / secs / 1024.0
+                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s",
+                                                sender,
+                                                stat_count as f64 / secs,
+                                                budget.quality,
+                                                VIDEO_TICKS_MS[budget.tick_step],
+                                                "ms",
+                                                stat_bytes as f64 / secs / 1024.0
                                             );
                                             stat_count = 0;
                                             stat_bytes = 0;
@@ -515,7 +531,7 @@ fn spawn_video_pump(
                     }
                     // Nouvel encodage si une frame fraîche attend.
                     if let Some(frame) = latest.take() {
-                        let q = quality;
+                        let q = budget.quality;
                         let prev = std::mem::take(&mut prev_samples);
                         pending = Some(tokio::task::spawn_blocking(move || {
                             let buf = frame.buffer.as_ref();
@@ -527,7 +543,9 @@ fn spawn_video_pump(
                             }
                             let (dy, _, _) = i420.data();
                             let samples = y_samples(dy);
-                            if dw == 0 || (!prev.is_empty() && !frame_changed(&prev, dy)) {
+                            // Écran strictement fixe (mêmes échantillons) :
+                            // on garde l'image affichée, zéro encodage.
+                            if dw == 0 || (!prev.is_empty() && prev == samples) {
                                 return (samples, (sw, sh), None);
                             }
                             let (sy, su, sv) = i420.strides();
@@ -1363,38 +1381,40 @@ mod tests {
     }
 
     #[test]
-    fn frame_changed_ignore_le_bruit_garde_le_mouvement() {
-        // Écran fixe : que du bruit d'encodeur (±1) → pas de ré-encodage.
-        let base = vec![100u8; 4096];
-        let mut noisy = base.clone();
-        for (i, v) in noisy.iter_mut().enumerate() {
-            *v = v.wrapping_add((i % 3) as u8);
-        }
-        assert!(!frame_changed(&y_samples(&base), &noisy));
-        // Curseur qui bouge : bloc bien changé → ré-encodage.
-        let mut moved = base.clone();
-        for v in moved.iter_mut().take(512) {
-            *v = 200;
-        }
-        assert!(frame_changed(&y_samples(&base), &moved));
-        // Dimensions changées (échantillons de taille différente) → toujours.
-        assert!(frame_changed(&y_samples(&base), &vec![100u8; 2048]));
-        // Premier échantillon vide (pas de référence) : l'appelant émet.
-        assert!(y_samples(&[]).is_empty());
-    }
-
-    #[test]
-    fn adapt_quality_vise_le_debit_cible() {
-        // Sous la cible (~350 Ko/s sur 2 s) : remonte doucement.
-        assert_eq!(adapt_quality(80, 100_000, 2), 82);
-        // Au-dessus : baisse vite.
-        assert_eq!(adapt_quality(80, 900_000, 2), 74);
-        // Bornes : jamais sous 55 ni sur 88.
-        assert_eq!(adapt_quality(55, 9_000_000, 2), 55);
-        assert_eq!(adapt_quality(88, 0, 2), 88);
-        assert_eq!(adapt_quality(87, 0, 2), 88);
+    fn adapt_budget_degrade_qualite_avant_cadence() {
+        let start = VideoBudget { quality: 86, tick_step: 0 };
+        // Sous la cible (~2,5 Mo/s sur 2 s) : qualité remonte, cadence intacte.
+        assert_eq!(
+            adapt_budget(&start, 100_000, 2),
+            VideoBudget { quality: 88, tick_step: 0 }
+        );
+        // Au-dessus : qualité baisse vite, cadence intacte.
+        assert_eq!(
+            adapt_budget(&start, 9_000_000, 2),
+            VideoBudget { quality: 80, tick_step: 0 }
+        );
+        // Coincé au plancher qualité + toujours au-dessus : cadence baisse.
+        let floor = VideoBudget { quality: VIDEO_Q_MIN, tick_step: 0 };
+        assert_eq!(
+            adapt_budget(&floor, 9_000_000, 2),
+            VideoBudget { quality: VIDEO_Q_MIN, tick_step: 1 }
+        );
+        // Dernier palier : on reste (pas de panique, pas de recul).
+        let last = VideoBudget { quality: VIDEO_Q_MIN, tick_step: VIDEO_TICKS_MS.len() - 1 };
+        assert_eq!(adapt_budget(&last, 9_000_000, 2), last);
+        // Budget redevenu sain : cadence remonte AVANT la qualité.
+        let slow = VideoBudget { quality: VIDEO_Q_MIN, tick_step: 1 };
+        assert_eq!(
+            adapt_budget(&slow, 100_000, 2),
+            VideoBudget { quality: VIDEO_Q_MIN, tick_step: 0 }
+        );
+        // Bornes qualité.
+        assert_eq!(
+            adapt_budget(&VideoBudget { quality: 89, tick_step: 0 }, 0, 2),
+            VideoBudget { quality: 90, tick_step: 0 }
+        );
         // Fenêtre vide : pas de division par zéro, inchangé.
-        assert_eq!(adapt_quality(70, 0, 0), 70);
+        assert_eq!(adapt_budget(&start, 0, 0), start);
     }
     #[test]
     fn adm_playout_indices_filtre_livraison() {
