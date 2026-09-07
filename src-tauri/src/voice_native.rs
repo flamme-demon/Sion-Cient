@@ -523,6 +523,36 @@ fn apply_engine_event(
     }
 }
 
+/// Décode un payload `sion-afk` (base64) et pose l'état sourdine sur
+/// l'expéditeur — miroir de `remoteDeafenState` + `update()` côté JS.
+/// Retourne `true` si la liste doit être réémise. Fonction pure.
+#[cfg(feature = "native-voice")]
+fn apply_afk_state(
+    map: &mut HashMap<String, NativeParticipant>,
+    sender: &str,
+    payload_b64: &str,
+) -> bool {
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(payload_b64) else {
+        return false;
+    };
+    let Ok(raw) = String::from_utf8(bytes) else {
+        return false;
+    };
+    let Ok(data) = decode_json::<AfkPayload>(&raw) else {
+        return false;
+    };
+    upsert_participant(map, sender).is_deafened = data.deafened;
+    log::info!(
+        "[Sion][voix-native] AFK rx {} deafened={}",
+        sender,
+        data.deafened
+    );
+    // On réémet systématiquement : l'expéditeur a pu rejoindre entre-temps
+    // et le front a besoin d'un refresh complet.
+    true
+}
+
 /// Décode un payload `sion-soundboard` (base64) et pose le badge sur
 /// l'expéditeur. Retourne la durée (ms) pour l'expiration. Fonction pure.
 #[cfg(feature = "native-voice")]
@@ -555,6 +585,19 @@ fn spawn_forward_task(
             while let Ok(ev) = rx.blocking_recv() {
                 match &ev {
                     VoiceEngineEvent::DataReceived { topic, payload_b64, sender } => {
+                        if topic.as_deref() == Some(TOPIC_AFK) {
+                            if let Some(sender) = sender {
+                                let changed = {
+                                    let mut map = participants_map()
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    apply_afk_state(&mut map, sender, payload_b64)
+                                };
+                                if changed {
+                                    emit_participants(&app);
+                                }
+                            }
+                        }
                         if topic.as_deref() == Some(TOPIC_SOUNDBOARD) {
                             if let Some(sender) = sender {
                                 let duration = {
@@ -669,6 +712,16 @@ fn connect_engine(
             }));
         }
         store_engine(Some(engine));
+    }
+    // Annonce initiale aux pairs déjà présents (`deafened: false` — le
+    // connect remet toujours à zéro), miroir du `broadcastAfk` au join JS.
+    // Best-effort : un data-channel pas encore prêt ne fait pas échouer le join.
+    if let Err(e) = with_engine(app, "afk initial natif", |e| {
+        let payload = serde_json::to_vec(&AfkPayload { deafened: false })
+            .map_err(|e| e.to_string())?;
+        e.publish_data(TOPIC_AFK, payload)
+    }) {
+        log::warn!("[Sion][voix-native] {}", e);
     }
     Ok(identity)
 }
@@ -939,7 +992,12 @@ pub fn voice_native_set_deafened(
             .unwrap_or(false);
         if connected {
             if let Err(e) = with_engine(&app, "deafen natif", |e| {
-                e.set_deafened(deafened).map(|_| ())
+                e.set_deafened(deafened).map(|_| ())?;
+                // Propager aux pairs (interop JS `broadcastAfk`) : sinon les
+                // autres clients ne voient jamais notre sourdine.
+                let payload = serde_json::to_vec(&AfkPayload { deafened })
+                    .map_err(|e| e.to_string())?;
+                e.publish_data(TOPIC_AFK, payload)
             }) {
                 log::warn!("[Sion][voix-native] {}", e);
                 applied = false;
@@ -1279,6 +1337,34 @@ mod tests {
             assert_eq!(map["@dj:h"].playing_sound_emoji.as_deref(), Some("🥁"));
             // Payload corrompu : pas de badge, pas de panique.
             assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", "!!!"), None);
+        }
+
+        #[test]
+        fn afk_state_mirrors_js_broadcast() {
+            use base64::Engine as _;
+            let enc = |raw: &str| base64::engine::general_purpose::STANDARD.encode(raw);
+            let mut map = empty();
+            // Sourdine distante : flag posé (upsert si join pas encore vu).
+            assert!(apply_afk_state(&mut map, "@p:h", &enc(r#"{"deafened":true}"#)));
+            assert!(map["@p:h"].is_deafened);
+            // Retour : flag retiré.
+            assert!(apply_afk_state(&mut map, "@p:h", &enc(r#"{"deafened":false}"#)));
+            assert!(!map["@p:h"].is_deafened);
+            // Payload JS exact (champ unique, pas d'extra).
+            assert!(apply_afk_state(&mut map, "@q:h", &enc(r#"{"deafened":true}"#)));
+            assert!(map["@q:h"].is_deafened);
+            // Corrompus : pas de changement, pas de panique.
+            assert!(!apply_afk_state(&mut map, "@p:h", "!!!"));
+            assert!(!apply_afk_state(&mut map, "@p:h", &enc("pas du json")));
+            assert!(!apply_afk_state(&mut map, "@p:h", &enc(r#"{"muted":true}"#)));
+            assert!(!map["@p:h"].is_deafened);
+        }
+
+        #[test]
+        fn afk_payload_serializes_like_js() {
+            // Ce que le natif émet doit être lisible par `broadcastAfk` JS.
+            let raw = serde_json::to_string(&AfkPayload { deafened: true }).unwrap();
+            assert_eq!(raw, r#"{"deafened":true}"#);
         }
     }
 }

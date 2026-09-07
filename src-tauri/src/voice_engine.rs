@@ -703,12 +703,14 @@ impl LiveKitEngine {
                                 name: participant.name(),
                             });
                             for publication in publications {
-                                if publication.is_muted() {
-                                    let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
-                                        identity: id.clone(),
-                                        muted: true,
-                                    });
-                                }
+                                // L'état live de la publication fait foi (et pas
+                                // notre cache) : un unpublish+republish (ex. fin
+                                // de sourdine côté JS) ne réémet pas forcément
+                                // de TrackUnmuted, d'où un mute fantôme sinon.
+                                let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
+                                    identity: id.clone(),
+                                    muted: publication.is_muted(),
+                                });
                                 if deafened.load(std::sync::atomic::Ordering::Relaxed) {
                                     if publication.kind() == TrackKind::Audio {
                                         publication.set_subscribed(false);
@@ -760,6 +762,12 @@ impl LiveKitEngine {
                         } else {
                             let sid = publication.sid().to_string();
                             log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, participant.identity());
+                            // Resync : une republication (fin de sourdine
+                            // distante) démarre non-mutée sans TrackUnmuted.
+                            let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
+                                identity: participant.identity().to_string(),
+                                muted: publication.is_muted(),
+                            });
                             let fresh = attached
                                 .lock()
                                 .map(|mut a| a.insert(sid))

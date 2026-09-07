@@ -11,6 +11,7 @@ export function useLiveKit() {
   const cleanupParticipantChange = useRef<(() => void) | null>(null);
   const cleanupNative = useRef<(() => void) | null>(null);
   const cleanupNativeData = useRef<(() => void) | null>(null);
+  const knownNativeIdentities = useRef<Set<string> | null>(null);
 
   const pushThrottled = useCallback((updatedParticipants: typeof participants) => {
     // Throttle store updates to max ~4 per second to avoid choking React renders
@@ -43,7 +44,24 @@ export function useLiveKit() {
     const native = await import("../services/voiceNativeService");
     await native.voiceNativeConnect(url, token, room, displayName);
     storeConnect(room);
+    knownNativeIdentities.current = new Set();
     cleanupNative.current = await native.onVoiceNativeParticipants((updatedParticipants) => {
+      // Rebroadcast AFK aux nouveaux arrivants (miroir du `rebroadcastOnJoin`
+      // JS) : un pair qui rejoint pendant notre sourdine doit l'apprendre.
+      const known = knownNativeIdentities.current;
+      if (known) {
+        const fresh = updatedParticipants.some((p) => !known.has(p.identity));
+        updatedParticipants.forEach((p) => known.add(p.identity));
+        if (fresh) {
+          import("../stores/useAppStore").then(({ useAppStore }) => {
+            if (!useAppStore.getState().isDeafened) return;
+            import("../services/voiceNativeService").then((svc) => {
+              const payload = new TextEncoder().encode(JSON.stringify({ deafened: true }));
+              svc.voiceNativePublishData("sion-afk", svc.bytesToB64(payload)).catch(() => {});
+            }).catch(() => {});
+          }).catch(() => {});
+        }
+      }
       pushThrottled(updatedParticipants);
     });
     // Relais data-channel natif → handlers existants (soundboard…). Miroir du
@@ -85,6 +103,7 @@ export function useLiveKit() {
       throttleRef.current = null;
     }
     pendingUpdate.current = null;
+    knownNativeIdentities.current = null;
     const native = await import("../services/voiceNativeService");
     await native.voiceNativeDisconnect();
     storeDisconnect();
