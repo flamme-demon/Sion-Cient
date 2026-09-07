@@ -390,8 +390,9 @@ const VIDEO_TARGET_BPS: u64 = 2_500_000;
 const VIDEO_Q_MIN: u8 = 75;
 const VIDEO_Q_MAX: u8 = 90;
 /// Paliers de cadence (ms entre frames) : on ne descend que coincé au
-/// plancher qualité, on remonte dès que le budget le permet.
-const VIDEO_TICKS_MS: [u64; 3] = [100, 200, 400];
+/// plancher qualité, on remonte dès que le budget le permet. Base 80 ms
+/// (~12 im/s) : la source LiveKit ne dépasse 15 im/s qu'en preset 30fps.
+const VIDEO_TICKS_MS: [u64; 3] = [80, 160, 320];
 
 /// État du contrôleur : qualité + palier de cadence courants.
 #[derive(Debug, PartialEq, Eq)]
