@@ -510,6 +510,10 @@ fn apply_engine_event(
             upsert_participant(map, identity).is_muted = *muted;
             true
         }
+        VoiceEngineEvent::VideoPresence { sender, sharing } => {
+            upsert_participant(map, sender).is_screen_sharing = *sharing;
+            true
+        }
         VoiceEngineEvent::QualityChanged { identity, quality } => {
             upsert_participant(map, identity).connection_quality =
                 NativeConnectionQuality::from_livekit_str(quality);
@@ -689,6 +693,7 @@ fn connect_engine(
     token: &str,
 ) -> Result<String, String> {
     let mut engine = LiveKitEngine::new()?;
+    engine.set_event_app(app.clone());
     let rx = engine.subscribe();
     spawn_forward_task(app.clone(), rx);
     let identity = engine.connect(url, token)?;
@@ -1312,6 +1317,21 @@ mod tests {
                 &E::QualityChanged { identity: "@a:h".into(), quality: "poor".into() }
             ));
             assert_eq!(map["@a:h"].connection_quality, NativeConnectionQuality::Poor);
+        }
+
+        #[test]
+        fn video_presence_drives_screen_sharing_flag() {
+            let mut map = empty();
+            assert!(apply_engine_event(
+                &mut map,
+                &E::VideoPresence { sender: "@p:h".into(), sharing: true }
+            ));
+            assert!(map["@p:h"].is_screen_sharing);
+            assert!(apply_engine_event(
+                &mut map,
+                &E::VideoPresence { sender: "@p:h".into(), sharing: false }
+            ));
+            assert!(!map["@p:h"].is_screen_sharing);
         }
 
         #[test]

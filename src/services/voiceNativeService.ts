@@ -191,6 +191,38 @@ export async function onVoiceNativeData(
   );
 }
 
+/** JPEG d'une frame de partage d'écran distant (émis ~4 im/s par expéditeur). */
+export const VOICE_NATIVE_FRAME_EVENT = "voice-native-frame";
+/** `{ sender }` — fin de partage (unsubscribe, leave, fin de piste). */
+export const VOICE_NATIVE_FRAME_STOPPED_EVENT = "voice-native-frame-stopped";
+
+export interface VoiceNativeFrame {
+  sender: string;
+  width: number;
+  height: number;
+  jpeg_b64: string;
+}
+
+export interface VoiceNativeFrameStopped {
+  sender: string;
+}
+
+export async function onVoiceNativeFrame(
+  cb: (ev: VoiceNativeFrame) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeFrame>(VOICE_NATIVE_FRAME_EVENT, (e) => cb(e.payload));
+}
+
+export async function onVoiceNativeFrameStopped(
+  cb: (ev: VoiceNativeFrameStopped) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeFrameStopped>(VOICE_NATIVE_FRAME_STOPPED_EVENT, (e) =>
+    cb(e.payload),
+  );
+}
+
 /** Qualité string du natif → type front (même vocabulaire que LiveKit JS). */
 export function toConnectionQuality(q: string): ConnectionQuality {
   switch (q) {

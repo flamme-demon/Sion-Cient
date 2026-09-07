@@ -1,5 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { RemoteTrack } from "livekit-client";
 import { onScreenShareChange, onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, setScreenShareAudioMuted, setScreenShareAudioVolume, getScreenShareAudioState, type ScreenShareInfo, type RemoteCursor, type RemoteCursorClick } from "../../services/livekitService";
+import { getActiveVoiceEngine } from "../../services/voiceNativeService";
+import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useTranslation } from "react-i18next";
 import { SpeakerIcon, ScreenIcon } from "../icons";
 
@@ -77,9 +80,28 @@ function colorForIdentity(identity: string): string {
 
 export function ScreenShareView() {
   const { t } = useTranslation();
+  // Moteur voix actif : en natif il n'y a pas de room JS — les partages
+  // viennent des participants natifs (`isScreenSharing`) et les pixels des
+  // events `voice-native-frame` (JPEG), rendus dans un <img>.
+  const isNative = getActiveVoiceEngine() === "native";
+  const nativeParticipants = useLiveKitStore((s) => s.participants);
+  const nativeShares: ScreenShareInfo[] = useMemo(() => {
+    if (!isNative) return [];
+    return nativeParticipants
+      .filter((p) => p.isScreenSharing)
+      .map((p) => ({
+        track: null as unknown as RemoteTrack,
+        participantIdentity: p.identity,
+        participantName: p.name,
+        // L'audio du partage (piste ScreenshareAudio) passe par le playout
+        // ADM global : pas de contrôle séparé côté natif (MVP).
+        hasAudio: false,
+      }));
+  }, [isNative, nativeParticipants]);
   // All concurrent shares in the channel; `selectedId` is the viewer's pick.
   const [shares, setShares] = useState<ScreenShareInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const activeShares = isNative ? nativeShares : shares;
   const [cursors, setCursors] = useState<RemoteCursor[]>([]);
   const [clicks, setClicks] = useState<RemoteCursorClick[]>([]);
   // Content-area box (inside the video element, after object-contain) in
@@ -97,9 +119,58 @@ export function ScreenShareView() {
 
   // Derive the active share from the viewer's pick, auto-falling back to the
   // first available one when their pick is gone — no effect needed.
-  const activeShare = shares.find((s) => s.participantIdentity === selectedId) ?? shares[0] ?? null;
+  const activeShare = activeShares.find((s) => s.participantIdentity === selectedId) ?? activeShares[0] ?? null;
   const activeTrack = activeShare?.track ?? null;
   const activeIdentity = activeShare?.participantIdentity ?? null;
+
+  // Cache des dernières frames natives (data-URL par expéditeur) + miroir de
+  // l'identité active pour le callback d'événement (abonnement unique).
+  // Mutation directe de `img.src` : pas de re-render React à 4 im/s.
+  const framesRef = useRef(new Map<string, string>());
+  const activeRef = useRef<string | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // Miroir de l'identité active pour le callback d'événement (abonnement
+  // unique) — en effet, pas pendant le rendu.
+  useEffect(() => {
+    activeRef.current = activeIdentity;
+  });
+
+  useEffect(() => {
+    if (!isNative) return;
+    let cancelled = false;
+    let unsubFrame: (() => void) | null = null;
+    let unsubStopped: (() => void) | null = null;
+    import("../../services/voiceNativeService").then((native) => {
+      if (cancelled) return;
+      native.onVoiceNativeFrame((f) => {
+        framesRef.current.set(f.sender, `data:image/jpeg;base64,${f.jpeg_b64}`);
+        if (activeRef.current === f.sender && imgRef.current) {
+          imgRef.current.src = framesRef.current.get(f.sender) ?? "";
+        }
+      }).then((u) => { unsubFrame = u; }).catch(() => {});
+      native.onVoiceNativeFrameStopped((s) => {
+        framesRef.current.delete(s.sender);
+        if (activeRef.current === s.sender && imgRef.current) {
+          imgRef.current.removeAttribute("src");
+        }
+      }).then((u) => { unsubStopped = u; }).catch(() => {});
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      unsubFrame?.();
+      unsubStopped?.();
+    };
+  }, [isNative]);
+
+  // Changement de partage actif : appliquer la frame en cache (ou vide en
+  // attendant la prochaine, ~250 ms max).
+  useEffect(() => {
+    if (!isNative || !imgRef.current) return;
+    const cached = activeIdentity ? framesRef.current.get(activeIdentity) : undefined;
+    if (cached) imgRef.current.src = cached;
+    else imgRef.current.removeAttribute("src");
+  }, [isNative, activeIdentity]);
 
   // Audio control widgets, re-synced from the service when the active share
   // changes (each sharer keeps their own mute/volume). Adjusting state during
@@ -286,12 +357,12 @@ export function ScreenShareView() {
   };
 
   // Carousel navigation between concurrent shares (wraps around).
-  const activeIndex = shares.findIndex((s) => s.participantIdentity === activeIdentity);
+  const activeIndex = activeShares.findIndex((s) => s.participantIdentity === activeIdentity);
   const goToShare = (delta: number) => {
-    if (shares.length < 2) return;
+    if (activeShares.length < 2) return;
     const base = activeIndex < 0 ? 0 : activeIndex;
-    const next = (base + delta + shares.length) % shares.length;
-    setSelectedId(shares[next].participantIdentity);
+    const next = (base + delta + activeShares.length) % activeShares.length;
+    setSelectedId(activeShares[next].participantIdentity);
   };
 
   if (!activeShare) return null;
@@ -308,9 +379,9 @@ export function ScreenShareView() {
     <div className="bg-black flex flex-col items-center border-b border-[var(--color-border)]">
       {/* Tab bar (browser-style) when several peers share at once — full width,
           active tab visually connected to the video below. */}
-      {shares.length > 1 && (
+      {activeShares.length > 1 && (
         <div className="w-full flex" style={{ background: 'var(--color-surface-container-low)' }}>
-          {shares.map((s, i) => {
+          {activeShares.map((s, i) => {
             const isActive = s.participantIdentity === activeIdentity;
             // Reflect this share's audio state: live for the active one,
             // stored for the others. Lets each tab show 🔊 vs 🔇.
@@ -327,7 +398,7 @@ export function ScreenShareView() {
                   color: isActive ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
                   fontWeight: isActive ? 600 : 400,
                   borderBottom: isActive ? '2px solid var(--color-primary)' : '2px solid transparent',
-                  borderRight: i < shares.length - 1 ? '1px solid var(--color-outline-variant)' : 'none',
+                  borderRight: i < activeShares.length - 1 ? '1px solid var(--color-outline-variant)' : 'none',
                 }}
               >
                 <ScreenIcon />
@@ -343,6 +414,22 @@ export function ScreenShareView() {
         </div>
       )}
       <div ref={containerRef} style={{ position: 'relative', width: '100%', maxHeight: '50vh', display: 'flex', justifyContent: 'center' }}>
+        {isNative ? (
+          <img
+            ref={imgRef}
+            alt={activeShare.participantName}
+            className="w-full max-h-[50vh] object-contain"
+            style={{ background: 'black' }}
+            onDoubleClick={(e) => {
+              const el = e.currentTarget;
+              if (document.fullscreenElement === el) {
+                document.exitFullscreen().catch(() => { /* ignore */ });
+              } else {
+                el.requestFullscreen().catch(() => { /* ignore */ });
+              }
+            }}
+          />
+        ) : (
         <video
           ref={videoRef}
           autoPlay
@@ -354,9 +441,10 @@ export function ScreenShareView() {
           disablePictureInPicture
           className="w-full max-h-[50vh] object-contain"
         />
+        )}
         {/* Carousel chevrons — overlaid on the video edges, in addition to the
             top tab bar, for quick prev/next cycling. Only when >1 share. */}
-        {shares.length > 1 && (
+        {activeShares.length > 1 && (
           <>
             <button
               type="button"
@@ -382,7 +470,7 @@ export function ScreenShareView() {
               className="absolute top-2 left-1/2 text-xs px-2 py-0.5 rounded-full"
               style={{ transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.5)', color: 'white', zIndex: 200 }}
             >
-              {activeIndex + 1}/{shares.length}
+              {activeIndex + 1}/{activeShares.length}
             </div>
           </>
         )}

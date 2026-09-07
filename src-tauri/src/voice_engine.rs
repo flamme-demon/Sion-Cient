@@ -19,7 +19,9 @@ use std::sync::Mutex;
 use base64::Engine as _;
 use livekit::prelude::*;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
+use livekit::webrtc::video_stream::native::NativeVideoStream;
 use livekit::options::TrackPublishOptions;
+use tauri::Emitter as _;
 
 use crate::voice_native::{RmsSpeakingDetector, VoiceEngine};
 
@@ -35,6 +37,9 @@ pub enum VoiceEngineEvent {
     TrackMutedChanged { identity: String, muted: bool },
     QualityChanged { identity: String, quality: String },
     DataReceived { topic: Option<String>, payload_b64: String, sender: Option<String> },
+    /// Partage d'écran distant (présence) : le front affiche/masque la vue.
+    /// Les pixels arrivent séparément (`voice-native-frame`, JPEG).
+    VideoPresence { sender: String, sharing: bool },
     RoomDisconnected { reason: String },
     RoomReconnecting,
     RoomReconnected,
@@ -303,6 +308,184 @@ fn spawn_rms_task(
     });
 }
 
+/// Dimensions d'émission d'une frame vidéo : largeur plafonnée à 1280,
+/// dimensions paires (exigées par le scale I420). Fonction pure (testée).
+fn video_emit_dims(width: u32, height: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (0, 0);
+    }
+    let (mut w, mut h) = if width > 1280 {
+        (1280, height.saturating_mul(1280) / width)
+    } else {
+        (width, height)
+    };
+    w &= !1;
+    h &= !1;
+    (w.max(2), h.max(2))
+}
+
+/// I420 (strides arbitraires) → RGB24 entrelacé, BT.601 plage limitée
+/// (c'est ce que WebRTC produit : noir = Y 16, blanc = Y 235). Fonction
+/// pure (testée).
+fn i420_to_rgb(
+    width: u32,
+    height: u32,
+    y: &[u8],
+    u: &[u8],
+    v: &[u8],
+    stride_y: u32,
+    stride_u: u32,
+    stride_v: u32,
+) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let (sy, su, sv) = (stride_y as usize, stride_u as usize, stride_v as usize);
+    let mut rgb = vec![0u8; w * h * 3];
+    for row in 0..h {
+        for col in 0..w {
+            let c = y[row * sy + col] as i32 - 16;
+            let d = u[(row / 2) * su + col / 2] as i32 - 128;
+            let e = v[(row / 2) * sv + col / 2] as i32 - 128;
+            let r = (298 * c + 409 * e + 128) >> 8;
+            let g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+            let b = (298 * c + 516 * d + 128) >> 8;
+            let o = (row * w + col) * 3;
+            rgb[o] = r.clamp(0, 255) as u8;
+            rgb[o + 1] = g.clamp(0, 255) as u8;
+            rgb[o + 2] = b.clamp(0, 255) as u8;
+        }
+    }
+    rgb
+}
+
+/// RGB24 → JPEG (qualité 70 : un 1280x720 d'écran tient ~50-120 Ko).
+fn encode_jpeg_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70)
+        .encode(rgb, width, height, image::ExtendedColorType::Rgb8)
+        .map_err(|e| format!("jpeg: {}", e))?;
+    Ok(out)
+}
+
+/// Pompe vidéo : partage d'écran distant → JPEG ~4 im/s vers le front
+/// (`voice-native-frame`). File "latest" (1 frame) : aucun backlog, le
+/// réseau lent fait juste baisser le débit effectif. Se termine sur `stop`
+/// (unsubscribe, leave, disconnect) ou fin de piste.
+#[allow(clippy::too_many_arguments)]
+fn spawn_video_pump(
+    rt: &tokio::runtime::Handle,
+    app: tauri::AppHandle<crate::TauriRuntime>,
+    sender: String,
+    rtc_track: livekit::webrtc::video_track::RtcVideoTrack,
+    stop: tokio::sync::oneshot::Receiver<()>,
+) {
+    rt.spawn(async move {
+        use futures_util::StreamExt as _;
+        let mut stream = NativeVideoStream::new(rtc_track);
+        log::info!("[Sion][voix-native] partage d'écran reçu de {}", sender);
+        let mut last_emit = tokio::time::Instant::now() - std::time::Duration::from_secs(60);
+        let mut stop = stop;
+        let mut first = true;
+        loop {
+            tokio::select! {
+                _ = &mut stop => break,
+                frame = stream.next() => {
+                    let Some(frame) = frame else { break };
+                    if last_emit.elapsed() < std::time::Duration::from_millis(250) {
+                        continue;
+                    }
+                    let buf = frame.buffer.as_ref();
+                    let (dw, dh) = video_emit_dims(buf.width(), buf.height());
+                    if dw == 0 {
+                        continue;
+                    }
+                    let mut i420 = buf.to_i420();
+                    if dw != buf.width() || dh != buf.height() {
+                        i420 = i420.scale(dw as i32, dh as i32);
+                    }
+                    let (sy, su, sv) = i420.strides();
+                    let (dy, du, dv) = i420.data();
+                    let rgb = i420_to_rgb(dw, dh, dy, du, dv, sy, su, sv);
+                    match encode_jpeg_rgb(dw, dh, &rgb) {
+                        Ok(jpeg) => {
+                            last_emit = tokio::time::Instant::now();
+                            if first {
+                                first = false;
+                                log::info!(
+                                    "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg)",
+                                    sender, buf.width(), buf.height(), dw, dh, jpeg.len()
+                                );
+                            }
+                            use base64::Engine as _;
+                            let _ = app.emit(
+                                "voice-native-frame",
+                                &serde_json::json!({
+                                    "sender": sender,
+                                    "width": dw,
+                                    "height": dh,
+                                    "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
+                                }),
+                            );
+                        }
+                        Err(e) => log::warn!("[Sion][voix-native] frame vidéo {} : {}", sender, e),
+                    }
+                }
+            }
+        }
+        log::info!("[Sion][voix-native] fin de partage {}", sender);
+        let _ = app.emit(
+            "voice-native-frame-stopped",
+            &serde_json::json!({ "sender": sender }),
+        );
+    });
+}
+
+/// Démarre (ou remplace) la pompe vidéo d'un partage d'écran distant.
+/// Fonction libre (pas de `&self`) pour être appelable depuis la pompe
+/// d'événements, qui vit dans une tâche `'static` sans accès au moteur.
+fn start_remote_video_pump(
+    rt: &tokio::runtime::Handle,
+    app: Option<tauri::AppHandle<crate::TauriRuntime>>,
+    video_stops: &std::sync::Arc<
+        Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    >,
+    sender: String,
+    rtc_track: livekit::webrtc::video_track::RtcVideoTrack,
+) {
+    let Some(app) = app else {
+        log::warn!("[Sion][voix-native] partage {} ignoré (pas de AppHandle)", sender);
+        return;
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    if let Some(prev) = video_stops
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(sender.clone(), stop_tx)
+    {
+        let _ = prev.send(());
+    }
+    spawn_video_pump(rt, app, sender, rtc_track, stop_rx);
+}
+
+/// Stoppe la pompe vidéo d'un expéditeur (unsubscribe, leave).
+/// Fonction libre, même raison que `start_remote_video_pump`.
+fn stop_remote_video_pump(
+    video_stops: &std::sync::Arc<
+        Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    >,
+    sender: &str,
+) {
+    let prev = video_stops
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(sender);
+    if prev.is_some() {
+        log::info!("[Sion][voix-native] partage {} arrêté", sender);
+    }
+    if let Some(prev) = prev {
+        let _ = prev.send(());
+    }
+}
+
 pub struct LiveKitEngine {
     rt: tokio::runtime::Runtime,
     room: Mutex<Option<Room>>,
@@ -321,6 +504,13 @@ pub struct LiveKitEngine {
     deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
     attached: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Pompes vidéo (partage d'écran) : un canal stop par expéditeur.
+    /// Clé = identité LiveKit (un partage actif à la fois par pair, MVP).
+    video_stops:
+        std::sync::Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    /// Poignée Tauri pour émettre les frames (`voice-native-frame`) depuis
+    /// les pompes vidéo (le canal broadcast reste réservé aux petits events).
+    event_app: Mutex<Option<tauri::AppHandle<crate::TauriRuntime>>>,
     event_tx: tokio::sync::broadcast::Sender<VoiceEngineEvent>,
 }
 
@@ -344,6 +534,8 @@ impl LiveKitEngine {
             watchdog_stop: Mutex::new(None),
             deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
+            event_app: Mutex::new(None),
             event_tx,
         })
     }
@@ -430,6 +622,37 @@ impl LiveKitEngine {
             .map_err(|e| format!("publish data: {}", e))?;
         log::info!("[Sion][voix-native] data publié topic={} ({} o)", topic, len);
         Ok(())
+    }
+
+    /// Poignée d'émission des frames vidéo (posée par `connect_engine`,
+    /// le `connect` du trait ne reçoit pas le `AppHandle`).
+    pub fn set_event_app(&self, app: tauri::AppHandle<crate::TauriRuntime>) {
+        *self.event_app.lock().unwrap_or_else(|e| e.into_inner()) = Some(app);
+    }
+
+    /// Démarre (ou remplace) la pompe vidéo d'un partage d'écran distant.
+    pub fn track_remote_video(
+        &self,
+        sender: String,
+        rtc_track: livekit::webrtc::video_track::RtcVideoTrack,
+    ) {
+        let app = self
+            .event_app
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        start_remote_video_pump(
+            self.rt.handle(),
+            app,
+            &self.video_stops,
+            sender,
+            rtc_track,
+        );
+    }
+
+    /// Stoppe la pompe vidéo d'un expéditeur (unsubscribe, leave).
+    pub fn stop_remote_video(&self, sender: &str) {
+        stop_remote_video_pump(&self.video_stops, sender);
     }
 
     /// Démarre la mesure du micro local (rond vert) : l'ADM WebRTC ne donnant
@@ -686,6 +909,14 @@ impl LiveKitEngine {
         // quand on est sourdine + ré-accrochage RMS au retour).
         let attached = self.attached.clone();
         let deafened = self.deafened.clone();
+        // Pompe vidéo : handles possédés (la tâche est `'static`, pas de `&self`).
+        let video_stops = self.video_stops.clone();
+        let video_app = self
+            .event_app
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let video_rt = self.rt.handle().clone();
         self.rt.spawn(async move {
             while let Some(ev) = events.recv().await {
                 match ev {
@@ -745,6 +976,7 @@ impl LiveKitEngine {
                     }
                     RoomEvent::ParticipantDisconnected(p) => {
                         let id = p.identity().to_string();
+                        stop_remote_video_pump(&video_stops, &id);
                         let _ = tx.send(VoiceEngineEvent::ParticipantLeft { identity: id });
                     }
                     RoomEvent::TrackSubscribed {
@@ -783,10 +1015,48 @@ impl LiveKitEngine {
                         }
                     }
                     RoomEvent::TrackSubscribed {
-                        track: RemoteTrack::Video(_),
+                        track: RemoteTrack::Video(video_track),
+                        publication,
+                        participant,
                         ..
                     } => {
-                        // Rendu vidéo natif : étape "partage d'écran" du chantier.
+                        let sender = participant.identity().to_string();
+                        if publication.source() == TrackSource::Screenshare {
+                            log::info!(
+                                "[Sion][voix-native] partage d'écran souscrit {} ({})",
+                                publication.sid(),
+                                sender
+                            );
+                            let _ = tx.send(VoiceEngineEvent::VideoPresence {
+                                sender: sender.clone(),
+                                sharing: true,
+                            });
+                            start_remote_video_pump(
+                                &video_rt,
+                                video_app.clone(),
+                                &video_stops,
+                                sender,
+                                video_track.rtc_track(),
+                            );
+                        } else {
+                            log::info!(
+                                "[Sion][voix-native] piste vidéo caméra ignorée {} ({})",
+                                publication.sid(),
+                                sender
+                            );
+                        }
+                    }
+                    RoomEvent::TrackUnsubscribed {
+                        track: RemoteTrack::Video(_),
+                        participant,
+                        ..
+                    } => {
+                        let sender = participant.identity().to_string();
+                        stop_remote_video_pump(&video_stops, &sender);
+                        let _ = tx.send(VoiceEngineEvent::VideoPresence {
+                            sender,
+                            sharing: false,
+                        });
                     }
                     RoomEvent::TrackMuted { participant, .. } => {
                         let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
@@ -865,6 +1135,17 @@ impl VoiceEngine for LiveKitEngine {
         if let Some(room) = room {
             let _ = self.rt.block_on(room.close());
         }
+        // Plus aucune frame : les pompes vidéo meurent via leurs canaux stop
+        // (leurs events `frame-stopped` partent avant la fin de l'ADM).
+        for (_, stop) in self
+            .video_stops
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+        {
+            let _ = stop.send(());
+        }
+        *self.event_app.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // L'ADM se coupe quand le dernier `PlatformAudio` tombe ; le meter
         // local s'arrête quand son canal stop se ferme.
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -923,6 +1204,49 @@ mod tests {
         assert_eq!(push_i16_frame(&mut det, &[]), None);
     }
 
+    #[test]
+    fn video_emit_dims_plafonne_et_pairise() {
+        assert_eq!(video_emit_dims(0, 0), (0, 0));
+        assert_eq!(video_emit_dims(1920, 1080), (1280, 720));
+        assert_eq!(video_emit_dims(1280, 720), (1280, 720));
+        assert_eq!(video_emit_dims(640, 480), (640, 480));
+        // Dimensions impaires → pairisées (I420).
+        assert_eq!(video_emit_dims(641, 481), (640, 480));
+        // Ultrawide : ratio conservé.
+        assert_eq!(video_emit_dims(2560, 1080), (1280, 540));
+    }
+
+    #[test]
+    fn i420_to_rgb_noir_et_blanc() {
+        // 2x2 : Y plein blanc / noir, chroma neutre.
+        let y = vec![235u8, 235, 16, 16];
+        let u = vec![128u8];
+        let v = vec![128u8];
+        let rgb = i420_to_rgb(2, 2, &y, &u, &v, 2, 1, 1);
+        assert_eq!(rgb.len(), 12);
+        // Blanc ≈ 255, noir ≈ 0 (tolérance d'arrondi).
+        assert!(rgb[0] > 240 && rgb[1] > 240 && rgb[2] > 240);
+        assert!(rgb[9] < 16 && rgb[10] < 16 && rgb[11] < 16);
+    }
+
+    #[test]
+    fn i420_to_rgb_respecte_les_strides() {
+        // Stride Y = 4 pour 2 px utiles (padding ignoré).
+        let y = vec![235u8, 235, 0, 0, 16, 16, 0, 0];
+        let u = vec![128u8];
+        let v = vec![128u8];
+        let rgb = i420_to_rgb(2, 2, &y, &u, &v, 4, 1, 1);
+        assert!(rgb[0] > 240);
+        assert!(rgb[9] < 16);
+    }
+
+    #[test]
+    fn jpeg_encode_produit_un_vrai_jpeg() {
+        let rgb = vec![128u8; 8 * 8 * 3];
+        let jpeg = encode_jpeg_rgb(8, 8, &rgb).expect("encode jpeg");
+        assert!(jpeg.len() > 2);
+        assert_eq!(&jpeg[0..2], &[0xFF, 0xD8]);
+    }
     #[test]
     fn adm_playout_indices_filtre_livraison() {
         let fixture = r#"[
@@ -990,7 +1314,8 @@ mod tests {
     }
 
     #[test]
-    fn quality_str_covers_sdk_values() {        assert_eq!(connection_quality_str(&ConnectionQuality::Excellent), "excellent");
+    fn quality_str_covers_sdk_values() {
+        assert_eq!(connection_quality_str(&ConnectionQuality::Excellent), "excellent");
         assert_eq!(connection_quality_str(&ConnectionQuality::Good), "good");
         assert_eq!(connection_quality_str(&ConnectionQuality::Poor), "poor");
         assert_eq!(connection_quality_str(&ConnectionQuality::Lost), "lost");

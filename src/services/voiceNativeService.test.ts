@@ -16,6 +16,8 @@ import {
   onVoiceNativeParticipants,
   onVoiceNativeSpeaking,
   onVoiceNativeData,
+  onVoiceNativeFrame,
+  onVoiceNativeFrameStopped,
   voiceNativePublishData,
   toConnectionQuality,
   selectVoiceEngine,
@@ -166,5 +168,32 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(listenMock).toHaveBeenCalledWith("voice-native-data", expect.any(Function));
     calls[0]({ payload: { topic: "sion-soundboard", payload_b64: "e30=", sender: "@a:b:c" } });
     expect(seen).toEqual([{ topic: "sion-soundboard", payload_b64: "e30=", sender: "@a:b:c" }]);
+  });
+
+  it("onVoiceNativeFrame relaie sender/dimensions/jpeg pour le rendu partage", async () => {
+    const calls: Array<(ev: unknown) => void> = [];
+    listenMock.mockImplementation((_event: unknown, cb: (ev: unknown) => void) => {
+      calls.push(cb);
+      return Promise.resolve(() => {});
+    });
+    const seen: unknown[] = [];
+    await onVoiceNativeFrame((ev) => seen.push(ev));
+    expect(listenMock).toHaveBeenCalledWith("voice-native-frame", expect.any(Function));
+    const frame = { sender: "@p:h", width: 1280, height: 720, jpeg_b64: "e30=" };
+    calls[0]({ payload: frame });
+    expect(seen).toEqual([frame]);
+  });
+
+  it("onVoiceNativeFrameStopped relaie le sender pour masquer le partage", async () => {
+    const calls: Array<(ev: unknown) => void> = [];
+    listenMock.mockImplementation((_event: unknown, cb: (ev: unknown) => void) => {
+      calls.push(cb);
+      return Promise.resolve(() => {});
+    });
+    const seen: unknown[] = [];
+    await onVoiceNativeFrameStopped((ev) => seen.push(ev));
+    expect(listenMock).toHaveBeenCalledWith("voice-native-frame-stopped", expect.any(Function));
+    calls[0]({ payload: { sender: "@p:h" } });
+    expect(seen).toEqual([{ sender: "@p:h" }]);
   });
 });
