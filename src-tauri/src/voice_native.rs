@@ -386,6 +386,32 @@ fn take_engine() -> Option<LiveKitEngine> {
         .take()
 }
 
+/// Sort le moteur du holder, en patientant brièvement s'il est emprunté par
+/// une autre commande : les commandes Tauri tournent en concurrence (ex. le
+/// curseur publie à 60 Hz) et un `take` immédiat rendait `None` par collision.
+/// Sans attente, l'appelant déclarait la session morte (`drop_dead_session`
+/// vide la liste des participants) alors que le moteur revenait une
+/// milliseconde plus tard — d'où des participants / partages qui
+/// "disparaissent" mystérieusement au survol, sans jamais revenir pour les
+/// silencieux (pas d'event pour les recréer). Seule une absence durable
+/// (≈100 ms) vaut mort de session.
+#[cfg(feature = "native-voice")]
+fn take_engine_wait() -> Option<LiveKitEngine> {
+    for attempt in 0..10 {
+        if let Some(engine) = take_engine() {
+            if attempt > 0 {
+                log::debug!(
+                    "[Sion][voix-native] moteur récupéré après {} tentative(s)",
+                    attempt + 1
+                );
+            }
+            return Some(engine);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    None
+}
+
 /// Repose un moteur (éventuellement None) dans le holder.
 #[cfg(feature = "native-voice")]
 fn store_engine(engine: Option<LiveKitEngine>) {
@@ -394,9 +420,10 @@ fn store_engine(engine: Option<LiveKitEngine>) {
         .unwrap_or_else(|e| e.into_inner()) = engine;
 }
 
-/// Session locale réinitialisée quand le moteur a disparu (jamais créé,
-/// déjà pris par une autre commande) : pas de fantôme, le front repart
-/// d'un état propre.
+/// Session locale réinitialisée quand le moteur a durablement disparu
+/// (jamais créé, ou perdu après panique) : pas de fantôme, le front repart
+/// d'un état propre. N'est atteint qu'après `take_engine_wait` — jamais sur
+/// une simple collision entre commandes.
 #[cfg(feature = "native-voice")]
 fn drop_dead_session(app: &tauri::AppHandle<TauriRuntime>) {
     store_engine(None);
@@ -425,7 +452,7 @@ fn with_engine<R>(
     label: &str,
     op: impl FnOnce(&mut LiveKitEngine) -> Result<R, String>,
 ) -> Result<R, String> {
-    let mut slot = take_engine();
+    let mut slot = take_engine_wait();
     let res = match slot.as_mut() {
         Some(engine) => {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(engine))) {
@@ -1137,6 +1164,17 @@ mod tests {
         let inner = manager().lock().unwrap();
         assert_eq!(inner.state, VoiceConnectionState::Disconnected);
         assert!(inner.room_name.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "native-voice")]
+    fn take_engine_wait_sans_moteur_rend_none() {
+        // Holder vide (aucun test ne stocke de moteur réel) : ~100 ms de
+        // retries puis None, sans panique — le cas "toggle sans session".
+        // Surtout : pas de reset sauvage ici, juste None (l'appelant décide).
+        let t0 = std::time::Instant::now();
+        assert!(take_engine_wait().is_none());
+        assert!(t0.elapsed().as_millis() >= 50);
     }
 
     #[test]

@@ -449,9 +449,14 @@ fn spawn_video_pump(
         // backlog) ; `pending` = encodage en cours (un seul à la fois).
         let mut latest: Option<livekit::webrtc::video_frame::BoxVideoFrame> = None;
         // Encodage en cours (un seul à la fois) : (échantillons Y, dims
-        // source, JPEG émis ou None si image strictement inchangée).
+        // source, JPEG émis ou None si image strictement inchangée, avec
+        // temps conversion et encodage en ms pour le diagnostic).
         let mut pending: Option<
-            tokio::task::JoinHandle<(Vec<u8>, (u32, u32), Option<(Vec<u8>, u32, u32, u128)>)>,
+            tokio::task::JoinHandle<(
+                Vec<u8>,
+                (u32, u32),
+                Option<(Vec<u8>, u32, u32, u128, u128)>,
+            )>,
         > = None;
         let mut prev_samples: Vec<u8> = Vec::new();
         let mut budget = VideoBudget { quality: 86, tick_step: 0 };
@@ -460,6 +465,7 @@ fn spawn_video_pump(
         let mut first = true;
         let mut stat_count: u64 = 0;
         let mut stat_bytes: u64 = 0;
+        let mut stat_conv_ms: u128 = 0;
         let mut stat_enc_ms: u128 = 0;
         let mut stat_since = tokio::time::Instant::now();
         loop {
@@ -478,7 +484,7 @@ fn spawn_video_pump(
                                     prev_samples = samples;
                                     // Image inchangée (emitted = None) : on
                                     // garde simplement l'affichée.
-                                    if let Some((jpeg, dw, dh, enc_ms)) = emitted {
+                                    if let Some((jpeg, dw, dh, conv_ms, enc_ms)) = emitted {
                                         let now = tokio::time::Instant::now();
                                         window.push_back((now, jpeg.len()));
                                         while window.front().is_some_and(|(t, _)| now.duration_since(*t).as_secs() >= 2) {
@@ -495,27 +501,30 @@ fn spawn_video_pump(
                                         stat_count += 1;
                                         stat_bytes += jpeg.len() as u64;
                                         stat_enc_ms += enc_ms;
+                                        stat_conv_ms += conv_ms;
                                         if first {
                                             first = false;
                                             log::info!(
-                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{}, enc {}ms)",
-                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality, enc_ms
+                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{}, conv {}ms enc {}ms)",
+                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality, conv_ms, enc_ms
                                             );
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, enc {}ms",
+                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms",
                                                 sender,
                                                 stat_count as f64 / secs,
                                                 budget.quality,
                                                 VIDEO_TICKS_MS[budget.tick_step],
                                                 "ms",
                                                 stat_bytes as f64 / secs / 1024.0,
+                                                stat_conv_ms / stat_count.max(1) as u128,
                                                 stat_enc_ms / stat_count.max(1) as u128
                                             );
                                             stat_count = 0;
                                             stat_bytes = 0;
+                                            stat_conv_ms = 0;
                                             stat_enc_ms = 0;
                                             stat_since = tokio::time::Instant::now();
                                         }
@@ -561,9 +570,10 @@ fn spawn_video_pump(
                             let (dy, du, dv) = i420.data();
                             let t0 = std::time::Instant::now();
                             let rgb = i420_to_rgb(dw, dh, dy, du, dv, sy, su, sv);
+                            let conv_ms = t0.elapsed().as_millis();
                             let emitted = encode_jpeg_rgb(dw, dh, &rgb, q)
                                 .ok()
-                                .map(|jpeg| (jpeg, dw, dh, t0.elapsed().as_millis()));
+                                .map(|jpeg| (jpeg, dw, dh, conv_ms, t0.elapsed().as_millis()));
                             (samples, (sw, sh), emitted)
                         }));
                     }
