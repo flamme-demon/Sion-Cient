@@ -99,6 +99,13 @@ export function voiceNativePublishData(topic: string, payloadB64: string, reliab
   return tauriInvoke<void>("voice_native_publish_data", { topic, payloadB64, reliable });
 }
 
+/** Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
+ *  toggle 🔊 JS). Retourne `true` si une piste `ScreenshareAudio` existe.
+ *  Pas de volume par piste côté natif : le slider reste JS-only. */
+export function setVoiceNativeShareAudioMuted(sender: string, muted: boolean): Promise<boolean> {
+  return tauriInvoke<boolean>("voice_native_set_screenshare_audio_muted", { sender, muted });
+}
+
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);

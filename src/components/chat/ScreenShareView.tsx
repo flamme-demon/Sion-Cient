@@ -94,9 +94,9 @@ export function ScreenShareView() {
         track: null as unknown as RemoteTrack,
         participantIdentity: p.identity,
         participantName: p.name,
-        // L'audio du partage (piste ScreenshareAudio) passe par le playout
-        // ADM global : pas de contrôle séparé côté natif (MVP).
-        hasAudio: false,
+        // Présence fournie par le moteur natif (piste ScreenshareAudio) ;
+        // le mute passe par `voice_native_set_screenshare_audio_muted`.
+        hasAudio: p.isScreenSharingAudio ?? false,
       }));
   }, [isNative, nativeParticipants]);
   // All concurrent shares in the channel; `selectedId` is the viewer's pick.
@@ -388,6 +388,20 @@ export function ScreenShareView() {
     if (!activeIdentity) return;
     const next = !audioMuted;
     setAudioCtl((c) => ({ ...c, muted: next }));
+    // Chemin natif : pas d'éléments <audio> JS — la (dés)inscription de la
+    // piste ScreenshareAudio passe par le moteur Rust. L'état local
+    // (`screenShareAudioMuted`) reste la source de vérité pour les icônes.
+    if (isNative) {
+      import("../../services/voiceNativeService").then(({ setVoiceNativeShareAudioMuted }) => {
+        setVoiceNativeShareAudioMuted(activeIdentity, next).catch(() => {
+          // Moteur injoignable : on ne ment pas à l'UI, on annule le toggle.
+          setAudioCtl((c) => ({ ...c, muted: !next }));
+        });
+      }).catch(() => {
+        setAudioCtl((c) => ({ ...c, muted: !next }));
+      });
+      return;
+    }
     setScreenShareAudioMuted(activeIdentity, next);
   };
 
@@ -629,6 +643,9 @@ export function ScreenShareView() {
             >
               {audioMuted ? <SpeakerMutedIcon /> : <SpeakerIcon />}
             </button>
+            {/* Pas de volume par piste côté natif (pas de gain SFU) : le
+                slider reste JS-only, le mute suffit. */}
+            {!isNative && (
             <input
               type="range"
               min={0}
@@ -640,6 +657,7 @@ export function ScreenShareView() {
               className="screenshare-volume-slider"
               style={{ width: 72 }}
             />
+            )}
           </span>
         )}
         <span style={{ opacity: 0.6 }}>

@@ -42,6 +42,10 @@ pub enum VoiceEngineEvent {
     /// Partage d'écran distant (présence) : le front affiche/masque la vue.
     /// Les pixels arrivent séparément (`voice-native-frame`, JPEG).
     VideoPresence { sender: String, sharing: bool },
+    /// Le partage d'écran distant publie aussi du son (piste
+    /// `ScreenshareAudio`) : le front affiche le contrôle 🔊/🔇.
+    /// Indépendant du mute local (voir `set_screenshare_audio_subscribed`).
+    ShareAudioPresence { sender: String, has_audio: bool },
     RoomDisconnected { reason: String },
     RoomReconnecting,
     RoomReconnected,
@@ -666,6 +670,10 @@ pub struct LiveKitEngine {
     deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
     attached: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Expéditeurs dont le son du partage est coupé localement (miroir du
+    /// `screenShareAudioMuted` JS) : survivre au undeafen global (qui
+    /// réinscrit tout) sans réactiver leur partage.
+    share_audio_muted: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
     /// Pompes vidéo (partage d'écran) : un canal stop par expéditeur.
     /// Clé = identité LiveKit (un partage actif à la fois par pair, MVP).
     video_stops:
@@ -696,6 +704,7 @@ impl LiveKitEngine {
             watchdog_stop: Mutex::new(None),
             deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            share_audio_muted: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             event_app: Mutex::new(None),
             event_tx,
@@ -1030,29 +1039,39 @@ impl LiveKitEngine {
                 .unwrap_or_default();
         }
         let mut touched = 0;
+        // Sons de partage coupés localement : le undeafen global ne doit pas
+        // les réactiver (miroir du `screenShareAudioMuted` JS).
+        let share_muted = self
+            .share_audio_muted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         for participant in room.remote_participants().values() {            let identity = participant.identity().to_string();
             for publication in participant.track_publications().values() {
                 if publication.kind() != TrackKind::Audio {
                     continue;
                 }
-                publication.set_subscribed(!deafened);
+                let is_share_audio = publication.source() == TrackSource::ScreenshareAudio;
+                let want = !deafened && !(is_share_audio && share_muted.contains(&identity));
+                publication.set_subscribed(want);
                 touched += 1;
-                if !deafened {
-                    if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
-                        let sid = publication.sid().to_string();
-                        let fresh = self
-                            .attached
-                            .lock()
-                            .map(|mut a| a.insert(sid))
-                            .unwrap_or(false);
-                        if fresh {
-                            spawn_rms_task(
-                                self.rt.handle(),
-                                &self.event_tx,
-                                identity.clone(),
-                                audio_track.rtc_track(),
-                            );
-                        }
+                if !want {
+                    continue;
+                }
+                if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
+                    let sid = publication.sid().to_string();
+                    let fresh = self
+                        .attached
+                        .lock()
+                        .map(|mut a| a.insert(sid))
+                        .unwrap_or(false);
+                    if fresh {
+                        spawn_rms_task(
+                            self.rt.handle(),
+                            &self.event_tx,
+                            identity.clone(),
+                            audio_track.rtc_track(),
+                        );
                     }
                 }
             }
@@ -1062,6 +1081,84 @@ impl LiveKitEngine {
             ensure_playout_unmuted();
         }
         Ok(touched)
+    }
+
+    /// Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
+    /// toggle 🔊 JS), sans toucher aux voix. Retourne `true` si une piste
+    /// `ScreenshareAudio` de cet expéditeur existe (false = pas de son
+    /// partagé, le front masque le contrôle).
+    pub fn set_screenshare_audio_subscribed(
+        &self,
+        sender: &str,
+        subscribed: bool,
+    ) -> Result<bool, String> {
+        // Même exigence de contexte Tokio que `set_deafened`.
+        let _rt_enter = self.rt.enter();
+        if subscribed {
+            self.share_audio_muted
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(sender);
+        } else {
+            self.share_audio_muted
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(sender.to_string());
+        }
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(room) = room_guard.as_ref() else {
+            return Ok(false);
+        };
+        let mut found = false;
+        for participant in room.remote_participants().values() {
+            if participant.identity().as_str() != sender {
+                continue;
+            }
+            for publication in participant.track_publications().values() {
+                if publication.kind() != TrackKind::Audio
+                    || publication.source() != TrackSource::ScreenshareAudio
+                {
+                    continue;
+                }
+                found = true;
+                // Le RMS est ré-accroché explicitement (pas via l'event, qui
+                // peut tarder) ; `attached` purgé du sid pour éviter le
+                // doublon quand l'event arrivera.
+                let sid = publication.sid().to_string();
+                self.attached
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(sid.as_str());
+                publication.set_subscribed(subscribed);
+                if subscribed {
+                    if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
+                        let fresh = self
+                            .attached
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(sid);
+                        if fresh {
+                            spawn_rms_task(
+                                self.rt.handle(),
+                                &self.event_tx,
+                                sender.to_string(),
+                                audio_track.rtc_track(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        log::info!(
+            "[Sion][voix-native] son du partage {} : {}",
+            sender,
+            if found {
+                if subscribed { "rétabli" } else { "coupé" }
+            } else {
+                "aucune piste ScreenshareAudio"
+            }
+        );
+        Ok(found)
     }
 
     fn spawn_event_pump(
@@ -1074,6 +1171,9 @@ impl LiveKitEngine {
         // quand on est sourdine + ré-accrochage RMS au retour).
         let attached = self.attached.clone();
         let deafened = self.deafened.clone();
+        // Son du partage coupé localement : une (ré)inscription SFU ne doit
+        // pas le réactiver toute seule (voir `set_deafened`).
+        let share_audio_muted = self.share_audio_muted.clone();
         // Pompe vidéo : handles possédés (la tâche est `'static`, pas de `&self`).
         let video_stops = self.video_stops.clone();
         let video_app = self
@@ -1107,6 +1207,16 @@ impl LiveKitEngine {
                                     identity: id.clone(),
                                     muted: publication.is_muted(),
                                 });
+                                // Présence du son de partage pour les pistes
+                                // déjà là (le front affiche le contrôle 🔊).
+                                if publication.kind() == TrackKind::Audio
+                                    && publication.source() == TrackSource::ScreenshareAudio
+                                {
+                                    let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
+                                        sender: id.clone(),
+                                        has_audio: true,
+                                    });
+                                }
                                 if deafened.load(std::sync::atomic::Ordering::Relaxed) {
                                     if publication.kind() == TrackKind::Audio {
                                         publication.set_subscribed(false);
@@ -1148,6 +1258,10 @@ impl LiveKitEngine {
                         let id = p.identity().to_string();
                         log::info!("[Sion][voix-native] participant parti {}", id);
                         stop_remote_video_pump(&video_stops, &id);
+                        share_audio_muted
+                            .lock()
+                            .map(|mut m| m.remove(id.as_str()))
+                            .unwrap_or(false);
                         let _ = tx.send(VoiceEngineEvent::ParticipantLeft { identity: id });
                     }
                     RoomEvent::TrackPublished { publication, participant } => {
@@ -1166,6 +1280,16 @@ impl LiveKitEngine {
                             publication.sid(),
                             participant.identity()
                         );
+                        // Son du partage retiré côté émetteur : masquer le
+                        // contrôle 🔊 (pas de réinscription possible).
+                        if publication.kind() == TrackKind::Audio
+                            && publication.source() == TrackSource::ScreenshareAudio
+                        {
+                            let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
+                                sender: participant.identity().to_string(),
+                                has_audio: false,
+                            });
+                        }
                     }
                     RoomEvent::TrackSubscribed {
                         track: RemoteTrack::Audio(audio_track),
@@ -1181,24 +1305,45 @@ impl LiveKitEngine {
                             publication.set_subscribed(false);
                         } else {
                             let sid = publication.sid().to_string();
-                            log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, participant.identity());
-                            // Resync : une republication (fin de sourdine
-                            // distante) démarre non-mutée sans TrackUnmuted.
-                            let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
-                                identity: participant.identity().to_string(),
-                                muted: publication.is_muted(),
-                            });
-                            let fresh = attached
-                                .lock()
-                                .map(|mut a| a.insert(sid))
-                                .unwrap_or(false);
-                            if fresh {
-                                spawn_rms_task(
-                                    &rt_handle,
-                                    &tx,
-                                    participant.identity().to_string(),
-                                    audio_track.rtc_track(),
-                                );
+                            let sender = participant.identity().to_string();
+                            let is_share_audio = publication.source() == TrackSource::ScreenshareAudio;
+                            if is_share_audio {
+                                log::info!("[Sion][voix-native] piste audio de partage souscrite {} ({})", sid, sender);
+                                let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
+                                    sender: sender.clone(),
+                                    has_audio: true,
+                                });
+                            } else {
+                                log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, sender);
+                            }
+                            // Son du partage coupé localement : on ne le
+                            // réactive pas tout seul (voir commande).
+                            let share_still_muted = is_share_audio
+                                && share_audio_muted
+                                    .lock()
+                                    .map(|m| m.contains(sender.as_str()))
+                                    .unwrap_or(false);
+                            if share_still_muted {
+                                publication.set_subscribed(false);
+                            } else {
+                                // Resync : une republication (fin de sourdine
+                                // distante) démarre non-mutée sans TrackUnmuted.
+                                let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
+                                    identity: sender.clone(),
+                                    muted: publication.is_muted(),
+                                });
+                                let fresh = attached
+                                    .lock()
+                                    .map(|mut a| a.insert(sid))
+                                    .unwrap_or(false);
+                                if fresh {
+                                    spawn_rms_task(
+                                        &rt_handle,
+                                        &tx,
+                                        sender,
+                                        audio_track.rtc_track(),
+                                    );
+                                }
                             }
                         }
                     }
@@ -1265,6 +1410,27 @@ impl LiveKitEngine {
                             sharing: false,
                         });
                     }
+                    RoomEvent::TrackUnsubscribed {
+                        track: RemoteTrack::Audio(audio_track),
+                        publication,
+                        participant,
+                        ..
+                    } => {
+                        // Seul le son du partage intéresse le front (l'icône
+                        // 🔊) ; les voix se contentent de la fin de piste RMS.
+                        if publication.source() == TrackSource::ScreenshareAudio {
+                            let sender = participant.identity().to_string();
+                            log::info!(
+                                "[Sion][voix-native] son du partage désinscrit {} ({})",
+                                audio_track.sid(),
+                                sender
+                            );
+                            let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
+                                sender,
+                                has_audio: false,
+                            });
+                        }
+                    }
                     RoomEvent::TrackMuted { participant, .. } => {
                         let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
                             identity: participant.identity().to_string(),
@@ -1328,6 +1494,10 @@ impl VoiceEngine for LiveKitEngine {
             .lock()
             .map(|mut a| a.clear())
             .unwrap_or_default();
+        self.share_audio_muted
+            .lock()
+            .map(|mut m| m.clear())
+            .unwrap_or_default();
         self.spawn_event_pump(events);
         *self.room.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
         // Le démute one-shot au publish ne suffit pas (l'ADM se remute
@@ -1359,6 +1529,10 @@ impl VoiceEngine for LiveKitEngine {
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.watchdog_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.share_audio_muted
+            .lock()
+            .map(|mut m| m.clear())
+            .unwrap_or_default();
         self.deafened
             .store(false, std::sync::atomic::Ordering::Relaxed);
     }

@@ -12,6 +12,9 @@ export interface ParticipantInfo {
   isSpeaking: boolean;
   isMuted: boolean;
   isScreenSharing: boolean;
+  /** The sharer also publishes screen audio (`ScreenshareAudio track).
+   *  Drives the 🔊/🔇 control. Undefined (JS path without share) = no audio. */
+  isScreenSharingAudio?: boolean;
   /** Remote participant has explicitly toggled deafen ("AFK"); broadcast via LiveKit metadata. */
   isDeafened: boolean;
   audioLevel: number;

@@ -203,6 +203,10 @@ pub struct NativeParticipant {
     pub is_muted: bool,
     #[serde(default)]
     pub is_screen_sharing: bool,
+    /// L'expéditeur publie aussi le son de son partage (`ScreenshareAudio`).
+    /// Affiche le contrôle 🔊/🔇 (coupure locale uniquement).
+    #[serde(default)]
+    pub is_screen_sharing_audio: bool,
     #[serde(default)]
     pub is_deafened: bool,
     #[serde(default)]
@@ -225,6 +229,7 @@ impl NativeParticipant {
             is_speaking: false,
             is_muted: false,
             is_screen_sharing: false,
+            is_screen_sharing_audio: false,
             is_deafened: false,
             audio_level: 0.0,
             connection_quality: NativeConnectionQuality::Unknown,
@@ -539,6 +544,10 @@ fn apply_engine_event(
         }
         VoiceEngineEvent::VideoPresence { sender, sharing } => {
             upsert_participant(map, sender).is_screen_sharing = *sharing;
+            true
+        }
+        VoiceEngineEvent::ShareAudioPresence { sender, has_audio } => {
+            upsert_participant(map, sender).is_screen_sharing_audio = *has_audio;
             true
         }
         VoiceEngineEvent::QualityChanged { identity, quality } => {
@@ -1048,6 +1057,29 @@ pub fn voice_native_set_deafened(
     status
 }
 
+/// Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
+/// toggle 🔊 JS : `setScreenShareAudioMuted`). Retourne `true` si une piste
+/// `ScreenshareAudio` existe (false = pas de son partagé). Pas de volume
+/// par piste côté natif (pas de gain SFU) : le slider reste JS-only.
+#[tauri::command]
+pub fn voice_native_set_screenshare_audio_muted(
+    app: tauri::AppHandle<TauriRuntime>,
+    sender: String,
+    muted: bool,
+) -> Result<bool, String> {
+    #[cfg(feature = "native-voice")]
+    {
+        return with_engine(&app, "son du partage natif", |e| {
+            e.set_screenshare_audio_subscribed(&sender, !muted)
+        });
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&app, &sender, &muted);
+        Err("voix native indisponible".to_string())
+    }
+}
+
 /// Envoie un paquet data-channel sur la session native (soundboard, AFK,
 /// curseurs…). Payload base64 (binaire arbitraire). Miroir de `publishData`
 /// JS — `reliable: false` pour le curseur (60 Hz, la perte se répare toute
@@ -1377,6 +1409,23 @@ mod tests {
                 &E::VideoPresence { sender: "@p:h".into(), sharing: false }
             ));
             assert!(!map["@p:h"].is_screen_sharing);
+        }
+
+        #[test]
+        fn share_audio_presence_drives_speaker_flag() {
+            let mut map = empty();
+            // Indépendant du flag vidéo : le son peut arriver sans l'image.
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ShareAudioPresence { sender: "@p:h".into(), has_audio: true }
+            ));
+            assert!(map["@p:h"].is_screen_sharing_audio);
+            assert!(!map["@p:h"].is_screen_sharing);
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ShareAudioPresence { sender: "@p:h".into(), has_audio: false }
+            ));
+            assert!(!map["@p:h"].is_screen_sharing_audio);
         }
 
         #[test]

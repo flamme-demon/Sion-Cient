@@ -18,6 +18,7 @@ import {
   onVoiceNativeData,
   onVoiceNativeFrame,
   onVoiceNativeFrameStopped,
+  setVoiceNativeShareAudioMuted,
   voiceNativePublishData,
   toConnectionQuality,
   selectVoiceEngine,
@@ -202,5 +203,16 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(listenMock).toHaveBeenCalledWith("voice-native-frame-stopped", expect.any(Function));
     calls[0]({ payload: { sender: "@p:h" } });
     expect(seen).toEqual([{ sender: "@p:h" }]);
+  });
+
+  it("setVoiceNativeShareAudioMuted transmet sender + muted (retour = piste trouvée ?)", async () => {
+    invokeMock.mockResolvedValue(true);
+    await expect(setVoiceNativeShareAudioMuted("@p:h", true)).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screenshare_audio_muted", {
+      sender: "@p:h",
+      muted: true,
+    });
+    invokeMock.mockResolvedValue(false);
+    await expect(setVoiceNativeShareAudioMuted("@p:h", false)).resolves.toBe(false);
   });
 });
