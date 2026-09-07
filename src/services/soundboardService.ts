@@ -581,13 +581,12 @@ export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs:
     gain,
   }));
   // Chemin natif (chantier no-CEF) : pas de room JS, on passe par le moteur
-  // Rust (`voice_native_publish_data`, reliable comme ici).
+  // Rust (`voice_native_publish_data`, reliable comme ici). Le badge local
+  // est posé côté Rust (commande `voice_native_publish_data`) car la liste
+  // des participants affichée vient du moteur, pas de `setPlayingSound`.
   if (!room) {
-    import("./voiceNativeService").then(({ getActiveVoiceEngine, getVoiceNativeStatus, voiceNativePublishData, bytesToB64 }) => {
+    import("./voiceNativeService").then(({ getActiveVoiceEngine, voiceNativePublishData, bytesToB64 }) => {
       if (getActiveVoiceEngine() !== "native") return;
-      getVoiceNativeStatus().then((st) => {
-        if (st.identity) setPlayingSound(st.identity, resolvedEmoji, resolvedDuration);
-      }).catch(() => {});
       voiceNativePublishData(AFK_LIKE_TOPIC, bytesToB64(payload)).catch((err) => {
         console.warn("[Sion] soundboard broadcast natif failed:", err);
       });

@@ -610,6 +610,43 @@ fn apply_soundboard_badge(
     Some(data.duration)
 }
 
+/// Pose le badge et programme son expiration, miroir du timer JS de
+/// `setPlayingSound`. Partagé par la réception distante et l'envoi local
+/// (le data-channel ne revient pas vers l'expéditeur : sans ça, on ne voit
+/// jamais son propre badge quand on déclenche un son).
+#[cfg(feature = "native-voice")]
+fn show_soundboard_badge(
+    app: &tauri::AppHandle<TauriRuntime>,
+    sender: &str,
+    payload_b64: &str,
+) {
+    let duration = {
+        let mut map = participants_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        apply_soundboard_badge(&mut map, sender, payload_b64)
+    };
+    emit_participants(app);
+    if let Some(ms) = duration {
+        let app2 = app.clone();
+        let sender2 = sender.to_string();
+        std::thread::Builder::new()
+            .name("sion-voice-badge".into())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                {
+                    let mut map = participants_map()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if let Some(p) = map.get_mut(&sender2) {
+                        p.playing_sound_emoji = None;
+                    }
+                }
+                emit_participants(&app2);
+            })
+            .ok();
+    }
+}
 /// Pompe d'événements moteur → front sur thread dédié (pas besoin du runtime
 /// Tokio ici : `blocking_recv`). Se termine quand le moteur est droppé
 /// (canal fermé) — pas de fuite entre deux sessions.
@@ -643,35 +680,7 @@ fn spawn_forward_task(
                         }
                         if topic.as_deref() == Some(TOPIC_SOUNDBOARD) {
                             if let Some(sender) = sender {
-                                let duration = {
-                                    let mut map = participants_map()
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner());
-                                    apply_soundboard_badge(&mut map, sender, payload_b64)
-                                };
-                                emit_participants(&app);
-                                // Expiration du badge, miroir du timer JS de setPlayingSound.
-                                if let Some(ms) = duration {
-                                    let app2 = app.clone();
-                                    let sender2 = sender.clone();
-                                    std::thread::Builder::new()
-                                        .name("sion-voice-badge".into())
-                                        .spawn(move || {
-                                            std::thread::sleep(std::time::Duration::from_millis(
-                                                ms,
-                                            ));
-                                            {
-                                                let mut map = participants_map()
-                                                    .lock()
-                                                    .unwrap_or_else(|e| e.into_inner());
-                                                if let Some(p) = map.get_mut(&sender2) {
-                                                    p.playing_sound_emoji = None;
-                                                }
-                                            }
-                                            emit_participants(&app2);
-                                        })
-                                        .ok();
-                                }
+                                show_soundboard_badge(&app, sender, payload_b64);
                             }
                         }
                         // Relais générique pour les futurs dispatchers front
@@ -1105,9 +1114,23 @@ pub fn voice_native_publish_data(
             .decode(&payload_b64)
             .map_err(|e| format!("payload base64: {}", e))?;
         let reliable = reliable.unwrap_or(true);
-        return with_engine(&app, "publish data natif", |e| {
+        let res = with_engine(&app, "publish data natif", |e| {
             e.publish_data(&topic, payload, reliable)
         });
+        // Badge local (miroir du `setPlayingSound` sur soi-même côté JS) :
+        // le data-channel ne revient pas vers l'expéditeur, sans ça on ne
+        // voit jamais son propre badge quand on déclenche un son.
+        if res.is_ok() && topic == TOPIC_SOUNDBOARD {
+            let identity = manager()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .identity
+                .clone();
+            if let Some(identity) = identity {
+                show_soundboard_badge(&app, &identity, &payload_b64);
+            }
+        }
+        return res;
     }
     #[allow(unreachable_code)]
     {
@@ -1458,6 +1481,17 @@ mod tests {
             assert_eq!(map["@dj:h"].playing_sound_emoji.as_deref(), Some("🥁"));
             // Payload corrompu : pas de badge, pas de panique.
             assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", "!!!"), None);
+        }
+
+        #[test]
+        fn data_topics_match_js_constants() {
+            // Garde-fou d'interopérabilité : ces topics doivent rester
+            // identiques à `livekitService.ts` / `soundboardService.ts`.
+            assert_eq!(TOPIC_AFK, "sion-afk");
+            assert_eq!(TOPIC_SOUNDBOARD, "sion-soundboard");
+            assert_eq!(TOPIC_CURSOR, "sion-cursor");
+            assert_eq!(TOPIC_CURSOR_CLICK, "sion-cursor-click");
+            assert_eq!(TOPIC_TRANSCRIBE_ARM, "sion-transcribe-arm");
         }
 
         #[test]
