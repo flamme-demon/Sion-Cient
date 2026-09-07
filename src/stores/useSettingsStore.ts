@@ -5,6 +5,10 @@ export type ChannelSortMode = "created" | "name" | "activity";
 export type SidebarView = "channels" | "dm";
 export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
 export type NotificationMode = "all" | "mentions" | "minimal";
+/** Moteur voix : "js" = livekit-client dans la webview (défaut, stable),
+ *  "native" = Room LiveKit en Rust hors webview (chantier suppression CEF,
+ *  expérimental — build avec --features native-voice requis). */
+export type VoiceEngineChoice = "js" | "native";
 
 // join/leave/timeout are gated by the `voiceChannelSounds` toggle; poke/kick/
 // memberKicked are user-event notifications that always play; mute/unmute/
@@ -49,6 +53,7 @@ interface SettingsState {
   linkPreviews: boolean;
   audioInputDevice: string;
   audioOutputDevice: string;
+  voiceEngine: VoiceEngineChoice;
   /** Optional path to an ffmpeg executable, used to transcode videos whose
    *  codec CEF can't play natively (e.g. H.264 on the minimal CEF build,
    *  notably Windows). Empty = use `ffmpeg` from PATH. */
@@ -140,6 +145,7 @@ interface SettingsState {
   setTtsEnginePath: (v: string) => void;
   setTtsModel: (v: string) => void;
   setAudioOutputDevice: (v: string) => void;
+  setVoiceEngine: (v: VoiceEngineChoice) => void;
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
   setEnableGifs: (v: boolean) => void;
@@ -188,6 +194,9 @@ export const useSettingsStore = create<SettingsState>()(
       ttsEnginePath: "",
       ttsModel: "chatterbox",
       audioOutputDevice: "",
+      // "js" par défaut : comportement inchangé. Le natif s'active
+      // explicitement (et exige un build --features native-voice).
+      voiceEngine: "js" as VoiceEngineChoice,
       defaultChannel: "",
       autoJoinVoice: false,
       enableGifs: false,
@@ -243,6 +252,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTtsEnginePath: (v) => set({ ttsEnginePath: v.trim() }),
       setTtsModel: (v) => set({ ttsModel: v }),
       setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
+      setVoiceEngine: (v) => set({ voiceEngine: v }),
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),

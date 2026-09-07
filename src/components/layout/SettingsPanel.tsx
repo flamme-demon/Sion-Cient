@@ -44,6 +44,7 @@ export function SettingsPanel() {
   const aiNoiseSuppressionMix = useSettingsStore((s) => s.aiNoiseSuppressionMix);
   const setAiNoiseSuppressionMix = useSettingsStore((s) => s.setAiNoiseSuppressionMix);
   const audioQuality = useSettingsStore((s) => s.audioQuality);
+  const voiceEngine = useSettingsStore((s) => s.voiceEngine);
   const setMutedSpeakAlert = useSettingsStore((s) => s.setMutedSpeakAlert);
   const setMicThreshold = useSettingsStore((s) => s.setMicThreshold);
   const setJoinMuted = useSettingsStore((s) => s.setJoinMuted);
@@ -108,6 +109,7 @@ export function SettingsPanel() {
   const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
   const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
+  const setVoiceEngine = useSettingsStore((s) => s.setVoiceEngine);
   const audioInputDevice = useSettingsStore((s) => s.audioInputDevice);
   const audioOutputDevice = useSettingsStore((s) => s.audioOutputDevice);
   const setAudioInputDevice = useSettingsStore((s) => s.setAudioInputDevice);
@@ -675,6 +677,16 @@ export function SettingsPanel() {
                 <option value="voiceHD">{t("settings.audioQualityVoiceHD")}</option>
                 <option value="musicStereo">{t("settings.audioQualityMusicStereo")}</option>
               </select>
+            </div>
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.voiceEngine")}</div>
+              <select value={voiceEngine} onChange={(e) => { const v = e.target.value as import("../../stores/useSettingsStore").VoiceEngineChoice; setVoiceEngine(v); }} style={selectStyle}>
+                <option value="js">{t("settings.voiceEngineJs")}</option>
+                <option value="native">{t("settings.voiceEngineNative")}</option>
+              </select>
+              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 4 }}>
+                {t("settings.voiceEngineDesc")}
+              </div>
             </div>
           </div>
         </>)}

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as livekitService from "../services/livekitService";
+import * as voiceNativeService from "../services/voiceNativeService";
 import * as matrixService from "../services/matrixService";
 import { playMuteCue, playUnmuteCue, playDeafenCue, playUndeafenCue } from "../services/voiceChannelSounds";
 
@@ -172,7 +173,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     // debounced and a failure is purely cosmetic for those other clients.
     matrixService.publishLocalVoiceState({ muted: newMuted });
     try {
-      await livekitService.toggleMicrophone(!newMuted);
+      if (voiceNativeService.getActiveVoiceEngine() === "native") {
+        await voiceNativeService.setVoiceNativeMuted(newMuted);
+      } else {
+        await livekitService.toggleMicrophone(!newMuted);
+      }
     } catch (err) {
       console.error("[Sion] Failed to toggle microphone:", err);
     }
@@ -183,7 +188,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isDeafened: newDeafened });
     if (newDeafened) playDeafenCue();
     else playUndeafenCue();
-    livekitService.setDeafened(newDeafened);
+    if (voiceNativeService.getActiveVoiceEngine() === "native") {
+      // Coupure du playout distant non branchée (étape "deafen natif") —
+      // l'état est suivi, le micro est coupé via toggleMute ci-dessous.
+      voiceNativeService.setVoiceNativeDeafened(newDeafened).catch((err) => {
+        console.error("[Sion] Failed to set native deafen:", err);
+      });
+    } else {
+      livekitService.setDeafened(newDeafened);
+    }
     matrixService.publishLocalVoiceState({ deafened: newDeafened });
     // Deafen also mutes the mic — silently, so only the deafen cue plays.
     if (newDeafened && !get().isMuted) {
@@ -192,6 +205,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   toggleScreenShare: async () => {
     const newSharing = !get().isScreenSharing;
+    if (voiceNativeService.getActiveVoiceEngine() === "native") {
+      console.warn("[Sion][voix-native] partage d'écran non branché en natif — étape dédiée du chantier.");
+      return;
+    }
     set({ isScreenSharing: newSharing });
     try {
       await livekitService.toggleScreenShare(newSharing);

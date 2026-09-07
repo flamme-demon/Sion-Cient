@@ -2,28 +2,24 @@
 //!
 //! Aujourd'hui la voix passe par `livekit-client` (JS) dans la webview, ce qui
 //! impose CEF sur Linux desktop (WebKitGTK n'expose pas `RTCPeerConnection`).
-//! Ce module est la fondation du chemin natif : la `Room` LiveKit vivra ici
-//! (crate `livekit`, étape suivante) et la webview ne fera plus que l'UI.
+//! Ce module porte le chemin natif : la `Room` LiveKit vit dans
+//! [`crate::voice_engine`] (feature `native-voice`, crate `livekit`) et la
+//! webview ne fait plus que l'UI.
 //!
-//! Contenu de cette étape (aucun trafic SFU réel — le chemin JS reste le
-//! défaut) :
 //! - [`VoiceConnectionState`] : machine d'états de la session native.
 //! - [`RmsSpeakingDetector`] : portage fidèle de `speakingDetector.ts`
-//!   (seuils RMS 0.0018/0.0008 + hystérésis) appliqué aux frames PCM reçues
-//!   via `NativeAudioStream` — remplace le rond vert Web Audio.
+//!   (seuils RMS 0.0018/0.0008 + hystérésis).
 //! - [`NativeParticipant`] : miroir de `ParticipantInfo` (front) + mapping
 //!   des qualités de connexion.
 //! - Codecs des payloads data-channel **partagés avec le JS** (`sion-afk`,
 //!   `sion-soundboard`, `sion-cursor`, `sion-cursor-click`,
-//!   `sion-transcribe-arm`) pour rester interopérable avec les clients JS
-//!   pendant la migration.
-//! - [`validate_e2ee_key`] : les clés MatrixRTC brutes font 32 octets
-//!   (importées comme clés HKDF côté JS dans `matrixRTCE2EE.ts`) — garde-fou
-//!   avant le pont E2EE natif (prochaine étape).
+//!   `sion-transcribe-arm`) pour rester interopérable pendant la migration.
+//! - [`validate_e2ee_key`] : les clés MatrixRTC brutes font 32 octets —
+//!   garde-fou avant le pont E2EE natif.
 //!
-//! Le branchement réel (`Room::connect`, publish/subscribe, `PlatformAudio`)
-//! arrive derrière le trait [`VoiceEngine`] : les commandes Tauri ci-dessous
-//! ne gèrent pour l'instant que l'état + les événements front.
+//! Les commandes Tauri ci-dessous pilotent le moteur (quand compilé) et
+//! relaient participants/statut au front. Sans la feature, `connect` renvoie
+//! une erreur explicite et le chemin JS reste le défaut.
 
 // Étape 1 : fondations. Les API publiques ci-dessous (détecteur RMS,
 // participants, codecs) seront consommées par le moteur LiveKit à l'étape 2 ;
@@ -358,7 +354,228 @@ pub trait VoiceEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Commandes Tauri (phase 1 : état + événements, pas de trafic SFU)
+// Registre participants + relais d'événements moteur → front
+// (feature `native-voice` : sans elle, les commandes restent en mode état
+// seul et `connect` renvoie une erreur explicite)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "native-voice")]
+use base64::Engine as _;
+#[cfg(feature = "native-voice")]
+use std::collections::HashMap;
+#[cfg(feature = "native-voice")]
+use crate::voice_engine::{LiveKitEngine, VoiceEngineEvent};
+
+/// Moteur SFU natif (feature `native-voice` uniquement).
+#[cfg(feature = "native-voice")]
+static ENGINE: OnceLock<Mutex<Option<LiveKitEngine>>> = OnceLock::new();
+
+#[cfg(feature = "native-voice")]
+fn engine_holder() -> &'static Mutex<Option<LiveKitEngine>> {
+    ENGINE.get_or_init(|| Mutex::new(None))
+}
+
+/// Registre des participants natifs : le front consomme la liste complète
+/// (comme `getParticipants()` côté JS), pas des deltas.
+#[cfg(feature = "native-voice")]
+static PARTICIPANTS: OnceLock<Mutex<HashMap<String, NativeParticipant>>> = OnceLock::new();
+
+#[cfg(feature = "native-voice")]
+fn participants_map() -> &'static Mutex<HashMap<String, NativeParticipant>> {
+    PARTICIPANTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(feature = "native-voice")]
+fn emit_participants(app: &tauri::AppHandle<TauriRuntime>) {
+    let mut list: Vec<NativeParticipant> = participants_map()
+        .lock()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    list.sort_by(|a, b| a.identity.cmp(&b.identity));
+    let _ = app.emit("voice-native-participants", &list);
+}
+
+#[cfg(feature = "native-voice")]
+fn upsert_participant<'a>(
+    map: &'a mut HashMap<String, NativeParticipant>,
+    identity: &str,
+) -> &'a mut NativeParticipant {
+    // Upsert défensif : un event (mute, parole, qualité) peut précéder le
+    // join en cas de race — le nom réel arrive avec ParticipantJoined.
+    map.entry(identity.to_string())
+        .or_insert_with(|| NativeParticipant::new(identity, identity))
+}
+
+/// Applique un événement moteur au registre. Retourne `true` si la liste
+/// doit être réémise. Fonction pure (testable sans Tauri).
+#[cfg(feature = "native-voice")]
+fn apply_engine_event(
+    map: &mut HashMap<String, NativeParticipant>,
+    ev: &VoiceEngineEvent,
+) -> bool {
+    match ev {
+        VoiceEngineEvent::ParticipantJoined { identity, name } => {
+            let p = upsert_participant(map, identity);
+            p.name = name.clone();
+            true
+        }
+        VoiceEngineEvent::ParticipantLeft { identity } => map.remove(identity).is_some(),
+        VoiceEngineEvent::SpeakingChanged { identity, speaking } => {
+            upsert_participant(map, identity).is_speaking = *speaking;
+            true
+        }
+        VoiceEngineEvent::TrackMutedChanged { identity, muted } => {
+            upsert_participant(map, identity).is_muted = *muted;
+            true
+        }
+        VoiceEngineEvent::QualityChanged { identity, quality } => {
+            upsert_participant(map, identity).connection_quality =
+                NativeConnectionQuality::from_livekit_str(quality);
+            true
+        }
+        // Badge soundboard + statuts room gérés par l'appelant (AppHandle).
+        VoiceEngineEvent::DataReceived { .. }
+        | VoiceEngineEvent::RoomDisconnected { .. }
+        | VoiceEngineEvent::RoomReconnecting
+        | VoiceEngineEvent::RoomReconnected => false,
+    }
+}
+
+/// Décode un payload `sion-soundboard` (base64) et pose le badge sur
+/// l'expéditeur. Retourne la durée (ms) pour l'expiration. Fonction pure.
+#[cfg(feature = "native-voice")]
+fn apply_soundboard_badge(
+    map: &mut HashMap<String, NativeParticipant>,
+    sender: &str,
+    payload_b64: &str,
+) -> Option<u64> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload_b64)
+        .ok()?;
+    let raw = String::from_utf8(bytes).ok()?;
+    let data: SoundboardPayload = decode_json(&raw).ok()?;
+    upsert_participant(map, sender).playing_sound_emoji = Some(data.emoji.clone());
+    Some(data.duration)
+}
+
+/// Pompe d'événements moteur → front sur thread dédié (pas besoin du runtime
+/// Tokio ici : `blocking_recv`). Se termine quand le moteur est droppé
+/// (canal fermé) — pas de fuite entre deux sessions.
+#[cfg(feature = "native-voice")]
+fn spawn_forward_task(
+    app: tauri::AppHandle<TauriRuntime>,
+    rx: tokio::sync::broadcast::Receiver<VoiceEngineEvent>,
+) {
+    std::thread::Builder::new()
+        .name("sion-voice-events".into())
+        .spawn(move || {
+            let mut rx = rx;
+            while let Ok(ev) = rx.blocking_recv() {
+                match &ev {
+                    VoiceEngineEvent::DataReceived { topic, payload_b64, sender } => {
+                        if topic.as_deref() == Some(TOPIC_SOUNDBOARD) {
+                            if let Some(sender) = sender {
+                                let duration = {
+                                    let mut map = participants_map()
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    apply_soundboard_badge(&mut map, sender, payload_b64)
+                                };
+                                emit_participants(&app);
+                                // Expiration du badge, miroir du timer JS de setPlayingSound.
+                                if let Some(ms) = duration {
+                                    let app2 = app.clone();
+                                    let sender2 = sender.clone();
+                                    std::thread::Builder::new()
+                                        .name("sion-voice-badge".into())
+                                        .spawn(move || {
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                ms,
+                                            ));
+                                            {
+                                                let mut map = participants_map()
+                                                    .lock()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                if let Some(p) = map.get_mut(&sender2) {
+                                                    p.playing_sound_emoji = None;
+                                                }
+                                            }
+                                            emit_participants(&app2);
+                                        })
+                                        .ok();
+                                }
+                            }
+                        }
+                        // Relais générique pour les futurs dispatchers front
+                        // (AFK, curseurs, transcribe-arm).
+                        let _ = app.emit("voice-native-data", &ev);
+                    }
+                    VoiceEngineEvent::RoomDisconnected { .. } => {
+                        let mut inner =
+                            manager().lock().unwrap_or_else(|e| e.into_inner());
+                        inner.state = VoiceConnectionState::Disconnected;
+                        inner.identity = None;
+                        let status = snapshot(&inner);
+                        emit_status(&app, &status);
+                    }
+                    VoiceEngineEvent::RoomReconnecting => {
+                        let mut inner =
+                            manager().lock().unwrap_or_else(|e| e.into_inner());
+                        inner.state = VoiceConnectionState::Reconnecting;
+                        let status = snapshot(&inner);
+                        emit_status(&app, &status);
+                    }
+                    VoiceEngineEvent::RoomReconnected => {
+                        let mut inner =
+                            manager().lock().unwrap_or_else(|e| e.into_inner());
+                        inner.state = VoiceConnectionState::Connected;
+                        let status = snapshot(&inner);
+                        emit_status(&app, &status);
+                    }
+                    other => {
+                        let changed = {
+                            let mut map = participants_map()
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            apply_engine_event(&mut map, other)
+                        };
+                        if changed {
+                            emit_participants(&app);
+                        }
+                        if matches!(other, VoiceEngineEvent::SpeakingChanged { .. }) {
+                            let _ = app.emit("voice-native-speaking", other);
+                        }
+                    }
+                }
+            }
+        })
+        .ok();
+}
+
+/// Ouvre la session SFU native + publie le micro. Le récepteur d'événements
+/// est branché AVANT `connect` pour ne rater aucun event précoce.
+#[cfg(feature = "native-voice")]
+fn connect_engine(
+    app: &tauri::AppHandle<TauriRuntime>,
+    url: &str,
+    token: &str,
+) -> Result<String, String> {
+    let mut engine = LiveKitEngine::new()?;
+    let rx = engine.subscribe();
+    spawn_forward_task(app.clone(), rx);
+    let identity = engine.connect(url, token)?;
+    if let Err(e) = engine.publish_microphone() {
+        engine.disconnect();
+        return Err(e);
+    }
+    *engine_holder()
+        .lock()
+        .map_err(|e| e.to_string())? = Some(engine);
+    Ok(identity)
+}
+
+// ---------------------------------------------------------------------------
+// Commandes Tauri
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -367,9 +584,9 @@ pub fn voice_native_status() -> VoiceNativeStatus {
     snapshot(&inner)
 }
 
-/// Arme la session native. Valide les paramètres et passe en `Connecting` ;
-/// la connexion SFU réelle (`Room::connect`) est l'étape suivante du
-/// chantier — le chemin JS reste le défaut d'ici là.
+/// Ouvre la session vocale native : `Connecting`, puis `Room::connect` +
+/// publish micro (feature `native-voice`). Sans la feature, erreur explicite
+/// (le chemin JS reste le défaut).
 #[tauri::command]
 pub fn voice_native_connect(
     app: tauri::AppHandle<TauriRuntime>,
@@ -383,20 +600,66 @@ pub fn voice_native_connect(
     if token.trim().is_empty() {
         return Err("Token LiveKit vide".into());
     }
-    let mut inner = manager().lock().map_err(|e| e.to_string())?;
-    if inner.state != VoiceConnectionState::Disconnected {
-        return Err(format!("Session déjà active ({:?})", inner.state));
+    {
+        let mut inner = manager().lock().map_err(|e| e.to_string())?;
+        if inner.state != VoiceConnectionState::Disconnected {
+            return Err(format!("Session déjà active ({:?})", inner.state));
+        }
+        inner.state = VoiceConnectionState::Connecting;
+        inner.room_name = Some(room_name);
+        inner.identity = None;
+        emit_status(&app, &snapshot(&inner));
     }
-    inner.state = VoiceConnectionState::Connecting;
-    inner.room_name = Some(room_name);
-    inner.identity = None;
-    let status = snapshot(&inner);
-    emit_status(&app, &status);
-    Ok(status)
+
+    #[cfg(not(feature = "native-voice"))]
+    {
+        let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
+        inner.state = VoiceConnectionState::Disconnected;
+        inner.room_name = None;
+        let status = snapshot(&inner);
+        emit_status(&app, &status);
+        return Err("Voix native non compilée : relancer avec --features native-voice (cf. build-scripts/run-native.sh)".into());
+    }
+
+    #[cfg(feature = "native-voice")]
+    match connect_engine(&app, &url, &token) {
+        Ok(identity) => {
+            let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
+            inner.state = VoiceConnectionState::Connected;
+            inner.identity = Some(identity);
+            let status = snapshot(&inner);
+            emit_status(&app, &status);
+            Ok(status)
+        }
+        Err(e) => {
+            let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
+            inner.state = VoiceConnectionState::Disconnected;
+            inner.room_name = None;
+            let status = snapshot(&inner);
+            emit_status(&app, &status);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 pub fn voice_native_disconnect(app: tauri::AppHandle<TauriRuntime>) -> VoiceNativeStatus {
+    #[cfg(feature = "native-voice")]
+    {
+        if let Some(holder) = ENGINE.get() {
+            if let Ok(mut guard) = holder.lock() {
+                if let Some(mut engine) = guard.take() {
+                    engine.disconnect();
+                }
+            }
+        }
+        participants_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let empty: Vec<NativeParticipant> = Vec::new();
+        let _ = app.emit("voice-native-participants", &empty);
+    }
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
     inner.state = VoiceConnectionState::Disconnected;
     inner.room_name = None;
@@ -411,8 +674,32 @@ pub fn voice_native_set_muted(
     app: tauri::AppHandle<TauriRuntime>,
     muted: bool,
 ) -> VoiceNativeStatus {
+    // Ne pas mentir au front : si le moteur refuse, on garde l'état précédent.
+    let mut applied = true;
+    #[cfg(feature = "native-voice")]
+    {
+        if let Some(holder) = ENGINE.get() {
+            let connected = holder
+                .lock()
+                .map(|g| g.as_ref().map(|e| e.is_connected()).unwrap_or(false))
+                .unwrap_or(false);
+            if connected {
+                let res = holder.lock().map_err(|e| e.to_string()).and_then(|g| {
+                    g.as_ref()
+                        .ok_or_else(|| "moteur natif absent".to_string())
+                        .and_then(|e| e.set_microphone_enabled(!muted))
+                });
+                if let Err(e) = res {
+                    log::warn!("[Sion][voix-native] mute natif impossible: {}", e);
+                    applied = false;
+                }
+            }
+        }
+    }
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
-    inner.muted = muted;
+    if applied {
+        inner.muted = muted;
+    }
     let status = snapshot(&inner);
     emit_status(&app, &status);
     status
@@ -423,6 +710,9 @@ pub fn voice_native_set_deafened(
     app: tauri::AppHandle<TauriRuntime>,
     deafened: bool,
 ) -> VoiceNativeStatus {
+    // État seul pour l'instant : couper le playout distant (set_subscribed)
+    // arrive avec l'étape "deafen natif" — le sourdine micro, elle, est
+    // immédiate via set_muted.
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
     inner.deafened = deafened;
     let status = snapshot(&inner);
@@ -593,8 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn participant_mirror_serializes_like_ts() {
-        let mut p = NativeParticipant::new("@flamme:sionchat.fr:XYZ", "flamme");
+    fn participant_mirror_serializes_like_ts() {        let mut p = NativeParticipant::new("@flamme:sionchat.fr:XYZ", "flamme");
         p.is_speaking = true;
         p.connection_quality = NativeConnectionQuality::Excellent;
         p.playing_sound_emoji = Some("🥁".into());
@@ -605,5 +894,90 @@ mod tests {
         // camelCase imposé par le front : serde rename_all.
         let back: NativeParticipant = decode_json(&raw).unwrap();
         assert_eq!(back.name, "flamme");
+    }
+
+    /// Câblage registre ↔ événements moteur (feature `native-voice`).
+    #[cfg(feature = "native-voice")]
+    mod engine_wiring {
+        use super::super::*;
+        use crate::voice_engine::VoiceEngineEvent as E;
+        use std::collections::HashMap;
+
+        fn empty() -> HashMap<String, NativeParticipant> {
+            HashMap::new()
+        }
+
+        #[test]
+        fn join_leave_maintain_the_list() {
+            let mut map = empty();
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ParticipantJoined { identity: "@b:h".into(), name: "b".into() }
+            ));
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ParticipantJoined { identity: "@a:h".into(), name: "a".into() }
+            ));
+            assert_eq!(map.len(), 2);
+            assert_eq!(map["@a:h"].name, "a");
+            // Re-join : met à jour le nom, pas de doublon.
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ParticipantJoined { identity: "@a:h".into(), name: "a2".into() }
+            ));
+            assert_eq!(map.len(), 2);
+            assert_eq!(map["@a:h"].name, "a2");
+            assert!(apply_engine_event(&mut map, &E::ParticipantLeft { identity: "@a:h".into() }));
+            assert_eq!(map.len(), 1);
+            // Leave inconnu : pas de changement, pas d'émission.
+            assert!(!apply_engine_event(&mut map, &E::ParticipantLeft { identity: "@z:h".into() }));
+        }
+
+        #[test]
+        fn speaking_mute_quality_update_flags() {
+            let mut map = empty();
+            assert!(apply_engine_event(
+                &mut map,
+                &E::SpeakingChanged { identity: "@a:h".into(), speaking: true }
+            ));
+            // Upsert défensif : le participant existe même si le join n'est
+            // pas encore arrivé.
+            assert!(map["@a:h"].is_speaking);
+            assert!(apply_engine_event(
+                &mut map,
+                &E::TrackMutedChanged { identity: "@a:h".into(), muted: true }
+            ));
+            assert!(map["@a:h"].is_muted);
+            assert!(apply_engine_event(
+                &mut map,
+                &E::QualityChanged { identity: "@a:h".into(), quality: "poor".into() }
+            ));
+            assert_eq!(map["@a:h"].connection_quality, NativeConnectionQuality::Poor);
+        }
+
+        #[test]
+        fn room_status_events_do_not_touch_the_list() {
+            let mut map = empty();
+            assert!(!apply_engine_event(&mut map, &E::RoomReconnecting));
+            assert!(!apply_engine_event(&mut map, &E::RoomReconnected));
+            assert!(!apply_engine_event(
+                &mut map,
+                &E::RoomDisconnected { reason: "x".into() }
+            ));
+            assert!(map.is_empty());
+        }
+
+        #[test]
+        fn soundboard_badge_decodes_js_payload() {
+            use base64::Engine as _;
+            let mut map = empty();
+            let payload = base64::engine::general_purpose::STANDARD.encode(
+                r#"{"mxc":"mxc://h/s","emoji":"🥁","duration":2500,"gain":1.5}"#,
+            );
+            assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", &payload), Some(2500));
+            assert_eq!(map["@dj:h"].playing_sound_emoji.as_deref(), Some("🥁"));
+            // Payload corrompu : pas de badge, pas de panique.
+            assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", "!!!"), None);
+        }
     }
 }

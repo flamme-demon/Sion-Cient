@@ -10,6 +10,7 @@ import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMem
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
 import { getCurrentRoom, setReemitKeysCallback } from "../services/livekitService";
+import { selectVoiceEngine, isVoiceNativeAvailable, setActiveVoiceEngine, getActiveVoiceEngine } from "../services/voiceNativeService";
 import { RoomEvent } from "livekit-client";
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
@@ -178,7 +179,7 @@ export async function republishVoicePresence(): Promise<boolean> {
 
 export function useVoiceChannel() {
   const { joinRoom } = useMatrix();
-  const { connect, disconnect, connected, participants } = useLiveKit();
+  const { connect, disconnect, connectNative, disconnectNative, connected, participants } = useLiveKit();
   const setConnectedVoice = useAppStore((s) => s.setConnectedVoice);
   const disconnectVoice = useAppStore((s) => s.disconnectVoice);
   const credentials = useAuthStore((s) => s.credentials);
@@ -192,9 +193,14 @@ export function useVoiceChannel() {
     if (!currentChannel) return;
 
     await cleanupActiveSession();
-    await disconnect();
+    if (getActiveVoiceEngine() === "native") {
+      await disconnectNative();
+    } else {
+      await disconnect();
+    }
+    setActiveVoiceEngine(null);
     disconnectVoice();
-  }, [disconnect, disconnectVoice]);
+  }, [disconnect, disconnectNative, disconnectVoice]);
 
   const joinVoiceChannel = useCallback(
     async (matrixRoomId: string) => {
@@ -336,7 +342,27 @@ export function useVoiceChannel() {
           }
 
           await joinRoom(matrixRoomId);
-          await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
+
+          // Moteur voix : natif (Rust, chantier no-CEF) si demandé dans les
+          // settings, sinon JS (livekit-client, défaut stable).
+          const useNative =
+            selectVoiceEngine(
+              useSettingsStore.getState().voiceEngine,
+              isVoiceNativeAvailable(),
+            ) === "native";
+          if (useNative) {
+            const encryptedHere = client.getRoom(matrixRoomId)?.hasEncryptionStateEvent() ?? false;
+            if (encryptedHere) {
+              console.warn(
+                "[Sion][voix-native] salon chiffré : le pont E2EE natif n'est pas encore branché — l'audio distant restera muet jusqu'à l'étape E2EE.",
+              );
+            }
+            setActiveVoiceEngine("native");
+            await connectNative(rtcResult.url, rtcResult.token, matrixRoomId);
+          } else {
+            setActiveVoiceEngine("js");
+            await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
+          }
 
           // Four complementary reemit triggers. The EncryptionManager may not
           // have been ready when the first to-device key arrived, and the
@@ -347,7 +373,10 @@ export function useVoiceChannel() {
           //   3. On-demand from livekitService — MissingKey error observed
           //      (exponential backoff, replaces the old 15 s × 5 fixed timer)
           //   4. Bounded post-join burst       — see below
-          if (activeRTCSession && activeKeyProvider) {
+          // (chemin JS uniquement : en natif il n'y a pas de Room JS sur
+          // laquelle attacher ces listeners — le pont E2EE natif arrive à
+          // l'étape suivante du chantier).
+          if (activeRTCSession && activeKeyProvider && getActiveVoiceEngine() !== "native") {
             const lkRoom = getCurrentRoom();
             const rtcSession = activeRTCSession;
             if (lkRoom) {
@@ -422,7 +451,18 @@ export function useVoiceChannel() {
       );
 
       await joinRoom(matrixRoomId);
-      await connect(credentials.livekitUrl, token, matrixRoomId);
+      if (
+        selectVoiceEngine(
+          useSettingsStore.getState().voiceEngine,
+          isVoiceNativeAvailable(),
+        ) === "native"
+      ) {
+        setActiveVoiceEngine("native");
+        await connectNative(credentials.livekitUrl, token, matrixRoomId);
+      } else {
+        setActiveVoiceEngine("js");
+        await connect(credentials.livekitUrl, token, matrixRoomId);
+      }
       setConnectedVoice(matrixRoomId);
       useAppStore.getState().setConnectingVoice(null);
       connectingStartedAt = 0;
@@ -451,23 +491,29 @@ export function useVoiceChannel() {
             console.warn("[Sion] cleanupActiveSession after join failure also failed:", cleanupErr);
           }
         }
+        setActiveVoiceEngine(null);
         useAppStore.getState().setConnectingVoice(null);
         connectingStartedAt = 0;
         connectingRoomId = null;
         throw err;
       }
     },
-    [joinRoom, connect, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],
+    [joinRoom, connect, connectNative, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],
   );
 
   const leaveVoiceChannel = useCallback(
     async (_matrixRoomId: string) => {
       stopVoiceService();
       await cleanupActiveSession();
-      await disconnect();
+      if (getActiveVoiceEngine() === "native") {
+        await disconnectNative();
+      } else {
+        await disconnect();
+      }
+      setActiveVoiceEngine(null);
       disconnectVoice();
     },
-    [disconnect, disconnectVoice],
+    [disconnect, disconnectNative, disconnectVoice],
   );
 
   return {

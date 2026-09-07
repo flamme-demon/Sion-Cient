@@ -16,6 +16,10 @@ import {
   onVoiceNativeParticipants,
   onVoiceNativeSpeaking,
   toConnectionQuality,
+  selectVoiceEngine,
+  b64ToBytes,
+  getActiveVoiceEngine,
+  setActiveVoiceEngine,
   VOICE_NATIVE_STATUS_EVENT,
   VOICE_NATIVE_PARTICIPANTS_EVENT,
   VOICE_NATIVE_SPEAKING_EVENT,
@@ -98,5 +102,28 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(toConnectionQuality("excellent")).toBe("excellent");
     expect(toConnectionQuality("poor")).toBe("poor");
     expect(toConnectionQuality("n'importe quoi")).toBe("unknown");
+  });
+
+  it("selectVoiceEngine : natif seulement si demandé ET disponible", () => {
+    expect(selectVoiceEngine("native", true)).toBe("native");
+    expect(selectVoiceEngine("native", false)).toBe("js");
+    expect(selectVoiceEngine("js", true)).toBe("js");
+    expect(selectVoiceEngine("n'importe quoi", true)).toBe("js");
+  });
+
+  it("le tracker de moteur actif pilote les toggles (défaut null = JS)", () => {
+    setActiveVoiceEngine(null);
+    expect(getActiveVoiceEngine()).toBeNull();
+    setActiveVoiceEngine("native");
+    expect(getActiveVoiceEngine()).toBe("native");
+    setActiveVoiceEngine("js");
+    expect(getActiveVoiceEngine()).toBe("js");
+    setActiveVoiceEngine(null);
+  });
+
+  it("b64ToBytes décode les payloads data-channel natifs", () => {
+    // '{"deafened":true}' en base64.
+    const bytes = b64ToBytes("eyJkZWFmZW5lZCI6dHJ1ZX0=");
+    expect(new TextDecoder().decode(bytes)).toBe('{"deafened":true}');
   });
 });

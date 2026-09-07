@@ -9,27 +9,42 @@ export function useLiveKit() {
   const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingUpdate = useRef<typeof participants | null>(null);
   const cleanupParticipantChange = useRef<(() => void) | null>(null);
+  const cleanupNative = useRef<(() => void) | null>(null);
 
-  const connect = useCallback(async (url: string, token: string, room: string, e2eeKeyProvider?: BaseKeyProvider) => {
-    const lkRoom = await livekitService.connectToRoom(url, token, e2eeKeyProvider);
+  const pushThrottled = useCallback((updatedParticipants: typeof participants) => {
+    // Throttle store updates to max ~4 per second to avoid choking React renders
+    pendingUpdate.current = updatedParticipants;
+    if (!throttleRef.current) {
+      throttleRef.current = setTimeout(() => {
+        throttleRef.current = null;
+        if (pendingUpdate.current) {
+          setParticipants(pendingUpdate.current);
+          pendingUpdate.current = null;
+        }
+      }, 250);
+    }
+  }, [setParticipants]);
+
+  const connect = useCallback(async (url: string, token: string, room: string, e2eeKeyProvider?: BaseKeyProvider) => {    const lkRoom = await livekitService.connectToRoom(url, token, e2eeKeyProvider);
     storeConnect(room);
 
     cleanupParticipantChange.current = livekitService.onParticipantChange((updatedParticipants) => {
-      // Throttle store updates to max ~4 per second to avoid choking React renders
-      pendingUpdate.current = updatedParticipants;
-      if (!throttleRef.current) {
-        throttleRef.current = setTimeout(() => {
-          throttleRef.current = null;
-          if (pendingUpdate.current) {
-            setParticipants(pendingUpdate.current);
-            pendingUpdate.current = null;
-          }
-        }, 250);
-      }
+      pushThrottled(updatedParticipants);
     });
 
     return lkRoom;
-  }, [storeConnect, setParticipants]);
+  }, [storeConnect, pushThrottled]);
+
+  /** Chemin natif (chantier no-CEF) : la Room vit en Rust, le store reçoit
+   *  la même forme `ParticipantInfo` via `voice-native-participants`. */
+  const connectNative = useCallback(async (url: string, token: string, room: string) => {
+    const native = await import("../services/voiceNativeService");
+    await native.voiceNativeConnect(url, token, room);
+    storeConnect(room);
+    cleanupNative.current = await native.onVoiceNativeParticipants((updatedParticipants) => {
+      pushThrottled(updatedParticipants);
+    });
+  }, [storeConnect, pushThrottled]);
 
   const disconnect = useCallback(async () => {
     if (cleanupParticipantChange.current) {
@@ -42,6 +57,21 @@ export function useLiveKit() {
     }
     pendingUpdate.current = null;
     await livekitService.disconnectFromRoom();
+    storeDisconnect();
+  }, [storeDisconnect]);
+
+  const disconnectNative = useCallback(async () => {
+    if (cleanupNative.current) {
+      cleanupNative.current();
+      cleanupNative.current = null;
+    }
+    if (throttleRef.current) {
+      clearTimeout(throttleRef.current);
+      throttleRef.current = null;
+    }
+    pendingUpdate.current = null;
+    const native = await import("../services/voiceNativeService");
+    await native.voiceNativeDisconnect();
     storeDisconnect();
   }, [storeDisconnect]);
 
@@ -59,6 +89,8 @@ export function useLiveKit() {
     participants,
     connect,
     disconnect,
+    connectNative,
+    disconnectNative,
     toggleMic,
     toggleScreenShare,
   };

@@ -25,10 +25,50 @@ export const VOICE_NATIVE_STATUS_EVENT = "voice-native-status";
 export const VOICE_NATIVE_PARTICIPANTS_EVENT = "voice-native-participants";
 /** `{ identity, speaking }` — alimente le rond vert. */
 export const VOICE_NATIVE_SPEAKING_EVENT = "voice-native-speaking";
+/** Relais data-channel brut `{ topic, payload_b64, sender }` (sérialisé avec
+ *  tag `type: "data_received"`) — dispatché par le front vers les handlers
+ *  existants (soundboard, AFK, curseurs…) au fil de la migration. */
+export const VOICE_NATIVE_DATA_EVENT = "voice-native-data";
 
 export interface VoiceNativeSpeaking {
   identity: string;
   speaking: boolean;
+}
+
+export interface VoiceNativeData {
+  topic: string | null;
+  payload_b64: string;
+  sender: string | null;
+}
+
+/** Moteur effectivement utilisé par la session en cours (pas la préférence
+ *  settings). Piloté par `useVoiceChannel` au join/leave — les toggles
+ *  mute/deafen/screen-share s'y réfèrent pour choisir JS vs natif. */
+let activeVoiceEngine: "js" | "native" | null = null;
+
+export function getActiveVoiceEngine(): "js" | "native" | null {
+  return activeVoiceEngine;
+}
+
+export function setActiveVoiceEngine(engine: "js" | "native" | null): void {
+  activeVoiceEngine = engine;
+}
+
+/** Résout le moteur à utiliser : "native" seulement si demandé dans les
+ *  settings ET disponible (Tauri). Sinon "js" — le défaut stable. */
+export function selectVoiceEngine(
+  preference: string,
+  available: boolean,
+): "js" | "native" {
+  return preference === "native" && available ? "native" : "js";
+}
+
+/** base64 → Uint8Array (payloads data-channel natifs). */
+export function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -90,6 +130,16 @@ export async function onVoiceNativeSpeaking(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<VoiceNativeSpeaking>(VOICE_NATIVE_SPEAKING_EVENT, (e) => cb(e.payload));
+}
+
+export async function onVoiceNativeData(
+  cb: (ev: VoiceNativeData) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  // Le Rust émet l'enum avec tag `type: "data_received"` + champs à plat.
+  return listen<VoiceNativeData & { type?: string }>(VOICE_NATIVE_DATA_EVENT, (e) =>
+    cb({ topic: e.payload.topic ?? null, payload_b64: e.payload.payload_b64, sender: e.payload.sender ?? null }),
+  );
 }
 
 /** Qualité string du natif → type front (même vocabulaire que LiveKit JS). */
