@@ -17,6 +17,7 @@ import {
   onVoiceNativeSpeaking,
   toConnectionQuality,
   selectVoiceEngine,
+  shouldAutoJoinVoice,
   b64ToBytes,
   getActiveVoiceEngine,
   setActiveVoiceEngine,
@@ -102,6 +103,14 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(toConnectionQuality("excellent")).toBe("excellent");
     expect(toConnectionQuality("poor")).toBe("poor");
     expect(toConnectionQuality("n'importe quoi")).toBe("unknown");
+  });
+
+  it("shouldAutoJoinVoice ne percute ni session ni connexion en cours", () => {
+    expect(shouldAutoJoinVoice("!a", null, null)).toBe(true);
+    expect(shouldAutoJoinVoice("!a", "!a", null)).toBe(false);
+    expect(shouldAutoJoinVoice("!a", "!b", null)).toBe(false);
+    expect(shouldAutoJoinVoice("!a", null, "!a")).toBe(false);
+    expect(shouldAutoJoinVoice("", null, null)).toBe(false);
   });
 
   it("selectVoiceEngine : natif seulement si demandé ET disponible", () => {

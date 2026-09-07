@@ -583,6 +583,36 @@ fn connect_engine(
 // Commandes Tauri
 // ---------------------------------------------------------------------------
 
+/// Décision de garde à l'ouverture d'une session native. Fonction pure :
+/// - `Join` : aucune session, on peut connecter ;
+/// - `Reuse` : déjà en ligne sur le MÊME salon (course auto-join / clic
+///   manuel) — on réutilise la session au lieu d'en ouvrir une seconde
+///   (qui laisserait un fantôme SFU + un micro fantôme) ;
+/// - `Conflict(room)` : en ligne sur un AUTRE salon — l'appelant doit
+///   quitter d'abord (le `joinVoiceChannel` frontalier le fait).
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConnectGuard {
+    Join,
+    Reuse,
+    Conflict(String),
+}
+
+pub fn connect_guard(
+    state: VoiceConnectionState,
+    current_room: Option<&str>,
+    requested_room: &str,
+) -> ConnectGuard {
+    match state {
+        VoiceConnectionState::Disconnected => ConnectGuard::Join,
+        _ => match current_room {
+            Some(current) if current == requested_room => ConnectGuard::Reuse,
+            Some(current) => ConnectGuard::Conflict(current.to_string()),
+            // État incohérent (ni connecté ni salle) : on rejoint.
+            None => ConnectGuard::Join,
+        },
+    }
+}
+
 #[tauri::command]
 pub fn voice_native_status() -> VoiceNativeStatus {
     let inner = manager().lock().unwrap_or_else(|e| e.into_inner());
@@ -607,12 +637,23 @@ pub fn voice_native_connect(
     }
     {
         let mut inner = manager().lock().map_err(|e| e.to_string())?;
-        if inner.state != VoiceConnectionState::Disconnected {
-            return Err(format!("Session déjà active ({:?})", inner.state));
+        match connect_guard(inner.state, inner.room_name.as_deref(), &room_name) {
+            ConnectGuard::Reuse => {
+                // Même salon déjà en ligne : idempotent, pas de 2e moteur.
+                return Ok(snapshot(&inner));
+            }
+            ConnectGuard::Conflict(active) => {
+                return Err(format!(
+                    "Déjà en ligne sur {} — quittez d'abord",
+                    active
+                ));
+            }
+            ConnectGuard::Join => {
+                inner.state = VoiceConnectionState::Connecting;
+                inner.room_name = Some(room_name.clone());
+                inner.identity = None;
+            }
         }
-        inner.state = VoiceConnectionState::Connecting;
-        inner.room_name = Some(room_name.clone());
-        inner.identity = None;
         emit_status(&app, &snapshot(&inner));
     }
     log::info!("[Sion][voix-native] connect room={} (moteur Rust)", room_name);
@@ -753,6 +794,33 @@ pub fn test_reset() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_guard_drives_join_reuse_conflict() {
+        use VoiceConnectionState::*;
+        // Libre dans tous les cas → Join.
+        assert_eq!(connect_guard(Disconnected, None, "!a"), ConnectGuard::Join);
+        assert_eq!(
+            connect_guard(Disconnected, Some("!a"), "!b"),
+            ConnectGuard::Join
+        );
+        // Même salon déjà en ligne (course auto-join / clic) → Reuse.
+        for state in [Connecting, Connected, Reconnecting] {
+            assert_eq!(
+                connect_guard(state, Some("!a"), "!a"),
+                ConnectGuard::Reuse,
+                "state={:?}",
+                state
+            );
+        }
+        // Autre salon → Conflict nommant le salon actif.
+        assert_eq!(
+            connect_guard(Connected, Some("!a"), "!b"),
+            ConnectGuard::Conflict("!a".to_string())
+        );
+        // État incohérent (pas Disconnected mais pas de salle) → Join.
+        assert_eq!(connect_guard(Connecting, None, "!a"), ConnectGuard::Join);
+    }
 
     #[test]
     fn connect_requires_url_and_token() {

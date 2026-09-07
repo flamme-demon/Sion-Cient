@@ -18,6 +18,7 @@ import { usePendingUsersStore } from "./stores/usePendingUsersStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
 import { useVoiceChannel } from "./hooks/useVoiceChannel";
+import { shouldAutoJoinVoice } from "./services/voiceNativeService";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { MatrixRain } from "./components/sidebar/MatrixRain";
@@ -126,6 +127,10 @@ export default function App() {
         // Short delay for reconnect, longer for initial mobile auto-join
         const isReconnect = connectionStatus === "connected";
         setTimeout(() => {
+          // Ne jamais percuter un join manuel en cours ni voler une session
+          // active (course auto-join / clic qui coinçait la session native).
+          const { connectedVoiceChannel, connectingVoiceChannel } = useAppStore.getState();
+          if (!shouldAutoJoinVoice(roomId, connectedVoiceChannel, connectingVoiceChannel)) return;
           joinVoiceRef.current(roomId).catch((err: unknown) =>
             console.error("[Sion] Auto-join voice failed:", err)
           );

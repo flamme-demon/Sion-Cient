@@ -63,6 +63,20 @@ export function selectVoiceEngine(
   return preference === "native" && available ? "native" : "js";
 }
 
+/** L'auto-join ne doit jamais percuter un join manuel en cours ni voler une
+ *  session active : il ne démarre que si personne n'est en ligne ni en
+ *  connexion. Fonction pure (testée). */
+export function shouldAutoJoinVoice(
+  targetRoomId: string,
+  connectedVoiceChannel: string | null,
+  connectingVoiceChannel: string | null,
+): boolean {
+  if (!targetRoomId) return false;
+  if (connectedVoiceChannel) return false;
+  if (connectingVoiceChannel) return false;
+  return true;
+}
+
 /** base64 → Uint8Array (payloads data-channel natifs). */
 export function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
