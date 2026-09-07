@@ -375,6 +375,79 @@ fn engine_holder() -> &'static Mutex<Option<LiveKitEngine>> {
     ENGINE.get_or_init(|| Mutex::new(None))
 }
 
+/// Sort le moteur du holder (récupère l'intérieur même si le mutex est
+/// empoisonné par un panic antérieur — une session SFU morte ne doit jamais
+/// bloquer les commandes suivantes).
+#[cfg(feature = "native-voice")]
+fn take_engine() -> Option<LiveKitEngine> {
+    engine_holder()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+}
+
+/// Repose un moteur (éventuellement None) dans le holder.
+#[cfg(feature = "native-voice")]
+fn store_engine(engine: Option<LiveKitEngine>) {
+    *engine_holder()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = engine;
+}
+
+/// Session locale réinitialisée après la perte du moteur (panique SDK
+/// isolée) : pas de fantôme, le front repart d'un état propre.
+#[cfg(feature = "native-voice")]
+fn drop_dead_session(app: &tauri::AppHandle<TauriRuntime>) {
+    store_engine(None);
+    participants_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+    let empty: Vec<NativeParticipant> = Vec::new();
+    let _ = app.emit("voice-native-participants", &empty);
+    let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
+    inner.state = VoiceConnectionState::Disconnected;
+    inner.room_name = None;
+    inner.identity = None;
+    emit_status(&app, &snapshot(&inner));
+}
+
+/// Exécute `op` sur le moteur sorti du holder puis le repose — sans jamais
+/// verrouiller pendant l'appel SDK (une panique LiveKit ne doit plus
+/// empoisonner les commandes suivantes). En cas de panique, le moteur est
+/// abandonné et la session locale réinitialisée.
+#[cfg(feature = "native-voice")]
+fn with_engine<R>(
+    app: &tauri::AppHandle<TauriRuntime>,
+    label: &str,
+    op: impl FnOnce(&mut LiveKitEngine) -> Result<R, String>,
+) -> Result<R, String> {
+    let mut slot = take_engine();
+    let mut lost = false;
+    let res = match slot.as_mut() {
+        Some(engine) => {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op(engine))) {
+                Ok(r) => r,
+                Err(_) => {
+                    log::error!("[Sion][voix-native] {} : panique SDK isolée", label);
+                    lost = true;
+                    Err(format!("{} (panique SDK isolée)", label))
+                }
+            }
+        }
+        None => Err("pas de moteur natif".to_string()),
+    };
+    if lost {
+        slot = None;
+    }
+    let lost = lost || slot.is_none();
+    store_engine(slot);
+    if lost {
+        drop_dead_session(app);
+    }
+    res
+}
+
 /// Registre des participants natifs : le front consomme la liste complète
 /// (comme `getParticipants()` côté JS), pas des deltas.
 #[cfg(feature = "native-voice")]
@@ -577,13 +650,16 @@ fn connect_engine(
         log::warn!("[Sion][voix-native] meter micro local indisponible: {}", e);
     }
     {
-        let mut holder = engine_holder()
-            .lock()
-            .map_err(|e| e.to_string())?;
-        if let Some(mut previous) = holder.replace(engine) {
+        // Un précédent moteur encore présent (double-join) est fermé hors
+        // verrou — une panique ici ne doit pas empoisonner le holder.
+        let previous = take_engine();
+        if let Some(mut previous) = previous {
             log::warn!("[Sion][voix-native] moteur précédent encore présent — fermeture");
-            previous.disconnect();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                previous.disconnect();
+            }));
         }
+        store_engine(Some(engine));
     }
     Ok(identity)
 }
@@ -787,12 +863,12 @@ pub fn voice_native_connect(
 pub fn voice_native_disconnect(app: tauri::AppHandle<TauriRuntime>) -> VoiceNativeStatus {
     #[cfg(feature = "native-voice")]
     {
-        if let Some(holder) = ENGINE.get() {
-            if let Ok(mut guard) = holder.lock() {
-                if let Some(mut engine) = guard.take() {
-                    engine.disconnect();
-                }
-            }
+        // Moteur sorti du holder avant l'appel (pas de verrou pendant close).
+        let previous = take_engine();
+        if let Some(mut engine) = previous {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine.disconnect();
+            }));
         }
         participants_map()
             .lock()
@@ -819,21 +895,14 @@ pub fn voice_native_set_muted(
     let mut applied = true;
     #[cfg(feature = "native-voice")]
     {
-        if let Some(holder) = ENGINE.get() {
-            let connected = holder
-                .lock()
-                .map(|g| g.as_ref().map(|e| e.is_connected()).unwrap_or(false))
-                .unwrap_or(false);
-            if connected {
-                let res = holder.lock().map_err(|e| e.to_string()).and_then(|g| {
-                    g.as_ref()
-                        .ok_or_else(|| "moteur natif absent".to_string())
-                        .and_then(|e| e.set_microphone_enabled(!muted))
-                });
-                if let Err(e) = res {
-                    log::warn!("[Sion][voix-native] mute natif impossible: {}", e);
-                    applied = false;
-                }
+        let connected = engine_holder()
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|e| e.is_connected()))
+            .unwrap_or(false);
+        if connected {
+            if let Err(e) = with_engine(&app, "mute natif", |e| e.set_microphone_enabled(!muted)) {
+                log::warn!("[Sion][voix-native] {}", e);
+                applied = false;
             }
         }
     }
@@ -855,14 +924,15 @@ pub fn voice_native_set_deafened(
     let mut applied = true;
     #[cfg(feature = "native-voice")]
     {
-        if let Some(holder) = ENGINE.get() {
-            let res = holder.lock().map_err(|e| e.to_string()).and_then(|g| {
-                g.as_ref()
-                    .map(|e| e.set_deafened(deafened).map(|_| ()))
-                    .unwrap_or(Ok(()))
-            });
-            if let Err(e) = res {
-                log::warn!("[Sion][voix-native] deafen natif impossible: {}", e);
+        let connected = engine_holder()
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|e| e.is_connected()))
+            .unwrap_or(false);
+        if connected {
+            if let Err(e) = with_engine(&app, "deafen natif", |e| {
+                e.set_deafened(deafened).map(|_| ())
+            }) {
+                log::warn!("[Sion][voix-native] {}", e);
                 applied = false;
             }
         }

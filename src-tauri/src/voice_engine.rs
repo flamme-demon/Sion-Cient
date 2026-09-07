@@ -70,7 +70,57 @@ pub fn platform_audio_snapshot() -> Result<
     Ok((recording, playout))
 }
 
-/// Vocabulaire qualité partagé avec le front (`ConnectionQuality` TS).
+/// Extrait les index des sink-inputs de playout de l'ADM WebRTC depuis un
+/// `pactl -f json list sink-inputs`. Fonction pure (testée).
+fn adm_playout_indices(pactl_json: &str) -> Vec<u64> {
+    let mut out = Vec::new();
+    let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(pactl_json) else {
+        return out;
+    };
+    for entry in &entries {
+        let props = entry.get("properties");
+        let is_adm = props
+            .and_then(|p| p.get("application.name"))
+            .and_then(|n| n.as_str())
+            == Some("WEBRTC VoiceEngine");
+        if !is_adm {
+            continue;
+        }
+        if let Some(idx) = entry.get("index").and_then(|i| i.as_u64()) {
+            out.push(idx);
+        }
+    }
+    out
+}
+
+/// L'ADM WebRTC coupe parfois son propre playout (sink-input muet côté
+/// PipeWire — observé en prod : frames reçues, casque OK, silence total).
+/// On ré-impose démute + on le journalise pour traquer le motif.
+/// Best-effort, Linux uniquement (pactl).
+fn ensure_playout_unmuted() {
+    #[cfg(target_os = "linux")]
+    {
+        let list = std::process::Command::new("pactl")
+            .args(["-f", "json", "list", "sink-inputs"])
+            .output();
+        let Ok(list) = list else { return };
+        let indices = adm_playout_indices(&String::from_utf8_lossy(&list.stdout));
+        for idx in indices {
+            let status = std::process::Command::new("pactl")
+                .args(["set-sink-input-mute", &idx.to_string(), "0"])
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    log::info!("[Sion][voix-native] playout ADM démute (sink-input {})", idx)
+                }
+                _ => log::warn!(
+                    "[Sion][voix-native] impossible de démuter le playout {}",
+                    idx
+                ),
+            }
+        }
+    }
+}
 pub fn connection_quality_str(q: &ConnectionQuality) -> &'static str {
     match q {
         ConnectionQuality::Excellent => "excellent",
@@ -245,7 +295,9 @@ impl LiveKitEngine {
         let sid = publication.sid();
         log::info!("[Sion][voix-native] micro publié sid={}", sid);
         *self.mic_sid.lock().map_err(|e| e.to_string())? = Some(sid);
-        *self.audio.lock().map_err(|e| e.to_string())? = Some(audio);
+        // L'ADM coupe parfois son playout tout seul (observé : muet côté
+        // PipeWire alors que tout le reste est OK) — on ré-impose démute.
+        ensure_playout_unmuted();
         Ok(())
     }
 
@@ -483,6 +535,9 @@ impl LiveKitEngine {
             }
         }
         log::info!("[Sion][voix-native] sourdine={} ({} piste(s) audio)", deafened, touched);
+        if !deafened {
+            ensure_playout_unmuted();
+        }
         Ok(touched)
     }
 
@@ -716,6 +771,20 @@ mod tests {
         // Retour au silence franc.
         assert_eq!(push_i16_frame(&mut det, &[0; 480]), Some(false));
         assert_eq!(push_i16_frame(&mut det, &[]), None);
+    }
+
+    #[test]
+    fn adm_playout_indices_filtre_livraison() {
+        let fixture = r#"[
+            {"index": 11, "properties": {"application.name": "Firefox"}},
+            {"index": 22, "properties": {"application.name": "WEBRTC VoiceEngine", "media.name": "playStream"}},
+            {"index": 33, "properties": {"application.name": "WEBRTC VoiceEngine", "media.name": "recStream"}},
+            {"index": 44, "properties": {}},
+            {"index": "nan", "properties": {"application.name": "WEBRTC VoiceEngine"}}
+        ]"#;
+        assert_eq!(adm_playout_indices(fixture), vec![22, 33]);
+        assert!(adm_playout_indices("pas du json").is_empty());
+        assert!(adm_playout_indices("{}").is_empty());
     }
 
     #[test]
