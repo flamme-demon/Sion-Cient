@@ -623,6 +623,9 @@ fn spawn_forward_task(
         .spawn(move || {
             let mut rx = rx;
             while let Ok(ev) = rx.blocking_recv() {
+                // Un event vérolé ne doit jamais tuer la pompe (mort
+                // silencieuse = plus aucun état live : AFK, parole, liste).
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match &ev {
                     VoiceEngineEvent::DataReceived { topic, payload_b64, sender } => {
                         if topic.as_deref() == Some(TOPIC_AFK) {
@@ -712,6 +715,10 @@ fn spawn_forward_task(
                             let _ = app.emit("voice-native-speaking", other);
                         }
                     }
+                }
+                }));
+                if res.is_err() {
+                    log::error!("[Sion][voix-native] pompe d'events : panique isolée sur un event");
                 }
             }
         })

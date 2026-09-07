@@ -1450,6 +1450,26 @@ impl LiveKitEngine {
                         });
                     }
                     RoomEvent::DataReceived { payload, topic, participant, .. } => {
+                        // Journal systématique (topic/expéditeur/taille) : le
+                        // data-channel est le seul vecteur des états live
+                        // (AFK, soundboard, curseurs) — un paquet manquant
+                        // doit se voir, pas se deviner. Le curseur (60 Hz)
+                        // reste en debug pour ne pas noyer le log.
+                        let sender = participant.as_ref().map(|p| p.identity().to_string());
+                        if topic.as_deref() == Some(crate::voice_native::TOPIC_CURSOR) {
+                            log::debug!(
+                                "[Sion][voix-native] data reçu topic=sion-cursor de={:?} ({} o)",
+                                sender,
+                                payload.len()
+                            );
+                        } else {
+                            log::info!(
+                                "[Sion][voix-native] data reçu topic={:?} de={:?} ({} o)",
+                                topic,
+                                sender,
+                                payload.len()
+                            );
+                        }
                         let _ = tx.send(VoiceEngineEvent::DataReceived {
                             topic,
                             payload_b64: base64::engine::general_purpose::STANDARD
