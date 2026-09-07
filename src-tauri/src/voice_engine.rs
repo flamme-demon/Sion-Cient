@@ -466,12 +466,16 @@ fn spawn_video_pump(
         let mut stat_bytes: u64 = 0;
         let mut stat_conv_ms: u128 = 0;
         let mut stat_enc_ms: u128 = 0;
+        // Frames décodées ARRIVÉES (vs émises) : si le SFU ne nous sert
+        // qu'un filet (couche en pause, dynacast), ça se voit ici.
+        let mut stat_arrived: u64 = 0;
         let mut stat_since = tokio::time::Instant::now();
         loop {
             tokio::select! {
                 _ = &mut stop => break,
                 frame = stream.next() => {
                     let Some(frame) = frame else { break };
+                    stat_arrived += 1;
                     latest = Some(frame);
                 }
                 _ = ticker.tick() => {
@@ -512,8 +516,9 @@ fn spawn_video_pump(
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms",
+                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms",
                                                 sender,
+                                                stat_arrived as f64 / secs,
                                                 stat_count as f64 / secs,
                                                 budget.quality,
                                                 VIDEO_TICKS_MS[budget.tick_step],
@@ -522,6 +527,7 @@ fn spawn_video_pump(
                                                 stat_conv_ms / stat_count.max(1) as u128,
                                                 stat_enc_ms / stat_count.max(1) as u128
                                             );
+                                            stat_arrived = 0;
                                             stat_count = 0;
                                             stat_bytes = 0;
                                             stat_conv_ms = 0;

@@ -126,16 +126,44 @@ export function ScreenShareView() {
 
   // Cache des dernières frames natives (data-URL par expéditeur) + miroir de
   // l'identité active pour le callback d'événement (abonnement unique).
-  // Mutation directe de `img.src` : pas de re-render React à 4 im/s.
+  // Mutation directe de `img.src` : pas de re-render React à 12 im/s.
   const framesRef = useRef(new Map<string, string>());
   const activeRef = useRef<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  // Mesure de latence event→pixels (diagnostic : où partent les "2 s" ?).
+  // Tout en refs, log throttled toutes les 5 s, zéro re-render.
+  const rxRef = useRef(0);
+  const latRef = useRef({ count: 0, sum: 0, start: 0, lastLog: 0 });
 
   // Miroir de l'identité active pour le callback d'événement (abonnement
   // unique) — en effet, pas pendant le rendu.
   useEffect(() => {
     activeRef.current = activeIdentity;
   });
+
+  // `img.onload` → latence entre réception de l'event Tauri et pixels
+  // affichés (décodage JPEG Chromium + rendu). Rattaché à chaque changement
+  // de partage (l'élément peut être remonté).
+  const attachLatProbe = () => {
+    const img = imgRef.current;
+    if (!img) return;
+    img.onload = () => {
+      const rx = rxRef.current;
+      if (!rx) return;
+      const now = performance.now();
+      const lat = latRef.current;
+      if (lat.start === 0) lat.start = now;
+      lat.count += 1;
+      lat.sum += now - rx;
+      if (now - lat.lastLog > 5000 && lat.count > 0) {
+        console.info(
+          `[Sion][partage-natif] affichage: ${(lat.count / ((now - lat.start) / 1000)).toFixed(1)} im/s, ` +
+          `latence event→pixels ${(lat.sum / lat.count).toFixed(0)} ms (moy sur ${lat.count} frames)`,
+        );
+        latRef.current = { count: 0, sum: 0, start: now, lastLog: now };
+      }
+    };
+  };
 
   useEffect(() => {
     if (!isNative) return;
@@ -145,6 +173,7 @@ export function ScreenShareView() {
     import("../../services/voiceNativeService").then((native) => {
       if (cancelled) return;
       native.onVoiceNativeFrame((f) => {
+        rxRef.current = performance.now();
         framesRef.current.set(f.sender, `data:image/jpeg;base64,${f.jpeg_b64}`);
         if (activeRef.current === f.sender && imgRef.current) {
           imgRef.current.src = framesRef.current.get(f.sender) ?? "";
@@ -157,6 +186,7 @@ export function ScreenShareView() {
         }
       }).then((u) => { unsubStopped = u; }).catch(() => {});
     }).catch(() => {});
+    attachLatProbe();
     return () => {
       cancelled = true;
       unsubFrame?.();
@@ -168,9 +198,12 @@ export function ScreenShareView() {
   // attendant la prochaine, ~250 ms max).
   useEffect(() => {
     if (!isNative || !imgRef.current) return;
+    attachLatProbe();
     const cached = activeIdentity ? framesRef.current.get(activeIdentity) : undefined;
-    if (cached) imgRef.current.src = cached;
-    else imgRef.current.removeAttribute("src");
+    if (cached) {
+      rxRef.current = performance.now();
+      imgRef.current.src = cached;
+    } else imgRef.current.removeAttribute("src");
   }, [isNative, activeIdentity]);
 
   // Audio control widgets, re-synced from the service when the active share
