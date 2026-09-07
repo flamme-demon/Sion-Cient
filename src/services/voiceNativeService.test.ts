@@ -47,11 +47,12 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
 
   it("connect transmet url/token/roomName (Tauri convertit en room_name côté Rust)", async () => {
     invokeMock.mockResolvedValue({ state: "connecting" });
-    await voiceNativeConnect("wss://livekit", "jwt", "salon");
+    await voiceNativeConnect("wss://livekit", "jwt", "salon", "flamme");
     expect(invokeMock).toHaveBeenCalledWith("voice_native_connect", {
       url: "wss://livekit",
       token: "jwt",
       roomName: "salon",
+      displayName: "flamme",
     });
   });
 
@@ -69,7 +70,7 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
 
   it("les erreurs Rust remontent au front (pas d'écrasement silencieux)", async () => {
     invokeMock.mockRejectedValue("URL LiveKit vide");
-    await expect(voiceNativeConnect("", "jwt", "salon")).rejects.toBe("URL LiveKit vide");
+    await expect(voiceNativeConnect("", "jwt", "salon", "flamme")).rejects.toBe("URL LiveKit vide");
   });
 
   it("les listeners s'abonnent aux bons événements et relaient le payload", async () => {

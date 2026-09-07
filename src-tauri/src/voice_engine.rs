@@ -179,7 +179,9 @@ impl LiveKitEngine {
                 mic_publish_options(),
             ))
             .map_err(|e| format!("publish mic: {}", e))?;
-        *self.mic_sid.lock().map_err(|e| e.to_string())? = Some(publication.sid());
+        let sid = publication.sid();
+        log::info!("[Sion][voix-native] micro publié sid={}", sid);
+        *self.mic_sid.lock().map_err(|e| e.to_string())? = Some(sid);
         *self.audio.lock().map_err(|e| e.to_string())? = Some(audio);
         Ok(())
     }

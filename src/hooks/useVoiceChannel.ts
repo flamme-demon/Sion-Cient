@@ -177,6 +177,11 @@ export async function republishVoicePresence(): Promise<boolean> {
   return rooms > 0 || activeRTCSession !== null;
 }
 
+// Les joins sont sérialisés : un double-clic ou un auto-join + clic ne
+// doivent jamais ouvrir deux sessions en parallèle (micro fantôme côté
+// natif — cf. connect idempotent côté Rust, ici on évite même la course).
+let joinChain: Promise<void> = Promise.resolve();
+
 export function useVoiceChannel() {
   const { joinRoom } = useMatrix();
   const { connect, disconnect, connectNative, disconnectNative, connected, participants } = useLiveKit();
@@ -202,7 +207,7 @@ export function useVoiceChannel() {
     disconnectVoice();
   }, [disconnect, disconnectNative, disconnectVoice]);
 
-  const joinVoiceChannel = useCallback(
+  const joinVoiceChannelInner = useCallback(
     async (matrixRoomId: string) => {
       // Déconnecter le canal vocal actif avant d'en rejoindre un autre
       const currentChannel = useAppStore.getState().connectedVoiceChannel;
@@ -358,7 +363,13 @@ export function useVoiceChannel() {
               );
             }
             setActiveVoiceEngine("native");
-            await connectNative(rtcResult.url, rtcResult.token, matrixRoomId);
+            const myId = client.getUserId() ?? "";
+            const displayName =
+              credentials?.displayName
+              || client.getUser(myId)?.displayName
+              || credentials?.userId
+              || myId;
+            await connectNative(rtcResult.url, rtcResult.token, matrixRoomId, displayName);
           } else {
             console.info("[Sion] join JS (livekit-client dans la webview)");
             setActiveVoiceEngine("js");
@@ -459,7 +470,7 @@ export function useVoiceChannel() {
         ) === "native"
       ) {
         setActiveVoiceEngine("native");
-        await connectNative(credentials.livekitUrl, token, matrixRoomId);
+        await connectNative(credentials.livekitUrl, token, matrixRoomId, credentials.displayName || credentials.userId);
       } else {
         setActiveVoiceEngine("js");
         await connect(credentials.livekitUrl, token, matrixRoomId);
@@ -501,6 +512,12 @@ export function useVoiceChannel() {
     },
     [joinRoom, connect, connectNative, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],
   );
+
+  const joinVoiceChannel = useCallback((matrixRoomId: string) => {
+    const run = joinChain.catch(() => {}).then(() => joinVoiceChannelInner(matrixRoomId));
+    joinChain = run.catch(() => {});
+    return run;
+  }, [joinVoiceChannelInner]);
 
   const leaveVoiceChannel = useCallback(
     async (_matrixRoomId: string) => {

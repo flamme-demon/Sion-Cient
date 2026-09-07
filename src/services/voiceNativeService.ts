@@ -105,11 +105,13 @@ export function voiceNativeConnect(
   url: string,
   token: string,
   roomName: string,
+  displayName: string,
 ): Promise<VoiceNativeStatus> {
   return tauriInvoke<VoiceNativeStatus>("voice_native_connect", {
     url,
     token,
     roomName,
+    displayName,
   });
 }
 

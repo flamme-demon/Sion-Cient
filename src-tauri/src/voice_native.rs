@@ -554,6 +554,9 @@ fn spawn_forward_task(
 
 /// Ouvre la session SFU native + publie le micro. Le récepteur d'événements
 /// est branché AVANT `connect` pour ne rater aucun event précoce.
+/// Remplace (en le fermant proprement) un éventuel moteur précédent : en cas
+/// de double-join quasi-simultané, on ne laisse ni session SFU fantôme ni
+/// micro fantôme derrière.
 #[cfg(feature = "native-voice")]
 fn connect_engine(
     app: &tauri::AppHandle<TauriRuntime>,
@@ -573,9 +576,15 @@ fn connect_engine(
     if let Err(e) = engine.start_local_meter(identity.clone()) {
         log::warn!("[Sion][voix-native] meter micro local indisponible: {}", e);
     }
-    *engine_holder()
-        .lock()
-        .map_err(|e| e.to_string())? = Some(engine);
+    {
+        let mut holder = engine_holder()
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if let Some(mut previous) = holder.replace(engine) {
+            log::warn!("[Sion][voix-native] moteur précédent encore présent — fermeture");
+            previous.disconnect();
+        }
+    }
     Ok(identity)
 }
 
@@ -628,6 +637,7 @@ pub fn voice_native_connect(
     url: String,
     token: String,
     room_name: String,
+    #[allow(unused_variables)] display_name: String,
 ) -> Result<VoiceNativeStatus, String> {
     if url.trim().is_empty() {
         return Err("URL LiveKit vide".into());
@@ -672,6 +682,24 @@ pub fn voice_native_connect(
     match connect_engine(&app, &url, &token) {
         Ok(identity) => {
             log::info!("[Sion][voix-native] session SFU ouverte identite={}", identity);
+            // Le local n'arrive jamais via ParticipantConnected : on
+            // l'injecte explicitement (nom d'affichage Matrix fourni par le
+            // front) pour qu'il apparaisse aussitôt dans la liste.
+            {
+                let name = if display_name.trim().is_empty() {
+                    identity.clone()
+                } else {
+                    display_name.clone()
+                };
+                let mut map = participants_map()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                map.insert(
+                    identity.clone(),
+                    NativeParticipant::new(&identity, &name),
+                );
+            }
+            emit_participants(&app);
             let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
             inner.state = VoiceConnectionState::Connected;
             inner.identity = Some(identity);
