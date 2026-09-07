@@ -21,6 +21,9 @@ mod tts;
 // data-channel. Fonctionne partout (desktop + Android), aucun trafic SFU
 // réel à ce stade — le chemin JS reste le défaut.
 mod voice_native;
+// Moteur LiveKit natif (POC) : uniquement avec `--features native-voice`.
+#[cfg(feature = "native-voice")]
+mod voice_engine;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 use serde::Serialize;
