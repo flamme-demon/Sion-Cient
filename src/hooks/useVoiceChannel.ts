@@ -360,6 +360,7 @@ export function useVoiceChannel() {
             setActiveVoiceEngine("native");
             await connectNative(rtcResult.url, rtcResult.token, matrixRoomId);
           } else {
+            console.info("[Sion] join JS (livekit-client dans la webview)");
             setActiveVoiceEngine("js");
             await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
           }
