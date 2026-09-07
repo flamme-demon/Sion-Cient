@@ -126,7 +126,17 @@ fn spawn_rms_task(
         // le détecteur RMS s'en contente.
         let mut stream = NativeAudioStream::new(rtc_track, 48000, 1);
         let mut det = RmsSpeakingDetector::new();
+        let mut first_frame = true;
         while let Some(frame) = stream.next().await {
+            if first_frame {
+                first_frame = false;
+                log::info!(
+                    "[Sion][voix-native] frames distantes recues {} ({} Hz, {} canaux)",
+                    identity,
+                    frame.sample_rate,
+                    frame.num_channels
+                );
+            }
             if let Some(speaking) = push_i16_frame(&mut det, &frame.data) {
                 let _ = tx2.send(VoiceEngineEvent::SpeakingChanged {
                     identity: identity.clone(),
@@ -134,6 +144,7 @@ fn spawn_rms_task(
                 });
             }
         }
+        log::info!("[Sion][voix-native] fin de piste distante {}", identity);
         let _ = tx2.send(VoiceEngineEvent::SpeakingChanged { identity, speaking: false });
     });
 }
@@ -444,8 +455,7 @@ impl LiveKitEngine {
                 .unwrap_or_default();
         }
         let mut touched = 0;
-        for participant in room.remote_participants().values() {
-            let identity = participant.identity().to_string();
+        for participant in room.remote_participants().values() {            let identity = participant.identity().to_string();
             for publication in participant.track_publications().values() {
                 if publication.kind() != TrackKind::Audio {
                     continue;
@@ -472,6 +482,7 @@ impl LiveKitEngine {
                 }
             }
         }
+        log::info!("[Sion][voix-native] sourdine={} ({} piste(s) audio)", deafened, touched);
         Ok(touched)
     }
 
@@ -491,6 +502,10 @@ impl LiveKitEngine {
                     RoomEvent::Connected { participants_with_tracks } => {
                         // Participants déjà présents (aucun ParticipantConnected
                         // ne sera émis pour eux) + leurs pistes existantes.
+                        log::info!(
+                            "[Sion][voix-native] seeding Connected: {} participant(s) distant(s)",
+                            participants_with_tracks.len()
+                        );
                         for (participant, publications) in &participants_with_tracks {
                             let id = participant.identity().to_string();
                             let _ = tx.send(VoiceEngineEvent::ParticipantJoined {
@@ -550,9 +565,11 @@ impl LiveKitEngine {
                         // mêmes seuils que speakingDetector.ts. Sous sourdine,
                         // on désinscrit d'office (retour sonore au undeafen).
                         if deafened.load(std::sync::atomic::Ordering::Relaxed) {
+                            log::info!("[Sion][voix-native] piste {} désinscrite (sourdine)", publication.sid());
                             publication.set_subscribed(false);
                         } else {
                             let sid = publication.sid().to_string();
+                            log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, participant.identity());
                             let fresh = attached
                                 .lock()
                                 .map(|mut a| a.insert(sid))
