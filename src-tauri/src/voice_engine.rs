@@ -413,6 +413,25 @@ impl LiveKitEngine {
         Ok(())
     }
 
+    /// Publie un paquet data-channel (soundboard, AFK, curseurs…).
+    /// `reliable: true` comme le chemin JS (`publishData { reliable: true }`).
+    pub fn publish_data(&self, topic: &str, payload: Vec<u8>) -> Result<(), String> {
+        let len = payload.len();
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let room = room_guard.as_ref().ok_or("pas de session SFU")?;
+        let packet = DataPacket {
+            payload,
+            topic: Some(topic.to_string()),
+            reliable: true,
+            destination_identities: Vec::new(),
+        };
+        self.rt
+            .block_on(room.local_participant().publish_data(packet))
+            .map_err(|e| format!("publish data: {}", e))?;
+        log::info!("[Sion][voix-native] data publié topic={} ({} o)", topic, len);
+        Ok(())
+    }
+
     /// Démarre la mesure du micro local (rond vert) : l'ADM WebRTC ne donnant
     /// pas accès à ses frames capturées, on ouvre le même défaut d'entrée
     /// via cpal en analyse seule (parallèle à la capture ADM, sans publier).
@@ -873,6 +892,8 @@ mod tests {
         assert!(engine.publish_microphone().is_err());
         // Mute sans session : unpublish inexistant = no-op OK.
         assert!(engine.set_microphone_enabled(false).is_ok());
+        // Data sans session : erreur propre, pas de panique.
+        assert!(engine.publish_data("sion-soundboard", vec![1, 2, 3]).is_err());
     }
 
     #[test]

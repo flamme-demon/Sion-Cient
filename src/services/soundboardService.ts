@@ -568,23 +568,36 @@ const afkDecoder = new TextDecoder();
  */
 export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs: number | null, gain: number = 1.0): void {
   const room = getCurrentRoom();
-  if (!room) return;
   const resolvedEmoji = emoji || "🔊";
   const resolvedDuration = durationMs ?? 3000;
+  const payload = afkEncoder.encode(JSON.stringify({
+    mxc: mxcUrl,
+    emoji: resolvedEmoji,
+    duration: resolvedDuration,
+    // Sender ships the gain so receivers don't need to look up the sound
+    // metadata locally (avoids a race where the receiver hasn't synced
+    // the latest m.replace edit yet). Defaults sender-side to the
+    // SoundEntry.gain for the played sound.
+    gain,
+  }));
+  // Chemin natif (chantier no-CEF) : pas de room JS, on passe par le moteur
+  // Rust (`voice_native_publish_data`, reliable comme ici).
+  if (!room) {
+    import("./voiceNativeService").then(({ getActiveVoiceEngine, getVoiceNativeStatus, voiceNativePublishData, bytesToB64 }) => {
+      if (getActiveVoiceEngine() !== "native") return;
+      getVoiceNativeStatus().then((st) => {
+        if (st.identity) setPlayingSound(st.identity, resolvedEmoji, resolvedDuration);
+      }).catch(() => {});
+      voiceNativePublishData(AFK_LIKE_TOPIC, bytesToB64(payload)).catch((err) => {
+        console.warn("[Sion] soundboard broadcast natif failed:", err);
+      });
+    }).catch(() => {});
+    return;
+  }
   // Local "now playing" badge on own avatar — mirrors what remote peers will
   // show when they receive the broadcast.
   setPlayingSound(room.localParticipant.identity, resolvedEmoji, resolvedDuration);
   try {
-    const payload = afkEncoder.encode(JSON.stringify({
-      mxc: mxcUrl,
-      emoji: resolvedEmoji,
-      duration: resolvedDuration,
-      // Sender ships the gain so receivers don't need to look up the sound
-      // metadata locally (avoids a race where the receiver hasn't synced
-      // the latest m.replace edit yet). Defaults sender-side to the
-      // SoundEntry.gain for the played sound.
-      gain,
-    }));
     room.localParticipant.publishData(payload, { reliable: true, topic: AFK_LIKE_TOPIC }).catch((err) => {
       console.warn("[Sion] soundboard broadcast failed:", err);
     });

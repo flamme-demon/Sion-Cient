@@ -85,6 +85,19 @@ export function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+/** Uint8Array → base64 (envoi data-channel natif). */
+export function bytesToB64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+/** Envoie un paquet data-channel sur la session native (soundboard, AFK…).
+ *  Miroir de `publishData` JS (reliable). */
+export function voiceNativePublishData(topic: string, payloadB64: string): Promise<void> {
+  return tauriInvoke<void>("voice_native_publish_data", { topic, payloadB64 });
+}
+
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);

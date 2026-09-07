@@ -15,10 +15,13 @@ import {
   onVoiceNativeStatus,
   onVoiceNativeParticipants,
   onVoiceNativeSpeaking,
+  onVoiceNativeData,
+  voiceNativePublishData,
   toConnectionQuality,
   selectVoiceEngine,
   shouldAutoJoinVoice,
   b64ToBytes,
+  bytesToB64,
   getActiveVoiceEngine,
   setActiveVoiceEngine,
   VOICE_NATIVE_STATUS_EVENT,
@@ -135,5 +138,33 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     // '{"deafened":true}' en base64.
     const bytes = b64ToBytes("eyJkZWFmZW5lZCI6dHJ1ZX0=");
     expect(new TextDecoder().decode(bytes)).toBe('{"deafened":true}');
+  });
+
+  it("bytesToB64 encode les payloads sortants (roundtrip soundboard)", () => {
+    const payload = new TextEncoder().encode('{"mxc":"mxc://h/snd","emoji":"🔊"}');
+    const back = b64ToBytes(bytesToB64(payload));
+    expect(new TextDecoder().decode(back)).toBe('{"mxc":"mxc://h/snd","emoji":"🔊"}');
+  });
+
+  it("voiceNativePublishData transmet topic + payloadB64 (Tauri convertit en payload_b64)", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    await voiceNativePublishData("sion-soundboard", "e30=");
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_publish_data", {
+      topic: "sion-soundboard",
+      payloadB64: "e30=",
+    });
+  });
+
+  it("onVoiceNativeData aplatit topic/payload_b64/sender pour le dispatch front", async () => {
+    const calls: Array<(ev: unknown) => void> = [];
+    listenMock.mockImplementation((_event: unknown, cb: (ev: unknown) => void) => {
+      calls.push(cb);
+      return Promise.resolve(() => {});
+    });
+    const seen: unknown[] = [];
+    await onVoiceNativeData((ev) => seen.push(ev));
+    expect(listenMock).toHaveBeenCalledWith("voice-native-data", expect.any(Function));
+    calls[0]({ payload: { topic: "sion-soundboard", payload_b64: "e30=", sender: "@a:b:c" } });
+    expect(seen).toEqual([{ topic: "sion-soundboard", payload_b64: "e30=", sender: "@a:b:c" }]);
   });
 });

@@ -10,6 +10,7 @@ export function useLiveKit() {
   const pendingUpdate = useRef<typeof participants | null>(null);
   const cleanupParticipantChange = useRef<(() => void) | null>(null);
   const cleanupNative = useRef<(() => void) | null>(null);
+  const cleanupNativeData = useRef<(() => void) | null>(null);
 
   const pushThrottled = useCallback((updatedParticipants: typeof participants) => {
     // Throttle store updates to max ~4 per second to avoid choking React renders
@@ -45,6 +46,15 @@ export function useLiveKit() {
     cleanupNative.current = await native.onVoiceNativeParticipants((updatedParticipants) => {
       pushThrottled(updatedParticipants);
     });
+    // Relais data-channel natif → handlers existants (soundboard…). Miroir du
+    // `RoomEvent.DataReceived` branché dans `livekitService` (chemin JS).
+    cleanupNativeData.current = await native.onVoiceNativeData((ev) => {
+      if (!ev.topic || !ev.sender) return;
+      import("../services/soundboardService").then(({ SOUNDBOARD_TOPIC, handleRemoteBroadcast }) => {
+        if (ev.topic !== SOUNDBOARD_TOPIC || !ev.sender) return;
+        handleRemoteBroadcast(native.b64ToBytes(ev.payload_b64), ev.sender);
+      }).catch(() => {});
+    });
   }, [storeConnect, pushThrottled]);
 
   const disconnect = useCallback(async () => {
@@ -65,6 +75,10 @@ export function useLiveKit() {
     if (cleanupNative.current) {
       cleanupNative.current();
       cleanupNative.current = null;
+    }
+    if (cleanupNativeData.current) {
+      cleanupNativeData.current();
+      cleanupNativeData.current = null;
     }
     if (throttleRef.current) {
       clearTimeout(throttleRef.current);

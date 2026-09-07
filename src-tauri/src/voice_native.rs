@@ -951,12 +951,42 @@ pub fn voice_native_set_deafened(
     status
 }
 
+/// Envoie un paquet data-channel sur la session native (soundboard, AFK…).
+/// Payload base64 (binaire arbitraire). Miroir de `publishData` JS.
+#[tauri::command]
+pub fn voice_native_publish_data(
+    app: tauri::AppHandle<TauriRuntime>,
+    topic: String,
+    payload_b64: String,
+) -> Result<(), String> {
+    #[cfg(feature = "native-voice")]
+    {
+        use base64::Engine as _;
+        let payload = base64::engine::general_purpose::STANDARD
+            .decode(&payload_b64)
+            .map_err(|e| format!("payload base64: {}", e))?;
+        return with_engine(&app, "publish data natif", |e| {
+            e.publish_data(&topic, payload)
+        });
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&app, &topic, &payload_b64);
+        Err("voix native indisponible".to_string())
+    }
+}
+
 /// Remet l'état global à zéro. Réservé aux tests.
 #[cfg(test)]
 pub fn test_reset() {
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
     *inner = VoiceNativeInner::default();
 }
+
+/// Sérialise les tests touchant au `manager()` global : `cargo test`
+/// exécute en parallèle et ces tests se marcheraient dessus sinon (flake).
+#[cfg(test)]
+static TEST_MANAGER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -991,6 +1021,9 @@ mod tests {
 
     #[test]
     fn connect_requires_url_and_token() {
+        let _serial = TEST_MANAGER_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         test_reset();
         assert!(manager().lock().unwrap().state == VoiceConnectionState::Disconnected);
         // Validation pure (sans AppHandle) : on rejoue la logique via l'état.
@@ -1000,6 +1033,9 @@ mod tests {
 
     #[test]
     fn state_defaults_to_disconnected() {
+        let _serial = TEST_MANAGER_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         test_reset();
         let inner = manager().lock().unwrap();
         assert_eq!(inner.state, VoiceConnectionState::Disconnected);
@@ -1009,6 +1045,9 @@ mod tests {
 
     #[test]
     fn disconnect_resets_session() {
+        let _serial = TEST_MANAGER_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         test_reset();
         {
             let mut inner = manager().lock().unwrap();
