@@ -42,6 +42,7 @@ tauri-plugin-notification = "2.3.3"
 # d'OpenSSL système requis).
 livekit = { version = "0.8", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"], optional = true }
+futures-util = { version = "0.3", optional = true }
 
 # Desktop-only dependencies (all platforms except Android)
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -146,7 +147,7 @@ default = ["cef"]
 cef = ["tauri/cef", "tauri-runtime-cef", "dep:cef"]
 # Voix LiveKit native (sans Chromium) : `cargo check --features native-voice`.
 # Hors défaut tant que le chemin JS reste la voix de production.
-native-voice = ["dep:livekit", "dep:tokio"]
+native-voice = ["dep:livekit", "dep:tokio", "dep:futures-util"]
 
 # serde_json is on the IPC hot path; keep it optimized even in dev builds.
 [profile.dev.package.serde_json]

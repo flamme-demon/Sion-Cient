@@ -139,7 +139,13 @@ impl RmsSpeakingDetector {
             return None;
         }
         let sum: f32 = samples.iter().map(|v| v * v).sum();
-        let rms = (sum / samples.len() as f32).sqrt();
+        self.push_rms((sum / samples.len() as f32).sqrt())
+    }
+
+    /// Même logique à partir d'un RMS déjà calculé — évite d'allouer une
+    /// tranche `f32` quand les frames arrivent en `i16` (cas du
+    /// `NativeAudioStream` natif).
+    pub fn push_rms(&mut self, rms: f32) -> Option<bool> {
         let threshold = if self.speaking {
             RMS_SILENCE
         } else {
