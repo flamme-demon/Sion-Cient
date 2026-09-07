@@ -345,9 +345,10 @@ fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// RGBA32 → JPEG à qualité donnée. `full_chroma` = 4:4:4 (texte net, ~2×
-/// plus gros) sinon 4:2:0 (mouvement : imperceptible à 12 im/s, 2× moins
-/// de données à encoder et à faire passer).
+/// RGBA32 → JPEG à qualité donnée, toujours en 4:4:4 (pas de
+/// sous-échantillonnage chroma : le texte reste net même en mouvement ;
+/// ~2× plus gros que le 4:2:0 mais IPC local et CPU SIMD encaissent).
+/// `full_chroma=false` (4:2:0) réservé aux tests comparatifs.
 fn encode_jpeg_rgba(
     width: u32,
     height: u32,
@@ -362,13 +363,6 @@ fn encode_jpeg_rgba(
     enc.encode_rgba(rgba, width, height)
         .map_err(|e| format!("jpeg: {}", e))?;
     Ok(out)
-}
-
-/// Écran en mouvement (oui/non) d'après les émissions des 2 dernières
-/// secondes : au-delà de ~3 im/s, le 4:2:0 est invisible et 2× moins cher.
-/// Fonction pure (testée).
-fn screen_in_motion(emits_last_2s: usize) -> bool {
-    emits_last_2s >= 6
 }
 
 /// Échantillonne le plan Y (1 octet sur 32) pour la détection de changement.
@@ -450,12 +444,12 @@ fn spawn_video_pump(
         let mut latest: Option<livekit::webrtc::video_frame::BoxVideoFrame> = None;
         // Encodage en cours (un seul à la fois) : (échantillons Y, dims
         // source, JPEG émis ou None si image strictement inchangée, avec
-        // temps conversion et encodage en ms + mode chroma pour le diagnostic).
+        // temps conversion et encodage en ms pour le diagnostic).
         let mut pending: Option<
             tokio::task::JoinHandle<(
                 Vec<u8>,
                 (u32, u32),
-                Option<(Vec<u8>, u32, u32, u128, u128, bool)>,
+                Option<(Vec<u8>, u32, u32, u128, u128)>,
             )>,
         > = None;
         let mut prev_samples: Vec<u8> = Vec::new();
@@ -488,7 +482,7 @@ fn spawn_video_pump(
                                     prev_samples = samples;
                                     // Image inchangée (emitted = None) : on
                                     // garde simplement l'affichée.
-                                    if let Some((jpeg, dw, dh, conv_ms, enc_ms, full_chroma)) = emitted {
+                                    if let Some((jpeg, dw, dh, conv_ms, enc_ms)) = emitted {
                                         let now = tokio::time::Instant::now();
                                         window.push_back((now, jpeg.len()));
                                         while window.front().is_some_and(|(t, _)| now.duration_since(*t).as_secs() >= 2) {
@@ -509,9 +503,8 @@ fn spawn_video_pump(
                                         if first {
                                             first = false;
                                             log::info!(
-                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{} {}, conv {}ms enc {}ms)",
-                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality,
-                                                if full_chroma { "444" } else { "420" }, conv_ms, enc_ms
+                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{} 444, conv {}ms enc {}ms)",
+                                                sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality, conv_ms, enc_ms
                                             );
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
@@ -557,9 +550,6 @@ fn spawn_video_pump(
                     // Nouvel encodage si une frame fraîche attend.
                     if let Some(frame) = latest.take() {
                         let q = budget.quality;
-                        // 4:4:4 quand l'écran est calme (texte net), 4:2:0 en
-                        // plein mouvement (imperceptible, 2× moins cher).
-                        let full_chroma = !screen_in_motion(window.len());
                         let prev = std::mem::take(&mut prev_samples);
                         pending = Some(tokio::task::spawn_blocking(move || {
                             let buf = frame.buffer.as_ref();
@@ -576,8 +566,10 @@ fn spawn_video_pump(
                             if dw == 0 || (!prev.is_empty() && prev == samples) {
                                 return (samples, (sw, sh), None);
                             }
-                            // Conversion SIMD libyuv (remplace la boucle
-                            // scalaire : ~68 ms → quelques ms en 1920px).
+                            // Toujours 4:4:4 (texte net même en mouvement) :
+                            // ~2× plus gros que le 4:2:0 mais IPC local et
+                            // CPU SIMD encaissent ; le contrôleur qualité /
+                            // cadence reste la soupape.
                             // ATTENTION : le binding inverse RGBA↔ABGR et
                             // BGRA↔ARGB (vérifié empiriquement, test
                             // `libyuv_to_argb_ordre_des_canaux`) — on demande
@@ -592,9 +584,9 @@ fn spawn_video_pump(
                                 dh as i32,
                             );
                             let conv_ms = t0.elapsed().as_millis();
-                            let emitted = encode_jpeg_rgba(dw, dh, &rgba, q, full_chroma)
+                            let emitted = encode_jpeg_rgba(dw, dh, &rgba, q, true)
                                 .ok()
-                                .map(|jpeg| (jpeg, dw, dh, conv_ms, t0.elapsed().as_millis(), full_chroma));
+                                .map(|jpeg| (jpeg, dw, dh, conv_ms, t0.elapsed().as_millis()));
                             (samples, (sw, sh), emitted)
                         }));
                     }
@@ -1223,10 +1215,19 @@ impl LiveKitEngine {
                             // un écran 2560px) et le texte est illisible.
                             publication.set_video_quality(VideoQuality::High);
                             publication.update_video_dimensions(TrackDimension(1920, 1080));
+                            // Échelle des couches (diagnostic : que propose le
+                            // SFU ?). Pas d'API pour lister les couches
+                            // simulcast — dimension + simulcast + dims des
+                            // frames décodées ci-dessous = l'échelle servie.
+                            let dim = publication.dimension();
                             log::info!(
-                                "[Sion][voix-native] partage d'écran souscrit {} ({})",
+                                "[Sion][voix-native] partage d'écran souscrit {} ({}, simulcast={}, codec={}, dim_annoncee={}x{})",
                                 publication.sid(),
-                                sender
+                                sender,
+                                publication.simulcasted(),
+                                publication.mime_type(),
+                                dim.0,
+                                dim.1
                             );
                             let _ = tx.send(VoiceEngineEvent::VideoPresence {
                                 sender: sender.clone(),
@@ -1449,17 +1450,6 @@ mod tests {
         assert!(j420.len() < j444.len(), "420={} 444={}", j420.len(), j444.len());
     }
 
-    #[test]
-    fn screen_in_motion_seuil_3_images_seconde() {
-        assert!(!screen_in_motion(0));
-        assert!(!screen_in_motion(5));
-        assert!(screen_in_motion(6));
-        assert!(screen_in_motion(25));
-    }
-
-    /// Pinpoint d'un swap de canaux (écran rouge en prod) : YUV connus →
-    /// `to_argb(RGBA)` doit sortir R,G,B dans l'ordre, alpha 255.
-    /// Tolérance ±25 (arrondis libyuv + plage limitée).
     /// Garde-fou du swap RGBA↔ABGR / BGRA↔ARGB du binding (écran rouge en
     /// prod) : on demande ABGR et on DOIT lire du RGBA. Tolérance ±25
     /// (arrondis libyuv + plage limitée BT.601).
