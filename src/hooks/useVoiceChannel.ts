@@ -65,6 +65,14 @@ function gracefulVoiceShutdown(_reason: string) {
       try { room.disconnect(true); } catch { /* ignore */ }
     }
   }).catch(() => {});
+  // Chemin natif : pas de room JS — sans cet appel, le moteur Rust ne reçoit
+  // jamais le disconnect et le SFU nous garde en fantôme ~30 s (+ micro/ADM
+  // vivants jusqu'à la mort du processus).
+  import("../services/voiceNativeService").then(({ getActiveVoiceEngine, voiceNativeDisconnect }) => {
+    if (getActiveVoiceEngine() === "native") {
+      voiceNativeDisconnect().catch(() => {});
+    }
+  }).catch(() => {});
   if (activeRTCRoomId) {
     removeCallMemberEvent(activeRTCRoomId);
     activeRTCRoomId = null;
@@ -147,8 +155,16 @@ async function cleanupActiveSession() {
  */
 export async function cleanupVoiceOnKick() {
   await cleanupActiveSession();
-  const { disconnectFromRoom } = await import("../services/livekitService");
-  await disconnectFromRoom();
+  // Moteur natif : `disconnectFromRoom` JS ne voit aucune room — sans cette
+  // branche, un kick laisse le moteur Rust (micro + session SFU) en vie.
+  if (getActiveVoiceEngine() === "native") {
+    const { voiceNativeDisconnect } = await import("../services/voiceNativeService");
+    await voiceNativeDisconnect();
+    setActiveVoiceEngine(null);
+  } else {
+    const { disconnectFromRoom } = await import("../services/livekitService");
+    await disconnectFromRoom();
+  }
   useAppStore.getState().disconnectVoice();
 }
 

@@ -733,14 +733,27 @@ impl LiveKitEngine {
     /// + `publishTrack` côté JS, sans `getUserMedia` ni shim PulseAudio :
     /// la sélection de périphérique passe par `PlatformAudio`.
     ///
-    /// Parité JS : suppression de bruit Chromium forcée à off (la pipeline
-    /// RNNoise du projet la remplace, cf. `connectToRoom`).
+    /// Traitement audio : le pipeline RNNoise du projet (worklet JS sur la
+    /// piste micro) ne s'applique PAS ici — et `set_noise_suppression`
+    /// ci-dessous ne coupe que le traitement MATÉRIEL (no-op sur desktop,
+    /// où seul l'APM logiciel WebRTC tourne). Autrement dit, en natif c'est
+    /// l'APM logiciel WebRTC (AEC/AGC/NS, cf. log `apm effectif`) qui traite
+    /// le micro, pas RNNoise. Réglages `echoCancellation`/`autoGainControl`
+    /// des settings : non propagés (pas d'API logicielle exposée).
     pub fn publish_microphone(&self) -> Result<(), String> {
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
         let audio = PlatformAudio::new().map_err(|e| format!("audio natif: {}", e))?;
         // Best-effort : un ADM qui refuse ce réglage ne doit pas bloquer l'appel.
+        // (Ne touche que le NS matériel — voir doc ci-dessus.)
         let _ = audio.set_noise_suppression(false, false);
+        // Vérité terrain : quel traitement est VRAIMENT actif ?
+        log::info!(
+            "[Sion][voix-native] apm effectif aec={:?} agc={:?} ns={:?}",
+            audio.active_aec_type(),
+            audio.active_agc_type(),
+            audio.active_ns_type()
+        );
         // Diagnostic routage : quels périphériques l'ADM voit-il ?
         log::info!(
             "[Sion][voix-native] ADM entree=[{}] sortie=[{}]",
