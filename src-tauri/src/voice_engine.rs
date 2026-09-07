@@ -51,6 +51,21 @@ pub fn connection_quality_str(q: &ConnectionQuality) -> &'static str {
     }
 }
 
+/// Options de publication du micro. Parité JS (`publishDefaults` +
+/// `source: Track.Source.Microphone` dans `livekitService`) :
+/// - `source: Microphone` — SANS ÇA, les pairs ne trouvent pas la
+///   publication micro (`isMicrophoneEnabled == false`) et nous affichent
+///   mutés alors que l'audio passe ;
+/// - `dtx/red: false` comme le chemin JS.
+pub fn mic_publish_options() -> TrackPublishOptions {
+    TrackPublishOptions {
+        source: TrackSource::Microphone,
+        dtx: false,
+        red: false,
+        ..Default::default()
+    }
+}
+
 /// Pousse une frame PCM `i16` (format du `NativeAudioStream`) dans le
 /// détecteur RMS sans allocation intermédiaire.
 pub fn push_i16_frame(det: &mut RmsSpeakingDetector, samples: &[i16]) -> Option<bool> {
@@ -67,12 +82,43 @@ pub fn push_i16_frame(det: &mut RmsSpeakingDetector, samples: &[i16]) -> Option<
     det.push_rms((sum / samples.len() as f64).sqrt() as f32)
 }
 
+/// Attache un détecteur de parole (rond vert) à une piste audio distante.
+/// À la fin du stream (unpublish), retombe à `speaking: false`.
+fn spawn_rms_task(
+    tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
+    identity: String,
+    rtc_track: livekit::webrtc::audio_track::RtcAudioTrack,
+) {
+    let tx2 = tx.clone();
+    tokio::spawn(async move {
+        use futures_util::StreamExt as _;
+        // 48 kHz mono : ce que l'ADM négocie par défaut ;
+        // le détecteur RMS s'en contente.
+        let mut stream = NativeAudioStream::new(rtc_track, 48000, 1);
+        let mut det = RmsSpeakingDetector::new();
+        while let Some(frame) = stream.next().await {
+            if let Some(speaking) = push_i16_frame(&mut det, &frame.data) {
+                let _ = tx2.send(VoiceEngineEvent::SpeakingChanged {
+                    identity: identity.clone(),
+                    speaking,
+                });
+            }
+        }
+        let _ = tx2.send(VoiceEngineEvent::SpeakingChanged { identity, speaking: false });
+    });
+}
+
 pub struct LiveKitEngine {
     rt: tokio::runtime::Runtime,
     room: Mutex<Option<Room>>,
     /// Garde l'ADM WebRTC vivant tant que le moteur existe (refcount).
     audio: Mutex<Option<PlatformAudio>>,
     mic_sid: Mutex<Option<TrackSid>>,
+    /// Capture cpal parallèle, analyse seule (rond vert local) : l'ADM ne
+    /// donnant pas accès à ses frames, on mesure le même défaut d'entrée.
+    /// `cpal::Stream` n'étant ni Send ni Sync, il vit dans un thread
+    /// propriétaire qui meurt quand le canal stop se ferme (disconnect).
+    local_meter_stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     event_tx: tokio::sync::broadcast::Sender<VoiceEngineEvent>,
 }
 
@@ -92,6 +138,7 @@ impl LiveKitEngine {
             room: Mutex::new(None),
             audio: Mutex::new(None),
             mic_sid: Mutex::new(None),
+            local_meter_stop: Mutex::new(None),
             event_tx,
         })
     }
@@ -123,12 +170,173 @@ impl LiveKitEngine {
             .rt
             .block_on(room.local_participant().publish_track(
                 LocalTrack::Audio(track),
-                TrackPublishOptions::default(),
+                mic_publish_options(),
             ))
             .map_err(|e| format!("publish mic: {}", e))?;
         *self.mic_sid.lock().map_err(|e| e.to_string())? = Some(publication.sid());
         *self.audio.lock().map_err(|e| e.to_string())? = Some(audio);
         Ok(())
+    }
+
+    /// Démarre la mesure du micro local (rond vert) : l'ADM WebRTC ne donnant
+    /// pas accès à ses frames capturées, on ouvre le même défaut d'entrée
+    /// via cpal en analyse seule (parallèle à la capture ADM, sans publier).
+    /// Mêmes seuils RMS que `speakingDetector.ts`.
+    ///
+    /// `cpal::Stream` n'étant ni Send ni Sync, TOUT vit dans le thread dédié
+    /// (création, play, drop) ; fermer le canal stop (disconnect) fait sortir
+    /// le thread. Best-effort : un défaut indisponible ne fait que logger.
+    pub fn start_local_meter(&self, identity: String) -> Result<(), String> {
+        let tx = self.event_tx.clone();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::Builder::new()
+            .name("sion-voice-local-meter".into())
+            .spawn(move || {
+                Self::run_local_meter(&tx, &identity, &stop_rx);
+            })
+            .map_err(|e| format!("thread meter: {}", e))?;
+        *self.local_meter_stop.lock().map_err(|e| e.to_string())? = Some(stop_tx);
+        Ok(())
+    }
+
+    fn run_local_meter(
+        tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
+        identity: &str,
+        stop_rx: &std::sync::mpsc::Receiver<()>,
+    ) {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        use std::sync::Arc;
+
+        fn feed(
+            tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
+            det: &Arc<Mutex<RmsSpeakingDetector>>,
+            rms: f32,
+            id: &str,
+        ) {
+            let flipped = det.lock().map(|mut d| d.push_rms(rms)).unwrap_or(None);
+            if let Some(speaking) = flipped {
+                let _ = tx.send(VoiceEngineEvent::SpeakingChanged {
+                    identity: id.to_string(),
+                    speaking,
+                });
+            }
+        }
+
+        let host = cpal::default_host();
+        let Some(device) = host.default_input_device() else {
+            log::warn!("[Sion][voix-native] meter local : pas de périphérique d'entrée");
+            return;
+        };
+        let config = match device.default_input_config() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[Sion][voix-native] meter local : config entrée: {}", e);
+                return;
+            }
+        };
+
+        let err_fn =
+            |err| log::warn!("[Sion][voix-native] meter micro local: {}", err);
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::F32 => {
+                let (tx, det, id) = (
+                    tx.clone(),
+                    Arc::new(Mutex::new(RmsSpeakingDetector::new())),
+                    identity.to_string(),
+                );
+                match device.build_input_stream(
+                    &config.into(),
+                    move |data: &[f32], _| {
+                        if data.is_empty() {
+                            return;
+                        }
+                        let sum: f32 = data.iter().map(|v| v * v).sum();
+                        feed(&tx, &det, (sum / data.len() as f32).sqrt(), &id);
+                    },
+                    err_fn,
+                    None,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("[Sion][voix-native] meter local : stream f32: {}", e);
+                        return;
+                    }
+                }
+            }
+            cpal::SampleFormat::I16 => {
+                let (tx, det, id) = (
+                    tx.clone(),
+                    Arc::new(Mutex::new(RmsSpeakingDetector::new())),
+                    identity.to_string(),
+                );
+                match device.build_input_stream(
+                    &config.into(),
+                    move |data: &[i16], _| {
+                        if data.is_empty() {
+                            return;
+                        }
+                        let sum: f64 = data
+                            .iter()
+                            .map(|v| {
+                                let n = *v as f64 / 32768.0;
+                                n * n
+                            })
+                            .sum();
+                        feed(&tx, &det, (sum / data.len() as f64).sqrt() as f32, &id);
+                    },
+                    err_fn,
+                    None,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("[Sion][voix-native] meter local : stream i16: {}", e);
+                        return;
+                    }
+                }
+            }
+            cpal::SampleFormat::U16 => {
+                let (tx, det, id) = (
+                    tx.clone(),
+                    Arc::new(Mutex::new(RmsSpeakingDetector::new())),
+                    identity.to_string(),
+                );
+                match device.build_input_stream(
+                    &config.into(),
+                    move |data: &[u16], _| {
+                        if data.is_empty() {
+                            return;
+                        }
+                        let sum: f64 = data
+                            .iter()
+                            .map(|v| {
+                                let n = (*v as f64 - 32768.0) / 32768.0;
+                                n * n
+                            })
+                            .sum();
+                        feed(&tx, &det, (sum / data.len() as f64).sqrt() as f32, &id);
+                    },
+                    err_fn,
+                    None,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("[Sion][voix-native] meter local : stream u16: {}", e);
+                        return;
+                    }
+                }
+            }
+            fmt => {
+                log::warn!("[Sion][voix-native] meter local : format {:?}", fmt);
+                return;
+            }
+        };
+        if let Err(e) = stream.play() {
+            log::warn!("[Sion][voix-native] meter local : play: {}", e);
+            return;
+        }
+        // Bloque jusqu'au disconnect (fermeture du canal), puis drop le
+        // stream sur ce même thread.
+        let _ = stop_rx.recv();
     }
 
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
@@ -163,9 +371,43 @@ impl LiveKitEngine {
     ) {
         let tx = self.event_tx.clone();
         self.rt.spawn(async move {
-            let mut detectors: HashMap<String, RmsSpeakingDetector> = HashMap::new();
+            // SIDs déjà branchés sur un détecteur (évite les doublons entre
+            // le seeding `Connected` et les `TrackSubscribed` qui suivent).
+            // Les détecteurs RMS vivent dans leurs tâches (spawn_rms_task).
+            let mut attached: HashMap<String, ()> = HashMap::new();
             while let Some(ev) = events.recv().await {
                 match ev {
+                    RoomEvent::Connected { participants_with_tracks } => {
+                        // Participants déjà présents (aucun ParticipantConnected
+                        // ne sera émis pour eux) + leurs pistes existantes.
+                        for (participant, publications) in &participants_with_tracks {
+                            let id = participant.identity().to_string();
+                            let _ = tx.send(VoiceEngineEvent::ParticipantJoined {
+                                identity: id.clone(),
+                                name: participant.name(),
+                            });
+                            for publication in publications {
+                                if publication.is_muted() {
+                                    let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
+                                        identity: id.clone(),
+                                        muted: true,
+                                    });
+                                }
+                                if let Some(RemoteTrack::Audio(audio_track)) =
+                                    publication.track()
+                                {
+                                    let sid = publication.sid().to_string();
+                                    if attached.insert(sid, ()).is_none() {
+                                        spawn_rms_task(
+                                            &tx,
+                                            id.clone(),
+                                            audio_track.rtc_track(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     RoomEvent::ParticipantConnected(p) => {
                         let _ = tx.send(VoiceEngineEvent::ParticipantJoined {
                             identity: p.identity().to_string(),
@@ -174,38 +416,24 @@ impl LiveKitEngine {
                     }
                     RoomEvent::ParticipantDisconnected(p) => {
                         let id = p.identity().to_string();
-                        detectors.remove(&id);
                         let _ = tx.send(VoiceEngineEvent::ParticipantLeft { identity: id });
                     }
                     RoomEvent::TrackSubscribed {
                         track: RemoteTrack::Audio(audio_track),
+                        publication,
                         participant,
                         ..
                     } => {
                         // Rond vert : RMS côté natif sur les frames reçues,
                         // mêmes seuils que speakingDetector.ts.
-                        let id = participant.identity().to_string();
-                        let rtc_track = audio_track.rtc_track();
-                        let tx2 = tx.clone();
-                        tokio::spawn(async move {
-                            use futures_util::StreamExt as _;
-                            // 48 kHz mono : ce que l'ADM négocie par défaut ;
-                            // le détecteur RMS s'en contente.
-                            let mut stream = NativeAudioStream::new(rtc_track, 48000, 1);
-                            let mut det = RmsSpeakingDetector::new();
-                            while let Some(frame) = stream.next().await {
-                                if let Some(speaking) = push_i16_frame(&mut det, &frame.data) {
-                                    let _ = tx2.send(VoiceEngineEvent::SpeakingChanged {
-                                        identity: id.clone(),
-                                        speaking,
-                                    });
-                                }
-                            }
-                            let _ = tx2.send(VoiceEngineEvent::SpeakingChanged {
-                                identity: id,
-                                speaking: false,
-                            });
-                        });
+                        let sid = publication.sid().to_string();
+                        if attached.insert(sid, ()).is_none() {
+                            spawn_rms_task(
+                                &tx,
+                                participant.identity().to_string(),
+                                audio_track.rtc_track(),
+                            );
+                        }
                     }
                     RoomEvent::TrackSubscribed {
                         track: RemoteTrack::Video(_),
@@ -280,9 +508,11 @@ impl VoiceEngine for LiveKitEngine {
         if let Some(room) = room {
             let _ = self.rt.block_on(room.close());
         }
-        // L'ADM se coupe quand le dernier `PlatformAudio` tombe.
+        // L'ADM se coupe quand le dernier `PlatformAudio` tombe ; le meter
+        // local s'arrête quand son canal stop se ferme.
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -332,8 +562,18 @@ mod tests {
     }
 
     #[test]
-    fn quality_str_covers_sdk_values() {
-        assert_eq!(connection_quality_str(&ConnectionQuality::Excellent), "excellent");
+    fn mic_options_advertise_microphone_source() {
+        // Sans source=Microphone, les pairs JS ne trouvent pas la publication
+        // (isMicrophoneEnabled) et nous affichent mutés alors que l'audio passe.
+        let opts = mic_publish_options();
+        assert_eq!(opts.source, TrackSource::Microphone);
+        // Parité publishDefaults JS.
+        assert!(!opts.dtx);
+        assert!(!opts.red);
+    }
+
+    #[test]
+    fn quality_str_covers_sdk_values() {        assert_eq!(connection_quality_str(&ConnectionQuality::Excellent), "excellent");
         assert_eq!(connection_quality_str(&ConnectionQuality::Good), "good");
         assert_eq!(connection_quality_str(&ConnectionQuality::Poor), "poor");
         assert_eq!(connection_quality_str(&ConnectionQuality::Lost), "lost");

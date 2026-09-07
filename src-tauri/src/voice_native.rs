@@ -568,6 +568,11 @@ fn connect_engine(
         engine.disconnect();
         return Err(e);
     }
+    // Rond vert local : mesure cpal parallèle (best-effort — un défaut
+    // d'entrée indisponible ne doit pas faire échouer le join).
+    if let Err(e) = engine.start_local_meter(identity.clone()) {
+        log::warn!("[Sion][voix-native] meter micro local indisponible: {}", e);
+    }
     *engine_holder()
         .lock()
         .map_err(|e| e.to_string())? = Some(engine);
