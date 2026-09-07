@@ -14,7 +14,6 @@
 //! - chaque piste audio distante est branchée sur un [`RmsSpeakingDetector`]
 //!   (mêmes seuils que `speakingDetector.ts`) pour le rond vert.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 use base64::Engine as _;
@@ -85,12 +84,13 @@ pub fn push_i16_frame(det: &mut RmsSpeakingDetector, samples: &[i16]) -> Option<
 /// Attache un détecteur de parole (rond vert) à une piste audio distante.
 /// À la fin du stream (unpublish), retombe à `speaking: false`.
 fn spawn_rms_task(
+    rt: &tokio::runtime::Handle,
     tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
     identity: String,
     rtc_track: livekit::webrtc::audio_track::RtcAudioTrack,
 ) {
     let tx2 = tx.clone();
-    tokio::spawn(async move {
+    rt.spawn(async move {
         use futures_util::StreamExt as _;
         // 48 kHz mono : ce que l'ADM négocie par défaut ;
         // le détecteur RMS s'en contente.
@@ -119,6 +119,10 @@ pub struct LiveKitEngine {
     /// `cpal::Stream` n'étant ni Send ni Sync, il vit dans un thread
     /// propriétaire qui meurt quand le canal stop se ferme (disconnect).
     local_meter_stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Sourdine casque : les nouvelles pistes audio sont désinscrites d'office.
+    deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
+    attached: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
     event_tx: tokio::sync::broadcast::Sender<VoiceEngineEvent>,
 }
 
@@ -139,6 +143,8 @@ impl LiveKitEngine {
             audio: Mutex::new(None),
             mic_sid: Mutex::new(None),
             local_meter_stop: Mutex::new(None),
+            deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             event_tx,
         })
     }
@@ -365,16 +371,67 @@ impl LiveKitEngine {
         }
     }
 
+    /// Sourdine casque : (dés)inscrit toutes les pistes audio distantes.
+    /// Retourne le nombre de pistes touchées (0 sans session = no-op OK).
+    /// Au retour (`false`), les pistes sont réinscrites et le RMS ré-accroché
+    /// (le registre `attached` est purgé : d'éventuelles tâches orphelines
+    /// n'émettent que des booléens idempotents).
+    pub fn set_deafened(&self, deafened: bool) -> Result<usize, String> {
+        self.deafened
+            .store(deafened, std::sync::atomic::Ordering::Relaxed);
+        let room_guard = self.room.lock().map_err(|e| e.to_string())?;
+        let Some(room) = room_guard.as_ref() else {
+            return Ok(0);
+        };
+        if !deafened {
+            self.attached
+                .lock()
+                .map(|mut a| a.clear())
+                .unwrap_or_default();
+        }
+        let mut touched = 0;
+        for participant in room.remote_participants().values() {
+            let identity = participant.identity().to_string();
+            for publication in participant.track_publications().values() {
+                if publication.kind() != TrackKind::Audio {
+                    continue;
+                }
+                publication.set_subscribed(!deafened);
+                touched += 1;
+                if !deafened {
+                    if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
+                        let sid = publication.sid().to_string();
+                        let fresh = self
+                            .attached
+                            .lock()
+                            .map(|mut a| a.insert(sid))
+                            .unwrap_or(false);
+                        if fresh {
+                            spawn_rms_task(
+                                self.rt.handle(),
+                                &self.event_tx,
+                                identity.clone(),
+                                audio_track.rtc_track(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(touched)
+    }
+
     fn spawn_event_pump(
         &self,
         mut events: tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,
     ) {
         let tx = self.event_tx.clone();
+        let rt_handle = self.rt.handle().clone();
+        // Partagés avec `set_deafened` (désinscription des nouvelles pistes
+        // quand on est sourdine + ré-accrochage RMS au retour).
+        let attached = self.attached.clone();
+        let deafened = self.deafened.clone();
         self.rt.spawn(async move {
-            // SIDs déjà branchés sur un détecteur (évite les doublons entre
-            // le seeding `Connected` et les `TrackSubscribed` qui suivent).
-            // Les détecteurs RMS vivent dans leurs tâches (spawn_rms_task).
-            let mut attached: HashMap<String, ()> = HashMap::new();
             while let Some(ev) = events.recv().await {
                 match ev {
                     RoomEvent::Connected { participants_with_tracks } => {
@@ -393,12 +450,23 @@ impl LiveKitEngine {
                                         muted: true,
                                     });
                                 }
+                                if deafened.load(std::sync::atomic::Ordering::Relaxed) {
+                                    if publication.kind() == TrackKind::Audio {
+                                        publication.set_subscribed(false);
+                                    }
+                                    continue;
+                                }
                                 if let Some(RemoteTrack::Audio(audio_track)) =
                                     publication.track()
                                 {
                                     let sid = publication.sid().to_string();
-                                    if attached.insert(sid, ()).is_none() {
+                                    let fresh = attached
+                                        .lock()
+                                        .map(|mut a| a.insert(sid))
+                                        .unwrap_or(false);
+                                    if fresh {
                                         spawn_rms_task(
+                                            &rt_handle,
                                             &tx,
                                             id.clone(),
                                             audio_track.rtc_track(),
@@ -425,14 +493,24 @@ impl LiveKitEngine {
                         ..
                     } => {
                         // Rond vert : RMS côté natif sur les frames reçues,
-                        // mêmes seuils que speakingDetector.ts.
-                        let sid = publication.sid().to_string();
-                        if attached.insert(sid, ()).is_none() {
-                            spawn_rms_task(
-                                &tx,
-                                participant.identity().to_string(),
-                                audio_track.rtc_track(),
-                            );
+                        // mêmes seuils que speakingDetector.ts. Sous sourdine,
+                        // on désinscrit d'office (retour sonore au undeafen).
+                        if deafened.load(std::sync::atomic::Ordering::Relaxed) {
+                            publication.set_subscribed(false);
+                        } else {
+                            let sid = publication.sid().to_string();
+                            let fresh = attached
+                                .lock()
+                                .map(|mut a| a.insert(sid))
+                                .unwrap_or(false);
+                            if fresh {
+                                spawn_rms_task(
+                                    &rt_handle,
+                                    &tx,
+                                    participant.identity().to_string(),
+                                    audio_track.rtc_track(),
+                                );
+                            }
                         }
                     }
                     RoomEvent::TrackSubscribed {
@@ -498,6 +576,12 @@ impl VoiceEngine for LiveKitEngine {
             .block_on(Room::connect(url, token, RoomOptions::default()))
             .map_err(|e| format!("connect LiveKit: {}", e))?;
         let identity = room.local_participant().identity().to_string();
+        self.deafened
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.attached
+            .lock()
+            .map(|mut a| a.clear())
+            .unwrap_or_default();
         self.spawn_event_pump(events);
         *self.room.lock().map_err(|e| e.to_string())? = Some(room);
         Ok(identity)
@@ -513,6 +597,8 @@ impl VoiceEngine for LiveKitEngine {
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.deafened
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -559,6 +645,13 @@ mod tests {
         // Retour au silence franc.
         assert_eq!(push_i16_frame(&mut det, &[0; 480]), Some(false));
         assert_eq!(push_i16_frame(&mut det, &[]), None);
+    }
+
+    #[test]
+    fn deafen_without_session_is_noop() {
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        assert_eq!(engine.set_deafened(true), Ok(0));
+        assert_eq!(engine.set_deafened(false), Ok(0));
     }
 
     #[test]

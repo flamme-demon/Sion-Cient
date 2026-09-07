@@ -718,11 +718,26 @@ pub fn voice_native_set_deafened(
     app: tauri::AppHandle<TauriRuntime>,
     deafened: bool,
 ) -> VoiceNativeStatus {
-    // État seul pour l'instant : couper le playout distant (set_subscribed)
-    // arrive avec l'étape "deafen natif" — le sourdine micro, elle, est
-    // immédiate via set_muted.
+    // Ne pas mentir au front : si le moteur refuse, on garde l'état précédent.
+    let mut applied = true;
+    #[cfg(feature = "native-voice")]
+    {
+        if let Some(holder) = ENGINE.get() {
+            let res = holder.lock().map_err(|e| e.to_string()).and_then(|g| {
+                g.as_ref()
+                    .map(|e| e.set_deafened(deafened).map(|_| ()))
+                    .unwrap_or(Ok(()))
+            });
+            if let Err(e) = res {
+                log::warn!("[Sion][voix-native] deafen natif impossible: {}", e);
+                applied = false;
+            }
+        }
+    }
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
-    inner.deafened = deafened;
+    if applied {
+        inner.deafened = deafened;
+    }
     let status = snapshot(&inner);
     emit_status(&app, &status);
     status
