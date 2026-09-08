@@ -759,6 +759,18 @@ fn connect_engine(
         engine.disconnect();
         return Err(e);
     }
+    // Mute désiré AVANT le join (F8 hors appel…) : le manager le sait déjà,
+    // le moteur frais non — on l'applique (sinon store "muté" + micro live).
+    // Pas de `deafened` équivalent : aucun intent ne survit au join.
+    let want_muted = manager()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .muted;
+    if want_muted {
+        if let Err(e) = engine.set_microphone_enabled(false) {
+            log::warn!("[Sion][voix-native] mute initial refusé: {}", e);
+        }
+    }
     log::info!(
         "[Sion][voix-native] join complet en {}ms (connect+micro)",
         t_join.elapsed().as_millis()
@@ -972,6 +984,9 @@ pub fn voice_native_connect(
             let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
             inner.state = VoiceConnectionState::Connected;
             inner.identity = Some(identity);
+            // Pas de sourdine rassis : aucun intent ne survit au join
+            // (contrairement au mute, synchronisé dans `connect_engine`).
+            inner.deafened = false;
             let status = snapshot(&inner);
             emit_status(&app, &status);
             Ok(status)
@@ -1024,11 +1039,15 @@ pub fn voice_native_set_muted(
     let mut applied = true;
     #[cfg(feature = "native-voice")]
     {
-        let connected = engine_holder()
+        // Moteur présent même sans session (entre deux joins) : on fait
+        // passer l'opération quand même — `set_microphone_enabled(false)`
+        // enregistre le désir, honoré au prochain publish. Sans ça, un mute
+        // hors appel est perdu en silence (store "muté" + micro live).
+        let has_engine = engine_holder()
             .lock()
-            .map(|g| g.as_ref().is_some_and(|e| e.is_connected()))
+            .map(|g| g.is_some())
             .unwrap_or(false);
-        if connected {
+        if has_engine {
             if let Err(e) = with_engine(&app, "mute natif", |e| e.set_microphone_enabled(!muted)) {
                 log::warn!("[Sion][voix-native] {}", e);
                 applied = false;

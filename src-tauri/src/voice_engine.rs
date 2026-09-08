@@ -915,6 +915,11 @@ pub struct LiveKitEngine {
     deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
     attached: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Désir de mute persistant : un mute demandé AVANT toute publication
+    /// (F8 hors appel, join-muté précoce, moteur pas encore connecté) ne
+    /// doit pas se perdre en silence — sinon store "muté" + micro live
+    /// pour toute la session. Consulté à chaque publication.
+    mic_muted: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Partage d'écran local (émission) : `Some` tant que le thread de
     /// capture tourne et que la piste est publiée.
     local_share: Mutex<Option<LocalShareState>>,
@@ -952,6 +957,7 @@ impl LiveKitEngine {
             watchdog_stop: Mutex::new(None),
             deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            mic_muted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             local_share: Mutex::new(None),
             share_audio_muted: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -1018,6 +1024,23 @@ impl LiveKitEngine {
                 .join(" | ")
         );
         let track = LocalAudioTrack::create_audio_track("microphone", audio.rtc_source());
+        // Anti-fantôme : si une publication précédente traîne encore (unmute
+        // sans unpublish préalable), on la retire d'abord — sinon deux
+        // micros vivent et aucun unmute futur ne peut les taire tous les deux.
+        if let Some(old) = self
+            .mic_sid
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            log::warn!(
+                "[Sion][voix-native] micro déjà publié ({}) — dépublication avant re-publish",
+                old
+            );
+            let _ = self
+                .rt
+                .block_on(room.local_participant().unpublish_track(&old));
+        }
         let publication = self
             .rt
             .block_on(room.local_participant().publish_track(
@@ -1028,6 +1051,24 @@ impl LiveKitEngine {
         let sid = publication.sid();
         log::info!("[Sion][voix-native] micro publié sid={}", sid);
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = Some(sid);
+        // Mute désiré AVANT cette publication (F8 hors appel, join muté…)
+        // : on ne laisse pas un micro live derrière un store "muté".
+        if self.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
+            log::info!("[Sion][voix-native] micro publié déjà muté — dépublication immédiate");
+            let stale = self
+                .mic_sid
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            if let Some(stale) = stale {
+                let _ = self
+                    .rt
+                    .block_on(room.local_participant().unpublish_track(&stale));
+            }
+            // `audio` local, pas encore stocké dans le garde : on coupe sa
+            // capture directement (sinon elle tourne pour rien).
+            let _ = audio.stop_recording();
+        }
         // Garder l'ADM vivant tant que la session vit : sans ce garde, le
         // refcount retombe à zéro dès la fin de cette fonction et l'ADM
         // démonte son playout quelques secondes après le join (sink-input
@@ -1440,8 +1481,11 @@ impl LiveKitEngine {
 
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
     /// `refreshMicrophoneForDenoise` côté JS) : unpublish + stop d'un côté,
-    /// start + re-publish de l'autre.
+    /// start + re-publish de l'autre. Le désir est enregistré AVANT tout
+    /// (même sans session : un mute précoce sera honoré au publish).
     pub fn set_microphone_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.mic_muted
+            .store(!enabled, std::sync::atomic::Ordering::Relaxed);
         if enabled {
             let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(audio) = audio_guard.as_ref() {
@@ -2022,6 +2066,8 @@ impl VoiceEngine for LiveKitEngine {
         let identity = room.local_participant().identity().to_string();
         self.deafened
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.mic_muted
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         self.attached
             .lock()
             .map(|mut a| a.clear())
@@ -2388,6 +2434,18 @@ mod tests {
         let engine = LiveKitEngine::new().expect("runtime tokio");
         assert_eq!(engine.set_deafened(true), Ok(0));
         assert_eq!(engine.set_deafened(false), Ok(0));
+    }
+
+    #[test]
+    fn mute_desire_survives_until_publish() {
+        // Sans session : le mute est enregistré (pas perdu en silence) et
+        // une intention d'unmute ultérieure l'efface — même si le publish
+        // échoue faute de session.
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        assert!(engine.set_microphone_enabled(false).is_ok());
+        assert!(engine.mic_muted.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(engine.set_microphone_enabled(true).is_err());
+        assert!(!engine.mic_muted.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]
