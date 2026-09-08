@@ -586,6 +586,20 @@ fn adapt_budget(current: &VideoBudget, bytes_last_window: u64, window_secs: u64)
     }
 }
 
+/// Compteurs diagnostiques du data-channel (stutter curseurs constaté en
+/// prod) : paquets curseur émis/reçus par fenêtre de stats. Lus (et remis à
+/// zéro) par la pompe vidéo dans sa ligne de stats 30 s — donc visibles
+/// dans les logs Rust sans DevTools.
+static CURSOR_TX_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CURSOR_RX_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn take_cursor_counts() -> (u64, u64) {
+    (
+        CURSOR_TX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed),
+        CURSOR_RX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 /// Pompe vidéo : partage d'écran distant → JPEG ~10 im/s vers le front
 /// (`voice-native-frame`). Le flux décodé par libwebrtc EST fluide et net
 /// (vrai codec adaptatif côté SFU) ; le pont JPEG n'en garde que l'essentiel :
@@ -680,8 +694,9 @@ fn spawn_video_pump(
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
+                                            let (cur_tx, cur_rx) = take_cursor_counts();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms",
+                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms, curseurs tx {:.0}/s rx {:.0}/s",
                                                 sender,
                                                 stat_arrived as f64 / secs,
                                                 stat_count as f64 / secs,
@@ -690,7 +705,9 @@ fn spawn_video_pump(
                                                 "ms",
                                                 stat_bytes as f64 / secs / 1024.0,
                                                 stat_conv_ms / stat_count.max(1) as u128,
-                                                stat_enc_ms / stat_count.max(1) as u128
+                                                stat_enc_ms / stat_count.max(1) as u128,
+                                                cur_tx as f64 / secs,
+                                                cur_rx as f64 / secs
                                             );
                                             stat_arrived = 0;
                                             stat_count = 0;
@@ -966,6 +983,11 @@ impl LiveKitEngine {
     /// répare la perte.
     pub fn publish_data(&self, topic: &str, payload: Vec<u8>, reliable: bool) -> Result<(), String> {
         let len = payload.len();
+        if topic == crate::voice_native::TOPIC_CURSOR
+            || topic == crate::voice_native::TOPIC_CURSOR_CLICK
+        {
+            CURSOR_TX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
         let packet = DataPacket {
@@ -1858,7 +1880,10 @@ impl LiveKitEngine {
                         // doit se voir, pas se deviner. Le curseur (60 Hz)
                         // reste en debug pour ne pas noyer le log.
                         let sender = participant.as_ref().map(|p| p.identity().to_string());
-                        if topic.as_deref() == Some(crate::voice_native::TOPIC_CURSOR) {
+                        if topic.as_deref() == Some(crate::voice_native::TOPIC_CURSOR)
+                            || topic.as_deref() == Some(crate::voice_native::TOPIC_CURSOR_CLICK)
+                        {
+                            CURSOR_RX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             log::debug!(
                                 "[Sion][voix-native] data reçu topic=sion-cursor de={:?} ({} o)",
                                 sender,
