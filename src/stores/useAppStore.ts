@@ -76,7 +76,7 @@ interface AppState {
   setConnectingVoice: (id: string | null) => void;
   disconnectVoice: () => void;
   toggleMute: (silent?: boolean) => void;
-  toggleDeafen: () => void;
+  toggleDeafen: () => void | Promise<void>;
   toggleScreenShare: () => void;
   toggleAdmin: () => void;
   toggleSettings: () => void;
@@ -184,18 +184,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.error("[Sion] Failed to toggle microphone:", err);
     }
   },
-  toggleDeafen: () => {
+  toggleDeafen: async () => {
     const newDeafened = !get().isDeafened;
     console.log(`[Sion][deafen] toggleDeafen() store: ${get().isDeafened} → ${newDeafened}`);
     set({ isDeafened: newDeafened });
     if (newDeafened) playDeafenCue();
     else playUndeafenCue();
     if (voiceNativeService.getActiveVoiceEngine() === "native") {
-      // Coupure du playout distant non branchée (étape "deafen natif") —
-      // l'état est suivi, le micro est coupé via toggleMute ci-dessous.
-      voiceNativeService.setVoiceNativeDeafened(newDeafened).catch((err) => {
+      // ORDRE IMPOSÉ (bug F9 du 08/09) : le deafen Rust SORT le moteur de
+      // son holder pendant l'opération — un mute tiré en même temps le
+      // croit absent et abandonne en silence (micro live + sourdine).
+      // On attend donc la fin du deafen avant de couper le micro
+      // (le Rust attend aussi, cf. `wait_for_engine` : double sécurité).
+      try {
+        await voiceNativeService.setVoiceNativeDeafened(newDeafened);
+      } catch (err) {
         console.error("[Sion] Failed to set native deafen:", err);
-      });
+      }
     } else {
       livekitService.setDeafened(newDeafened);
     }

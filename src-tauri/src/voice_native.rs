@@ -108,6 +108,42 @@ fn holder_has_engine() -> bool {
     }
 }
 
+/// Le holder contient-il un moteur CONNECTÉ (session SFU établie) ?
+fn holder_is_connected() -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        engine_holder()
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|e| e.is_connected()))
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "native-voice"))]
+    {
+        false
+    }
+}
+
+/// Attente bornée du moteur : `with_engine` SORT le moteur du holder
+/// pendant chaque opération, donc une commande concurrente (typiquement le
+/// mute implicite tiré en même temps que le deafen par le front) peut
+/// observer un holder vide et abandonner en silence — micro resté live
+/// pendant toute la sourdine (bug F9 du 08/09). Au lieu de sauter, on
+/// attend le retour du moteur (20 × 50 ms = 1 s max, en pratique 1-2
+/// tours). `false` = vraiment aucun moteur (hors appel) : l'appelant
+/// conserve alors le désir côté manager, honoré au prochain join.
+fn wait_for_engine(ready: impl Fn() -> bool) -> bool {
+    if ready() {
+        return true;
+    }
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if ready() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Vérité terrain : le moteur tient-il une publication micro ? `false`
 /// sans moteur (et sans le feature natif : pas de moteur possible).
 fn holder_mic_published() -> bool {
@@ -1075,7 +1111,13 @@ pub fn voice_native_set_muted(
     // passer l'opération quand même — `set_microphone_enabled(false)`
     // enregistre le désir, honoré au prochain publish. Sans ça, un mute
     // hors appel est perdu en silence (store "muté" + micro live).
-    let has_engine = holder_has_engine();
+    // Attente bornée (cf. `wait_for_engine`) : le deafen concurrent sort
+    // le moteur du holder pendant son opération, un test instantané
+    // verrait "pas de moteur" et sauterait le mute.
+    #[cfg(feature = "native-voice")]
+    let has_engine = wait_for_engine(holder_has_engine);
+    #[cfg(not(feature = "native-voice"))]
+    let has_engine = false;
     #[cfg(feature = "native-voice")]
     {
         if has_engine {
@@ -1083,6 +1125,11 @@ pub fn voice_native_set_muted(
                 log::warn!("[Sion][voix-native] {}", e);
                 applied = false;
             }
+        } else {
+            log::info!(
+                "[Sion][voix-native] mute demandé={} sans moteur (hors appel) — désir conservé",
+                muted
+            );
         }
     }
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
@@ -1110,12 +1157,15 @@ pub fn voice_native_set_deafened(
 ) -> VoiceNativeStatus {
     // Ne pas mentir au front : si le moteur refuse, on garde l'état précédent.
     let mut applied = true;
+    // Même course que le mute (cf. `wait_for_engine`) : un deafen qui
+    // sauterait pendant un checkout concurrent laisserait le playout
+    // ouvert derrière un casque "sourdine" — le pendant auditif du bug F9.
+    #[cfg(feature = "native-voice")]
+    let connected = wait_for_engine(holder_is_connected);
+    #[cfg(not(feature = "native-voice"))]
+    let connected = false;
     #[cfg(feature = "native-voice")]
     {
-        let connected = engine_holder()
-            .lock()
-            .map(|g| g.as_ref().is_some_and(|e| e.is_connected()))
-            .unwrap_or(false);
         if connected {
             if let Err(e) = with_engine(&app, "deafen natif", |e| {
                 e.set_deafened(deafened).map(|_| ())?;
@@ -1336,12 +1386,39 @@ mod tests {
     #[test]
     #[cfg(feature = "native-voice")]
     fn take_engine_wait_sans_moteur_rend_none() {
+        let _serial = TEST_MANAGER_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Holder vide (aucun test ne stocke de moteur réel) : ~100 ms de
         // retries puis None, sans panique — le cas "toggle sans session".
         // Surtout : pas de reset sauvage ici, juste None (l'appelant décide).
         let t0 = std::time::Instant::now();
         assert!(take_engine_wait().is_none());
         assert!(t0.elapsed().as_millis() >= 50);
+    }
+
+    #[test]
+    #[cfg(feature = "native-voice")]
+    fn wait_for_engine_survives_concurrent_checkout() {
+        // Bug F9 du 08/09 : `with_engine` sort le moteur du holder pendant
+        // son opération — une commande concurrente voyait "pas de moteur"
+        // et abandonnait (micro live + sourdine). On simule le checkout
+        // (moteur rendu après 100 ms) : l'attente doit aboutir, pas sauter.
+        let _serial = TEST_MANAGER_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _drained = take_engine();
+        assert!(!holder_has_engine());
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if let Ok(engine) = LiveKitEngine::new() {
+                store_engine(Some(engine));
+            }
+        });
+        assert!(wait_for_engine(holder_has_engine));
+        // Nettoyage : holder vide pour les autres tests.
+        let _ = take_engine();
+        assert!(!holder_has_engine());
     }
 
     #[test]
