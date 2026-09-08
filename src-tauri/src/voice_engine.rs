@@ -1520,10 +1520,23 @@ impl LiveKitEngine {
     /// `false` si le provider refuse (ne doit pas arriver : log + poursuite,
     /// une clé manquée se répare à la prochaine rotation / re-flush).
     pub fn set_e2ee_key(&self, identity: &str, key_index: i32, key: Vec<u8>) -> bool {
+        let key_len = key.len();
         let ok = self
             .e2ee_keys
             .set_key(&identity.into(), key_index, key);
         if ok {
+            // Preuve de stockage (diagnostic MissingKey persistant) : le
+            // provider rend-il ce qu'on vient d'écrire, sous la même identité ?
+            let back = self.e2ee_keys.get_key(&identity.into(), key_index);
+            match back {
+                Some(b) if b.len() == key_len => {}
+                other => log::warn!(
+                    "[Sion][voix-native][E2EE] stockage incohérent {} index={} : relu {:?}",
+                    identity,
+                    key_index,
+                    other.map(|b| b.len())
+                ),
+            }
             let fresh = self
                 .e2ee_seen
                 .lock()
