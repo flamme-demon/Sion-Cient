@@ -1536,6 +1536,14 @@ impl LiveKitEngine {
                     "[Sion][voix-native][E2EE] première clé de {} index={}",
                     identity, key_index
                 );
+            } else {
+                // Rotations : chaque index compte pour diagnostiquer un
+                // `MissingKey` persistant (clé en retard vs introuvable).
+                // INFO (pas debug) : rares et décisives.
+                log::info!(
+                    "[Sion][voix-native][E2EE] rotation {} index={}",
+                    identity, key_index
+                );
             }
         } else {
             log::warn!(
