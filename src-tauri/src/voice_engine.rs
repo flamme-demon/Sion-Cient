@@ -379,6 +379,13 @@ fn share_audio_presence_kept(share_muted: bool, deafened: bool) -> bool {
     share_muted || deafened
 }
 
+/// Une publication est-elle un partage d'écran vidéo ? (caméras distantes
+/// ignorées en natif, MVP). Fonction pure (testée) : le seeding (pistes
+/// déjà là au join) et le live (TrackSubscribed) partagent ce prédicat.
+fn is_screenshare_video(kind: TrackKind, source: TrackSource) -> bool {
+    matches!(kind, TrackKind::Video) && matches!(source, TrackSource::Screenshare)
+}
+
 /// Échantillonne le plan Y (1 octet sur 32) pour la détection de changement.
 /// Fonction pure (testée).
 fn y_samples(y: &[u8]) -> Vec<u8> {
@@ -1233,6 +1240,32 @@ impl LiveKitEngine {
                                         has_audio: true,
                                     });
                                 }
+                                // Partage d'écran déjà en cours au join (ou
+                                // au reload) : sans ça, la vue n'apparaît que
+                                // si le partage DÉMARRE pendant la session.
+                                if is_screenshare_video(publication.kind(), publication.source()) {
+                                    log::info!(
+                                        "[Sion][voix-native] partage d'écran déjà actif {} ({})",
+                                        publication.sid(),
+                                        id
+                                    );
+                                    let _ = tx.send(VoiceEngineEvent::VideoPresence {
+                                        sender: id.clone(),
+                                        sharing: true,
+                                    });
+                                    // Pompe vidéo + qualité haute, comme au live.
+                                    publication.set_video_quality(VideoQuality::High);
+                                    publication.update_video_dimensions(TrackDimension(1920, 1080));
+                                    if let Some(RemoteTrack::Video(video_track)) = publication.track() {
+                                        start_remote_video_pump(
+                                            &video_rt,
+                                            video_app.clone(),
+                                            &video_stops,
+                                            id.clone(),
+                                            video_track.rtc_track(),
+                                        );
+                                    }
+                                }
                                 if deafened.load(std::sync::atomic::Ordering::Relaxed) {
                                     if publication.kind() == TrackKind::Audio {
                                         publication.set_subscribed(false);
@@ -1376,7 +1409,7 @@ impl LiveKitEngine {
                         ..
                     } => {
                         let sender = participant.identity().to_string();
-                        if publication.source() == TrackSource::Screenshare {
+                        if is_screenshare_video(publication.kind(), publication.source()) {
                             // Couche haute + dimensions de rendu : sans ça le
                             // SFU ne sert que la sous-couche (ex. 1280px pour
                             // un écran 2560px) et le texte est illisible.
@@ -1745,6 +1778,17 @@ mod tests {
         assert!(share_audio_presence_kept(true, true));
         // Vrai retrait côté émetteur : le contrôle doit se masquer.
         assert!(!share_audio_presence_kept(false, false));
+    }
+
+    #[test]
+    fn is_screenshare_video_filtre_camera_et_audio() {
+        use livekit::track::{TrackKind, TrackSource};
+        assert!(is_screenshare_video(TrackKind::Video, TrackSource::Screenshare));
+        // Caméra distante : ignorée en natif (MVP).
+        assert!(!is_screenshare_video(TrackKind::Video, TrackSource::Camera));
+        // Audio (micro comme partage) : jamais de la vidéo.
+        assert!(!is_screenshare_video(TrackKind::Audio, TrackSource::Microphone));
+        assert!(!is_screenshare_video(TrackKind::Audio, TrackSource::ScreenshareAudio));
     }
 
     #[test]
