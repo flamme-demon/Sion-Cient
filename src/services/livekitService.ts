@@ -58,12 +58,16 @@ const AFK_TOPIC = "sion-afk";
 // closes the share view.
 export const CURSOR_TOPIC = "sion-cursor";
 export const CURSOR_CLICK_TOPIC = "sion-cursor-click";
+// Durée de vie d'un curseur sans nouvelles : 5 s (et non 2). Les paquets
+// arrivent en rafales espacées de plusieurs secondes (mesuré en prod :
+// trou-max ~5 s) — avec 2 s le curseur clignotait (effacé puis réapparu
+// ailleurs) au lieu de se figer sur la dernière position connue.
+const CURSOR_TTL_MS = 5000;
 // Transcription arming: "I want the meeting transcribed" — ephemeral per
 // call, so it rides the data channel like AFK (re-broadcast to newcomers,
 // forgotten on leave). The session itself (uuid + dates) is DURABLE and
 // lives in Matrix events; this topic only carries intent.
 const TRANSCRIBE_ARM_TOPIC = "sion-transcribe-arm";
-const CURSOR_TTL_MS = 2000;
 
 /** Expiry for click ripples — the effect itself animates for ~600 ms, so
  *  beyond 800 ms the stored entry is just stale state. */
