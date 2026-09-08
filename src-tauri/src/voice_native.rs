@@ -530,7 +530,11 @@ fn apply_engine_event(
     match ev {
         VoiceEngineEvent::ParticipantJoined { identity, name } => {
             let p = upsert_participant(map, identity);
-            p.name = name.clone();
+            // LiveKit renvoie parfois un nom vide : ne jamais écraser (ni
+            // l'identité par défaut de l'upsert, ni un vrai nom déjà connu).
+            if !name.is_empty() {
+                p.name = name.clone();
+            }
             true
         }
         VoiceEngineEvent::ParticipantLeft { identity } => map.remove(identity).is_some(),
@@ -1436,6 +1440,29 @@ mod tests {
             assert_eq!(map.len(), 1);
             // Leave inconnu : pas de changement, pas d'émission.
             assert!(!apply_engine_event(&mut map, &E::ParticipantLeft { identity: "@z:h".into() }));
+        }
+
+        #[test]
+        fn join_empty_name_keeps_identity() {
+            let mut map = empty();
+            // Nom vide LiveKit : on garde l'identité (pastille curseur, etc.).
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ParticipantJoined { identity: "@a:h".into(), name: "".into() }
+            ));
+            assert_eq!(map["@a:h"].name, "@a:h");
+            // Vrai nom : pris en compte.
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ParticipantJoined { identity: "@a:h".into(), name: "a".into() }
+            ));
+            assert_eq!(map["@a:h"].name, "a");
+            // Re-join vide : ne régresse pas.
+            assert!(apply_engine_event(
+                &mut map,
+                &E::ParticipantJoined { identity: "@a:h".into(), name: "".into() }
+            ));
+            assert_eq!(map["@a:h"].name, "a");
         }
 
         #[test]
