@@ -1455,11 +1455,31 @@ export function broadcastCursorClick(x: number, y: number, target: string) {
 
 /** Envoi curseur via la session native (pas de room JS). Best-effort :
  *  silencieux si le moteur natif n'est pas actif. */
+let cursorPublishInflight = false;
+let cursorTxCount = 0;
+let cursorTxWindowStart = 0;
 function publishNativeCursor(topic: string, body: unknown, reliable: boolean) {
   import("./voiceNativeService").then(({ getActiveVoiceEngine, voiceNativePublishData, bytesToB64 }) => {
     if (getActiveVoiceEngine() !== "native") return;
+    // Latest-wins : à 60 Hz, si le publish précédent n'a pas fini, on jette
+    // cette position (la suivante arrive dans 16 ms). Sans ça les promises
+    // s'empilent et la latence croît sans borne → curseur lent + saccadé.
+    // Jamais sur du reliable (clic/expire/masquage doivent arriver).
+    if (!reliable && cursorPublishInflight) return;
     const payload = new TextEncoder().encode(JSON.stringify(body));
-    voiceNativePublishData(topic, bytesToB64(payload), reliable).catch(() => { /* best-effort */ });
+    cursorTxCount++;
+    const now = Date.now();
+    if (now - cursorTxWindowStart > 5000) {
+      if (cursorTxCount > 0) {
+        console.info(`[Sion][Cursor] tx ~${(cursorTxCount / ((now - cursorTxWindowStart) / 1000)).toFixed(0)}/s (natif)`);
+      }
+      cursorTxCount = 0;
+      cursorTxWindowStart = now;
+    }
+    if (!reliable) cursorPublishInflight = true;
+    voiceNativePublishData(topic, bytesToB64(payload), reliable)
+      .catch(() => { /* best-effort */ })
+      .finally(() => { if (!reliable) cursorPublishInflight = false; });
   }).catch(() => {});
 }
 
@@ -1518,10 +1538,16 @@ export function onCursorClick(callback: (click: RemoteCursorClick) => void): () 
 
 /** Ingère un paquet curseur reçu sur la session native (`voice-native-data`).
  *  Miroir des branches `CURSOR_TOPIC` / `CURSOR_CLICK_TOPIC` de `handleAfkData`
- *  (chemin JS), sans le renvoi vers l'overlay Tauri : le client natif ne
- *  partage jamais son propre écran (MVP), il n'y a donc rien à y projeter.
+ *  (chemin JS). Le renvoi vers l'overlay Tauri (quand ON partage en natif)
+ *  vit dans `useLiveKit`, qui connaît l'identité locale et l'état du partage.
  *  `senderName` vient de la liste des participants natifs (repli identité).
  *  Les curseurs orphelins (leave) expirent via le TTL comme en JS. */
+// Dernier `cursorCallback` émis (throttle ~30 Hz : la map garde toujours la
+// position la plus fraîche, seule la notification React est ralentie — à
+// 60 Hz le re-render ne suit plus et saccade).
+let lastNativeCursorEmit = 0;
+let cursorRxCount = 0;
+let cursorRxWindowStart = 0;
 export function handleNativeCursorData(
   topic: string,
   senderIdentity: string,
@@ -1561,7 +1587,22 @@ export function handleNativeCursorData(
           target: parsed.t ?? "",
           expiresAt: Date.now() + CURSOR_TTL_MS,
         });
-        cursorCallback?.(Array.from(remoteCursors.values()));
+        // La map garde toujours la position la plus fraîche ; seule la
+        // notification React est ralentie (~30 Hz) — à 60 Hz le re-render
+        // ne suit plus et saccade. Compteur diagnostique (stutter prod).
+        cursorRxCount++;
+        const nowRx = Date.now();
+        if (nowRx - cursorRxWindowStart > 5000) {
+          if (cursorRxCount > 0) {
+            console.info(`[Sion][Cursor] rx ~${(cursorRxCount / ((nowRx - cursorRxWindowStart) / 1000)).toFixed(0)}/s (natif)`);
+          }
+          cursorRxCount = 0;
+          cursorRxWindowStart = nowRx;
+        }
+        if (nowRx - lastNativeCursorEmit >= 33) {
+          lastNativeCursorEmit = nowRx;
+          cursorCallback?.(Array.from(remoteCursors.values()));
+        }
       }
     } catch { /* ignore malformed */ }
   }

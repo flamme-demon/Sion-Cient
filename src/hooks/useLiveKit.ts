@@ -3,6 +3,10 @@ import type { BaseKeyProvider } from "livekit-client";
 import { useLiveKitStore } from "../stores/useLiveKitStore";
 import * as livekitService from "../services/livekitService";
 
+/** Pushes overlay en vol par expéditeur (latest-wins : on jette la position
+ *  si le push précédent n'a pas fini — voir `publishNativeCursor`). */
+const overlayPushInflight = new Set<string>();
+
 export function useLiveKit() {
   const { connected, roomName, participants } = useLiveKitStore();
   const { connect: storeConnect, disconnect: storeDisconnect, setParticipants } = useLiveKitStore();
@@ -93,7 +97,8 @@ export function useLiveKit() {
       // JS conditionné au partage local) : les curseurs des viewers sont
       // projetés sur notre écran, donc capturés dans notre partage.
       // Coords relatives à UN partage : on ne projette que ce qui vise
-      // explicitement le nôtre (comme en JS).
+      // explicitement le nôtre (comme en JS). Latest-wins : un push encore
+      // en vol fait sauter la position (la suivante arrive dans 16 ms).
       import("../stores/useAppStore").then(({ useAppStore }) => {
         if (!useAppStore.getState().isScreenSharing) return;
         const selfId = nativeIdentity.current;
@@ -117,14 +122,19 @@ export function useLiveKit() {
             } else if (ev.topic === "sion-cursor") {
               if (payload.expire) {
                 overlay.clearCursorFromOverlay(sender).catch(() => {});
-              } else if (typeof payload.x === "number" && typeof payload.y === "number") {
+              } else if (
+                typeof payload.x === "number" &&
+                typeof payload.y === "number" &&
+                !overlayPushInflight.has(sender)
+              ) {
+                overlayPushInflight.add(sender);
                 overlay.pushCursorToOverlay({
                   identity: sender,
                   name,
                   x: payload.x,
                   y: payload.y,
                   expiresAt: Date.now() + 2000,
-                }).catch(() => {});
+                }).catch(() => {}).finally(() => overlayPushInflight.delete(sender));
               }
             }
           } catch { /* ignore malformed */ }

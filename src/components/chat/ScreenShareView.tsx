@@ -39,6 +39,11 @@ function ChevronRightIcon() {
 const CURSOR_BROADCAST_HZ = 60;
 const CURSOR_BROADCAST_INTERVAL = Math.floor(1000 / CURSOR_BROADCAST_HZ);
 
+// Compteur diagnostique (stutter curseurs constaté en prod) : re-rendus
+// effectifs de l'overlay, loggés toutes les 5 s quand actifs.
+let cursorRenderCount = 0;
+let cursorRenderWindowStart = 0;
+
 /** Rect of the media *content* (after `object-contain` letterbox/pillarbox)
  *  in viewport coordinates. When the element's aspect doesn't match the
  *  stream's (common when the sharer's screen is ultrawide and we render in
@@ -230,7 +235,18 @@ export function ScreenShareView() {
   // Subscribe to remote cursors only while a share is visible.
   useEffect(() => {
     if (!activeIdentity) { setCursors([]); return; }
-    const unsub = onCursorsChange(setCursors);
+    const unsub = onCursorsChange((c) => {
+      cursorRenderCount++;
+      const now = performance.now();
+      if (now - cursorRenderWindowStart > 5000) {
+        if (cursorRenderCount > 0) {
+          console.info(`[Sion][Cursor] rendu ~${(cursorRenderCount / ((now - cursorRenderWindowStart) / 1000)).toFixed(0)}/s`);
+        }
+        cursorRenderCount = 0;
+        cursorRenderWindowStart = now;
+      }
+      setCursors(c);
+    });
     return () => { unsub(); setCursors([]); };
   }, [activeIdentity]);
 
@@ -258,11 +274,25 @@ export function ScreenShareView() {
 
     let lastBroadcast = 0;
     let insideVideo = false;
+    // getBoundingClientRect() force un recalcul de layout synchrone : à
+    // 60-120 Hz d'événements souris sur un arbre sali par les re-renders,
+    // ça cale le thread (envoi saccadé à la source). Cache 50 ms — pendant
+    // un resize, 50 ms de décalage sont imperceptibles.
+    let cachedRect: ReturnType<typeof getVideoContentRect> | null = null;
+    let cachedRectAt = 0;
+    const getRect = () => {
+      const now = performance.now();
+      if (!cachedRect || now - cachedRectAt > 50) {
+        cachedRect = getVideoContentRect(video);
+        cachedRectAt = now;
+      }
+      return cachedRect;
+    };
 
     const onMove = (e: MouseEvent) => {
       const now = performance.now();
       if (now - lastBroadcast < CURSOR_BROADCAST_INTERVAL) return;
-      const rect = getVideoContentRect(video);
+      const rect = getRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
       if (x < 0 || x > 1 || y < 0 || y > 1) {
@@ -285,7 +315,7 @@ export function ScreenShareView() {
     let lastClickAt = 0;
     const DBLCLICK_WINDOW = 300;
     const onClick = (e: MouseEvent) => {
-      const rect = getVideoContentRect(video);
+      const rect = getRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
