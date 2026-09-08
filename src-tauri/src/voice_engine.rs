@@ -400,30 +400,6 @@ fn is_screenshare_video(kind: TrackKind, source: TrackSource) -> bool {
     matches!(kind, TrackKind::Video) && matches!(source, TrackSource::Screenshare)
 }
 
-/// RGBA (ordre réel des pixels de `DesktopFrame` — vérifié en prod : le
-/// supposer BGRA donne un écran rouge) → ABGR compact. Une passe scalaire
-/// avant la conversion SIMD. `src_stride` = octets par ligne source
-/// (padding éventuel). Fonction pure (testée).
-fn swizzle_rgba_to_abgr(
-    dst: &mut [u8],
-    src: &[u8],
-    width: u32,
-    height: u32,
-    src_stride: usize,
-) {
-    let (w, h) = (width as usize, height as usize);
-    for row in 0..h {
-        let s = &src[row * src_stride..row * src_stride + w * 4];
-        let d = &mut dst[row * w * 4..(row + 1) * w * 4];
-        for (dpx, spx) in d.chunks_exact_mut(4).zip(s.chunks_exact(4)) {
-            dpx[0] = spx[3];
-            dpx[1] = spx[2];
-            dpx[2] = spx[1];
-            dpx[3] = spx[0];
-        }
-    }
-}
-
 /// État d'un partage d'écran local (émission) : drapeau stop pour les
 /// threads de capture + sids des pistes publiées (pour dépublier au stop).
 struct LocalShareState {
@@ -475,7 +451,9 @@ fn run_share_audio_pump(
 /// Boucle de capture d'écran : tourne sur un thread propriétaire (le
 /// `DesktopCapturer` webrtc n'est pas partageable), pompe `capture_frame`
 /// à ~15 im/s et pousse chaque frame dans la `VideoSource` publiée.
-/// BGRA → ABGR (swizzle) → I420 (SIMD libyuv) → `VideoFrame`.
+/// `DesktopFrame` (BGRA sur Linux) → I420 (SIMD libyuv, PAS de swizzle :
+/// `argb_to_i420` lit en fait du BGRA — noms tournés dans ce binding,
+/// prouvé par tests) → `VideoFrame`.
 /// Se termine sur `stop` (ou erreur permanente : dialogue portail refusé…).
 fn run_share_capture(
     mut capturer: DesktopCapturer,
@@ -484,7 +462,11 @@ fn run_share_capture(
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
-    let mut abgr: Vec<u8> = Vec::new();
+    // Stats capture (diagnostic lenteur : la source fournit-elle assez vite,
+    // et à quel coût de conversion ?).
+    let mut captured: u64 = 0;
+    let mut conv_ms_total: u128 = 0;
+    let mut stat_since = std::time::Instant::now();
     let stop_cb = std::sync::Arc::clone(&stop);
     capturer.start_capture(Some(source), move |result| {
         let frame = match result {
@@ -509,20 +491,16 @@ fn run_share_capture(
             (w, h)
         };
         let src_stride = frame.stride() as usize;
-        let need = (w as usize) * (h as usize) * 4;
-        if abgr.len() != need {
-            abgr.resize(need, 0);
-        }
         if frame.data().len() < (h as usize - 1) * src_stride + (w as usize) * 4 {
             return;
         }
-        swizzle_rgba_to_abgr(&mut abgr, frame.data(), w, h, src_stride);
+        let t0 = std::time::Instant::now();
         let mut i420 = I420Buffer::with_strides(w, h, w, (w + 1) / 2, (w + 1) / 2);
         let (sy, su, sv) = i420.strides();
         let (dy, du, dv) = i420.data_mut();
-        livekit::webrtc::native::yuv_helper::abgr_to_i420(
-            &abgr,
-            w * 4,
+        livekit::webrtc::native::yuv_helper::argb_to_i420(
+            frame.data(),
+            src_stride as u32,
             dy,
             sy,
             du,
@@ -537,6 +515,19 @@ fn run_share_capture(
         }
         let vf = VideoFrame::new(VideoRotation::VideoRotation0, i420);
         video_source.capture_frame(&vf);
+        captured += 1;
+        conv_ms_total += t0.elapsed().as_millis();
+        if stat_since.elapsed().as_secs() >= 30 {
+            let secs = stat_since.elapsed().as_secs_f64();
+            log::info!(
+                "[Sion][voix-native] partage local : {:.1} im/s capturées, conv {}ms",
+                captured as f64 / secs,
+                conv_ms_total / captured.max(1) as u128
+            );
+            captured = 0;
+            conv_ms_total = 0;
+            stat_since = std::time::Instant::now();
+        }
     });
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         capturer.capture_frame();
@@ -2139,38 +2130,52 @@ mod tests {
         // Vrai retrait côté émetteur : le contrôle doit se masquer.
         assert!(!share_audio_presence_kept(false, false));
     }
+
+    /// Rotation des noms DANS CE BINDING (prouvé) : `abgr_to_i420` lit en
+    /// fait du RGBA (le vert ABGR [255,0,255,0] sort en magenta Y≈107), et
+    /// `argb_to_i420` lit du BGRA (cf. test suivant). Le rouge est un faux
+    /// ami (palindrome [255,0,0,255] dans les deux ordres). En pratique :
+    /// `DesktopFrame` (BGRA) passe par `argb_to_i420` SANS swizzle.
     #[test]
-    fn swizzle_rgba_to_abgr_ordonne_et_gerbe_stride() {
-        let src = vec![
-            10, 20, 30, 40, 50, 60, 70, 80, 0, 0, 0, 0,
-            11, 21, 31, 41, 51, 61, 71, 81, 0, 0, 0, 0,
-        ];
-        let mut dst = vec![0u8; 16];
-        swizzle_rgba_to_abgr(&mut dst, &src, 2, 2, 12);
-        // RGBA [R,G,B,A] → ABGR [A,B,G,R].
-        assert_eq!(&dst[0..8], &[40, 30, 20, 10, 80, 70, 60, 50]);
-        assert_eq!(&dst[8..16], &[41, 31, 21, 11, 81, 71, 61, 51]);
+    fn abgr_to_i420_lit_du_rgba() {
+        use livekit::webrtc::video_frame::I420Buffer;
+        fn convert(px: [u8; 4]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+            let input = px.repeat(4);
+            let mut buf = I420Buffer::new(2, 2);
+            let (sy, su, sv) = buf.strides();
+            let (dy, du, dv) = buf.data_mut();
+            livekit::webrtc::native::yuv_helper::abgr_to_i420(
+                &input, 8, dy, sy, du, su, dv, sv, 2, 2,
+            );
+            let (dy, du, dv) = buf.data();
+            (dy.to_vec(), du.to_vec(), dv.to_vec())
+        }
+        // Rouge : palindrome, correct dans les deux ordres (Y≈82).
+        let (y, _, _) = convert([255, 0, 0, 255]);
+        assert!((y[0] as i16 - 82).abs() <= 25, "Y={:?}", y);
+        // Vert ABGR [255,0,255,0] lu comme RGBA = magenta (Y≈107, pas 145).
+        let (y, _, _) = convert([255, 0, 255, 0]);
+        assert!((y[0] as i16 - 107).abs() <= 25, "Y={:?}", y);
     }
 
-    /// Le helper `abgr_to_i420` lit-il VRAIMENT de l'ABGR ? (l'autre sens,
-    /// `to_argb`, a un swap RGBA↔ABGR avéré dans ce binding). Rouge ABGR
-    /// [255,0,0,255] → Y≈82, U≈90, V≈240 (BT.601 plage limitée ±25).
+    /// Pendant : `argb_to_i420` lit-il du BGRA ? (si les noms sont tournés
+    /// comme de l'autre côté, argb↔BGRA se correspondent).
+    /// Vert BGRA [0,255,0,255] → Y≈145, U≈54, V≈34.
     #[test]
-    fn abgr_to_i420_ordre_des_canaux() {
+    fn argb_to_i420_ordre_des_canaux() {
         use livekit::webrtc::video_frame::I420Buffer;
-        // Rouge ABGR [255,0,0,255] sur les 4 pixels (2x2).
-        let abgr_red = [255u8, 0, 0, 255].repeat(4);
+        let bgra_green = [0u8, 255, 0, 255].repeat(4);
         let mut buf = I420Buffer::new(2, 2);
         let (sy, su, sv) = buf.strides();
         let (dy, du, dv) = buf.data_mut();
-        livekit::webrtc::native::yuv_helper::abgr_to_i420(
-            &abgr_red, 8, dy, sy, du, su, dv, sv, 2, 2,
+        livekit::webrtc::native::yuv_helper::argb_to_i420(
+            &bgra_green, 8, dy, sy, du, su, dv, sv, 2, 2,
         );
         let (dy, du, dv) = buf.data();
-        eprintln!("Y={:?} U={:?} V={:?}", dy, du, dv);
-        assert!((dy[0] as i16 - 82).abs() <= 25, "Y={:?}", dy);
-        assert!((du[0] as i16 - 90).abs() <= 25, "U={:?}", du);
-        assert!((dv[0] as i16 - 240).abs() <= 25, "V={:?}", dv);
+        eprintln!("vert-via-argb: Y={:?} U={:?} V={:?}", dy, du, dv);
+        assert!((dy[0] as i16 - 145).abs() <= 25, "Y={:?}", dy);
+        assert!((du[0] as i16 - 54).abs() <= 25, "U={:?}", du);
+        assert!((dv[0] as i16 - 34).abs() <= 25, "V={:?}", dv);
     }
 
     #[test]
