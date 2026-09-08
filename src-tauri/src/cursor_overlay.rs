@@ -534,16 +534,41 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 self.redraw();
-                // Keep animating while we have cursors or active clicks.
-                let pending = {
+                // Redessin conditionné : à 60 Hz en continu, le remplissage
+                // plein écran + le texte à chaque frame coûtent cher sur la
+                // machine du sharer (qui capture + encode déjà) → saccades
+                // pour tout le monde. On n'anime que si nécessaire :
+                // - clics actifs ou curseurs pas encore stabilisés (lerp) :
+                //   on maintient la cadence ~60 Hz ;
+                // - sinon (curseurs figés) : on dort jusqu'à la prochaine
+                //   expiration (sweep), zéro CPU entre-temps.
+                let (animate, wake_at) = {
                     let s = self.state.lock().unwrap();
-                    !s.cursors.is_empty() || !s.clicks.is_empty()
+                    let clicks = !s.clicks.is_empty();
+                    let unsettled = s.cursors.values().any(|c| {
+                        (c.render_x - c.target_x).abs() > 0.0005
+                            || (c.render_y - c.target_y).abs() > 0.0005
+                    });
+                    let mut wake: Option<Instant> = None;
+                    for c in s.cursors.values() {
+                        wake = Some(wake.map_or(c.expires_at, |t| t.min(c.expires_at)));
+                    }
+                    for c in &s.clicks {
+                        wake = Some(wake.map_or(c.expires_at, |t| t.min(c.expires_at)));
+                    }
+                    (clicks || unsettled, wake)
                 };
-                if pending {
+                if animate {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         Instant::now() + Duration::from_millis(16),
                     ));
                     if let Some(w) = &self.window { w.request_redraw(); }
+                } else if let Some(t) = wake_at {
+                    // Un seul redraw à l'expiration (le sweep purge alors).
+                    // `request_redraw` dès maintenant : la demande reste en
+                    // file et n'est servie qu'au réveil à `t`.
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(t));
                 } else {
                     event_loop.set_control_flow(ControlFlow::Wait);
                 }
@@ -851,6 +876,9 @@ pub fn cursor_overlay_clear(identity: String) {
     if let Ok(mut state) = handle.state.lock() {
         state.cursors.remove(&identity);
     }
+    // Kick un redraw : sans ça, la suppression resterait peinte si la
+    // boucle dort (curseurs figés, cf. `RedrawRequested` conditionné).
+    let _ = handle.proxy.send_event(UserEvent::Show);
 }
 
 #[tauri::command]
