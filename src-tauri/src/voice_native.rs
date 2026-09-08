@@ -636,7 +636,8 @@ fn apply_engine_event(
         VoiceEngineEvent::DataReceived { .. }
         | VoiceEngineEvent::RoomDisconnected { .. }
         | VoiceEngineEvent::RoomReconnecting
-        | VoiceEngineEvent::RoomReconnected => false,
+        | VoiceEngineEvent::RoomReconnected
+        | VoiceEngineEvent::E2eeStateChanged { .. } => false,
     }
 }
 
@@ -799,6 +800,9 @@ fn spawn_forward_task(
                         }
                         if matches!(other, VoiceEngineEvent::SpeakingChanged { .. }) {
                             let _ = app.emit("voice-native-speaking", other);
+                        }
+                        if matches!(other, VoiceEngineEvent::E2eeStateChanged { .. }) {
+                            let _ = app.emit("voice-native-e2ee-state", other);
                         }
                     }
                 }

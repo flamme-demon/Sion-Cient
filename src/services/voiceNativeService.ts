@@ -39,6 +39,13 @@ export interface VoiceNativeSpeaking {
   speaking: boolean;
 }
 
+/** État E2EE d'un participant (`Ok`, `MissingKey`, `DecryptionFailed`…).
+ *  Diagnostic décisif en salon chiffré (cf. `E2eeStateChanged` Rust). */
+export interface VoiceNativeE2eeState {
+  identity: string;
+  state: string;
+}
+
 export interface VoiceNativeData {
   topic: string | null;
   payload_b64: string;
@@ -214,6 +221,13 @@ export async function onVoiceNativeSpeaking(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<VoiceNativeSpeaking>(VOICE_NATIVE_SPEAKING_EVENT, (e) => cb(e.payload));
+}
+
+export async function onVoiceNativeE2eeState(
+  cb: (ev: VoiceNativeE2eeState) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeE2eeState>("voice-native-e2ee-state", (e) => cb(e.payload));
 }
 
 export async function onVoiceNativeData(

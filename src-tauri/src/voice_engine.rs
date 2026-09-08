@@ -54,6 +54,10 @@ pub enum VoiceEngineEvent {
     RoomDisconnected { reason: String },
     RoomReconnecting,
     RoomReconnected,
+    /// État E2EE d'un participant (`New/Ok/MissingKey/DecryptionFailed/…`) :
+    /// le diagnostic décisif en salon chiffré (clés importées mais silence
+    /// = `MissingKey` ou `DecryptionFailed` ici, pas de devinette).
+    E2eeStateChanged { identity: String, state: String },
 }
 
 /// Snapshot des périphériques vus par l'ADM (diagnostic + futurs réglages).
@@ -2098,6 +2102,15 @@ impl LiveKitEngine {
                     }
                     RoomEvent::Reconnected => {
                         let _ = tx.send(VoiceEngineEvent::RoomReconnected);
+                    }
+                    RoomEvent::E2eeStateChanged { participant, state } => {
+                        let identity = participant.identity().to_string();
+                        let state = format!("{:?}", state);
+                        log::info!(
+                            "[Sion][voix-native][E2EE] état {} : {}",
+                            identity, state
+                        );
+                        let _ = tx.send(VoiceEngineEvent::E2eeStateChanged { identity, state });
                     }
                     _ => {}
                 }

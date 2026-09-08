@@ -15,6 +15,7 @@ export function useLiveKit() {
   const cleanupParticipantChange = useRef<(() => void) | null>(null);
   const cleanupNative = useRef<(() => void) | null>(null);
   const cleanupNativeData = useRef<(() => void) | null>(null);
+  const cleanupNativeE2ee = useRef<(() => void) | null>(null);
   const nativeAfkHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null);
   /** Identité LiveKit locale en mode natif (pour cibler notre partage). */
   const nativeIdentity = useRef<string | null>(null);
@@ -143,6 +144,11 @@ export function useLiveKit() {
         }).catch(() => {});
       }).catch(() => {});
     });
+    // Relais état E2EE natif → console (diagnostic salon chiffré : Ok /
+    // MissingKey / DecryptionFailed par participant — cf. `E2eeStateChanged`).
+    cleanupNativeE2ee.current = await native.onVoiceNativeE2eeState((ev) => {
+      console.info(`[Sion][voix-native][E2EE] état ${ev.identity} : ${ev.state}`);
+    });
     // Heartbeat AFK natif (miroir du heartbeat JS) : tout état manqué ou
     // rassis chez les pairs se répare sous 30 s.
     if (nativeAfkHeartbeat.current) clearInterval(nativeAfkHeartbeat.current);
@@ -181,6 +187,10 @@ export function useLiveKit() {
     if (cleanupNativeData.current) {
       cleanupNativeData.current();
       cleanupNativeData.current = null;
+    }
+    if (cleanupNativeE2ee.current) {
+      cleanupNativeE2ee.current();
+      cleanupNativeE2ee.current = null;
     }
     if (nativeAfkHeartbeat.current) {
       clearInterval(nativeAfkHeartbeat.current);
