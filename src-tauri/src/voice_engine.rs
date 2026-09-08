@@ -20,6 +20,31 @@ use base64::Engine as _;
 use livekit::prelude::*;
 use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
 use livekit::e2ee::{E2eeOptions, EncryptionType};
+
+/// Options du provider E2EE : fenêtre de ratchet + anneau alignés sur
+/// Element Call (`MatrixKeyProvider` JS : 10 / 256). Sel + KDF par défaut
+/// du SDK (compatibles livekit-client).
+fn e2ee_key_provider_options() -> KeyProviderOptions {
+    KeyProviderOptions {
+        ratchet_window_size: 10,
+        key_ring_size: 256,
+        ..Default::default()
+    }
+}
+
+/// Keystore E2EE partagé par tous les moteurs du processus (cloné à chaque
+/// `Engine::new`, même objet C++ sous-jacent via `SharedPtr`) : l'historique
+/// des clés SURVIT aux rejoins, comme le provider JS long-vécu. Sans ça,
+/// chaque join repart vide et toute frame sous ancien index adopté reste en
+/// `MissingKey` définitif pendant que le JS (historique complet) entend.
+#[allow(dead_code)]
+static E2EE_STORE: std::sync::OnceLock<KeyProvider> = std::sync::OnceLock::new();
+
+fn shared_e2ee_store() -> KeyProvider {
+    E2EE_STORE
+        .get_or_init(|| KeyProvider::new(e2ee_key_provider_options()))
+        .clone()
+}
 use livekit::track::VideoQuality;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::desktop_capturer::{
@@ -962,15 +987,9 @@ impl LiveKitEngine {
             .build()
             .map_err(|e| format!("runtime voix: {}", e))?;
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
-        // Fenêtre de ratchet + taille d'anneau alignées sur Element Call
-        // (`MatrixKeyProvider` JS : ratchetWindowSize 10, keyringSize 256) :
-        // absorbe la dérive naturelle des rotations sans recovery applicatif.
-        // Sel + KDF par défaut du SDK (compatibles livekit-client).
-        let e2ee_keys = KeyProvider::new(KeyProviderOptions {
-            ratchet_window_size: 10,
-            key_ring_size: 256,
-            ..Default::default()
-        });
+        // Keystore partagé inter-moteurs (cf. `shared_e2ee_store`) : pas de
+        // provider frais ici, sinon l'historique meurt à chaque join.
+        let e2ee_keys = shared_e2ee_store();
         Ok(Self {
             rt,
             room: Mutex::new(None),
@@ -1519,6 +1538,12 @@ impl LiveKitEngine {
     /// `onEncryptionKey` : mêmes clés brutes, index partagés. Retourne
     /// `false` si le provider refuse (ne doit pas arriver : log + poursuite,
     /// une clé manquée se répare à la prochaine rotation / re-flush).
+    ///
+    /// Si la clé est LA NÔTRE, nos cryptors d'envoi sont réindexés dessus
+    /// (`set_key_index`) : le SDK Rust ne le fait pas seul (aucun appel dans
+    /// livekit 0.8.4 — livekit-client le fait via event `SetKey`), et sans ça
+    /// le sender reste à l'index de création (0) → `MissingKey` local et
+    /// micro inaudible dès la première rotation de notre clé.
     pub fn set_e2ee_key(&self, identity: &str, key_index: i32, key: Vec<u8>) -> bool {
         let key_len = key.len();
         let ok = self
@@ -1558,6 +1583,8 @@ impl LiveKitEngine {
                     identity, key_index
                 );
             }
+            // Notre propre clé : réindexer nos cryptors d'envoi (voir doc).
+            self.bump_own_sender_index(identity, key_index);
         } else {
             log::warn!(
                 "[Sion][voix-native][E2EE] clé refusée de {} index={}",
@@ -1565,6 +1592,33 @@ impl LiveKitEngine {
             );
         }
         ok
+    }
+
+    /// Aligne nos cryptors d'envoi sur notre index courant (cf. `set_e2ee_key`).
+    /// No-op si `identity` n'est pas la nôtre ou sans session (la clé est de
+    /// toute façon stockée : le prochain import — ou le re-bump au publish —
+    /// alignera).
+    fn bump_own_sender_index(&self, identity: &str, key_index: i32) {
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(room) = room_guard.as_ref() else {
+            return;
+        };
+        if room.local_participant().identity().to_string() != identity {
+            return;
+        }
+        let mut bumped = 0;
+        for ((id, _sid), cryptor) in room.e2ee_manager().frame_cryptors() {
+            if id.to_string() == identity {
+                cryptor.set_key_index(key_index);
+                bumped += 1;
+            }
+        }
+        if bumped > 0 {
+            log::info!(
+                "[Sion][voix-native][E2EE] sender réindexé sur {} ({} cryptor(s))",
+                key_index, bumped
+            );
+        }
     }
 
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
@@ -2551,6 +2605,21 @@ mod tests {
         // n'est publié (le store front peut prétendre le contraire).
         let engine = LiveKitEngine::new().expect("runtime tokio");
         assert!(!engine.is_microphone_published());
+    }
+
+    #[test]
+    fn e2ee_keystore_survives_engine_replacement() {
+        // L'historique des clés survit aux rejoins (même objet C++ partagé
+        // via `SharedPtr`) : un moteur frais voit les clés des sessions
+        // précédentes, comme le provider JS long-vécu.
+        let a = LiveKitEngine::new().expect("runtime tokio");
+        assert!(a.set_e2ee_key("@x:srv:D1", 7, vec![0x11u8; 16]));
+        let b = LiveKitEngine::new().expect("runtime tokio");
+        let back = b.e2ee_keys.get_key(&"@x:srv:D1".into(), 7);
+        assert_eq!(back, Some(vec![0x11u8; 16]));
+        // Sans session : le bump sender est un no-op silencieux (pas de
+        // panique sur le holder vide).
+        b.bump_own_sender_index("@x:srv:D1", 7);
     }
 
     #[test]
