@@ -165,6 +165,15 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.image]
 opt-level = 3
+# Overlay curseurs : rasterisation software plein écran (5120 px) à chaque
+# redraw — en opt 0, chaque frame prend des centaines de ms et la boucle ne
+# suit plus (2 im/s mesurées au lieu de 30). Même remède, trois crates.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.ab_glyph]
+opt-level = 3
 
 # Patches CEF — nécessaire pour le build desktop
 # Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive le CEF

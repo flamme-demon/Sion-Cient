@@ -600,9 +600,16 @@ static CURSOR_RX_LAST_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 static CURSOR_RX_MAX_GAP_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn take_cursor_counts() -> (u64, u64) {
+    let rx = CURSOR_RX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if rx == 0 {
+        // Fenêtre sans paquets (personne ne pointe) : on oublie le dernier
+        // timestamp, sinon le PREMIER paquet de la prochaine fenêtre mesure
+        // un "trou" qui n'est que de l'inactivité — faux positif systématique.
+        CURSOR_RX_LAST_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
     (
         CURSOR_TX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed),
-        CURSOR_RX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed),
+        rx,
     )
 }
 
