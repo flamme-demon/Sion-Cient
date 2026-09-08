@@ -612,6 +612,34 @@ pub fn take_cursor_max_gap_ms() -> u64 {
     CURSOR_RX_MAX_GAP_MS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Ticker diagnostique indépendant : toutes les 30 s, une ligne
+/// `curseurs tx/rx/trou-max` — même sans partage vidéo regardé (la pompe
+/// vidéo ne tourne que pour un partage distant, ce qui rendait les stats
+/// aveugles quand on partage soi-même). Lancé une seule fois par
+/// processus (thread global, silencieux hors activité).
+pub fn ensure_cursor_stats_thread() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("sion-cursor-stats".into())
+        .spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let (tx, rx) = take_cursor_counts();
+            let gap = take_cursor_max_gap_ms();
+            if tx + rx > 0 {
+                log::info!(
+                    "[Sion][voix-native] curseurs tx {}/s rx {}/s trou-max {}ms",
+                    tx as f64 / 30.0,
+                    rx as f64 / 30.0,
+                    gap
+                );
+            }
+        })
+        .ok();
+}
+
 fn note_cursor_rx(now_ms: u64) {
     CURSOR_RX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let prev = CURSOR_RX_LAST_MS.swap(now_ms, std::sync::atomic::Ordering::Relaxed);
@@ -723,10 +751,8 @@ fn spawn_video_pump(
                                         }
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
-                                            let (cur_tx, cur_rx) = take_cursor_counts();
-                                            let cur_gap = take_cursor_max_gap_ms();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms, curseurs tx {:.0}/s rx {:.0}/s trou-max {}ms",
+                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms",
                                                 sender,
                                                 stat_arrived as f64 / secs,
                                                 stat_count as f64 / secs,
@@ -735,10 +761,7 @@ fn spawn_video_pump(
                                                 "ms",
                                                 stat_bytes as f64 / secs / 1024.0,
                                                 stat_conv_ms / stat_count.max(1) as u128,
-                                                stat_enc_ms / stat_count.max(1) as u128,
-                                                cur_tx as f64 / secs,
-                                                cur_rx as f64 / secs,
-                                                cur_gap
+                                                stat_enc_ms / stat_count.max(1) as u128
                                             );
                                             stat_arrived = 0;
                                             stat_count = 0;
@@ -1997,6 +2020,8 @@ impl VoiceEngine for LiveKitEngine {
         }
         self.spawn_event_pump(events);
         *self.room.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
+        // Stats curseurs indépendantes (voir `ensure_cursor_stats_thread`).
+        ensure_cursor_stats_thread();
         // Le démute one-shot au publish ne suffit pas (l'ADM se remute
         // parfois en cours d'appel) : garde périodique jusqu'au disconnect.
         *self.watchdog_stop.lock().unwrap_or_else(|e| e.into_inner()) =
