@@ -52,6 +52,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Application avec CEF (fenêtre) + voix native (feature)
+# Application avec CEF (fenêtre) + voix native (feature).
+# RUST_BACKTRACE=1 : la panique tokio "Cannot start a runtime from within a
+# runtime" tue l'app sans stack sinon — intraçable (crash du 08/09 18h51).
 cd "$PROJECT_DIR/src-tauri"
-cargo run -j4 --features native-voice "$@"
+RUST_BACKTRACE=1 cargo run -j4 --features native-voice "$@"
