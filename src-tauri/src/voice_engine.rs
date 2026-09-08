@@ -20,6 +20,9 @@ use base64::Engine as _;
 use livekit::prelude::*;
 use livekit::track::VideoQuality;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
+use livekit::webrtc::desktop_capturer::{
+    CaptureError, CaptureSource, DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
+};
 use livekit::webrtc::video_frame::native::VideoFrameBufferExt as _;
 use livekit::webrtc::video_stream::native::NativeVideoStream;
 use livekit::options::TrackPublishOptions;
@@ -260,6 +263,17 @@ pub fn mic_publish_options() -> TrackPublishOptions {
     }
 }
 
+/// Options de publication du partage d'écran local. `source: Screenshare`
+/// (SANS ÇA, les pairs trient la piste en caméra et la vue ne l'affiche
+/// pas) ; le reste en défaut du SDK (simulcast VP8 — les viewers demandent
+/// la couche haute comme pour les partages JS).
+pub fn screenshare_publish_options() -> TrackPublishOptions {
+    TrackPublishOptions {
+        source: TrackSource::Screenshare,
+        ..Default::default()
+    }
+}
+
 /// Pousse une frame PCM `i16` (format du `NativeAudioStream`) dans le
 /// détecteur RMS sans allocation intermédiaire.
 pub fn push_i16_frame(det: &mut RmsSpeakingDetector, samples: &[i16]) -> Option<bool> {
@@ -384,6 +398,101 @@ fn share_audio_presence_kept(share_muted: bool, deafened: bool) -> bool {
 /// déjà là au join) et le live (TrackSubscribed) partagent ce prédicat.
 fn is_screenshare_video(kind: TrackKind, source: TrackSource) -> bool {
     matches!(kind, TrackKind::Video) && matches!(source, TrackSource::Screenshare)
+}
+
+/// BGRA (ordre des pixels de `DesktopFrame` sur Linux) → ABGR compact.
+/// Une passe scalaire avant la conversion SIMD — vérifié visuellement en
+/// prod (inverser = écran rouge, cf. historique du pont JPEG). `src_stride`
+/// = octets par ligne source (padding éventuel). Fonction pure (testée).
+fn swizzle_bgra_to_abgr(
+    dst: &mut [u8],
+    src: &[u8],
+    width: u32,
+    height: u32,
+    src_stride: usize,
+) {
+    let (w, h) = (width as usize, height as usize);
+    for row in 0..h {
+        let s = &src[row * src_stride..row * src_stride + w * 4];
+        let d = &mut dst[row * w * 4..(row + 1) * w * 4];
+        for (dpx, spx) in d.chunks_exact_mut(4).zip(s.chunks_exact(4)) {
+            dpx[0] = spx[3];
+            dpx[1] = spx[0];
+            dpx[2] = spx[1];
+            dpx[3] = spx[2];
+        }
+    }
+}
+
+/// État d'un partage d'écran local (émission) : drapeau stop pour le thread
+/// de capture + sid de la piste publiée (pour dépublier au stop).
+struct LocalShareState {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    video_sid: TrackSid,
+}
+
+/// Boucle de capture d'écran : tourne sur un thread propriétaire (le
+/// `DesktopCapturer` webrtc n'est pas partageable), pompe `capture_frame`
+/// à ~15 im/s et pousse chaque frame dans la `VideoSource` publiée.
+/// BGRA → ABGR (swizzle) → I420 (SIMD libyuv) → `VideoFrame`.
+/// Se termine sur `stop` (ou erreur permanente : dialogue portail refusé…).
+fn run_share_capture(
+    mut capturer: DesktopCapturer,
+    source: CaptureSource,
+    video_source: livekit::webrtc::video_source::native::NativeVideoSource,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
+    let mut abgr: Vec<u8> = Vec::new();
+    let stop_cb = std::sync::Arc::clone(&stop);
+    capturer.start_capture(Some(source), move |result| {
+        let frame = match result {
+            Ok(f) => f,
+            Err(CaptureError::Temporary) => return,
+            Err(CaptureError::Permanent) => {
+                log::warn!("[Sion][voix-native] capture écran en erreur permanente — arrêt");
+                stop_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        };
+        let (w, h) = (frame.width().max(0) as u32, frame.height().max(0) as u32);
+        if w < 2 || h < 2 {
+            return;
+        }
+        let src_stride = frame.stride() as usize;
+        let need = (w as usize) * (h as usize) * 4;
+        if abgr.len() != need {
+            abgr.resize(need, 0);
+        }
+        if frame.data().len() < (h as usize - 1) * src_stride + (w as usize) * 4 {
+            return;
+        }
+        swizzle_bgra_to_abgr(&mut abgr, frame.data(), w, h, src_stride);
+        // I420 neuf par frame (v1 : ~40 Mo/s d'allocs à 15 im/s en 1080p —
+        // à mutualiser si le profiling l'exige).
+        let mut i420 = I420Buffer::with_strides(w, h, w, (w + 1) / 2, (w + 1) / 2);
+        let (sy, su, sv) = i420.strides();
+        let (dy, du, dv) = i420.data_mut();
+        livekit::webrtc::native::yuv_helper::abgr_to_i420(
+            &abgr,
+            w * 4,
+            dy,
+            sy,
+            du,
+            su,
+            dv,
+            sv,
+            w as i32,
+            h as i32,
+        );
+        let vf = VideoFrame::new(VideoRotation::VideoRotation0, i420);
+        video_source.capture_frame(&vf);
+    });
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        capturer.capture_frame();
+        std::thread::sleep(std::time::Duration::from_millis(66));
+    }
+    log::info!("[Sion][voix-native] thread de capture écran terminé");
 }
 
 /// Échantillonne le plan Y (1 octet sur 32) pour la détection de changement.
@@ -687,6 +796,9 @@ pub struct LiveKitEngine {
     deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
     attached: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Partage d'écran local (émission) : `Some` tant que le thread de
+    /// capture tourne et que la piste est publiée.
+    local_share: Mutex<Option<LocalShareState>>,
     /// Expéditeurs dont le son du partage est coupé localement (miroir du
     /// `screenShareAudioMuted` JS) : survivre au undeafen global (qui
     /// réinscrit tout) sans réactiver leur partage.
@@ -721,6 +833,7 @@ impl LiveKitEngine {
             watchdog_stop: Mutex::new(None),
             deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            local_share: Mutex::new(None),
             share_audio_muted: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             event_app: Mutex::new(None),
@@ -857,6 +970,111 @@ impl LiveKitEngine {
     /// Stoppe la pompe vidéo d'un expéditeur (unsubscribe, leave).
     pub fn stop_remote_video(&self, sender: &str) {
         stop_remote_video_pump(&self.video_stops, sender);
+    }
+
+    /// Vrai si on partage notre écran (émission en cours).
+    pub fn is_screensharing(&self) -> bool {
+        self.local_share
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Démarre le partage d'écran local : capture (écran principal par
+    /// défaut, curseur inclus) → piste vidéo `Screenshare` publiée.
+    /// Idempotent (déjà en partage = no-op OK). Sans le son du système
+    /// pour l'instant (v1 vidéo seule — les viewers voient "sans son",
+    /// comme un partage JS sans la case audio).
+    pub fn start_screensharing(&self, source_id: Option<u64>) -> Result<(), String> {
+        // Même exigence de contexte Tokio que `set_deafened`.
+        let _rt_enter = self.rt.enter();
+        if self.is_screensharing() {
+            return Ok(());
+        }
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let room = room_guard.as_ref().ok_or("pas de session SFU")?;
+        let mut opts = DesktopCapturerOptions::new(DesktopCaptureSourceType::Screen);
+        opts.set_include_cursor(true);
+        let capturer = DesktopCapturer::new(opts)
+            .ok_or("capture d'écran indisponible (portail Wayland ?)")?;
+        let sources = capturer.get_source_list();
+        let source = match source_id {
+            Some(wanted) => sources
+                .iter()
+                .find(|s| s.id() == wanted)
+                .cloned()
+                .ok_or_else(|| format!("source de capture {} introuvable", wanted))?,
+            None => sources
+                .into_iter()
+                .next()
+                .ok_or("aucun écran détecté pour le partage")?,
+        };
+        log::info!(
+            "[Sion][voix-native] partage local : source {} (\"{}\")",
+            source.id(),
+            source.title()
+        );
+        // Source vidéo "screencast" (le SFU optimise texte/partage plutôt
+        // que caméra) ; la résolution suit les frames capturées.
+        let video_source =
+            livekit::webrtc::video_source::native::NativeVideoSource::new(
+                livekit::webrtc::video_source::VideoResolution {
+                    width: 1920,
+                    height: 1080,
+                },
+                true,
+            );
+        let track = LocalVideoTrack::create_video_track(
+            "screen-share",
+            livekit::webrtc::video_source::RtcVideoSource::Native(video_source.clone()),
+        );
+        let publication = self
+            .rt
+            .block_on(room.local_participant().publish_track(
+                LocalTrack::Video(track),
+                screenshare_publish_options(),
+            ))
+            .map_err(|e| format!("publish partage: {}", e))?;
+        let sid = publication.sid();
+        log::info!("[Sion][voix-native] partage local publié sid={}", sid);
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *self.local_share.lock().unwrap_or_else(|e| e.into_inner()) = Some(LocalShareState {
+            stop: std::sync::Arc::clone(&stop),
+            video_sid: sid,
+        });
+        let stop_thread = std::sync::Arc::clone(&stop);
+        std::thread::Builder::new()
+            .name("sion-share-capture".into())
+            .spawn(move || {
+                run_share_capture(capturer, source, video_source, stop_thread);
+            })
+            .map_err(|e| format!("thread capture: {}", e))?;
+        Ok(())
+    }
+
+    /// Stoppe le partage d'écran local (drapeau stop + dépublication).
+    /// Idempotent (pas de partage = no-op OK).
+    pub fn stop_screensharing(&self) -> Result<(), String> {
+        let _rt_enter = self.rt.enter();
+        let state = self
+            .local_share
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let Some(state) = state else {
+            return Ok(());
+        };
+        state
+            .stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(room) = room_guard.as_ref() {
+            let _ = self
+                .rt
+                .block_on(room.local_participant().unpublish_track(&state.video_sid));
+        }
+        log::info!("[Sion][voix-native] partage local arrêté");
+        Ok(())
     }
 
     /// Démarre la mesure du micro local (rond vert) : l'ADM WebRTC ne donnant
@@ -1599,6 +1817,17 @@ impl VoiceEngine for LiveKitEngine {
             .lock()
             .map(|mut m| m.clear())
             .unwrap_or_default();
+        // Un partage local ne survit pas au changement de room (la piste
+        // meurt avec l'ancienne) : on coupe le thread, sans dépublier
+        // (room déjà remplacée — `disconnect` s'en chargeait avant).
+        if let Some(stale) = self
+            .local_share
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            stale.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.spawn_event_pump(events);
         *self.room.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
         // Le démute one-shot au publish ne suffit pas (l'ADM se remute
@@ -1609,6 +1838,15 @@ impl VoiceEngine for LiveKitEngine {
     }
 
     fn disconnect(&mut self) {
+        // Couper d'abord le partage local éventuel (sinon piste fantôme).
+        let share = self
+            .local_share
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(share) = share {
+            share.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let room = self.room.lock().map(|mut g| g.take()).unwrap_or(None);
         if let Some(room) = room {
             let _ = self.rt.block_on(room.close());
@@ -1781,8 +2019,28 @@ mod tests {
     }
 
     #[test]
-    fn is_screenshare_video_filtre_camera_et_audio() {
-        use livekit::track::{TrackKind, TrackSource};
+    fn swizzle_bgra_to_abgr_ordonne_et_gerbe_stride() {
+        // 2x2, stride source avec padding (12 o utiles + 4 o bourrage).
+        let src = vec![
+            10, 20, 30, 40, 50, 60, 70, 80, 0, 0, 0, 0,
+            11, 21, 31, 41, 51, 61, 71, 81, 0, 0, 0, 0,
+        ];
+        let mut dst = vec![0u8; 16];
+        swizzle_bgra_to_abgr(&mut dst, &src, 2, 2, 12);
+        // BGRA [B,G,R,A] → ABGR [A,B,G,R].
+        assert_eq!(&dst[0..8], &[40, 10, 20, 30, 80, 50, 60, 70]);
+        assert_eq!(&dst[8..16], &[41, 11, 21, 31, 81, 51, 61, 71]);
+    }
+
+    #[test]
+    fn screenshare_publish_options_marque_la_source() {
+        // Sans source=Screenshare, les pairs trient la piste en caméra.
+        let opts = screenshare_publish_options();
+        assert_eq!(opts.source, TrackSource::Screenshare);
+    }
+
+    #[test]
+    fn is_screenshare_video_filtre_camera_et_audio() {        use livekit::track::{TrackKind, TrackSource};
         assert!(is_screenshare_video(TrackKind::Video, TrackSource::Screenshare));
         // Caméra distante : ignorée en natif (MVP).
         assert!(!is_screenshare_video(TrackKind::Video, TrackSource::Camera));

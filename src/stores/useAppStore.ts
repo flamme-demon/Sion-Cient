@@ -206,7 +206,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleScreenShare: async () => {
     const newSharing = !get().isScreenSharing;
     if (voiceNativeService.getActiveVoiceEngine() === "native") {
-      console.warn("[Sion][voix-native] partage d'écran non branché en natif — étape dédiée du chantier.");
+      // Chemin natif : capture + publication Rust (v1 : écran principal,
+      // 15 im/s, sans le son du système). État posé après succès moteur,
+      // revert sinon (jamais de partage fantôme affiché).
+      try {
+        await voiceNativeService.setVoiceNativeScreensharing(newSharing);
+      } catch (err) {
+        console.warn("[Sion][voix-native] partage d'écran natif impossible:", err);
+        return;
+      }
+      set({ isScreenSharing: newSharing });
       return;
     }
     set({ isScreenSharing: newSharing });

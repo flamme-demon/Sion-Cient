@@ -19,6 +19,7 @@ import {
   onVoiceNativeFrame,
   onVoiceNativeFrameStopped,
   setVoiceNativeShareAudioMuted,
+  setVoiceNativeScreensharing,
   overlayMatrixVoiceState,
   matrixUserIdOf,
   voiceNativePublishData,
@@ -216,6 +217,20 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     });
     invokeMock.mockResolvedValue(false);
     await expect(setVoiceNativeShareAudioMuted("@p:h", false)).resolves.toBe(false);
+  });
+
+  it("setVoiceNativeScreensharing transmet enabled (+ sourceId optionnel)", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    await setVoiceNativeScreensharing(true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
+      enabled: true,
+      sourceId: null,
+    });
+    await setVoiceNativeScreensharing(false, 42);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
+      enabled: false,
+      sourceId: 42,
+    });
   });
 
   it("matrixUserIdOf coupe le suffixe device LiveKit", () => {

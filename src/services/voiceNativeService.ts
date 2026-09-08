@@ -106,6 +106,13 @@ export function setVoiceNativeShareAudioMuted(sender: string, muted: boolean): P
   return tauriInvoke<boolean>("voice_native_set_screenshare_audio_muted", { sender, muted });
 }
 
+/** Démarre / arrête le partage de NOTRE écran en mode natif (miroir de
+ *  `toggleScreenShare` JS). V1 : écran principal, 15 im/s, sans le son
+ *  du système. `sourceId` réservé au futur picker (None = premier écran). */
+export function setVoiceNativeScreensharing(enabled: boolean, sourceId?: number): Promise<void> {
+  return tauriInvoke<void>("voice_native_set_screensharing", { enabled, sourceId: sourceId ?? null });
+}
+
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);

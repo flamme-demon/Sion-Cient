@@ -1101,6 +1101,35 @@ pub fn voice_native_set_screenshare_audio_muted(
     }
 }
 
+/// Démarre / arrête le partage de NOTRE écran en mode natif (miroir de
+/// `toggleScreenShare` JS). `source_id` = écran/fenêtre choisi (None =
+/// premier écran). V1 : vidéo seule, 15 im/s, curseur inclus, sans le son
+/// du système (les viewers voient "sans son", comme un partage JS sans la
+/// case audio) et sans overlay de curseurs distants.
+#[tauri::command]
+pub fn voice_native_set_screensharing(
+    app: tauri::AppHandle<TauriRuntime>,
+    enabled: bool,
+    source_id: Option<u64>,
+) -> Result<(), String> {
+    #[cfg(feature = "native-voice")]
+    {
+        if enabled {
+            return with_engine(&app, "partage d'écran natif", |e| {
+                e.start_screensharing(source_id)
+            });
+        }
+        return with_engine(&app, "arrêt partage natif", |e| {
+            e.stop_screensharing()
+        });
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&app, &enabled, &source_id);
+        Err("voix native indisponible".to_string())
+    }
+}
+
 /// Envoie un paquet data-channel sur la session native (soundboard, AFK,
 /// curseurs…). Payload base64 (binaire arbitraire). Miroir de `publishData`
 /// JS — `reliable: false` pour le curseur (60 Hz, la perte se répare toute
