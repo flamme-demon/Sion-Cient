@@ -1428,8 +1428,12 @@ export function broadcastCursor(x: number, y: number, target: string) {
       lastCursorTxLog = now;
       console.log(`[Sion][Cursor] tx move t=${target}`);
     }
-    const payload = afkEncoder.encode(JSON.stringify({ x, y, t: target }));
     // `reliable: false` = DataPacketKind.LOSSY — low-latency, drops allowed.
+    // `ts` = horodatage émetteur (ms, horloge locale) : le receveur mesure
+    // la gigue (max-min des délais, insensible au décalage d'horloge) pour
+    // distinguer transport en rafales vs affichage lent. Ignoré par les
+    // vieux receveurs (champ inconnu).
+    const payload = afkEncoder.encode(JSON.stringify({ x, y, t: target, ts: Date.now() }));
     currentRoom.localParticipant.publishData(payload, { reliable: false, topic: CURSOR_TOPIC }).catch(() => { /* best-effort */ });
   } catch { /* ignore */ }
 }
@@ -1470,7 +1474,11 @@ function publishNativeCursor(topic: string, body: unknown, reliable: boolean) {
     // s'empilent et la latence croît sans borne → curseur lent + saccadé.
     // Jamais sur du reliable (clic/expire/masquage doivent arriver).
     if (!reliable && cursorPublishInflight) return;
-    const payload = new TextEncoder().encode(JSON.stringify(body));
+    // Même `ts` que le chemin JS (voir `broadcastCursor`) pour la mesure
+    // de gigue côté receveur.
+    const payload = new TextEncoder().encode(
+      JSON.stringify({ ...(body as Record<string, unknown>), ts: Date.now() }),
+    );
     cursorTxCount++;
     const now = Date.now();
     if (now - cursorTxWindowStart > 5000) {
@@ -1552,6 +1560,33 @@ export function onCursorClick(callback: (click: RemoteCursorClick) => void): () 
 let lastNativeCursorEmit = 0;
 let cursorRxCount = 0;
 let cursorRxWindowStart = 0;
+
+// Gigue de réception (diagnostic) : min/max des (réception - émission) sur
+// 5 s, alimenté par le `ts` émetteur. Le décalage d'horloge s'annule dans
+// l'écart (max-min) : gigue faible + curseur lent = affichage en cause ;
+// gigue énorme = transport/émission en rafales. Anciens émetteurs sans `ts`
+// : mesure ignorée.
+let cursorDelayMin = Infinity;
+let cursorDelayMax = -Infinity;
+let cursorDelayCount = 0;
+let cursorDelayWindowStart = 0;
+function noteCursorDelay(sentTs: number | undefined) {
+  if (typeof sentTs !== "number") return;
+  const d = Date.now() - sentTs;
+  if (d < cursorDelayMin) cursorDelayMin = d;
+  if (d > cursorDelayMax) cursorDelayMax = d;
+  cursorDelayCount++;
+  const now = Date.now();
+  if (now - cursorDelayWindowStart > 5000 && cursorDelayCount > 0) {
+    console.info(
+      `[Sion][Cursor] transit min~${cursorDelayMin.toFixed(0)}ms gigue~${(cursorDelayMax - cursorDelayMin).toFixed(0)}ms (${cursorDelayCount} pkts)`,
+    );
+    cursorDelayMin = Infinity;
+    cursorDelayMax = -Infinity;
+    cursorDelayCount = 0;
+    cursorDelayWindowStart = now;
+  }
+}
 export function handleNativeCursorData(
   topic: string,
   senderIdentity: string,
@@ -1577,12 +1612,13 @@ export function handleNativeCursorData(
   }
   if (topic === CURSOR_TOPIC) {
     try {
-      const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean; t?: string };
+      const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean; t?: string; ts?: number };
       if (parsed.expire) {
         if (remoteCursors.delete(senderIdentity)) {
           cursorCallback?.(Array.from(remoteCursors.values()));
         }
       } else if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+        noteCursorDelay(parsed.ts);
         remoteCursors.set(senderIdentity, {
           identity: senderIdentity,
           name: senderName,
@@ -2149,7 +2185,8 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
     }
     if (topic === CURSOR_TOPIC) {
       try {
-        const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean; t?: string };
+        const parsed = JSON.parse(afkDecoder.decode(payload)) as { x?: number; y?: number; expire?: boolean; t?: string; ts?: number };
+        noteCursorDelay(parsed.ts);
         // If we're the one sharing the screen, forward to the transparent
         // Tauri overlay so the cursor appears on our real display (captured
         // by getDisplayMedia → all viewers see where everyone points). Only
