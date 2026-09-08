@@ -387,14 +387,21 @@ export function ScreenShareView() {
 
     const onMove = (e: MouseEvent) => {
       const now = performance.now();
-      if (now - lastBroadcast < CURSOR_BROADCAST_INTERVAL) return;
       const rect = getRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
       if (x < 0 || x > 1 || y < 0 || y > 1) {
-        if (insideVideo) { broadcastCursorHide(activeIdentity); insideVideo = false; }
+        // Sortie : TOUJOURS signalée immédiatement, jamais throttlée — une
+        // sortie avalée par le throttle (souris rapide <16 ms) laissait un
+        // curseur fantôme collé au bord jusqu'au TTL (60 s).
+        if (insideVideo) {
+          broadcastCursorHide(activeIdentity);
+          insideVideo = false;
+          lastBroadcast = now;
+        }
         return;
       }
+      if (now - lastBroadcast < CURSOR_BROADCAST_INTERVAL) return;
       insideVideo = true;
       lastBroadcast = now;
       broadcastCursor(x, y, activeIdentity);
@@ -453,12 +460,16 @@ export function ScreenShareView() {
     video.addEventListener("click", onClick as EventListener);
     video.addEventListener("dblclick", onDblClick as EventListener);
     window.addEventListener("blur", onLeave);
+    // Sortie de la fenêtre par un autre chemin que la vidéo (ex. sortie
+    // rapide sans mouseleave vidéo fiable) : le document la voit toujours.
+    document.addEventListener("mouseleave", onLeave);
     return () => {
       video.removeEventListener("mousemove", onMove as EventListener);
       video.removeEventListener("mouseleave", onLeave);
       video.removeEventListener("click", onClick as EventListener);
       video.removeEventListener("dblclick", onDblClick as EventListener);
       window.removeEventListener("blur", onLeave);
+      document.removeEventListener("mouseleave", onLeave);
       if (insideVideo) broadcastCursorHide(activeIdentity);
     };
   }, [activeIdentity, isNative]);
