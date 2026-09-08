@@ -44,6 +44,55 @@ const CURSOR_BROADCAST_INTERVAL = Math.floor(1000 / CURSOR_BROADCAST_HZ);
 let cursorRenderCount = 0;
 let cursorRenderWindowStart = 0;
 
+/** Couche curseurs en DOM direct (hors React) : à 30-60 positions/s, le
+ *  re-render du composant entier saccade ; ici seules `left`/`top` bougent.
+ *  Structure strictement identique au JSX remplacé (flèche SVG + pastille
+ *  nom). `textContent` pour le nom (échappement comme React). */
+function syncCursorLayer(
+  container: HTMLDivElement | null,
+  cache: Map<string, HTMLDivElement>,
+  cursors: RemoteCursor[],
+  activeIdentity: string | null,
+) {
+  if (!container) return;
+  const visible = new Set<string>();
+  for (const c of cursors) {
+    if (!c.target || c.target !== activeIdentity) continue;
+    visible.add(c.identity);
+    let el = cache.get(c.identity);
+    if (!el || !el.isConnected) {
+      el = document.createElement("div");
+      const color = colorForIdentity(c.identity);
+      el.dataset.identity = c.identity;
+      el.style.cssText =
+        "position:absolute;display:flex;flex-direction:column;align-items:flex-start;gap:2px;" +
+        "transform:translate(-2px,-2px);transition:left 60ms linear,top 60ms linear;";
+      el.innerHTML =
+        `<svg width="16" height="22" viewBox="0 0 16 22" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,0.55))">` +
+        `<path d="M0 0 L0 16 L4.5 12 L7 18 L9.5 17 L7 11 L12.5 11 Z" fill="${color}" ` +
+        `stroke="white" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+      const pill = document.createElement("span");
+      pill.style.cssText =
+        `background:${color};color:white;font-size:10px;font-weight:600;` +
+        `padding:2px 6px;border-radius:4px;white-space:nowrap;` +
+        `box-shadow:0 1px 3px rgba(0,0,0,0.35);`;
+      el.appendChild(pill);
+      container.appendChild(el);
+      cache.set(c.identity, el);
+    }
+    el.style.left = `${c.x * 100}%`;
+    el.style.top = `${c.y * 100}%`;
+    const pill = el.querySelector("span");
+    if (pill && pill.textContent !== c.name) pill.textContent = c.name;
+  }
+  for (const [id, el] of cache) {
+    if (!visible.has(id)) {
+      el.remove();
+      cache.delete(id);
+    }
+  }
+}
+
 /** Rect of the media *content* (after `object-contain` letterbox/pillarbox)
  *  in viewport coordinates. When the element's aspect doesn't match the
  *  stream's (common when the sharer's screen is ultrawide and we render in
@@ -108,7 +157,6 @@ export function ScreenShareView() {
   const [shares, setShares] = useState<ScreenShareInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const activeShares = isNative ? nativeShares : shares;
-  const [cursors, setCursors] = useState<RemoteCursor[]>([]);
   const [clicks, setClicks] = useState<RemoteCursorClick[]>([]);
   // Content-area box (inside the video element, after object-contain) in
   // coordinates relative to `containerRef`. Used to position the cursor +
@@ -232,9 +280,18 @@ export function ScreenShareView() {
     };
   }, [activeTrack]);
 
-  // Subscribe to remote cursors only while a share is visible.
+  // Subscribe to remote cursors only while a share is visible. Positions
+  // synchronisées en DOM direct (pas de setState : voir `syncCursorLayer`).
+  const cursorLayerRef = useRef<HTMLDivElement>(null);
+  const cursorElCache = useRef(new Map<string, HTMLDivElement>());
   useEffect(() => {
-    if (!activeIdentity) { setCursors([]); return; }
+    const cache = cursorElCache.current;
+    const layer = cursorLayerRef.current;
+    if (!activeIdentity) {
+      cache.clear();
+      if (layer) layer.innerHTML = "";
+      return;
+    }
     const unsub = onCursorsChange((c) => {
       cursorRenderCount++;
       const now = performance.now();
@@ -245,9 +302,13 @@ export function ScreenShareView() {
         cursorRenderCount = 0;
         cursorRenderWindowStart = now;
       }
-      setCursors(c);
+      syncCursorLayer(layer, cache, c, activeIdentity);
     });
-    return () => { unsub(); setCursors([]); };
+    return () => {
+      unsub();
+      cache.clear();
+      if (layer) layer.innerHTML = "";
+    };
   }, [activeIdentity]);
 
   // Subscribe to click ripples — ephemeral, auto-swept after CLICK_TTL_MS.
@@ -455,12 +516,12 @@ export function ScreenShareView() {
 
   if (!activeShare) return null;
 
-  // Only show cursors/ripples EXPLICITLY pointing at the share we're
-  // currently watching. Coords are relative to one share; a viewer hovering
-  // another sharer's tab would otherwise paint on top of this one. Untargeted
-  // events (pre-1.4.8 senders) are dropped — rendering them on every share
-  // at once is worse than not rendering them at all.
-  const visibleCursors = cursors.filter((c) => !!c.target && c.target === activeIdentity);
+  // Only show ripples EXPLICITLY pointing at the share we're currently
+  // watching (les curseurs sont filtrés dans `syncCursorLayer`). Coords are
+  // relative to one share; a viewer hovering another sharer's tab would
+  // otherwise paint on top of this one. Untargeted events (pre-1.4.8
+  // senders) are dropped — rendering them on every share at once is worse
+  // than not rendering them at all.
   const visibleClicks = clicks.filter((c) => !!c.target && c.target === activeIdentity);
 
   return (
@@ -603,8 +664,9 @@ export function ScreenShareView() {
         {/* Cursor overlay. Positioned against the video content rect (sized
             via contentBox) so percent-based placement stays aligned with the
             sharer's screen pixels when the video is letterboxed.
-            pointer-events: none so overlays never steal the video controls. */}
-        <div style={{
+            pointer-events: none so overlays never steal the video controls.
+            Enfants gérés en DOM direct (`syncCursorLayer`), pas en React. */}
+        <div ref={cursorLayerRef} style={{
           position: 'absolute',
           left: contentBox?.left ?? 0,
           top: contentBox?.top ?? 0,
@@ -613,44 +675,6 @@ export function ScreenShareView() {
           pointerEvents: 'none',
           overflow: 'hidden',
         }}>
-          {visibleCursors.map((c) => (
-            <div
-              key={c.identity}
-              style={{
-                position: 'absolute',
-                left: `${c.x * 100}%`,
-                top: `${c.y * 100}%`,
-                transform: 'translate(-2px, -2px)',
-                transition: 'left 60ms linear, top 60ms linear',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-start',
-                gap: 2,
-              }}
-            >
-              <svg width="16" height="22" viewBox="0 0 16 22" style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.55))' }}>
-                <path
-                  d="M0 0 L0 16 L4.5 12 L7 18 L9.5 17 L7 11 L12.5 11 Z"
-                  fill={colorForIdentity(c.identity)}
-                  stroke="white"
-                  strokeWidth="1.2"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              <span style={{
-                background: colorForIdentity(c.identity),
-                color: 'white',
-                fontSize: 10,
-                fontWeight: 600,
-                padding: '2px 6px',
-                borderRadius: 4,
-                whiteSpace: 'nowrap',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
-              }}>
-                {c.name}
-              </span>
-            </div>
-          ))}
         </div>
       </div>
       <div className="text-xs text-[var(--color-text-secondary)] py-1.5 flex items-center gap-2.5 flex-wrap justify-center px-2">

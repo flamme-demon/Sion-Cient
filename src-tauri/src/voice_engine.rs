@@ -592,12 +592,41 @@ fn adapt_budget(current: &VideoBudget, bytes_last_window: u64, window_secs: u64)
 /// dans les logs Rust sans DevTools.
 static CURSOR_TX_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CURSOR_RX_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Dernier paquet curseur reçu (Instant brut, ms) + plus grand trou
+/// inter-paquets de la fenêtre : un flux régulier donne ~16 ms ; des
+/// rafales espacées de secondes donnent des trous de plusieurs secondes
+/// (= saccades visibles, quelle que soit la moyenne).
+static CURSOR_RX_LAST_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CURSOR_RX_MAX_GAP_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn take_cursor_counts() -> (u64, u64) {
     (
         CURSOR_TX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed),
         CURSOR_RX_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed),
     )
+}
+
+/// Plus grand trou inter-paquets (ms) depuis le dernier appel (remise à zéro).
+/// 0 = moins de 2 paquets reçus dans la fenêtre (rien à mesurer).
+pub fn take_cursor_max_gap_ms() -> u64 {
+    CURSOR_RX_MAX_GAP_MS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+fn note_cursor_rx(now_ms: u64) {
+    CURSOR_RX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let prev = CURSOR_RX_LAST_MS.swap(now_ms, std::sync::atomic::Ordering::Relaxed);
+    if prev != 0 {
+        let gap = now_ms.saturating_sub(prev);
+        CURSOR_RX_MAX_GAP_MS.fetch_max(gap, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Horloge monotone (ms) sans dépendance supplémentaire.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Pompe vidéo : partage d'écran distant → JPEG ~10 im/s vers le front
@@ -695,8 +724,9 @@ fn spawn_video_pump(
                                         if stat_since.elapsed().as_secs() >= 30 {
                                             let secs = stat_since.elapsed().as_secs_f64();
                                             let (cur_tx, cur_rx) = take_cursor_counts();
+                                            let cur_gap = take_cursor_max_gap_ms();
                                             log::info!(
-                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms, curseurs tx {:.0}/s rx {:.0}/s",
+                                                "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, émises {:.1} im/s, q{}, pas {}{}, {:.0} Ko/s, conv {}ms enc {}ms, curseurs tx {:.0}/s rx {:.0}/s trou-max {}ms",
                                                 sender,
                                                 stat_arrived as f64 / secs,
                                                 stat_count as f64 / secs,
@@ -707,7 +737,8 @@ fn spawn_video_pump(
                                                 stat_conv_ms / stat_count.max(1) as u128,
                                                 stat_enc_ms / stat_count.max(1) as u128,
                                                 cur_tx as f64 / secs,
-                                                cur_rx as f64 / secs
+                                                cur_rx as f64 / secs,
+                                                cur_gap
                                             );
                                             stat_arrived = 0;
                                             stat_count = 0;
@@ -1883,7 +1914,7 @@ impl LiveKitEngine {
                         if topic.as_deref() == Some(crate::voice_native::TOPIC_CURSOR)
                             || topic.as_deref() == Some(crate::voice_native::TOPIC_CURSOR_CLICK)
                         {
-                            CURSOR_RX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            note_cursor_rx(now_ms());
                             log::debug!(
                                 "[Sion][voix-native] data reçu topic=sion-cursor de={:?} ({} o)",
                                 sender,
