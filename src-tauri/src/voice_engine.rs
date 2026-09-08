@@ -1920,7 +1920,7 @@ impl LiveKitEngine {
                                 }
                                 continue;
                             }
-                            log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, sender);
+                            log::info!("[Sion][voix-native] piste audio souscrite {} ({}) chiffrement={:?}", sid, sender, publication.encryption_type());
                             // Resync : une republication (fin de sourdine
                             // distante) démarre non-mutée sans TrackUnmuted.
                             let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
