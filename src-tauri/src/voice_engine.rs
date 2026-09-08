@@ -1452,8 +1452,18 @@ impl LiveKitEngine {
         } else {
             let sid = self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()).take();
             let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
-            if let (Some(room), Some(sid)) = (room_guard.as_ref(), sid) {
-                let _ = self.rt.block_on(room.local_participant().unpublish_track(&sid));
+            match (room_guard.as_ref(), sid) {
+                (Some(room), Some(sid)) => {
+                    match self.rt.block_on(room.local_participant().unpublish_track(&sid)) {
+                        Ok(_) => log::info!("[Sion][voix-native] micro dépublié sid={}", sid),
+                        Err(e) => log::warn!(
+                            "[Sion][voix-native] dépublication micro {} refusée: {}",
+                            sid, e
+                        ),
+                    }
+                }
+                (_, None) => log::info!("[Sion][voix-native] micro déjà coupé (aucun sid)"),
+                (None, _) => log::warn!("[Sion][voix-native] micro non coupé (pas de session)"),
             }
             drop(room_guard);
             let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
