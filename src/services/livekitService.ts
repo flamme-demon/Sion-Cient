@@ -1561,11 +1561,30 @@ let lastNativeCursorEmit = 0;
 let cursorRxCount = 0;
 let cursorRxWindowStart = 0;
 
-// Gigue de réception (diagnostic) : min/max des (réception - émission) sur
-// 5 s, alimenté par le `ts` émetteur. Le décalage d'horloge s'annule dans
-// l'écart (max-min) : gigue faible + curseur lent = affichage en cause ;
-// gigue énorme = transport/émission en rafales. Anciens émetteurs sans `ts`
-// : mesure ignorée.
+// Stats d'arrivée PAR EXPÉDITEUR (diagnostic) : moyenne + trou-max sur des
+// fenêtres de 10 s. Permet d'attribuer un flux en rafales à son émetteur
+// (machine/liaison du pair) plutôt qu'au transport ou à l'affichage.
+const cursorRxBySender = new Map<string, { count: number; last: number; maxGap: number; windowStart: number }>();
+function noteCursorArrival(senderIdentity: string) {
+  const now = Date.now();
+  let st = cursorRxBySender.get(senderIdentity);
+  if (!st) {
+    st = { count: 0, last: 0, maxGap: 0, windowStart: now };
+    cursorRxBySender.set(senderIdentity, st);
+  }
+  if (st.last !== 0) {
+    const gap = now - st.last;
+    if (gap > st.maxGap) st.maxGap = gap;
+  }
+  st.last = now;
+  st.count++;
+  if (now - st.windowStart > 10000 && st.count > 0) {
+    console.info(
+      `[Sion][Cursor] rx ${senderIdentity}: ~${(st.count / ((now - st.windowStart) / 1000)).toFixed(0)}/s trou-max ${st.maxGap}ms`,
+    );
+    cursorRxBySender.set(senderIdentity, { count: 0, last: 0, maxGap: 0, windowStart: now });
+  }
+}
 let cursorDelayMin = Infinity;
 let cursorDelayMax = -Infinity;
 let cursorDelayCount = 0;
@@ -1619,6 +1638,7 @@ export function handleNativeCursorData(
         }
       } else if (typeof parsed.x === "number" && typeof parsed.y === "number") {
         noteCursorDelay(parsed.ts);
+        noteCursorArrival(senderIdentity);
         remoteCursors.set(senderIdentity, {
           identity: senderIdentity,
           name: senderName,
@@ -2215,6 +2235,7 @@ export function onParticipantChange(callback: (participants: ParticipantInfo[]) 
             expiresAt,
           };
           remoteCursors.set(participant.identity, entry);
+          noteCursorArrival(participant.identity);
           cursorCallback?.(Array.from(remoteCursors.values()));
           if (Date.now() - lastCursorRxLog > 2000) {
             lastCursorRxLog = Date.now();

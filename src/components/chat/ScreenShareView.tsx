@@ -218,6 +218,41 @@ export function ScreenShareView() {
     };
   };
 
+  // Saturation du thread principal (diagnostic) : tâches >50 ms sur 10 s.
+  // Placé avant tout return précoce : mesure en viewer comme en sharer.
+  // Si le main thread est saturé (décodage JPEG plein écran + React +
+  // curseurs), TOUT y est saccadé des deux côtés.
+  useEffect(() => {
+    let count = 0;
+    let total = 0;
+    let max = 0;
+    let po: PerformanceObserver | null = null;
+    try {
+      po = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          count++;
+          total += e.duration;
+          if (e.duration > max) max = e.duration;
+        }
+      });
+      po.observe({ entryTypes: ["longtask"] });
+    } catch { /* non supporté */ }
+    const timer = setInterval(() => {
+      if (count > 0) {
+        console.info(
+          `[Sion][Perf] main-thread: ${count} longtasks/10s, total ${total.toFixed(0)}ms, max ${max.toFixed(0)}ms`,
+        );
+      }
+      count = 0;
+      total = 0;
+      max = 0;
+    }, 10000);
+    return () => {
+      po?.disconnect();
+      clearInterval(timer);
+    };
+  }, []);
+
   useEffect(() => {
     if (!isNative) return;
     let cancelled = false;
