@@ -157,6 +157,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setClockSkewMin: (v: number) => set({ clockSkewMin: v }),
   toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;
+    const engine = voiceNativeService.getActiveVoiceEngine();
+    console.log(`[Sion][mute] toggleMute() store: ${get().isMuted} → ${newMuted} (moteur=${engine}, silent=${silent})`);
     set({ isMuted: newMuted });
     // `silent` is set ONLY when deafen triggers the implicit mute below (passed
     // as a literal `true`) — the deafen cue already played, so we skip the mute
@@ -201,6 +203,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Deafen also mutes the mic — silently, so only the deafen cue plays.
     if (newDeafened && !get().isMuted) {
       get().toggleMute(true);
+    } else if (newDeafened && voiceNativeService.getActiveVoiceEngine() === "native") {
+      // Garde-fou : le store peut croire le micro déjà coupé alors que le
+      // moteur publie encore (désync historique : "muté" affiché + micro
+      // live — les pairs entendent tout). La coupure moteur est idempotente
+      // ("micro déjà coupé" si vraiment coupé), donc on force sans risque.
+      console.log("[Sion][deafen] micro déjà marqué muté — coupure moteur forcée (idempotente)");
+      voiceNativeService.setVoiceNativeMuted(true).catch((err) => {
+        console.error("[Sion] Failed to force native mute on deafen:", err);
+      });
     }
   },
   toggleScreenShare: async () => {

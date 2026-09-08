@@ -55,6 +55,10 @@ pub struct VoiceNativeStatus {
     pub room_name: Option<String>,
     pub muted: bool,
     pub deafened: bool,
+    /// Vérité terrain moteur (le store front peut mentir après une désync :
+    /// `muted=true` + micro encore publié). Le deafen s'en sert pour forcer
+    /// la coupure au lieu de faire confiance au store.
+    pub mic_published: bool,
     /// Identité LiveKit locale (`@user:serveur:deviceID`), si connue.
     pub identity: Option<String>,
 }
@@ -86,7 +90,37 @@ fn snapshot(inner: &VoiceNativeInner) -> VoiceNativeStatus {
         room_name: inner.room_name.clone(),
         muted: inner.muted,
         deafened: inner.deafened,
+        mic_published: holder_mic_published(),
         identity: inner.identity.clone(),
+    }
+}
+
+/// Le holder contient-il un moteur (indépendamment de toute session) ?
+/// `false` sans le feature natif : pas de moteur possible.
+fn holder_has_engine() -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        engine_holder().lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+    #[cfg(not(feature = "native-voice"))]
+    {
+        false
+    }
+}
+
+/// Vérité terrain : le moteur tient-il une publication micro ? `false`
+/// sans moteur (et sans le feature natif : pas de moteur possible).
+fn holder_mic_published() -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        engine_holder()
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|e| e.is_microphone_published()))
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "native-voice"))]
+    {
+        false
     }
 }
 
@@ -1037,16 +1071,13 @@ pub fn voice_native_set_muted(
 ) -> VoiceNativeStatus {
     // Ne pas mentir au front : si le moteur refuse, on garde l'état précédent.
     let mut applied = true;
+    // Moteur présent même sans session (entre deux joins) : on fait
+    // passer l'opération quand même — `set_microphone_enabled(false)`
+    // enregistre le désir, honoré au prochain publish. Sans ça, un mute
+    // hors appel est perdu en silence (store "muté" + micro live).
+    let has_engine = holder_has_engine();
     #[cfg(feature = "native-voice")]
     {
-        // Moteur présent même sans session (entre deux joins) : on fait
-        // passer l'opération quand même — `set_microphone_enabled(false)`
-        // enregistre le désir, honoré au prochain publish. Sans ça, un mute
-        // hors appel est perdu en silence (store "muté" + micro live).
-        let has_engine = engine_holder()
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
         if has_engine {
             if let Err(e) = with_engine(&app, "mute natif", |e| e.set_microphone_enabled(!muted)) {
                 log::warn!("[Sion][voix-native] {}", e);
@@ -1059,6 +1090,15 @@ pub fn voice_native_set_muted(
         inner.muted = muted;
     }
     let status = snapshot(&inner);
+    // Une ligne par appel : c'est elle qui a permis de prouver qu'un
+    // deafen-mute n'atteignait jamais le moteur (aucune trace ici).
+    log::info!(
+        "[Sion][voix-native] mute demandé={} moteur={} appliqué={} mic_published={}",
+        muted,
+        has_engine,
+        applied,
+        status.mic_published
+    );
     emit_status(&app, &status);
     status
 }
@@ -1262,6 +1302,11 @@ mod tests {
         assert_eq!(inner.state, VoiceConnectionState::Disconnected);
         assert!(inner.room_name.is_none());
         assert!(!inner.muted && !inner.deafened);
+        // mic_published : pas de moteur dans les tests → toujours false,
+        // jamais de panique sur le holder.
+        assert!(!holder_mic_published());
+        let status = snapshot(&inner);
+        assert!(!status.mic_published);
     }
 
     #[test]

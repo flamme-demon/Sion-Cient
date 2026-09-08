@@ -17,6 +17,9 @@ export interface VoiceNativeStatus {
   room_name: string | null;
   muted: boolean;
   deafened: boolean;
+  /** Vérité terrain moteur : une publication micro existe-t-elle vraiment ?
+   *  Peut contredire `muted` après une désync historique. */
+  mic_published: boolean;
   identity: string | null;
 }
 

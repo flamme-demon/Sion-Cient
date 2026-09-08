@@ -1479,6 +1479,16 @@ impl LiveKitEngine {
         let _ = stop_rx.recv();
     }
 
+    /// `true` si une publication micro est actuellement enregistrée (le
+    /// store front peut mentir suite à une désync historique : le deafen
+    /// consulte cette vérité terrain avant de faire confiance au store).
+    pub fn is_microphone_published(&self) -> bool {
+        self.mic_sid
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
     /// `refreshMicrophoneForDenoise` côté JS) : unpublish + stop d'un côté,
     /// start + re-publish de l'autre. Le désir est enregistré AVANT tout
@@ -2434,6 +2444,14 @@ mod tests {
         let engine = LiveKitEngine::new().expect("runtime tokio");
         assert_eq!(engine.set_deafened(true), Ok(0));
         assert_eq!(engine.set_deafened(false), Ok(0));
+    }
+
+    #[test]
+    fn fresh_engine_reports_mic_not_published() {
+        // Vérité terrain pour le garde-fou deafen : sans session, rien
+        // n'est publié (le store front peut prétendre le contraire).
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        assert!(!engine.is_microphone_published());
     }
 
     #[test]
