@@ -2523,13 +2523,16 @@ mod tests {
     fn e2ee_key_provider_roundtrip() {
         // Pont E2EE : le provider accepte les clés MatrixRTC brutes
         // (pairs + propre) et les rend (index partagés avec livekit-client).
+        // 16 octets = taille réelle MatrixRTC (AES-128).
         let engine = LiveKitEngine::new().expect("runtime tokio");
-        let key = vec![0xA5u8; 32];
+        let key = vec![0xA5u8; 16];
         assert!(engine.set_e2ee_key("@alice:srv:DEV1", 0, key.clone()));
         // Rotation : même identité, nouvel index — acceptée aussi.
         assert!(engine.set_e2ee_key("@alice:srv:DEV1", 1, key));
         // Clé propre (chiffrement de nos frames) : même chemin.
-        assert!(engine.set_e2ee_key("@moi:srv:DEV9", 0, vec![0x5Au8; 32]));
+        assert!(engine.set_e2ee_key("@moi:srv:DEV9", 0, vec![0x5Au8; 16]));
+        // AES-256 acceptée aussi.
+        assert!(engine.set_e2ee_key("@bob:srv:DEV2", 0, vec![0x5Au8; 32]));
     }
 
     #[test]

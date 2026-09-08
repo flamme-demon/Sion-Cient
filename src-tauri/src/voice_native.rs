@@ -407,13 +407,16 @@ pub fn decode_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, Strin
 // E2EE — garde-fou clés MatrixRTC
 // ---------------------------------------------------------------------------
 
-/// Longueur d'une clé MatrixRTC brute (`Uint8Array` reçue sur
-/// `EncryptionKeyChanged`, importée en clé HKDF côté JS).
-pub const E2EE_RAW_KEY_LEN: usize = 32;
+/// Clés MatrixRTC brutes (`Uint8Array` reçue sur `EncryptionKeyChanged`) :
+/// 16 octets (AES-128-GCM — `generateRandomKey` de matrix-js-sdk, prouvé
+/// par le rejet à tort du 08/09 qui attendait 32). 32 accepté aussi
+/// (AES-256, clés partagées livekit) ; le reste est rejeté avant le provider.
+pub const E2EE_RAW_KEY_LEN_128: usize = 16;
+pub const E2EE_RAW_KEY_LEN_256: usize = 32;
 
 /// Vrai si la clé brute est utilisable par le pont E2EE natif.
 pub fn validate_e2ee_key(key: &[u8]) -> bool {
-    key.len() == E2EE_RAW_KEY_LEN
+    matches!(key.len(), E2EE_RAW_KEY_LEN_128 | E2EE_RAW_KEY_LEN_256)
 }
 
 // ---------------------------------------------------------------------------
@@ -1226,7 +1229,7 @@ pub fn voice_native_set_e2ee_key(
         };
         if !validate_e2ee_key(&bytes) {
             log::warn!(
-                "[Sion][voix-native][E2EE] clé {} index={} rejetée : {} octets (attendu 32)",
+                "[Sion][voix-native][E2EE] clé {} index={} rejetée : {} octets (attendu 16 ou 32)",
                 identity,
                 key_index,
                 bytes.len()
@@ -1588,10 +1591,12 @@ mod tests {
     }
 
     #[test]
-    fn e2ee_keys_must_be_32_bytes() {
+    fn e2ee_keys_accept_16_or_32_bytes() {
+        // 16 = MatrixRTC réel (AES-128), 32 = AES-256 ; le reste est rejeté.
+        assert!(validate_e2ee_key(&[7u8; 16]));
         assert!(validate_e2ee_key(&[7u8; 32]));
         assert!(!validate_e2ee_key(&[]));
-        assert!(!validate_e2ee_key(&[7u8; 16]));
+        assert!(!validate_e2ee_key(&[7u8; 24]));
         assert!(!validate_e2ee_key(&[7u8; 64]));
     }
 
