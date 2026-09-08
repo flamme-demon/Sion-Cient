@@ -63,7 +63,14 @@ export function useLiveKit() {
           }).catch(() => {});
         }
       }
-      pushThrottled(updatedParticipants);
+      // État voix Matrix (`sion_muted` / `sion_deafened` des call.member) :
+      // persistant et sans course, il comble les broadcasts LiveKit manqués
+      // (cf. `overlayMatrixVoiceState`). Repli brut si le store est injoignable.
+      import("../stores/useMatrixStore").then(({ useMatrixStore }) => {
+        const voiceUsers =
+          useMatrixStore.getState().channels.find((c) => c.id === room)?.voiceUsers ?? [];
+        pushThrottled(native.overlayMatrixVoiceState(updatedParticipants, voiceUsers));
+      }).catch(() => pushThrottled(updatedParticipants));
     });
     // Relais data-channel natif → handlers existants (soundboard, curseurs…).
     // Miroir du `RoomEvent.DataReceived` branché dans `livekitService` (JS).

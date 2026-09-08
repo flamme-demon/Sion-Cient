@@ -243,3 +243,50 @@ export function toConnectionQuality(q: string): ConnectionQuality {
       return "unknown";
   }
 }
+
+/** Matrix user-ID extrait d'une identité LiveKit (`@user:server[:device]`).
+ *  Même regex que le filtre du panneau vocal (`ChannelItem`). */
+export function matrixUserIdOf(identity: string): string {
+  return identity.match(/^(@[^:]+:[^:]+)/)?.[1] ?? identity;
+}
+
+export interface MatrixVoiceUserState {
+  id: string;
+  muted: boolean;
+  deafened: boolean;
+}
+
+/** Fusionne l'état voix Matrix (`sion_muted` / `sion_deafened` des events
+ *  `call.member`) dans la liste des participants natifs.
+ *
+ *  Pourquoi : l'état LiveKit (data-channel) ne contient que ce qui a été
+ *  reçu depuis le join — un broadcast manqué (join en course) laisse un
+ *  sourdine affiché "mute" simple pour toute la session. L'état Matrix est
+ *  lui persistant (lisible via /sync à tout moment, sans course) : `main`
+ *  le fait déjà circuler dans `voiceUsers` pour la sidebar.
+ *
+ *  Règle : OU logique (soit source à vrai l'emporte). Les faux négatifs
+ *  Matrix sont impossibles par construction (champs absents = false, jamais
+ *  de stale-false), et un stale-true se nettoie tout seul (expiration du
+ *  membership → filtré de la liste, + heartbeat 30 s des nouveaux builds).
+ *  Fonction pure (testée). Retourne la liste d'origine si rien ne change
+ *  (référence identique → pas de re-render inutile).
+ */
+export function overlayMatrixVoiceState(
+  participants: ParticipantInfo[],
+  voiceUsers: MatrixVoiceUserState[],
+): ParticipantInfo[] {
+  if (voiceUsers.length === 0) return participants;
+  const byUser = new Map(voiceUsers.map((u) => [u.id, u]));
+  let touched = false;
+  const out = participants.map((p) => {
+    const u = byUser.get(matrixUserIdOf(p.identity));
+    if (!u) return p;
+    const isMuted = p.isMuted || u.muted;
+    const isDeafened = p.isDeafened || u.deafened;
+    if (isMuted === p.isMuted && isDeafened === p.isDeafened) return p;
+    touched = true;
+    return { ...p, isMuted, isDeafened };
+  });
+  return touched ? out : participants;
+}

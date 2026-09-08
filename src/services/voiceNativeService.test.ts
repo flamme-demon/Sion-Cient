@@ -19,6 +19,8 @@ import {
   onVoiceNativeFrame,
   onVoiceNativeFrameStopped,
   setVoiceNativeShareAudioMuted,
+  overlayMatrixVoiceState,
+  matrixUserIdOf,
   voiceNativePublishData,
   toConnectionQuality,
   selectVoiceEngine,
@@ -214,5 +216,54 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     });
     invokeMock.mockResolvedValue(false);
     await expect(setVoiceNativeShareAudioMuted("@p:h", false)).resolves.toBe(false);
+  });
+
+  it("matrixUserIdOf coupe le suffixe device LiveKit", () => {
+    expect(matrixUserIdOf("@narkow:sionchat.fr:qoNoEwRrbw")).toBe("@narkow:sionchat.fr");
+    expect(matrixUserIdOf("@a:b")).toBe("@a:b");
+    expect(matrixUserIdOf("local")).toBe("local");
+  });
+
+  it("overlayMatrixVoiceState remonte le sourdine Matrix manqué en LiveKit", () => {
+    const mk = (identity: string, isMuted = false, isDeafened = false) => ({
+      identity,
+      name: identity,
+      isSpeaking: false,
+      isMuted,
+      isDeafened,
+      isScreenSharing: false,
+      audioLevel: 0,
+      connectionQuality: "unknown" as const,
+    });
+    const participants = [mk("@picsou:sionchat.fr:XTBOJJBs3J"), mk("@narkow:sionchat.fr:qoNoEwRrbw")];
+    // Picsou : Matrix dit sourdine, LiveKit ne sait pas → badge AFK.
+    const merged = overlayMatrixVoiceState(participants, [
+      { id: "@picsou:sionchat.fr", muted: false, deafened: true },
+    ]);
+    expect(merged[0].isDeafened).toBe(true);
+    expect(merged[0].isMuted).toBe(false);
+    // Narkow : absent de Matrix → inchangé (même référence).
+    expect(merged[1]).toBe(participants[1]);
+    // Autres champs préservés.
+    expect(merged[0].identity).toBe("@picsou:sionchat.fr:XTBOJJBs3J");
+  });
+
+  it("overlayMatrixVoiceState ne ment jamais vers false et rend la réf si inchangé", () => {
+    const mk = (identity: string, isMuted: boolean, isDeafened: boolean) => ({
+      identity,
+      name: identity,
+      isSpeaking: false,
+      isMuted,
+      isDeafened,
+      isScreenSharing: false,
+      audioLevel: 0,
+      connectionQuality: "unknown" as const,
+    });
+    // LiveKit déjà vrai + Matrix faux → reste vrai (OU logique).
+    const participants = [mk("@p:h", true, true)];
+    const merged = overlayMatrixVoiceState(participants, [{ id: "@p:h", muted: false, deafened: false }]);
+    expect(merged).toBe(participants);
+    // Liste Matrix vide → même référence (pas de re-render inutile).
+    expect(overlayMatrixVoiceState(participants, [])).toBe(participants);
   });
 });
