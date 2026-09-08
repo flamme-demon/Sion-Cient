@@ -1106,10 +1106,10 @@ impl LiveKitEngine {
 
     /// Démarre le partage d'écran local : capture (écran principal par
     /// défaut, curseur inclus) → piste vidéo `Screenshare` publiée.
-    /// Idempotent (déjà en partage = no-op OK). Sans le son du système
-    /// pour l'instant (v1 vidéo seule — les viewers voient "sans son",
-    /// comme un partage JS sans la case audio).
-    pub fn start_screensharing(&self, source_id: Option<u64>) -> Result<(), String> {
+    /// Idempotent (déjà en partage = no-op OK). `with_audio=false` :
+    /// vidéo seule (les viewers voient "sans son", comme un partage JS
+    /// sans la case audio).
+    pub fn start_screensharing(&self, source_id: Option<u64>, with_audio: bool) -> Result<(), String> {
         // Même exigence de contexte Tokio que `set_deafened`.
         let _rt_enter = self.rt.enter();
         if self.is_screensharing() {
@@ -1162,14 +1162,20 @@ impl LiveKitEngine {
         let sid = publication.sid();
         log::info!("[Sion][voix-native] partage local publié sid={}", sid);
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        // Son du système (attendu : sans lui les viewers voient "sans
-        // son"). Best-effort : un échec n'empêche pas la vidéo.
-        let audio_sid = match Self::start_share_audio(self.rt.handle(), room, &stop) {
-            Ok(sid) => sid,
-            Err(e) => {
-                log::warn!("[Sion][voix-native] son du partage indisponible: {}", e);
-                None
+        // Son du système : seulement si demandé (case audio). Sans lui les
+        // viewers voient "sans son" (détecté via l'absence de piste
+        // ScreenshareAudio, comme en JS).
+        let audio_sid = if with_audio {
+            match Self::start_share_audio(self.rt.handle(), room, &stop) {
+                Ok(sid) => sid,
+                Err(e) => {
+                    log::warn!("[Sion][voix-native] son du partage indisponible: {}", e);
+                    None
+                }
             }
+        } else {
+            log::info!("[Sion][voix-native] partage local sans le son (opt-out)");
+            None
         };
         *self.local_share.lock().unwrap_or_else(|e| e.into_inner()) = Some(LocalShareState {
             stop: std::sync::Arc::clone(&stop),

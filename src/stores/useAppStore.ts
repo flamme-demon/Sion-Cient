@@ -206,17 +206,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleScreenShare: async () => {
     const newSharing = !get().isScreenSharing;
     if (voiceNativeService.getActiveVoiceEngine() === "native") {
-      // Chemin natif : capture + publication Rust (v1 : écran principal,
-      // 15 im/s, avec le son du système). État posé après succès moteur,
-      // jamais de partage fantôme affiché (pas de revert nécessaire : on
-      // ne pose qu'après succès).
+      // Chemin natif : capture + publication Rust (écran principal, 15 im/s,
+      // son du système sauf opt-out). État posé après succès moteur, jamais
+      // de partage fantôme affiché (pas de revert nécessaire : on ne pose
+      // qu'après succès). `screenShareAudioWarning` ("Sans son") miroir JS.
+      const { useSettingsStore } = await import("./useSettingsStore");
+      const wantAudio = useSettingsStore.getState().screenShareAudio;
       try {
-        await voiceNativeService.setVoiceNativeScreensharing(newSharing);
+        await voiceNativeService.setVoiceNativeScreensharing(newSharing, undefined, wantAudio);
       } catch (err) {
         console.warn("[Sion][voix-native] partage d'écran natif impossible:", err);
         return;
       }
-      set({ isScreenSharing: newSharing });
+      set({ isScreenSharing: newSharing, screenShareAudioWarning: newSharing && !wantAudio });
       // Overlay curseurs (miroir JS) : éteint/affiché avec le partage pour
       // que les viewers puissent pointer sur notre écran.
       import("../services/cursorOverlayService").then((overlay) => {

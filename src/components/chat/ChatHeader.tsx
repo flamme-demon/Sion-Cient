@@ -10,6 +10,7 @@ import * as matrixService from "../../services/matrixService";
 import { getMatrixClient } from "../../services/matrixService";
 import { getCurrentRoom } from "../../services/livekitService";
 import * as livekitService from "../../services/livekitService";
+import * as voiceNativeService from "../../services/voiceNativeService";
 import { ScreenShareOptionsModal } from "./ScreenShareOptionsModal";
 
 function buildWavePath(amplitude: number, phase: number): string {
@@ -750,6 +751,18 @@ export function ChatHeader() {
           onClose={() => setShowScreenShareOptions(false)}
           onConfirm={async () => {
             setShowScreenShareOptions(false);
+            // Chemin natif : repasser par le store (qui route vers le moteur
+            // Rust avec les settings à jour) — l'appel direct au service JS
+            // ne verrait aucune room et ne ferait rien.
+            if (voiceNativeService.getActiveVoiceEngine() === "native") {
+              if (isScreenSharing) {
+                await toggleScreenShare();
+                await toggleScreenShare();
+              } else {
+                toggleScreenShare();
+              }
+              return;
+            }
             if (isScreenSharing) {
               // Restart with the new preset so the change takes effect.
               try {

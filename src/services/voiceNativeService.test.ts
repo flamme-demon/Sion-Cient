@@ -230,11 +230,19 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
       enabled: true,
       sourceId: null,
+      withAudio: true,
     });
     await setVoiceNativeScreensharing(false, 42);
     expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
       enabled: false,
       sourceId: 42,
+      withAudio: true,
+    });
+    await setVoiceNativeScreensharing(true, undefined, false);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
+      enabled: true,
+      sourceId: null,
+      withAudio: false,
     });
   });
 
