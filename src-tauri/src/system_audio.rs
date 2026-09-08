@@ -99,6 +99,26 @@ pub fn system_audio_list_sinks() -> Vec<(String, String)> {
     }
 }
 
+/// Abonne un consommateur Rust interne aux frames PCM du système (voir
+/// `subscribe_frames` des impls) : le partage d'écran natif y publie sa
+/// piste `ScreenshareAudio`. `None` sur plateforme non supportée.
+/// La capture doit être démarrée (`system_audio_start`) par l'appelant ;
+/// le Receiver doit être drainé en continu.
+pub fn system_audio_subscribe() -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+    #[cfg(target_os = "linux")]
+    {
+        return Some(linux_impl::subscribe_frames());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return Some(windows_impl::subscribe_frames());
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
 // ============================================================================
 // Shared constants — platform impls publish frames in this format so the
 // WebSocket consumer on the JS side doesn't need platform awareness.
@@ -584,6 +604,18 @@ mod linux_impl {
         senders.0.retain(|tx| tx.send(buf.to_vec()).is_ok());
     }
 
+    /// Abonne un consommateur Rust interne aux frames PCM (même flux que les
+    /// clients WS) : le partage d'écran natif y publie sa piste
+    /// `ScreenshareAudio` sans passer par le navigateur. Format : voir
+    /// SAMPLE_RATE/CHANNELS/FRAME_BYTES (f32 48 kHz mono, 20 ms).
+    /// Le Receiver DOIT être drainé en continu (`broadcast` éjecte les
+    /// retardataires — canal std non borné sinon).
+    pub fn subscribe_frames() -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        WS_SENDERS.lock().unwrap().0.push(tx);
+        rx
+    }
+
     pub fn start(sink_monitor: Option<String>) -> Result<u16, String> {
         ensure_ws_server();
 
@@ -953,6 +985,13 @@ mod windows_impl {
     fn broadcast(buf: &[u8]) {
         let mut senders = WS_SENDERS.lock().unwrap();
         senders.0.retain(|tx| tx.send(buf.to_vec()).is_ok());
+    }
+
+    /// Abonne un consommateur Rust interne (voir `linux_impl::subscribe_frames`).
+    pub fn subscribe_frames() -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        WS_SENDERS.lock().unwrap().0.push(tx);
+        rx
     }
 
     /// Returns true if the OS exposes the AUDCLNT process-loopback API.

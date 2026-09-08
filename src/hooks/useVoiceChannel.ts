@@ -161,6 +161,10 @@ export async function cleanupVoiceOnKick() {
     const { voiceNativeDisconnect } = await import("../services/voiceNativeService");
     await voiceNativeDisconnect();
     setActiveVoiceEngine(null);
+    // L'overlay de curseurs (partage local) ne se ferme pas tout seul.
+    import("../services/cursorOverlayService").then(({ closeCursorOverlay }) => {
+      closeCursorOverlay().catch(() => {});
+    }).catch(() => {});
   } else {
     const { disconnectFromRoom } = await import("../services/livekitService");
     await disconnectFromRoom();

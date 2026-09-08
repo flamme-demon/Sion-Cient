@@ -207,8 +207,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newSharing = !get().isScreenSharing;
     if (voiceNativeService.getActiveVoiceEngine() === "native") {
       // Chemin natif : capture + publication Rust (v1 : écran principal,
-      // 15 im/s, sans le son du système). État posé après succès moteur,
-      // revert sinon (jamais de partage fantôme affiché).
+      // 15 im/s, avec le son du système). État posé après succès moteur,
+      // jamais de partage fantôme affiché (pas de revert nécessaire : on
+      // ne pose qu'après succès).
       try {
         await voiceNativeService.setVoiceNativeScreensharing(newSharing);
       } catch (err) {
@@ -216,6 +217,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         return;
       }
       set({ isScreenSharing: newSharing });
+      // Overlay curseurs (miroir JS) : éteint/affiché avec le partage pour
+      // que les viewers puissent pointer sur notre écran.
+      import("../services/cursorOverlayService").then((overlay) => {
+        if (newSharing) overlay.openCursorOverlay().catch(() => {});
+        else overlay.closeCursorOverlay().catch(() => {});
+      }).catch(() => {});
       return;
     }
     set({ isScreenSharing: newSharing });

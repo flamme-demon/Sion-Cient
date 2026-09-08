@@ -400,11 +400,11 @@ fn is_screenshare_video(kind: TrackKind, source: TrackSource) -> bool {
     matches!(kind, TrackKind::Video) && matches!(source, TrackSource::Screenshare)
 }
 
-/// BGRA (ordre des pixels de `DesktopFrame` sur Linux) → ABGR compact.
-/// Une passe scalaire avant la conversion SIMD — vérifié visuellement en
-/// prod (inverser = écran rouge, cf. historique du pont JPEG). `src_stride`
-/// = octets par ligne source (padding éventuel). Fonction pure (testée).
-fn swizzle_bgra_to_abgr(
+/// RGBA (ordre réel des pixels de `DesktopFrame` — vérifié en prod : le
+/// supposer BGRA donne un écran rouge) → ABGR compact. Une passe scalaire
+/// avant la conversion SIMD. `src_stride` = octets par ligne source
+/// (padding éventuel). Fonction pure (testée).
+fn swizzle_rgba_to_abgr(
     dst: &mut [u8],
     src: &[u8],
     width: u32,
@@ -417,18 +417,59 @@ fn swizzle_bgra_to_abgr(
         let d = &mut dst[row * w * 4..(row + 1) * w * 4];
         for (dpx, spx) in d.chunks_exact_mut(4).zip(s.chunks_exact(4)) {
             dpx[0] = spx[3];
-            dpx[1] = spx[0];
+            dpx[1] = spx[2];
             dpx[2] = spx[1];
-            dpx[3] = spx[2];
+            dpx[3] = spx[0];
         }
     }
 }
 
-/// État d'un partage d'écran local (émission) : drapeau stop pour le thread
-/// de capture + sid de la piste publiée (pour dépublier au stop).
+/// État d'un partage d'écran local (émission) : drapeau stop pour les
+/// threads de capture + sids des pistes publiées (pour dépublier au stop).
 struct LocalShareState {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     video_sid: TrackSid,
+    audio_sid: Option<TrackSid>,
+}
+
+/// Pompe audio du partage : PCM système (f32 48 kHz mono 20 ms, capturé
+/// SANS Sion — pas d'écho) → i16 → `AudioFrame` poussée dans une source
+/// native (traitements OFF, comme `main` : sur une boucle, l'écho
+/// cancellerait le signal lui-même). Se termine sur `stop` ou fin de
+/// capture (le Receiver est éjecté quand on arrête de drainer).
+fn run_share_audio_pump(
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    audio_source: livekit::webrtc::audio_source::native::NativeAudioSource,
+    rt: tokio::runtime::Handle,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use livekit::webrtc::audio_frame::AudioFrame;
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        let frame = match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(f) => f,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        if frame.len() < 3840 {
+            continue;
+        }
+        let mut samples = Vec::with_capacity(960);
+        for chunk in frame[..3840].chunks_exact(4) {
+            let s = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            samples.push((s.clamp(-1.0, 1.0) * 32767.0) as i16);
+        }
+        let af = AudioFrame {
+            data: std::borrow::Cow::Owned(samples),
+            sample_rate: 48000,
+            num_channels: 1,
+            samples_per_channel: 960,
+        };
+        let _ = rt.block_on(audio_source.capture_frame(&af));
+    }
+    log::info!("[Sion][voix-native] pompe audio du partage terminée");
 }
 
 /// Boucle de capture d'écran : tourne sur un thread propriétaire (le
@@ -459,6 +500,14 @@ fn run_share_capture(
         if w < 2 || h < 2 {
             return;
         }
+        // Plafond 1920 (parité preset h1080fps15 + encodeur VP8 logiciel
+        // soulagé) ; dimensions paires exigées par I420.
+        let (cw, ch) = if w > 1920 {
+            let ch = (h.saturating_mul(1920) / w) & !1;
+            (1920, ch.max(2))
+        } else {
+            (w, h)
+        };
         let src_stride = frame.stride() as usize;
         let need = (w as usize) * (h as usize) * 4;
         if abgr.len() != need {
@@ -467,9 +516,7 @@ fn run_share_capture(
         if frame.data().len() < (h as usize - 1) * src_stride + (w as usize) * 4 {
             return;
         }
-        swizzle_bgra_to_abgr(&mut abgr, frame.data(), w, h, src_stride);
-        // I420 neuf par frame (v1 : ~40 Mo/s d'allocs à 15 im/s en 1080p —
-        // à mutualiser si le profiling l'exige).
+        swizzle_rgba_to_abgr(&mut abgr, frame.data(), w, h, src_stride);
         let mut i420 = I420Buffer::with_strides(w, h, w, (w + 1) / 2, (w + 1) / 2);
         let (sy, su, sv) = i420.strides();
         let (dy, du, dv) = i420.data_mut();
@@ -485,6 +532,9 @@ fn run_share_capture(
             w as i32,
             h as i32,
         );
+        if cw != w || ch != h {
+            i420 = i420.scale(cw as i32, ch as i32);
+        }
         let vf = VideoFrame::new(VideoRotation::VideoRotation0, i420);
         video_source.capture_frame(&vf);
     });
@@ -1038,9 +1088,19 @@ impl LiveKitEngine {
         let sid = publication.sid();
         log::info!("[Sion][voix-native] partage local publié sid={}", sid);
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Son du système (attendu : sans lui les viewers voient "sans
+        // son"). Best-effort : un échec n'empêche pas la vidéo.
+        let audio_sid = match Self::start_share_audio(self.rt.handle(), room, &stop) {
+            Ok(sid) => sid,
+            Err(e) => {
+                log::warn!("[Sion][voix-native] son du partage indisponible: {}", e);
+                None
+            }
+        };
         *self.local_share.lock().unwrap_or_else(|e| e.into_inner()) = Some(LocalShareState {
             stop: std::sync::Arc::clone(&stop),
             video_sid: sid,
+            audio_sid,
         });
         let stop_thread = std::sync::Arc::clone(&stop);
         std::thread::Builder::new()
@@ -1052,8 +1112,10 @@ impl LiveKitEngine {
         Ok(())
     }
 
-    /// Stoppe le partage d'écran local (drapeau stop + dépublication).
-    /// Idempotent (pas de partage = no-op OK).
+    /// Stoppe le partage d'écran local (drapeaux stop + dépublications).
+    /// Idempotent (pas de partage = no-op OK). La vidéo est dépubliée en
+    /// dernier, après l'audio (miroir JS : évite une renégociation qui
+    /// réveillerait une capture déjà morte).
     pub fn stop_screensharing(&self) -> Result<(), String> {
         let _rt_enter = self.rt.enter();
         let state = self
@@ -1069,12 +1131,70 @@ impl LiveKitEngine {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(room) = room_guard.as_ref() {
+            // Audio d'abord (miroir JS), vidéo en dernier.
+            if let Some(audio_sid) = &state.audio_sid {
+                let _ = self
+                    .rt
+                    .block_on(room.local_participant().unpublish_track(audio_sid));
+            }
             let _ = self
                 .rt
                 .block_on(room.local_participant().unpublish_track(&state.video_sid));
         }
+        crate::system_audio::system_audio_stop();
         log::info!("[Sion][voix-native] partage local arrêté");
         Ok(())
+    }
+
+    /// Démarre la capture du son système pour le partage local et publie la
+    /// piste `ScreenshareAudio`. Retourne le sid publié (ou une erreur —
+    /// l'appelant continue sans le son, mode "sans son" côté viewers).
+    /// Traitements OFF (boucle = écho garanti sinon), parité JS.
+    fn start_share_audio(
+        rt: &tokio::runtime::Handle,
+        room: &Room,
+        stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Option<TrackSid>, String> {
+        use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
+        crate::system_audio::system_audio_start(None).map_err(|e| format!("capture: {}", e))?;
+        let rx = crate::system_audio::system_audio_subscribe()
+            .ok_or_else(|| "plateforme non supportée".to_string())?;
+        let audio_source = livekit::webrtc::audio_source::native::NativeAudioSource::new(
+            AudioSourceOptions {
+                echo_cancellation: false,
+                noise_suppression: false,
+                auto_gain_control: false,
+            },
+            48000,
+            1,
+            100,
+        );
+        let track = LocalAudioTrack::create_audio_track(
+            "screen-share-audio",
+            RtcAudioSource::Native(audio_source.clone()),
+        );
+        let sid = rt
+            .block_on(room.local_participant().publish_track(
+                LocalTrack::Audio(track),
+                TrackPublishOptions {
+                    source: TrackSource::ScreenshareAudio,
+                    dtx: false,
+                    red: false,
+                    ..Default::default()
+                },
+            ))
+            .map_err(|e| format!("publish son du partage: {}", e))?
+            .sid();
+        log::info!("[Sion][voix-native] son du partage local publié sid={}", sid);
+        let stop_thread = std::sync::Arc::clone(stop);
+        let rt_thread = rt.clone();
+        std::thread::Builder::new()
+            .name("sion-share-audio".into())
+            .spawn(move || {
+                run_share_audio_pump(rx, audio_source, rt_thread, stop_thread);
+            })
+            .map_err(|e| format!("thread audio: {}", e))?;
+        Ok(Some(sid))
     }
 
     /// Démarre la mesure du micro local (rond vert) : l'ADM WebRTC ne donnant
@@ -1838,14 +1958,16 @@ impl VoiceEngine for LiveKitEngine {
     }
 
     fn disconnect(&mut self) {
-        // Couper d'abord le partage local éventuel (sinon piste fantôme).
-        let share = self
+        // Couper d'abord le partage local éventuel (sinon pistes fantômes
+        // + parec qui tourne dans le vide).
+        if let Some(share) = self
             .local_share
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .take();
-        if let Some(share) = share {
+            .take()
+        {
             share.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            crate::system_audio::system_audio_stop();
         }
         let room = self.room.lock().map(|mut g| g.take()).unwrap_or(None);
         if let Some(room) = room {
@@ -2017,19 +2139,38 @@ mod tests {
         // Vrai retrait côté émetteur : le contrôle doit se masquer.
         assert!(!share_audio_presence_kept(false, false));
     }
-
     #[test]
-    fn swizzle_bgra_to_abgr_ordonne_et_gerbe_stride() {
-        // 2x2, stride source avec padding (12 o utiles + 4 o bourrage).
+    fn swizzle_rgba_to_abgr_ordonne_et_gerbe_stride() {
         let src = vec![
             10, 20, 30, 40, 50, 60, 70, 80, 0, 0, 0, 0,
             11, 21, 31, 41, 51, 61, 71, 81, 0, 0, 0, 0,
         ];
         let mut dst = vec![0u8; 16];
-        swizzle_bgra_to_abgr(&mut dst, &src, 2, 2, 12);
-        // BGRA [B,G,R,A] → ABGR [A,B,G,R].
-        assert_eq!(&dst[0..8], &[40, 10, 20, 30, 80, 50, 60, 70]);
-        assert_eq!(&dst[8..16], &[41, 11, 21, 31, 81, 51, 61, 71]);
+        swizzle_rgba_to_abgr(&mut dst, &src, 2, 2, 12);
+        // RGBA [R,G,B,A] → ABGR [A,B,G,R].
+        assert_eq!(&dst[0..8], &[40, 30, 20, 10, 80, 70, 60, 50]);
+        assert_eq!(&dst[8..16], &[41, 31, 21, 11, 81, 71, 61, 51]);
+    }
+
+    /// Le helper `abgr_to_i420` lit-il VRAIMENT de l'ABGR ? (l'autre sens,
+    /// `to_argb`, a un swap RGBA↔ABGR avéré dans ce binding). Rouge ABGR
+    /// [255,0,0,255] → Y≈82, U≈90, V≈240 (BT.601 plage limitée ±25).
+    #[test]
+    fn abgr_to_i420_ordre_des_canaux() {
+        use livekit::webrtc::video_frame::I420Buffer;
+        // Rouge ABGR [255,0,0,255] sur les 4 pixels (2x2).
+        let abgr_red = [255u8, 0, 0, 255].repeat(4);
+        let mut buf = I420Buffer::new(2, 2);
+        let (sy, su, sv) = buf.strides();
+        let (dy, du, dv) = buf.data_mut();
+        livekit::webrtc::native::yuv_helper::abgr_to_i420(
+            &abgr_red, 8, dy, sy, du, su, dv, sv, 2, 2,
+        );
+        let (dy, du, dv) = buf.data();
+        eprintln!("Y={:?} U={:?} V={:?}", dy, du, dv);
+        assert!((dy[0] as i16 - 82).abs() <= 25, "Y={:?}", dy);
+        assert!((du[0] as i16 - 90).abs() <= 25, "U={:?}", du);
+        assert!((dv[0] as i16 - 240).abs() <= 25, "V={:?}", dv);
     }
 
     #[test]

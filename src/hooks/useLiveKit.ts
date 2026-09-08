@@ -12,6 +12,8 @@ export function useLiveKit() {
   const cleanupNative = useRef<(() => void) | null>(null);
   const cleanupNativeData = useRef<(() => void) | null>(null);
   const nativeAfkHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Identité LiveKit locale en mode natif (pour cibler notre partage). */
+  const nativeIdentity = useRef<string | null>(null);
   const knownNativeIdentities = useRef<Set<string> | null>(null);
 
   const pushThrottled = useCallback((updatedParticipants: typeof participants) => {
@@ -43,7 +45,8 @@ export function useLiveKit() {
   const connectNative = useCallback(async (url: string, token: string, room: string, displayName: string) => {
     console.info(`[Sion][voix-native] join natif ${room} (SDK Rust, pas de livekit-client)`);
     const native = await import("../services/voiceNativeService");
-    await native.voiceNativeConnect(url, token, room, displayName);
+    const status = await native.voiceNativeConnect(url, token, room, displayName);
+    nativeIdentity.current = status.identity ?? null;
     storeConnect(room);
     knownNativeIdentities.current = new Set();
     cleanupNative.current = await native.onVoiceNativeParticipants((updatedParticipants) => {
@@ -85,6 +88,47 @@ export function useLiveKit() {
         if ((ev.topic !== CURSOR_TOPIC && ev.topic !== CURSOR_CLICK_TOPIC) || !sender) return;
         const name = useLiveKitStore.getState().participants.find((p) => p.identity === sender)?.name ?? sender;
         handleNativeCursorData(ev.topic, sender, name, native.b64ToBytes(ev.payload_b64));
+      }).catch(() => {});
+      // Renvoi vers l'overlay quand ON partage en natif (miroir du forward
+      // JS conditionné au partage local) : les curseurs des viewers sont
+      // projetés sur notre écran, donc capturés dans notre partage.
+      // Coords relatives à UN partage : on ne projette que ce qui vise
+      // explicitement le nôtre (comme en JS).
+      import("../stores/useAppStore").then(({ useAppStore }) => {
+        if (!useAppStore.getState().isScreenSharing) return;
+        const selfId = nativeIdentity.current;
+        if (!selfId) return;
+        import("../services/cursorOverlayService").then((overlay) => {
+          try {
+            const payload = JSON.parse(
+              new TextDecoder().decode(native.b64ToBytes(ev.payload_b64)),
+            ) as { x?: number; y?: number; click?: boolean; expire?: boolean; t?: string };
+            if (payload.t !== selfId) return;
+            const name = useLiveKitStore.getState().participants.find((p) => p.identity === sender)?.name ?? sender;
+            if (ev.topic === "sion-cursor-click" && payload.click) {
+              overlay.pushCursorClickToOverlay({
+                id: `${sender}:${Date.now()}`,
+                identity: sender,
+                name,
+                x: payload.x ?? 0,
+                y: payload.y ?? 0,
+                expiresAt: Date.now() + 800,
+              }).catch(() => {});
+            } else if (ev.topic === "sion-cursor") {
+              if (payload.expire) {
+                overlay.clearCursorFromOverlay(sender).catch(() => {});
+              } else if (typeof payload.x === "number" && typeof payload.y === "number") {
+                overlay.pushCursorToOverlay({
+                  identity: sender,
+                  name,
+                  x: payload.x,
+                  y: payload.y,
+                  expiresAt: Date.now() + 2000,
+                }).catch(() => {});
+              }
+            }
+          } catch { /* ignore malformed */ }
+        }).catch(() => {});
       }).catch(() => {});
     });
     // Heartbeat AFK natif (miroir du heartbeat JS) : tout état manqué ou
@@ -136,6 +180,12 @@ export function useLiveKit() {
     }
     pendingUpdate.current = null;
     knownNativeIdentities.current = null;
+    nativeIdentity.current = null;
+    // Fermer l'overlay de curseurs (ouvert si on partageait) : sinon la
+    // fenêtre transparente survit au leave.
+    import("../services/cursorOverlayService").then(({ closeCursorOverlay }) => {
+      closeCursorOverlay().catch(() => {});
+    }).catch(() => {});
     const native = await import("../services/voiceNativeService");
     await native.voiceNativeDisconnect();
     storeDisconnect();
