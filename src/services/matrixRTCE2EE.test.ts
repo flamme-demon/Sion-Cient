@@ -51,7 +51,7 @@ describe("MatrixKeyProvider (pont E2EE natif)", () => {
     provider.disconnect();
   });
 
-  it("une rotation écrase la clé cachée (flush rejoue le dernier index)", async () => {
+  it("une rotation conserve l'historique (flush rejoue les deux index)", async () => {
     const provider = new MatrixKeyProvider();
     await feedKey(provider, "@alice:srv:DEV1", 0);
     await feedKey(provider, "@alice:srv:DEV1", 1, 0x5a);
@@ -59,8 +59,23 @@ describe("MatrixKeyProvider (pont E2EE natif)", () => {
     provider.setNativeForwarder((_id, keyIndex) => {
       seen.push(keyIndex);
     });
-    expect(provider.flushKeysToNative()).toBe(1);
-    expect(seen).toEqual([1]);
+    expect(provider.flushKeysToNative()).toBe(2);
+    expect(seen).toEqual([0, 1]);
+    provider.disconnect();
+  });
+
+  it("l'anneau est borné à 16 par pair (plus ancien éjecté)", async () => {
+    const provider = new MatrixKeyProvider();
+    for (let i = 0; i < 18; i++) {
+      await feedKey(provider, "@alice:srv:DEV1", i, i);
+    }
+    const seen: number[] = [];
+    provider.setNativeForwarder((_id, keyIndex) => {
+      seen.push(keyIndex);
+    });
+    expect(provider.flushKeysToNative()).toBe(16);
+    expect(seen[0]).toBe(2);
+    expect(seen[seen.length - 1]).toBe(17);
     provider.disconnect();
   });
 

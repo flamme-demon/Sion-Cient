@@ -22,10 +22,12 @@ export class MatrixKeyProvider extends BaseKeyProvider {
   // réémet pour chiffrer nos frames). Posé par useVoiceChannel quand le
   // moteur natif est sélectionné sur salon chiffré, jamais sinon.
   private nativeForwarder: ((identity: string, keyIndex: number, key: Uint8Array) => void) | null = null;
-  // Dernière clé par identité : les clés arrivées AVANT le connect natif
-  // (reemit au attach) seraient perdues sinon — `flushKeysToNative` les
-  // rejoue après chaque connect.
-  private latestKeys = new Map<string, { key: Uint8Array; keyIndex: number }>();
+  // Anneau complet par identité (comme `participantKeyRings` côté MatrixRTC,
+  // rejoué en entier par `reemitEncryptionKeys`) : le déchiffrement peut
+  // exiger un ANCIEN index (émetteur en retard sur la rotation) — avec la
+  // seule dernière clé, `MissingKey` définitif côté natif alors que le JS
+  // (historique complet) entend. Borné à 16 par pair (fenêtre ratchet 10).
+  private keyRings = new Map<string, Array<{ key: Uint8Array; keyIndex: number }>>();
 
   constructor() {
     // Align with Element Call's config: the ratchet window lets LiveKit's
@@ -56,7 +58,7 @@ export class MatrixKeyProvider extends BaseKeyProvider {
       this.sessionAttachedAt = 0;
     }
     this.nativeForwarder = null;
-    this.latestKeys.clear();
+    this.keyRings.clear();
   }
 
   /** Branche le transfert vers le moteur natif (useVoiceChannel, salon chiffré natif). */
@@ -66,16 +68,20 @@ export class MatrixKeyProvider extends BaseKeyProvider {
     this.nativeForwarder = cb;
   }
 
-  /** Rejoue toutes les clés connues vers le natif (après chaque connect). */
+  /** Rejoue tout l'historique connu vers le natif (après chaque connect),
+   *  par index croissant (comme le reemit MatrixRTC). */
   flushKeysToNative(): number {
     if (!this.nativeForwarder) return 0;
     let n = 0;
-    for (const [identity, { key, keyIndex }] of this.latestKeys) {
-      try {
-        this.nativeForwarder(identity, keyIndex, key);
-        n++;
-      } catch (err) {
-        console.error(`[Sion][E2EE] flush natif vers ${identity}:`, err);
+    for (const [identity, ring] of this.keyRings) {
+      const ordered = [...ring].sort((a, b) => a.keyIndex - b.keyIndex);
+      for (const { key, keyIndex } of ordered) {
+        try {
+          this.nativeForwarder(identity, keyIndex, key);
+          n++;
+        } catch (err) {
+          console.error(`[Sion][E2EE] flush natif vers ${identity}:`, err);
+        }
       }
     }
     return n;
@@ -96,7 +102,20 @@ export class MatrixKeyProvider extends BaseKeyProvider {
         ["deriveBits", "deriveKey"],
       );
       this.onSetEncryptionKey(cryptoKey, rtcBackendIdentity, encryptionKeyIndex);
-      this.latestKeys.set(rtcBackendIdentity, { key: key.slice(), keyIndex: encryptionKeyIndex });
+      // Anneau borné (16) : remplace l'index déjà vu (re-reemit), sinon
+      // ajoute en queue en éjectant le plus ancien.
+      let ring = this.keyRings.get(rtcBackendIdentity);
+      if (!ring) {
+        ring = [];
+        this.keyRings.set(rtcBackendIdentity, ring);
+      }
+      const known = ring.findIndex((e) => e.keyIndex === encryptionKeyIndex);
+      const entry = { key: key.slice(), keyIndex: encryptionKeyIndex };
+      if (known >= 0) ring[known] = entry;
+      else {
+        ring.push(entry);
+        while (ring.length > 16) ring.shift();
+      }
       if (this.nativeForwarder) {
         try {
           this.nativeForwarder(rtcBackendIdentity, encryptionKeyIndex, key);
