@@ -8,6 +8,7 @@
  */
 
 import type { ConnectionQuality, ParticipantInfo } from "../types/livekit";
+import { getMatrixClient } from "./matrixService";
 
 export type VoiceNativeState = "disconnected" | "connecting" | "connected" | "reconnecting";
 
@@ -255,6 +256,27 @@ export function toConnectionQuality(q: string): ConnectionQuality {
  *  Même regex que le filtre du panneau vocal (`ChannelItem`). */
 export function matrixUserIdOf(identity: string): string {
   return identity.match(/^(@[^:]+:[^:]+)/)?.[1] ?? identity;
+}
+
+/** Pseudo d'affichage d'un participant vocal natif : membre Matrix de la
+ *  room (pseudo choisi par l'utilisateur), sinon displayname global, sinon
+ *  localpart — jamais l'identité longue (`@user:server:device`). Miroir de
+ *  `getParticipantInfo` (panneau vocal) pour les pastilles de curseur.
+ *  Synchrone et pas cher (lectures de maps) : appelable à chaque paquet. */
+export function resolveNativeDisplayName(identity: string, roomId: string | null): string {
+  const userId = matrixUserIdOf(identity);
+  try {
+    const client = getMatrixClient();
+    if (client) {
+      if (roomId) {
+        const memberName = client.getRoom(roomId)?.getMember?.(userId)?.name;
+        if (memberName) return memberName;
+      }
+      const globalName = client.getUser(userId)?.displayName;
+      if (globalName) return globalName;
+    }
+  } catch { /* ignore — repli localpart ci-dessous */ }
+  return userId.replace("@", "").split(":")[0] || identity;
 }
 
 export interface MatrixVoiceUserState {

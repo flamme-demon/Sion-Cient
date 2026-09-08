@@ -2,9 +2,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const invokeMock = vi.fn();
 const listenMock = vi.fn();
+const getMatrixClientMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...args: unknown[]) => listenMock(...args) }));
+vi.mock("./matrixService", () => ({ getMatrixClient: (...args: unknown[]) => getMatrixClientMock(...args) }));
 
 import {
   getVoiceNativeStatus,
@@ -22,6 +24,7 @@ import {
   setVoiceNativeScreensharing,
   overlayMatrixVoiceState,
   matrixUserIdOf,
+  resolveNativeDisplayName,
   voiceNativePublishData,
   toConnectionQuality,
   selectVoiceEngine,
@@ -38,6 +41,8 @@ import {
 beforeEach(() => {
   invokeMock.mockReset();
   listenMock.mockReset();
+  getMatrixClientMock.mockReset();
+  getMatrixClientMock.mockReturnValue(null);
 });
 
 describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
@@ -280,5 +285,26 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(merged).toBe(participants);
     // Liste Matrix vide → même référence (pas de re-render inutile).
     expect(overlayMatrixVoiceState(participants, [])).toBe(participants);
+  });
+
+  it("resolveNativeDisplayName préfère le pseudo Matrix au localpart", () => {
+    // Sans client : repli localpart, jamais l'identité longue.
+    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("narkow");
+    expect(resolveNativeDisplayName("local", "!room")).toBe("local");
+    // Membre de la room : son pseudo.
+    getMatrixClientMock.mockReturnValue({
+      getRoom: () => ({ getMember: () => ({ name: "Narkow le Magnifique" }) }),
+      getUser: () => null,
+    });
+    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow le Magnifique");
+    // Pas de membre, displayname global : repli global.
+    getMatrixClientMock.mockReturnValue({
+      getRoom: () => null,
+      getUser: () => ({ displayName: "Narkow" }),
+    });
+    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow");
+    // Rien nulle part : localpart.
+    getMatrixClientMock.mockReturnValue({ getRoom: () => null, getUser: () => null });
+    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("narkow");
   });
 });

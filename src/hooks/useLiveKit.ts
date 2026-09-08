@@ -90,7 +90,7 @@ export function useLiveKit() {
       }).catch(() => {});
       import("../services/livekitService").then(({ CURSOR_TOPIC, CURSOR_CLICK_TOPIC, handleNativeCursorData }) => {
         if ((ev.topic !== CURSOR_TOPIC && ev.topic !== CURSOR_CLICK_TOPIC) || !sender) return;
-        const name = useLiveKitStore.getState().participants.find((p) => p.identity === sender)?.name || sender;
+        const name = native.resolveNativeDisplayName(sender, room);
         handleNativeCursorData(ev.topic, sender, name, native.b64ToBytes(ev.payload_b64));
       }).catch(() => {});
       // Renvoi vers l'overlay quand ON partage en natif (miroir du forward
@@ -111,7 +111,7 @@ export function useLiveKit() {
             if (payload.t !== selfId) return;
             // `||` et pas `??` : un nom vide LiveKit doit retomber sur
             // l'identité, sinon la pastille du curseur reste vide.
-            const name = useLiveKitStore.getState().participants.find((p) => p.identity === sender)?.name || sender;
+            const name = native.resolveNativeDisplayName(sender, room);
             if (ev.topic === "sion-cursor-click" && payload.click) {
               overlay.pushCursorClickToOverlay({
                 id: `${sender}:${Date.now()}`,
