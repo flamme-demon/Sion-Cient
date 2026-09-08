@@ -1081,6 +1081,11 @@ impl LiveKitEngine {
                 if !want {
                     continue;
                 }
+                // Le son du partage n'est pas de la voix : pas de détecteur
+                // RMS (miroir JS : un jeu bruyant allumerait le rond vert).
+                if is_share_audio {
+                    continue;
+                }
                 if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
                     let sid = publication.sid().to_string();
                     let fresh = self
@@ -1144,32 +1149,15 @@ impl LiveKitEngine {
                     continue;
                 }
                 found = true;
-                // Le RMS est ré-accroché explicitement (pas via l'event, qui
-                // peut tarder) ; `attached` purgé du sid pour éviter le
-                // doublon quand l'event arrivera.
+                // Pas de détecteur RMS sur le son du partage (miroir JS :
+                // ce n'est pas de la voix). `attached` purgé par hygiène
+                // (doublon impossible quand l'event arrivera).
                 let sid = publication.sid().to_string();
                 self.attached
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(sid.as_str());
                 publication.set_subscribed(subscribed);
-                if subscribed {
-                    if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
-                        let fresh = self
-                            .attached
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(sid);
-                        if fresh {
-                            spawn_rms_task(
-                                self.rt.handle(),
-                                &self.event_tx,
-                                sender.to_string(),
-                                audio_track.rtc_track(),
-                            );
-                        }
-                    }
-                }
             }
         }
         log::info!(
@@ -1226,15 +1214,20 @@ impl LiveKitEngine {
                                 // notre cache) : un unpublish+republish (ex. fin
                                 // de sourdine côté JS) ne réémet pas forcément
                                 // de TrackUnmuted, d'où un mute fantôme sinon.
-                                let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
-                                    identity: id.clone(),
-                                    muted: publication.is_muted(),
-                                });
+                                // SAUF le son du partage : son mute n'est pas
+                                // celui de la voix (ni resync, ni RMS — voir
+                                // branche TrackSubscribed).
+                                let is_share_audio = publication.kind() == TrackKind::Audio
+                                    && publication.source() == TrackSource::ScreenshareAudio;
+                                if !is_share_audio {
+                                    let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
+                                        identity: id.clone(),
+                                        muted: publication.is_muted(),
+                                    });
+                                }
                                 // Présence du son de partage pour les pistes
                                 // déjà là (le front affiche le contrôle 🔊).
-                                if publication.kind() == TrackKind::Audio
-                                    && publication.source() == TrackSource::ScreenshareAudio
-                                {
+                                if is_share_audio {
                                     let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
                                         sender: id.clone(),
                                         has_audio: true,
@@ -1244,6 +1237,10 @@ impl LiveKitEngine {
                                     if publication.kind() == TrackKind::Audio {
                                         publication.set_subscribed(false);
                                     }
+                                    continue;
+                                }
+                                // Pas de RMS sur le son du partage (miroir JS).
+                                if is_share_audio {
                                     continue;
                                 }
                                 if let Some(RemoteTrack::Audio(audio_track)) =
@@ -1336,37 +1333,39 @@ impl LiveKitEngine {
                                     sender: sender.clone(),
                                     has_audio: true,
                                 });
-                            } else {
-                                log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, sender);
-                            }
-                            // Son du partage coupé localement : on ne le
-                            // réactive pas tout seul (voir commande).
-                            let share_still_muted = is_share_audio
-                                && share_audio_muted
+                                // Son du partage coupé localement : on ne le
+                                // réactive pas tout seul (voir commande).
+                                // Dans tous les cas, PAS de resync mute (le
+                                // mute du partage n'est pas le mute de la
+                                // voix) et PAS de RMS (miroir JS : un jeu
+                                // bruyant allumerait le rond vert).
+                                if share_audio_muted
                                     .lock()
                                     .map(|m| m.contains(sender.as_str()))
-                                    .unwrap_or(false);
-                            if share_still_muted {
-                                publication.set_subscribed(false);
-                            } else {
-                                // Resync : une republication (fin de sourdine
-                                // distante) démarre non-mutée sans TrackUnmuted.
-                                let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
-                                    identity: sender.clone(),
-                                    muted: publication.is_muted(),
-                                });
-                                let fresh = attached
-                                    .lock()
-                                    .map(|mut a| a.insert(sid))
-                                    .unwrap_or(false);
-                                if fresh {
-                                    spawn_rms_task(
-                                        &rt_handle,
-                                        &tx,
-                                        sender,
-                                        audio_track.rtc_track(),
-                                    );
+                                    .unwrap_or(false)
+                                {
+                                    publication.set_subscribed(false);
                                 }
+                                continue;
+                            }
+                            log::info!("[Sion][voix-native] piste audio souscrite {} ({})", sid, sender);
+                            // Resync : une republication (fin de sourdine
+                            // distante) démarre non-mutée sans TrackUnmuted.
+                            let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
+                                identity: sender.clone(),
+                                muted: publication.is_muted(),
+                            });
+                            let fresh = attached
+                                .lock()
+                                .map(|mut a| a.insert(sid))
+                                .unwrap_or(false);
+                            if fresh {
+                                spawn_rms_task(
+                                    &rt_handle,
+                                    &tx,
+                                    sender,
+                                    audio_track.rtc_track(),
+                                );
                             }
                         }
                     }
