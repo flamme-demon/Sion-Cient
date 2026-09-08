@@ -135,7 +135,7 @@ export function useLiveKit() {
                   name,
                   x: payload.x,
                   y: payload.y,
-                  expiresAt: Date.now() + 5000,
+                  expiresAt: Date.now() + 60000,
                 }).catch(() => {}).finally(() => overlayPushInflight.delete(sender));
               }
             }

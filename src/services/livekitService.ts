@@ -58,11 +58,13 @@ const AFK_TOPIC = "sion-afk";
 // closes the share view.
 export const CURSOR_TOPIC = "sion-cursor";
 export const CURSOR_CLICK_TOPIC = "sion-cursor-click";
-// Durée de vie d'un curseur sans nouvelles : 5 s (et non 2). Les paquets
-// arrivent en rafales espacées de plusieurs secondes (mesuré en prod :
-// trou-max ~5 s) — avec 2 s le curseur clignotait (effacé puis réapparu
-// ailleurs) au lieu de se figer sur la dernière position connue.
-const CURSOR_TTL_MS = 5000;
+// Durée de vie d'un curseur sans nouvelles : 60 s. Un pointeur immobile
+// pointe toujours quelque chose d'utile — l'effacer (puis le faire
+// réapparaître ailleurs à la reprise) est perçu comme une téléportation.
+// Les vrais départs sont nettoyés explicitement (expire, leave), donc une
+// longue expiration ne laisse que des fantômes de crash (~30 s SFU timeout
+// + 60 s max ici). Voir `overlayPush` côté useLiveKit (même valeur).
+const CURSOR_TTL_MS = 60000;
 // Transcription arming: "I want the meeting transcribed" — ephemeral per
 // call, so it rides the data channel like AFK (re-broadcast to newcomers,
 // forgotten on leave). The session itself (uuid + dates) is DURABLE and
