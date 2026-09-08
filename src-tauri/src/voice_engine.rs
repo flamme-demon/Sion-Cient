@@ -369,6 +369,16 @@ fn encode_jpeg_rgba(
     Ok(out)
 }
 
+/// La fin d'une piste `ScreenshareAudio` retire-t-elle le contrôle 🔊 ?
+/// Non si c'est NOUS qui avons désinscrit (mute local du partage ou
+/// sourdine globale) : la publication existe toujours côté émetteur, le
+/// contrôle doit rester pour pouvoir réactiver. Oui sinon (l'émetteur a
+/// coupé son partage : `TrackUnpublished` gère déjà ce cas, ceci couvre
+/// les `TrackUnsubscribed` spontanés). Fonction pure (testée).
+fn share_audio_presence_kept(share_muted: bool, deafened: bool) -> bool {
+    share_muted || deafened
+}
+
 /// Échantillonne le plan Y (1 octet sur 32) pour la détection de changement.
 /// Fonction pure (testée).
 fn y_samples(y: &[u8]) -> Vec<u8> {
@@ -1433,15 +1443,33 @@ impl LiveKitEngine {
                         // 🔊) ; les voix se contentent de la fin de piste RMS.
                         if publication.source() == TrackSource::ScreenshareAudio {
                             let sender = participant.identity().to_string();
-                            log::info!(
-                                "[Sion][voix-native] son du partage désinscrit {} ({})",
-                                audio_track.sid(),
-                                sender
-                            );
-                            let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
-                                sender,
-                                has_audio: false,
-                            });
+                            // Unsub LOCAL (mute du partage ou sourdine) : la
+                            // publication existe toujours, on garde le
+                            // contrôle pour pouvoir réactiver (sinon le
+                            // bouton disparaît et le unmute est impossible).
+                            let locally_muted = share_audio_muted
+                                .lock()
+                                .map(|m| m.contains(sender.as_str()))
+                                .unwrap_or(false);
+                            let globally_deafened =
+                                deafened.load(std::sync::atomic::Ordering::Relaxed);
+                            if share_audio_presence_kept(locally_muted, globally_deafened) {
+                                log::info!(
+                                    "[Sion][voix-native] son du partage désinscrit localement {} ({})",
+                                    audio_track.sid(),
+                                    sender
+                                );
+                            } else {
+                                log::info!(
+                                    "[Sion][voix-native] son du partage désinscrit {} ({})",
+                                    audio_track.sid(),
+                                    sender
+                                );
+                                let _ = tx.send(VoiceEngineEvent::ShareAudioPresence {
+                                    sender,
+                                    has_audio: false,
+                                });
+                            }
                         }
                     }
                     RoomEvent::TrackMuted { participant, .. } => {
@@ -1708,6 +1736,16 @@ mod tests {
         let img = image::load_from_memory(&jpeg).expect("decode").to_rgb8();
         let px = img.get_pixel(8, 8);
         assert!(px[0] > 150 && px[1] < 110 && px[2] < 120, "px={:?}", px);
+    }
+
+    #[test]
+    fn share_audio_presence_survit_au_mute_local() {
+        // Mute local ou sourdine : on garde le contrôle (pas de has_audio=false).
+        assert!(share_audio_presence_kept(true, false));
+        assert!(share_audio_presence_kept(false, true));
+        assert!(share_audio_presence_kept(true, true));
+        // Vrai retrait côté émetteur : le contrôle doit se masquer.
+        assert!(!share_audio_presence_kept(false, false));
     }
 
     #[test]
