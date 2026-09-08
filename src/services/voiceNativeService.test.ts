@@ -14,6 +14,7 @@ import {
   voiceNativeDisconnect,
   setVoiceNativeMuted,
   setVoiceNativeDeafened,
+  setVoiceNativeE2EEKey,
   onVoiceNativeStatus,
   onVoiceNativeParticipants,
   onVoiceNativeSpeaking,
@@ -67,6 +68,29 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
       token: "jwt",
       roomName: "salon",
       displayName: "flamme",
+      encrypted: false,
+    });
+  });
+
+  it("connect propage le flag salon chiffré (E2EE GCM natif)", async () => {
+    invokeMock.mockResolvedValue({ state: "connecting" });
+    await voiceNativeConnect("wss://livekit", "jwt", "salon", "flamme", true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_connect", {
+      url: "wss://livekit",
+      token: "jwt",
+      roomName: "salon",
+      displayName: "flamme",
+      encrypted: true,
+    });
+  });
+
+  it("setVoiceNativeE2EEKey transfère clé brute au provider natif", async () => {
+    invokeMock.mockResolvedValue(true);
+    await expect(setVoiceNativeE2EEKey("@a:srv:D1", 3, "QUJD")).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_e2ee_key", {
+      identity: "@a:srv:D1",
+      keyIndex: 3,
+      keyB64: "QUJD",
     });
   });
 

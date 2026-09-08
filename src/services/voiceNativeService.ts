@@ -158,12 +158,14 @@ export function voiceNativeConnect(
   token: string,
   roomName: string,
   displayName: string,
+  encrypted = false,
 ): Promise<VoiceNativeStatus> {
   return tauriInvoke<VoiceNativeStatus>("voice_native_connect", {
     url,
     token,
     roomName,
     displayName,
+    encrypted,
   });
 }
 
@@ -177,6 +179,20 @@ export function setVoiceNativeMuted(muted: boolean): Promise<VoiceNativeStatus> 
 
 export function setVoiceNativeDeafened(deafened: boolean): Promise<VoiceNativeStatus> {
   return tauriInvoke<VoiceNativeStatus>("voice_native_set_deafened", { deafened });
+}
+
+/** Pont E2EE : transfère une clé MatrixRTC brute au provider natif.
+ *  `keyB64` = 32 octets bruts encodés (cf. `validate_e2ee_key` côté Rust). */
+export function setVoiceNativeE2EEKey(
+  identity: string,
+  keyIndex: number,
+  keyB64: string,
+): Promise<boolean> {
+  return tauriInvoke<boolean>("voice_native_set_e2ee_key", {
+    identity,
+    keyIndex,
+    keyB64,
+  });
 }
 
 export async function onVoiceNativeStatus(

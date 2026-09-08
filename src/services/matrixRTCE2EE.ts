@@ -17,6 +17,15 @@ export class MatrixKeyProvider extends BaseKeyProvider {
   // issues after the fact without interactive debugging.
   private sessionAttachedAt = 0;
   private firstKeySeen = new Set<string>();
+  // Pont E2EE natif (chantier no-CEF) : le moteur Rust ne voit pas les events
+  // MatrixRTC — on lui transfère chaque clé (paires + la nôtre, que MatrixRTC
+  // réémet pour chiffrer nos frames). Posé par useVoiceChannel quand le
+  // moteur natif est sélectionné sur salon chiffré, jamais sinon.
+  private nativeForwarder: ((identity: string, keyIndex: number, key: Uint8Array) => void) | null = null;
+  // Dernière clé par identité : les clés arrivées AVANT le connect natif
+  // (reemit au attach) seraient perdues sinon — `flushKeysToNative` les
+  // rejoue après chaque connect.
+  private latestKeys = new Map<string, { key: Uint8Array; keyIndex: number }>();
 
   constructor() {
     // Align with Element Call's config: the ratchet window lets LiveKit's
@@ -46,6 +55,30 @@ export class MatrixKeyProvider extends BaseKeyProvider {
       this.firstKeySeen.clear();
       this.sessionAttachedAt = 0;
     }
+    this.nativeForwarder = null;
+    this.latestKeys.clear();
+  }
+
+  /** Branche le transfert vers le moteur natif (useVoiceChannel, salon chiffré natif). */
+  setNativeForwarder(
+    cb: ((identity: string, keyIndex: number, key: Uint8Array) => void) | null,
+  ): void {
+    this.nativeForwarder = cb;
+  }
+
+  /** Rejoue toutes les clés connues vers le natif (après chaque connect). */
+  flushKeysToNative(): number {
+    if (!this.nativeForwarder) return 0;
+    let n = 0;
+    for (const [identity, { key, keyIndex }] of this.latestKeys) {
+      try {
+        this.nativeForwarder(identity, keyIndex, key);
+        n++;
+      } catch (err) {
+        console.error(`[Sion][E2EE] flush natif vers ${identity}:`, err);
+      }
+    }
+    return n;
   }
 
   private onEncryptionKey = async (
@@ -63,6 +96,14 @@ export class MatrixKeyProvider extends BaseKeyProvider {
         ["deriveBits", "deriveKey"],
       );
       this.onSetEncryptionKey(cryptoKey, rtcBackendIdentity, encryptionKeyIndex);
+      this.latestKeys.set(rtcBackendIdentity, { key: key.slice(), keyIndex: encryptionKeyIndex });
+      if (this.nativeForwarder) {
+        try {
+          this.nativeForwarder(rtcBackendIdentity, encryptionKeyIndex, key);
+        } catch (err) {
+          console.error(`[Sion][E2EE] transfert natif vers ${rtcBackendIdentity}:`, err);
+        }
+      }
 
       // Structured log: first key per peer with elapsed time since attach.
       // Subsequent rotations are noisy and unhelpful in logs, so skip them.

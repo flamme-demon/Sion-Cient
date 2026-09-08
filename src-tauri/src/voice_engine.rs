@@ -18,6 +18,8 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 use livekit::prelude::*;
+use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
+use livekit::e2ee::{E2eeOptions, EncryptionType};
 use livekit::track::VideoQuality;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::desktop_capturer::{
@@ -935,6 +937,14 @@ pub struct LiveKitEngine {
     /// les pompes vidéo (le canal broadcast reste réservé aux petits events).
     event_app: Mutex<Option<tauri::AppHandle<crate::TauriRuntime>>>,
     event_tx: tokio::sync::broadcast::Sender<VoiceEngineEvent>,
+    /// Clés E2EE MatrixRTC (salons chiffrés) : alimenté par le front via
+    /// `voice_native_set_e2ee_key`, miroir exact du `MatrixKeyProvider` JS
+    /// (mêmes clés brutes, mêmes identités `@user:serveur:device`, clé
+    /// propre incluse — MatrixRTC la réémet pour nous chiffrer).
+    /// `KeyProvider::set_key` est `&self` : pas de verrou nécessaire.
+    e2ee_keys: KeyProvider,
+    /// Identités ayant déjà fourni une clé (télémétrie first-key, miroir JS).
+    e2ee_seen: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 // Étape suivante : instancié par les commandes `voice_native_*` quand le
@@ -948,6 +958,15 @@ impl LiveKitEngine {
             .build()
             .map_err(|e| format!("runtime voix: {}", e))?;
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
+        // Fenêtre de ratchet + taille d'anneau alignées sur Element Call
+        // (`MatrixKeyProvider` JS : ratchetWindowSize 10, keyringSize 256) :
+        // absorbe la dérive naturelle des rotations sans recovery applicatif.
+        // Sel + KDF par défaut du SDK (compatibles livekit-client).
+        let e2ee_keys = KeyProvider::new(KeyProviderOptions {
+            ratchet_window_size: 10,
+            key_ring_size: 256,
+            ..Default::default()
+        });
         Ok(Self {
             rt,
             room: Mutex::new(None),
@@ -963,6 +982,8 @@ impl LiveKitEngine {
             video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             event_app: Mutex::new(None),
             event_tx,
+            e2ee_keys,
+            e2ee_seen: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
         })
     }
 
@@ -1487,6 +1508,38 @@ impl LiveKitEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
+    }
+
+    /// Importe une clé E2EE MatrixRTC (commande `voice_native_set_e2ee_key`,
+    /// alimentée par le `MatrixKeyProvider` JS). Miroir de
+    /// `onEncryptionKey` : mêmes clés brutes, index partagés. Retourne
+    /// `false` si le provider refuse (ne doit pas arriver : log + poursuite,
+    /// une clé manquée se répare à la prochaine rotation / re-flush).
+    pub fn set_e2ee_key(&self, identity: &str, key_index: i32, key: Vec<u8>) -> bool {
+        let ok = self
+            .e2ee_keys
+            .set_key(&identity.into(), key_index, key);
+        if ok {
+            let fresh = self
+                .e2ee_seen
+                .lock()
+                .map(|mut s| s.insert(identity.to_string()))
+                .unwrap_or(false);
+            // Télémétrie first-key comme côté JS (rotations suivantes
+            // silencieuses pour ne pas noyer le log).
+            if fresh {
+                log::info!(
+                    "[Sion][voix-native][E2EE] première clé de {} index={}",
+                    identity, key_index
+                );
+            }
+        } else {
+            log::warn!(
+                "[Sion][voix-native][E2EE] clé refusée de {} index={}",
+                identity, key_index
+            );
+        }
+        ok
     }
 
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
@@ -2054,12 +2107,24 @@ impl LiveKitEngine {
 }
 
 impl VoiceEngine for LiveKitEngine {
-    fn connect(&mut self, url: &str, token: &str) -> Result<String, String> {
+    fn connect(&mut self, url: &str, token: &str, encrypted: bool) -> Result<String, String> {
         if url.trim().is_empty() {
             return Err("URL LiveKit vide".into());
         }
         if token.trim().is_empty() {
             return Err("Token LiveKit vide".into());
+        }
+        // Salon chiffré : E2EE GCM adossé aux clés MatrixRTC (cf.
+        // `set_e2ee_key`). Sans ça, les frames distantes restent
+        // indéchiffrables — audio distant muet. Le data-channel est chiffré
+        // du même coup (`with_dc_encryption` auto), comme côté JS.
+        let mut options = RoomOptions::default();
+        if encrypted {
+            options.encryption = Some(E2eeOptions {
+                encryption_type: EncryptionType::Gcm,
+                key_provider: self.e2ee_keys.clone(),
+            });
+            log::info!("[Sion][voix-native][E2EE] salon chiffré : E2EE GCM activé");
         }
         // Chronométrage du join (diagnostic : les pairs renvoient leur état
         // ~500 ms après nous avoir vus — si ce connect dépasse ça, leurs
@@ -2067,7 +2132,7 @@ impl VoiceEngine for LiveKitEngine {
         let t0 = std::time::Instant::now();
         let (room, events) = self
             .rt
-            .block_on(Room::connect(url, token, RoomOptions::default()))
+            .block_on(Room::connect(url, token, options))
             .map_err(|e| format!("connect LiveKit: {}", e))?;
         log::info!(
             "[Sion][voix-native] session SFU établie en {}ms (signal+PC+data-channel)",
@@ -2158,9 +2223,9 @@ mod tests {
     fn engine_rejects_empty_credentials_without_touching_network() {
         let mut engine = LiveKitEngine::new().expect("runtime tokio");
         assert!(!engine.is_connected());
-        assert!(engine.connect("", "jwt").is_err());
-        assert!(engine.connect("wss://x", "").is_err());
-        assert!(engine.connect("  ", "jwt").is_err());
+        assert!(engine.connect("", "jwt", false).is_err());
+        assert!(engine.connect("wss://x", "", false).is_err());
+        assert!(engine.connect("  ", "jwt", false).is_err());
         assert!(!engine.is_connected());
     }
 
@@ -2455,6 +2520,19 @@ mod tests {
     }
 
     #[test]
+    fn e2ee_key_provider_roundtrip() {
+        // Pont E2EE : le provider accepte les clés MatrixRTC brutes
+        // (pairs + propre) et les rend (index partagés avec livekit-client).
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        let key = vec![0xA5u8; 32];
+        assert!(engine.set_e2ee_key("@alice:srv:DEV1", 0, key.clone()));
+        // Rotation : même identité, nouvel index — acceptée aussi.
+        assert!(engine.set_e2ee_key("@alice:srv:DEV1", 1, key));
+        // Clé propre (chiffrement de nos frames) : même chemin.
+        assert!(engine.set_e2ee_key("@moi:srv:DEV9", 0, vec![0x5Au8; 32]));
+    }
+
+    #[test]
     fn mute_desire_survives_until_publish() {
         // Sans session : le mute est enregistré (pas perdu en silence) et
         // une intention d'unmute ultérieure l'efface — même si le publish
@@ -2514,7 +2592,7 @@ mod tests {
         let url = std::env::var("LIVEKIT_TEST_URL").expect("LIVEKIT_TEST_URL requis");
         let token = std::env::var("LIVEKIT_TEST_TOKEN").expect("LIVEKIT_TEST_TOKEN requis");
         let mut engine = LiveKitEngine::new().expect("runtime tokio");
-        let identity = engine.connect(&url, &token).expect("connect SFU");
+        let identity = engine.connect(&url, &token, false).expect("connect SFU");
         assert!(!identity.is_empty());
         assert!(engine.is_connected());
         engine.disconnect();

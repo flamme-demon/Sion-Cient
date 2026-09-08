@@ -378,9 +378,21 @@ export function useVoiceChannel() {
           if (useNative) {
             const encryptedHere = client.getRoom(matrixRoomId)?.hasEncryptionStateEvent() ?? false;
             if (encryptedHere) {
-              console.warn(
-                "[Sion][voix-native] salon chiffré : le pont E2EE natif n'est pas encore branché — l'audio distant restera muet jusqu'à l'étape E2EE.",
-              );
+              // Pont E2EE natif : chaque clé MatrixRTC (pairs + la nôtre)
+              // est transférée au provider Rust, qui déchiffre les frames
+              // (voix) comme livekit-client le fait côté JS.
+              if (keyProvider) {
+                const { bytesToB64, setVoiceNativeE2EEKey } =
+                  await import("../services/voiceNativeService");
+                keyProvider.setNativeForwarder((identity, keyIndex, key) => {
+                  setVoiceNativeE2EEKey(identity, keyIndex, bytesToB64(key)).catch((err) => {
+                    console.error(`[Sion][E2EE] transfert clé native ${identity}:`, err);
+                  });
+                });
+                console.info("[Sion][voix-native][E2EE] pont E2EE branché (clés MatrixRTC → Rust)");
+              } else {
+                console.warn("[Sion][voix-native][E2EE] pas de keyProvider — audio distant muet en salon chiffré");
+              }
             }
             setActiveVoiceEngine("native");
             const myId = client.getUserId() ?? "";
@@ -389,7 +401,13 @@ export function useVoiceChannel() {
               || client.getUser(myId)?.displayName
               || credentials?.userId
               || myId;
-            await connectNative(rtcResult.url, rtcResult.token, matrixRoomId, displayName);
+            await connectNative(rtcResult.url, rtcResult.token, matrixRoomId, displayName, encryptedHere);
+            // Clés arrivées AVANT le connect (reemit au attach) : le
+            // forwarder n'était pas posé — on rejoue tout le connu.
+            if (encryptedHere && keyProvider) {
+              const flushed = keyProvider.flushKeysToNative();
+              console.info(`[Sion][voix-native][E2EE] ${flushed} clé(s) rejouée(s) après connect`);
+            }
           } else {
             console.info("[Sion] join JS (livekit-client dans la webview)");
             setActiveVoiceEngine("js");

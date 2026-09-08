@@ -424,7 +424,7 @@ pub fn validate_e2ee_key(key: &[u8]) -> bool {
 /// `Room::connect`, `PlatformAudio`) se branchera ici sans changer les
 /// commandes ni le front.
 pub trait VoiceEngine {
-    fn connect(&mut self, url: &str, token: &str) -> Result<String, String>;
+    fn connect(&mut self, url: &str, token: &str, encrypted: bool) -> Result<String, String>;
     fn disconnect(&mut self);
 }
 
@@ -818,13 +818,14 @@ fn connect_engine(
     app: &tauri::AppHandle<TauriRuntime>,
     url: &str,
     token: &str,
+    encrypted: bool,
 ) -> Result<String, String> {
     let mut engine = LiveKitEngine::new()?;
     engine.set_event_app(app.clone());
     let rx = engine.subscribe();
     spawn_forward_task(app.clone(), rx);
     let t_join = std::time::Instant::now();
-    let identity = engine.connect(url, token)?;
+    let identity = engine.connect(url, token, encrypted)?;
     if let Err(e) = engine.publish_microphone() {
         engine.disconnect();
         return Err(e);
@@ -989,6 +990,9 @@ pub fn voice_native_connect(
     token: String,
     room_name: String,
     #[allow(unused_variables)] display_name: String,
+    // Salon Matrix chiffré : E2EE GCM adossé aux clés MatrixRTC (fournies
+    // ensuite via `voice_native_set_e2ee_key`). `false` = salon clair.
+    _encrypted: bool,
 ) -> Result<VoiceNativeStatus, String> {
     if url.trim().is_empty() {
         return Err("URL LiveKit vide".into());
@@ -1030,7 +1034,7 @@ pub fn voice_native_connect(
     }
 
     #[cfg(feature = "native-voice")]
-    match connect_engine(&app, &url, &token) {
+    match connect_engine(&app, &url, &token, _encrypted) {
         Ok(identity) => {
             log::info!("[Sion][voix-native] session SFU ouverte identite={}", identity);
             // Le local n'arrive jamais via ParticipantConnected : on
@@ -1161,12 +1165,12 @@ pub fn voice_native_set_deafened(
     // sauterait pendant un checkout concurrent laisserait le playout
     // ouvert derrière un casque "sourdine" — le pendant auditif du bug F9.
     #[cfg(feature = "native-voice")]
-    let connected = wait_for_engine(holder_is_connected);
+    let _connected = wait_for_engine(holder_is_connected);
     #[cfg(not(feature = "native-voice"))]
-    let connected = false;
+    let _connected = false;
     #[cfg(feature = "native-voice")]
     {
-        if connected {
+        if _connected {
             if let Err(e) = with_engine(&app, "deafen natif", |e| {
                 e.set_deafened(deafened).map(|_| ())?;
                 // Propager aux pairs (interop JS `broadcastAfk`) : sinon les
@@ -1189,6 +1193,64 @@ pub fn voice_native_set_deafened(
     let status = snapshot(&inner);
     emit_status(&app, &status);
     status
+}
+
+/// Importe une clé E2EE MatrixRTC dans le provider natif (pont E2EE,
+/// salons chiffrés). Le front (`MatrixKeyProvider`) transfère chaque clé
+/// reçue — pairs ET la nôtre (MatrixRTC la réémet pour chiffrer nos
+/// frames) — sous `{ identity: "@user:serveur:device", key_index, key_b64 }`.
+/// Retourne `true` si la clé est acceptée. `false` sans moteur (hors appel :
+/// la clé est inutile) ou b64 invalide — PAS d'effet de bord session
+/// (contrairement à `with_engine`, pas de `drop_dead_session` : une clé
+/// orpheline n'est pas une session morte). Le front re-flushe toutes les
+/// clés connues après chaque connect, donc aucune perte durable.
+#[tauri::command]
+pub fn voice_native_set_e2ee_key(
+    _app: tauri::AppHandle<TauriRuntime>,
+    identity: String,
+    key_index: i32,
+    key_b64: String,
+) -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        use base64::Engine as _;
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(key_b64.trim()) {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!(
+                    "[Sion][voix-native][E2EE] clé {} index={} illisible: {}",
+                    identity, key_index, e
+                );
+                return false;
+            }
+        };
+        if !validate_e2ee_key(&bytes) {
+            log::warn!(
+                "[Sion][voix-native][E2EE] clé {} index={} rejetée : {} octets (attendu 32)",
+                identity,
+                key_index,
+                bytes.len()
+            );
+            return false;
+        }
+        // `take_engine_wait` absorbe les checkouts concurrents (deafen…),
+        // comme `with_engine` — mais on repose le moteur nous-mêmes SANS
+        // `drop_dead_session` si absent (voir doc ci-dessus).
+        if let Some(engine) = take_engine_wait() {
+            let ok = engine.set_e2ee_key(&identity, key_index, bytes);
+            store_engine(Some(engine));
+            return ok;
+        }
+        log::debug!(
+            "[Sion][voix-native][E2EE] clé {} index={} sans moteur — ignorée",
+            identity, key_index
+        );
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&identity, &key_index, &key_b64);
+        false
+    }
 }
 
 /// Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
