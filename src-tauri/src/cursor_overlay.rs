@@ -288,6 +288,9 @@ struct App {
     pixmap: Option<Pixmap>,
     last_frame: Instant,
     frame_counter: u64,
+    /// Cumul du temps passé dans `redraw()` (diagnostic, voir ci-dessus).
+    redraw_ms_total: u64,
+    redraw_count: u64,
     /// Le collage sur tous les bureaux a-t-il été rejoué APRÈS le mappage ?
     /// La propriété posée avant suffit à la plupart des gestionnaires, mais
     /// certains la réécrivent en mappant — le ClientMessage, lui, n'a d'effet
@@ -305,6 +308,8 @@ impl App {
             pixmap: None,
             last_frame: Instant::now(),
             frame_counter: 0,
+            redraw_ms_total: 0,
+            redraw_count: 0,
             #[cfg(target_os = "linux")]
             sticky_reapplied: false,
         }
@@ -533,7 +538,22 @@ impl ApplicationHandler<UserEvent> for App {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
             WindowEvent::RedrawRequested => {
+                // Mesure du coût réel du rendu (diagnostic : l'overlay
+                // plein écran en software est suspecté de saturer le CPU
+                // du sharer — voir logs `redraw Nms`).
+                let t_redraw = Instant::now();
                 self.redraw();
+                self.redraw_ms_total += t_redraw.elapsed().as_millis() as u64;
+                self.redraw_count += 1;
+                if self.redraw_count % 300 == 0 {
+                    log::info!(
+                        "[Sion][CursorOverlay] redraw {}ms en moyenne ({} frames)",
+                        self.redraw_ms_total / self.redraw_count.max(1),
+                        self.redraw_count
+                    );
+                    self.redraw_ms_total = 0;
+                    self.redraw_count = 0;
+                }
                 // Redessin conditionné : à 60 Hz en continu, le remplissage
                 // plein écran + le texte à chaque frame coûtent cher sur la
                 // machine du sharer (qui capture + encode déjà) → saccades
@@ -558,9 +578,14 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     (clicks || unsettled, wake)
                 };
+                // Cadence ~30 Hz (et non 60) : à 5120 px de large, le
+                // remplissage plein écran + le texte à chaque frame saturent
+                // le CPU du sharer (qui capture + encode déjà) → saccades
+                // pour tout le monde. Le lerp 0.7 converge en ~2 frames
+                // (~66 ms), indiscernable de 60 Hz à l'œil.
                 if animate {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
-                        Instant::now() + Duration::from_millis(16),
+                        Instant::now() + Duration::from_millis(33),
                     ));
                     if let Some(w) = &self.window { w.request_redraw(); }
                 } else if let Some(t) = wake_at {
