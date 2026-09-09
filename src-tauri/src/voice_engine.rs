@@ -22,12 +22,17 @@ use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
 use livekit::e2ee::{E2eeOptions, EncryptionType};
 
 /// Options du provider E2EE : fenêtre de ratchet + anneau alignés sur
-/// Element Call (`MatrixKeyProvider` JS : 10 / 256). Sel + KDF par défaut
-/// du SDK (compatibles livekit-client).
+/// Element Call (`MatrixKeyProvider` JS : 10 / 256). Tolérance 10 comme le
+/// worker E2EE livekit-client (défaut JS) : un `MissingKey` transitoire
+/// (clé en retard de quelques ms sur les frames) ne doit pas invalider la
+/// clé définitivement — avec -1 (défaut Rust, "no tolerance"), le cryptor
+/// restait collé en `MissingKey` après l'arrivée de la clé alors que le JS
+/// récupérait. Sel + KDF par défaut du SDK (compatibles livekit-client).
 fn e2ee_key_provider_options() -> KeyProviderOptions {
     KeyProviderOptions {
         ratchet_window_size: 10,
         key_ring_size: 256,
+        failure_tolerance: 10,
         ..Default::default()
     }
 }
@@ -979,7 +984,7 @@ pub struct LiveKitEngine {
     /// rejoue la nôtre avant réessai (cf. `publish_data`).
     e2ee_own_key: Mutex<Option<(String, i32, Vec<u8>)>>,
     /// Identités ayant déjà fourni une clé (télémétrie first-key, miroir JS).
-    e2ee_seen: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    e2ee_seen: std::sync::Arc<Mutex<std::collections::HashSet<(String, i32)>>>,
 }
 
 /// Vrai si l'erreur ressemble à un échec de chiffrement data (clé latest
@@ -1609,7 +1614,7 @@ impl LiveKitEngine {
             let fresh = self
                 .e2ee_seen
                 .lock()
-                .map(|mut s| s.insert(identity.to_string()))
+                .map(|mut s| s.insert((identity.to_string(), key_index)))
                 .unwrap_or(false);
             // Télémétrie first-key comme côté JS (rotations suivantes
             // silencieuses pour ne pas noyer le log).
@@ -2664,6 +2669,17 @@ mod tests {
         // n'est publié (le store front peut prétendre le contraire).
         let engine = LiveKitEngine::new().expect("runtime tokio");
         assert!(!engine.is_microphone_published());
+    }
+
+    #[test]
+    fn e2ee_options_mirror_element_call() {
+        // Parité JS dure : le worker livekit-client tourne avec
+        // ratchetWindow 10 / keyring 256 / failureTolerance 10. Un écart
+        // ici = comportement E2EE divergent (cf. MissingKey collant avec -1).
+        let opts = e2ee_key_provider_options();
+        assert_eq!(opts.ratchet_window_size, 10);
+        assert_eq!(opts.key_ring_size, 256);
+        assert_eq!(opts.failure_tolerance, 10);
     }
 
     #[test]
