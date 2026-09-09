@@ -20,6 +20,7 @@ use base64::Engine as _;
 use livekit::prelude::*;
 use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
 use livekit::e2ee::{E2eeOptions, EncryptionType};
+use livekit::e2ee::key_provider::KeyDerivationAlgorithm;
 
 /// Options du provider E2EE : fenêtre de ratchet + anneau alignés sur
 /// Element Call (`MatrixKeyProvider` JS : 10 / 256). Tolérance 10 comme le
@@ -33,6 +34,11 @@ fn e2ee_key_provider_options() -> KeyProviderOptions {
         ratchet_window_size: 10,
         key_ring_size: 256,
         failure_tolerance: 10,
+        // Dérivation HKDF-SHA256 comme livekit-client (le worker importe
+        // les clés brutes en HKDF et ratchette en HKDF) : avec le PBKDF2
+        // par défaut du SDK, les clés de frames dérivées diffèrent et tout
+        // déchiffrement croisé JS↔natif échoue (`DecryptionFailed`).
+        key_derivation_algorithm: KeyDerivationAlgorithm::HKDF,
         ..Default::default()
     }
 }
@@ -2674,12 +2680,17 @@ mod tests {
     #[test]
     fn e2ee_options_mirror_element_call() {
         // Parité JS dure : le worker livekit-client tourne avec
-        // ratchetWindow 10 / keyring 256 / failureTolerance 10. Un écart
-        // ici = comportement E2EE divergent (cf. MissingKey collant avec -1).
+        // ratchetWindow 10 / keyring 256 / failureTolerance 10 / HKDF. Un
+        // écart ici = comportement E2EE divergent (cf. MissingKey collant
+        // avec -1, DecryptionFailed avec PBKDF2).
         let opts = e2ee_key_provider_options();
         assert_eq!(opts.ratchet_window_size, 10);
         assert_eq!(opts.key_ring_size, 256);
         assert_eq!(opts.failure_tolerance, 10);
+        assert!(matches!(
+            opts.key_derivation_algorithm,
+            KeyDerivationAlgorithm::HKDF
+        ));
     }
 
     #[test]
