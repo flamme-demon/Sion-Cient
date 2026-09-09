@@ -972,8 +972,20 @@ pub struct LiveKitEngine {
     /// propre incluse — MatrixRTC la réémet pour nous chiffrer).
     /// `KeyProvider::set_key` est `&self` : pas de verrou nécessaire.
     e2ee_keys: KeyProvider,
+    /// Notre dernière clé (identité, index, octets) : le SDK chiffre nos
+    /// paquets data avec le DERNIER index global (`get_latest_key_index`,
+    /// toutes identités confondues) — l'import d'une clé paire écrase le
+    /// nôtre et fait échouer nos publishes (`Failed to encrypt`). On
+    /// rejoue la nôtre avant réessai (cf. `publish_data`).
+    e2ee_own_key: Mutex<Option<(String, i32, Vec<u8>)>>,
     /// Identités ayant déjà fourni une clé (télémétrie first-key, miroir JS).
     e2ee_seen: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+}
+
+/// Vrai si l'erreur ressemble à un échec de chiffrement data (clé latest
+/// globale écrasée par une clé paire — cf. `publish_data`).
+fn is_encrypt_error(e: &str) -> bool {
+    e.to_lowercase().contains("encrypt")
 }
 
 // Étape suivante : instancié par les commandes `voice_native_*` quand le
@@ -1007,6 +1019,7 @@ impl LiveKitEngine {
             event_tx,
             e2ee_keys,
             e2ee_seen: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            e2ee_own_key: Mutex::new(None),
         })
     }
 
@@ -1127,6 +1140,10 @@ impl LiveKitEngine {
     /// `reliable: true` comme le chemin JS (`publishData { reliable: true }`) ;
     /// `false` = LOSSY pour les flux à 60 Hz (curseur) où le prochain paquet
     /// répare la perte.
+    ///
+    /// En salon chiffré, un échec de chiffrement rejoue d'abord notre clé
+    /// (redevient latest global) et réessaie une fois : sans ça, toute clé
+    /// paire importée après la nôtre casse nos publishes suivants.
     pub fn publish_data(&self, topic: &str, payload: Vec<u8>, reliable: bool) -> Result<(), String> {
         let len = payload.len();
         if topic == crate::voice_native::TOPIC_CURSOR
@@ -1142,9 +1159,36 @@ impl LiveKitEngine {
             reliable,
             destination_identities: Vec::new(),
         };
-        self.rt
-            .block_on(room.local_participant().publish_data(packet))
-            .map_err(|e| format!("publish data: {}", e))?;
+        let send = |room: &Room| {
+            self.rt
+                .block_on(room.local_participant().publish_data(packet.clone()))
+                .map_err(|e| format!("publish data: {}", e))
+        };
+        match send(room) {
+            Ok(()) => {}
+            Err(e) if is_encrypt_error(&e) => {
+                // Le SDK chiffre avec le DERNIER index global (toutes
+                // identités) : une clé paire importée après la nôtre casse
+                // nos publishes. On rejoue notre clé (redevient latest) et
+                // on réessaie une fois.
+                let own = self.e2ee_own_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                match own {
+                    Some((id, idx, bytes)) => {
+                        if self.e2ee_keys.set_key(&id.as_str().into(), idx, bytes) {
+                            log::info!(
+                                "[Sion][voix-native][E2EE] latest réaligné sur notre index {} — réessai data",
+                                idx
+                            );
+                            send(room)?;
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                    None => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        }
         // Debug : à 60 Hz (curseur), l'info spammerait le log.
         log::debug!("[Sion][voix-native] data publié topic={} ({} o)", topic, len);
         Ok(())
@@ -1548,7 +1592,7 @@ impl LiveKitEngine {
         let key_len = key.len();
         let ok = self
             .e2ee_keys
-            .set_key(&identity.into(), key_index, key);
+            .set_key(&identity.into(), key_index, key.clone());
         if ok {
             // Preuve de stockage (diagnostic MissingKey persistant) : le
             // provider rend-il ce qu'on vient d'écrire, sous la même identité ?
@@ -1585,6 +1629,11 @@ impl LiveKitEngine {
             }
             // Notre propre clé : réindexer nos cryptors d'envoi (voir doc).
             self.bump_own_sender_index(identity, key_index);
+            // Mémoriser pour `publish_data` (refresh du latest global).
+            if self.is_local_identity(identity) {
+                *self.e2ee_own_key.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((identity.to_string(), key_index, key));
+            }
         } else {
             log::warn!(
                 "[Sion][voix-native][E2EE] clé refusée de {} index={}",
@@ -1599,13 +1648,13 @@ impl LiveKitEngine {
     /// toute façon stockée : le prochain import — ou le re-bump au publish —
     /// alignera).
     fn bump_own_sender_index(&self, identity: &str, key_index: i32) {
+        if !self.is_local_identity(identity) {
+            return;
+        }
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let Some(room) = room_guard.as_ref() else {
             return;
         };
-        if room.local_participant().identity().to_string() != identity {
-            return;
-        }
         let mut bumped = 0;
         for ((id, _sid), cryptor) in room.e2ee_manager().frame_cryptors() {
             if id.to_string() == identity {
@@ -1619,6 +1668,16 @@ impl LiveKitEngine {
                 key_index, bumped
             );
         }
+    }
+
+    /// Vrai si `identity` est notre identité LiveKit locale (comparaison
+    /// exacte, même format `@user:serveur:device` que MatrixRTC).
+    fn is_local_identity(&self, identity: &str) -> bool {
+        self.room
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|room| room.local_participant().identity().to_string() == identity)
     }
 
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
