@@ -188,6 +188,13 @@ export function setVoiceNativeDeafened(deafened: boolean): Promise<VoiceNativeSt
   return tauriInvoke<VoiceNativeStatus>("voice_native_set_deafened", { deafened });
 }
 
+/** Ducking soundboard : suspend la capture micro pendant une lecture locale
+ *  (anti-écho — la musique WebAudio est hors référence AEC). Retourne `true`
+ *  ssi le duck est enregistré (relâche requise, même en cas d'erreur). */
+export function setVoiceNativeCaptureDucked(ducked: boolean): Promise<boolean> {
+  return tauriInvoke<boolean>("voice_native_set_capture_ducked", { ducked });
+}
+
 /** Pont E2EE : transfère une clé MatrixRTC brute au provider natif.
  *  `keyB64` = 32 octets bruts encodés (cf. `validate_e2ee_key` côté Rust). */
 export function setVoiceNativeE2EEKey(

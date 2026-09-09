@@ -1267,6 +1267,30 @@ pub fn voice_native_set_e2ee_key(
     }
 }
 
+/// Suspend / reprend la capture micro pendant une lecture soundboard locale
+/// (anti-écho : la musique WebAudio est hors référence AEC, cf.
+/// `LiveKitEngine::set_capture_ducked`). Retourne `true` si le moteur a pris
+/// en compte l'ordre (le front ne relâche que ce qu'il a acquitté).
+/// `false` sans moteur — jamais d'erreur (un son hors appel ne doit pas
+/// échouer la lecture).
+#[tauri::command]
+pub fn voice_native_set_capture_ducked(
+    _app: tauri::AppHandle<TauriRuntime>,
+    ducked: bool,
+) -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        // `take_engine_wait` absorbe les checkouts concurrents (deafen à
+        // 60 Hz côté curseur, etc.) : ~100 ms max, pas de skip silencieux.
+        if let Some(engine) = take_engine_wait() {
+            engine.set_capture_ducked(ducked);
+            store_engine(Some(engine));
+            return true;
+        }
+    }
+    false
+}
+
 /// Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
 /// toggle 🔊 JS : `setScreenShareAudioMuted`). Retourne `true` si une piste
 /// `ScreenshareAudio` existe (false = pas de son partagé). Pas de volume

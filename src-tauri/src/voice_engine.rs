@@ -989,6 +989,12 @@ pub struct LiveKitEngine {
     /// nôtre et fait échouer nos publishes (`Failed to encrypt`). On
     /// rejoue la nôtre avant réessai (cf. `publish_data`).
     e2ee_own_key: Mutex<Option<(String, i32, Vec<u8>)>>,
+    /// Ducking de capture pendant les lectures soundboard locales : la
+    /// musique jouée via WebAudio (CEF) est hors du playout ADM, donc hors
+    /// référence AEC — recaptée par le micro et réémise (écho pour tous),
+    /// alors que les voix (playout ADM) sont annulées. Compteur (sons
+    /// superposés) : >0 = capture suspendue. Voir `set_capture_ducked`.
+    capture_duck: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Identités ayant déjà fourni une clé (télémétrie first-key, miroir JS).
     e2ee_seen: std::sync::Arc<Mutex<std::collections::HashSet<(String, i32)>>>,
 }
@@ -1031,6 +1037,7 @@ impl LiveKitEngine {
             e2ee_keys,
             e2ee_seen: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             e2ee_own_key: Mutex::new(None),
+            capture_duck: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -1689,6 +1696,47 @@ impl LiveKitEngine {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .is_some_and(|room| room.local_participant().identity().to_string() == identity)
+    }
+
+    /// Suspend / reprend la capture micro pendant une lecture soundboard
+    /// locale (cf. champ `capture_duck`). Compteur saturant (jamais négatif) :
+    /// chaque `playSoundLocal` acquitte (`true`) puis relâche (`false`) —
+    /// même en cas d'erreur de lecture (cleanup garanti côté front).
+    /// Sans session ou micro déjà coupé : compteur quand même (relâche
+    /// équilibrée), sans toucher à l'ADM.
+    /// Note : un (de)mute manuel force start/stop sans consulter le compteur
+    /// (l'intention utilisateur gagne toujours — cf. `set_microphone_enabled`).
+    pub fn set_capture_ducked(&self, ducked: bool) {
+        use std::sync::atomic::Ordering;
+        if ducked {
+            let n = self.capture_duck.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 {
+                if let Some(audio) = self.audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    let _ = audio.stop_recording();
+                }
+                log::info!("[Sion][voix-native] capture duckée (soundboard)");
+            }
+        } else if self
+            .capture_duck
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            })
+            == Ok(1)
+        {
+            // Reprise seulement si le micro doit être live (publié) :
+            // sinon on réveillerait la capture d'un micro coupé.
+            let live = self
+                .mic_sid
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some();
+            if live {
+                if let Some(audio) = self.audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    let _ = audio.start_recording();
+                }
+            }
+            log::info!("[Sion][voix-native] capture rétablie (fin soundboard)");
+        }
     }
 
     /// Coupe / rétablit le micro. Comme préconisé par le SDK (et par notre
@@ -2675,6 +2723,23 @@ mod tests {
         // n'est publié (le store front peut prétendre le contraire).
         let engine = LiveKitEngine::new().expect("runtime tokio");
         assert!(!engine.is_microphone_published());
+    }
+
+    #[test]
+    fn capture_duck_counter_balances_without_session() {
+        use std::sync::atomic::Ordering;
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        // Sans session : compteur quand même (relâche équilibrée), ADM intact.
+        engine.set_capture_ducked(true);
+        engine.set_capture_ducked(true);
+        assert_eq!(engine.capture_duck.load(Ordering::Relaxed), 2);
+        engine.set_capture_ducked(false);
+        assert_eq!(engine.capture_duck.load(Ordering::Relaxed), 1);
+        engine.set_capture_ducked(false);
+        assert_eq!(engine.capture_duck.load(Ordering::Relaxed), 0);
+        // Saturant : jamais négatif (relâche orpheline inoffensive).
+        engine.set_capture_ducked(false);
+        assert_eq!(engine.capture_duck.load(Ordering::Relaxed), 0);
     }
 
     #[test]

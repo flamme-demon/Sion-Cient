@@ -528,7 +528,17 @@ export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promis
   // happens independently so other participants hear it.
   if (useAppStore.getState().isDeafened) return;
 
-  const url = await resolveBlobUrl(mxcUrl);
+  // Anti-écho : la lecture WebAudio est hors référence AEC (cf.
+  // `duckLocalMicCapture` / `setVoiceNativeCaptureDucked`) — le micro est
+  // suspendu le temps de la lecture, sinon la musique repasse dans le
+  // canal (les voix, elles, passent par le playout et sont annulées).
+  // L'acquit n'est relâché qu'au cleanup (fin/erreur), jamais avant.
+  const ducked = await duckCaptureForSoundboard(true).catch(() => false);
+
+  const url = await resolveBlobUrl(mxcUrl).catch((err) => {
+    if (ducked) duckCaptureForSoundboard(false).catch(() => {});
+    throw err;
+  });
   // Attach to the DOM so Chromium doesn't GC the element mid-play (which
   // manifests as AbortError: "media was removed from the document").
   const audio = document.createElement("audio");
@@ -536,7 +546,45 @@ export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promis
   audio.style.display = "none";
   audio.preload = "auto";
   document.body.appendChild(audio);
-  await playElementWithGain(audio, gain);
+  // Exactement-une-fois : `playElementWithGain` appelle déjà le cleanup en
+  // cas d'erreur avant de throw — sans garde, le catch ci-dessous relâcherait
+  // deux fois pour un seul acquit (compteur faussé pour les sons superposés).
+  let released = false;
+  const releaseDuck = () => {
+    if (released || !ducked) return;
+    released = true;
+    duckCaptureForSoundboard(false).catch(() => {});
+  };
+  try {
+    await playElementWithGain(audio, gain, releaseDuck);
+  } catch (err) {
+    releaseDuck();
+    throw err;
+  }
+}
+
+/** Suspend (`true`) / reprend (`false`) la capture micro pendant une lecture
+ *  locale, sur le moteur actif (natif ou JS). Retourne `true` ssi une relâche
+ *  est requise (compteur enregistré). Jamais d'exception propagée : un duck
+ *  qui échoue ne doit pas empêcher la lecture (on log et on joue quand même).
+ */
+async function duckCaptureForSoundboard(ducked: boolean): Promise<boolean> {
+  try {
+    const { getActiveVoiceEngine, setVoiceNativeCaptureDucked } =
+      await import("./voiceNativeService");
+    if (getActiveVoiceEngine() === "native") {
+      return await setVoiceNativeCaptureDucked(ducked);
+    }
+  } catch (err) {
+    console.warn("[Sion][soundboard] duck natif impossible:", err);
+  }
+  try {
+    const { duckLocalMicCapture } = await import("./livekitService");
+    return duckLocalMicCapture(ducked);
+  } catch (err) {
+    console.warn("[Sion][soundboard] duck JS impossible:", err);
+    return false;
+  }
 }
 
 /** Preview a sound from a local File (during upload) with the given gain.

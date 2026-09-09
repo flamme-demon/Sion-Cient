@@ -1215,6 +1215,9 @@ export async function disconnectFromRoom() {
     // null this — it fires when the user logs out / leaves the app.
     screenShareCallback?.([]);
     resetAllE2EEState();
+    // Ducking soundboard : ne jamais laisser le micro local suspendu après
+    // un leave (sinon muet fantôme au join suivant — le compteur meurt ici).
+    soundboardDuckCount = 0;
     pendingTimerCleanup?.();
     pendingTimerCleanup = null;
     stopAllSpeakingDetectors();
@@ -1250,6 +1253,33 @@ export function getLocalMicMediaStreamTrack(): MediaStreamTrack | null {
   if (!currentRoom) return null;
   const micPub = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
   return micPub?.track?.mediaStreamTrack ?? null;
+}
+
+/** Compteur de ducking soundboard (sons superposés) : pendant une lecture
+ *  locale, la capture micro est suspendue (`track.enabled = false`, local
+ *  uniquement — aucun mute signalé, aucune recréation de piste) car la
+ *  musique WebAudio est hors référence AEC et serait réémise (écho).
+ *  Retourne `true` ssi un duck a été enregistré (relâche requise).
+ *  Le compteur est remis à zéro au disconnect (cf. `disconnectFromRoom`). */
+let soundboardDuckCount = 0;
+export function duckLocalMicCapture(ducked: boolean): boolean {
+  const track = getLocalMicMediaStreamTrack();
+  if (!track) return false;
+  if (ducked) {
+    soundboardDuckCount++;
+    if (soundboardDuckCount === 1) {
+      console.log("[Sion][soundboard] capture duckée (lecture locale)");
+      track.enabled = false;
+    }
+    return true;
+  }
+  if (soundboardDuckCount === 0) return false;
+  soundboardDuckCount--;
+  if (soundboardDuckCount === 0) {
+    console.log("[Sion][soundboard] capture rétablie (fin lecture)");
+    track.enabled = true;
+  }
+  return true;
 }
 
 export async function toggleMicrophone(enabled: boolean) {

@@ -15,6 +15,7 @@ import {
   setVoiceNativeMuted,
   setVoiceNativeDeafened,
   setVoiceNativeE2EEKey,
+  setVoiceNativeCaptureDucked,
   onVoiceNativeStatus,
   onVoiceNativeParticipants,
   onVoiceNativeSpeaking,
@@ -94,7 +95,11 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     });
   });
 
-  it("disconnect/mute/deafen appellent la bonne commande", async () => {
+  it("setVoiceNativeCaptureDucked pilote le ducking micro natif", async () => {
+    invokeMock.mockResolvedValue(true);
+    await expect(setVoiceNativeCaptureDucked(true)).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_capture_ducked", { ducked: true });
+  });  it("disconnect/mute/deafen appellent la bonne commande", async () => {
     invokeMock.mockResolvedValue({ state: "disconnected" });
     await voiceNativeDisconnect();
     expect(invokeMock).toHaveBeenCalledWith("voice_native_disconnect", undefined);
