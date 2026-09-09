@@ -498,6 +498,20 @@ fn store_engine(engine: Option<LiveKitEngine>) {
         .unwrap_or_else(|e| e.into_inner()) = engine;
 }
 
+/// Remet le manager à l'état déconnecté vierge (partagé par le disconnect
+/// explicite et `drop_dead_session`). Le cycle de vie MIROIR du store front
+/// (`disconnectVoice` remet `isMuted`/`isDeafened` à false) est critique :
+/// sans le reset muted/deafened, un leave-while-muted mutait d'office le
+/// join suivant derrière un store "non muté" (bug du 09/09).
+fn reset_manager_to_disconnected() {
+    let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
+    inner.state = VoiceConnectionState::Disconnected;
+    inner.room_name = None;
+    inner.identity = None;
+    inner.muted = false;
+    inner.deafened = false;
+}
+
 /// Session locale réinitialisée quand le moteur a durablement disparu
 /// (jamais créé, ou perdu après panique) : pas de fantôme, le front repart
 /// d'un état propre. N'est atteint qu'après `take_engine_wait` — jamais sur
@@ -511,11 +525,8 @@ fn drop_dead_session(app: &tauri::AppHandle<TauriRuntime>) {
         .clear();
     let empty: Vec<NativeParticipant> = Vec::new();
     let _ = app.emit("voice-native-participants", &empty);
-    let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
-    inner.state = VoiceConnectionState::Disconnected;
-    inner.room_name = None;
-    inner.identity = None;
-    emit_status(&app, &snapshot(&inner));
+    reset_manager_to_disconnected();
+    emit_status(&app, &snapshot(&manager().lock().unwrap_or_else(|e| e.into_inner())));
 }
 
 /// Exécute `op` sur le moteur sorti du holder puis le repose — sans jamais
@@ -1102,18 +1113,14 @@ pub fn voice_native_disconnect(app: tauri::AppHandle<TauriRuntime>) -> VoiceNati
         let empty: Vec<NativeParticipant> = Vec::new();
         let _ = app.emit("voice-native-participants", &empty);
     }
-    let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
-    inner.state = VoiceConnectionState::Disconnected;
-    inner.room_name = None;
-    inner.identity = None;
-    let status = snapshot(&inner);
+    reset_manager_to_disconnected();
+    let status = snapshot(&manager().lock().unwrap_or_else(|e| e.into_inner()));
     emit_status(&app, &status);
     status
 }
 
 #[tauri::command]
-pub fn voice_native_set_muted(
-    app: tauri::AppHandle<TauriRuntime>,
+pub fn voice_native_set_muted(    app: tauri::AppHandle<TauriRuntime>,
     muted: bool,
 ) -> VoiceNativeStatus {
     // Ne pas mentir au front : si le moteur refuse, on garde l'état précédent.
@@ -1439,17 +1446,17 @@ mod tests {
             inner.state = VoiceConnectionState::Connected;
             inner.room_name = Some("sion".into());
             inner.identity = Some("@a:b:c".into());
+            // Leave-while-muted : le cas du 09/09 (muté en chiffré, join en
+            // clair avec un store "non muté").
+            inner.muted = true;
+            inner.deafened = true;
         }
-        // Même logique que voice_native_disconnect, sans AppHandle.
-        {
-            let mut inner = manager().lock().unwrap();
-            inner.state = VoiceConnectionState::Disconnected;
-            inner.room_name = None;
-            inner.identity = None;
-        }
+        // Le vrai helper (partagé par disconnect + drop_dead_session).
+        reset_manager_to_disconnected();
         let inner = manager().lock().unwrap();
         assert_eq!(inner.state, VoiceConnectionState::Disconnected);
         assert!(inner.room_name.is_none());
+        assert!(!inner.muted && !inner.deafened);
     }
 
     #[test]
