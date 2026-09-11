@@ -50,12 +50,18 @@ const PANEL_BODIES: Record<DockPanelId, () => ReactNode> = {
   voice: VoiceStatusPanel,
 };
 
-/** Zone sous un point de l'écran (les conteneurs portent `data-dock-zone`). */
-function zoneAtPoint(x: number, y: number): DockZoneId | null {
+/** Cible de dépôt : une zone de la dock, ou « menu » (la carte d'origine du
+ *  bloc, dans le menu latéral — seul le bloc voix y vit d'habitude). */
+type DropTarget = DockZoneId | "menu";
+
+/** Cible sous un point de l'écran (les conteneurs portent `data-dock-zone`). */
+function zoneAtPoint(x: number, y: number): DropTarget | null {
   const el = document.elementFromPoint(x, y);
   const holder = el?.closest?.("[data-dock-zone]") as HTMLElement | null;
   const value = holder?.dataset.dockZone;
-  return value === "right" || value === "bottom" ? value : null;
+  if (value === "top" || value === "right" || value === "bottom") return value;
+  if (value === "menu") return "menu";
+  return null;
 }
 
 /**
@@ -266,24 +272,9 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
             key={p}
             onClick={() => setDockZoneActive(zone, p)}
             title={t("layout.dragPanel", { defaultValue: "Glisser pour déplacer le panneau vers l'autre zone" })}
-            onPointerDown={(e) => {
-              if (e.button !== 0) return;
-              e.currentTarget.setPointerCapture(e.pointerId);
-              dragPointer.current = e.pointerId;
-              setPanelDrag(p);
-            }}
-            onPointerMove={(e) => {
-              if (dragPointer.current !== e.pointerId) return;
-              const over = zoneAtPoint(e.clientX, e.clientY);
-              if (over !== dragOverZone) setPanelDrag(p, over);
-            }}
-            onPointerUp={(e) => {
-              if (dragPointer.current !== e.pointerId) return;
-              dragPointer.current = null;
-              const target = zoneAtPoint(e.clientX, e.clientY);
-              if (target && target !== zone) useLayoutStore.getState().moveDockPanel(p, target);
-              setPanelDrag(null);
-            }}
+            onPointerDown={(e) => beginPanelDrag(e, p)}
+            onPointerMove={(e) => movePanelDrag(e, p)}
+            onPointerUp={(e) => endPanelDrag(e, p)}
             onPointerCancel={() => { dragPointer.current = null; setPanelDrag(null); }}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -349,13 +340,21 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   const movePanelDrag = (e: React.PointerEvent, panel: DockPanelId) => {
     if (dragPointer.current !== e.pointerId) return;
     const over = zoneAtPoint(e.clientX, e.clientY);
-    if (over !== dragOverZone) setPanelDrag(panel, over);
+    // « menu » ne s'illumine pas comme une zone : le cadre du menu s'annonce
+    // tout seul (il n'existe QUE pendant un drag du bloc voix).
+    const next = over === "menu" ? null : over;
+    if (next !== dragOverZone) setPanelDrag(panel, next);
   };
   const endPanelDrag = (e: React.PointerEvent, panel: DockPanelId) => {
     if (dragPointer.current !== e.pointerId) return;
     dragPointer.current = null;
     const target = zoneAtPoint(e.clientX, e.clientY);
-    if (target && target !== zone) useLayoutStore.getState().moveDockPanel(panel, target);
+    if (target === "menu") {
+      // Retour à l'origine (menu latéral) — seul le bloc voix y a sa place.
+      if (panel === "voice") useLayoutStore.getState().returnVoiceToMenu();
+    } else if (target && target !== zone) {
+      useLayoutStore.getState().moveDockPanel(panel, target);
+    }
     setPanelDrag(null);
   };
 

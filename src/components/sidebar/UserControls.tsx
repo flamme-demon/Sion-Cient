@@ -41,6 +41,7 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
   // Le bloc voix vit-il dans le menu (oui par défaut) ou a-t-il été détaché
   // dans la dock ?
   const voiceInMenu = useLayoutStore((s) => s.voiceInMenu);
+  const layoutEditing = useLayoutStore((s) => s.layoutEditing);
   const transcriptPanelOpen = useLayoutStore(
     (s) => s.dockZones.right.panels.includes("transcript") || s.dockZones.bottom.panels.includes("transcript"),
   );
@@ -109,6 +110,56 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
       gap: compact ? 8 : undefined,
     }}>
       <AccountPopover compact={compact} />
+
+      {/* Mode édition : le menu latéral est la cible « origine ». Quand le bloc
+          voix est ici, ce cadre se saisit (on le glisse vers une zone) ; quand
+          il est détaché, c'est ici qu'on le repose pour le rapatrier. */}
+      {layoutEditing && (
+        <div
+          data-dock-zone="menu"
+          title={t("layout.editLayoutHint", { defaultValue: "Glissez les blocs dans la grille (haut / droite / bas)" })}
+          onPointerDown={(e) => {
+            if (!inVoice || !voiceInMenu || e.button !== 0) return;
+            e.preventDefault();
+            useLayoutStore.getState().setPanelDrag("voice");
+            const targetZone = (x: number, y: number) => {
+              const el = document.elementFromPoint(x, y);
+              const value = (el?.closest?.("[data-dock-zone]") as HTMLElement | null)?.dataset?.dockZone;
+              return value === "top" || value === "right" || value === "bottom" ? value : null;
+            };
+            const onMove = (ev: PointerEvent) => {
+              const zone = targetZone(ev.clientX, ev.clientY);
+              if (zone !== useLayoutStore.getState().dragOverZone) useLayoutStore.getState().setPanelDrag("voice", zone);
+            };
+            const onUp = (ev: PointerEvent) => {
+              window.removeEventListener("pointermove", onMove);
+              window.removeEventListener("pointerup", onUp);
+              const zone = targetZone(ev.clientX, ev.clientY);
+              if (zone) useLayoutStore.getState().moveDockPanel("voice", zone);
+              useLayoutStore.getState().setPanelDrag(null);
+            };
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+          }}
+          style={{
+            position: 'absolute', inset: 0, zIndex: 4, borderRadius: 12,
+            border: '2px dashed var(--color-primary)',
+            cursor: inVoice && voiceInMenu ? 'grab' : 'default',
+            pointerEvents: inVoice ? 'auto' : 'none',
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+          }}
+        >
+          <span style={{
+            marginTop: 4, padding: '2px 8px', borderRadius: 999,
+            background: 'var(--color-surface-container)', color: 'var(--color-primary)',
+            fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+          }}>
+            {inVoice && voiceInMenu
+              ? t("layout.zoneMenu", { defaultValue: "Menu" })
+              : t("layout.dropHere", { defaultValue: "Déposer ici" })}
+          </span>
+        </div>
+      )}
 
       {/* Horloge décalée : l'utilisateur ne voit plus personne en vocal et les
           autres ne le voient plus non plus, sans qu'aucun symptôme ne l'explique. */}
