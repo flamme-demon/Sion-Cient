@@ -186,6 +186,10 @@ interface LayoutState {
   sendVoiceToDock: (zone?: DockZoneId) => void;
   /** Renvoie le bloc voix dans le menu latéral. */
   returnVoiceToMenu: () => void;
+  /** Mode édition de la disposition (façon KDE) : cadre les zones, rend les
+   *  blocs saisissables partout — éphémère, jamais persisté. */
+  layoutEditing: boolean;
+  setLayoutEditing: (editing: boolean) => void;
   /** Retour à la largeur par défaut, déployé (double-clic sur la poignée). */
   resetSidebar: () => void;
   /** Ouvre un panneau dans sa zone par défaut (ou l'active s'il est ouvert). */
@@ -236,6 +240,7 @@ export const useLayoutStore = create<LayoutState>()(
       sidebarMode: "full",
       sidebarSide: "left" as SidebarSide,
       voiceInMenu: true,
+      layoutEditing: false,
       dockZones: defaultDockZones(),
       shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
       setSidebarWidth: (raw) =>
@@ -282,6 +287,7 @@ export const useLayoutStore = create<LayoutState>()(
             dockZones: from ? { ...s.dockZones, [from]: removeFromZone(s.dockZones[from], "voice") } : s.dockZones,
           };
         }),
+      setLayoutEditing: (editing) => set({ layoutEditing: editing }),
       openDockPanel: (panel) =>
         set((s) => {
           const current = zoneOf(s.dockZones, panel);

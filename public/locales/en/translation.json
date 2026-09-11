@@ -43,7 +43,15 @@
     "voiceBackToMenu": "Send back to the menu",
     "voiceBackToMenuShort": "Menu",
     "voiceInDock": "Voice connection is in the dock — bring it back",
-    "hangUp": "Hang up"
+    "hangUp": "Hang up",
+    "editLayout": "Rearrange the layout",
+    "editLayoutHint": "Drag the blocks into the grid (top / right / bottom)",
+    "editDone": "Done",
+    "editReset": "Reset",
+    "editHidePanel": "Hide this block",
+    "zoneTop": "Top",
+    "zoneRight": "Right",
+    "zoneBottom": "Bottom"
   },
   "server": {
     "online": "Online",

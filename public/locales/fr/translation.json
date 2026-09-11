@@ -43,7 +43,12 @@
     "voiceBackToMenu": "Renvoyer dans le menu",
     "voiceBackToMenuShort": "Menu",
     "voiceInDock": "Connexion vocale dans la dock — récupérer",
-    "hangUp": "Raccrocher"
+    "hangUp": "Raccrocher",
+    "editLayout": "Réorganiser la disposition",
+    "editLayoutHint": "Glissez les blocs dans la grille (haut / droite / bas)",
+    "editDone": "Terminé",
+    "editReset": "Réinitialiser",
+    "editHidePanel": "Masquer ce bloc"
   },
   "server": {
     "online": "En ligne",

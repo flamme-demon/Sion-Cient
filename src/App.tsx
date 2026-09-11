@@ -33,6 +33,7 @@ export default function App() {
   const showSettings = useAppStore((s) => s.showSettings);
   // Côté du menu principal (gauche ou droite) — voir « Dispositions ».
   const sidebarSide = useLayoutStore((s) => s.sidebarSide);
+  const layoutEditing = useLayoutStore((s) => s.layoutEditing);
   const userContextMenu = useAppStore((s) => s.userContextMenu);
   const closeUserContextMenu = useAppStore((s) => s.closeUserContextMenu);
   const mobileView = useAppStore((s) => s.mobileView);
@@ -373,6 +374,27 @@ export default function App() {
         {showSettings && <SettingsPanel />}
         <RecoveryKeyModal />
         <ConnectionStatusBanner />
+        {layoutEditing && (
+          <div style={{
+            position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 500,
+            display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px 8px 16px', borderRadius: 999,
+            background: 'var(--color-surface-container-high)',
+            border: '1px solid var(--color-primary)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+          }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>
+              {t("layout.editLayoutHint", { defaultValue: "Glissez les blocs dans la grille (haut / droite / bas)" })}
+            </span>
+            <button
+              onClick={() => useLayoutStore.getState().resetLayout()}
+              style={{ padding: '5px 12px', borderRadius: 999, border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}
+            >{t("layout.editReset", { defaultValue: "Réinitialiser" })}</button>
+            <button
+              onClick={() => useLayoutStore.getState().setLayoutEditing(false)}
+              style={{ padding: '5px 14px', borderRadius: 999, border: 'none', background: 'var(--color-primary)', color: 'var(--color-on-primary)', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+            >{t("layout.editDone", { defaultValue: "Terminé" })}</button>
+          </div>
+        )}
         <UpdateBanner />
         <DownloadToast />
         {userContextMenu && (

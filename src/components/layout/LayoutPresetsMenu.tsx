@@ -94,6 +94,21 @@ export function LayoutPresetsMenu() {
           <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 4px' }} />
           <button
             role="menuitem"
+            onClick={() => { useLayoutStore.getState().setLayoutEditing(true); setOpen(false); }}
+            style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              padding: '8px 10px', borderRadius: 8, border: 'none',
+              background: 'transparent', color: 'var(--color-on-surface)',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            {t("layout.editLayout", { defaultValue: "Réorganiser la disposition" })}
+          </button>
+          <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 4px' }} />
+          <button
+            role="menuitem"
             onClick={() => { useLayoutStore.getState().toggleSidebarSide(); setOpen(false); }}
             style={{
               display: 'block', width: '100%', textAlign: 'left',

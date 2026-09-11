@@ -196,34 +196,53 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   const visible = zoneState.panels.filter((p) => availability[p]);
   const isRight = zone === "right";
   const isTop = zone === "top";
+  const layoutEditing = useLayoutStore((s) => s.layoutEditing);
+  // Hors édition, un panneau SEUL dans sa zone n'affiche aucune barre : le
+  // châssis permanent (⠿ + ⋯) était du bruit. La barre ne revient que pour
+  // des onglets multiples (là, elle sert à naviguer) ou en mode édition.
+  const showBar = layoutEditing || visible.length > 1;
   const dropActive = dragOverZone === zone && !!draggingPanel;
 
-  // Zone vide : elle n'est pas rendue… sauf pendant un drag, où elle devient
-  // une bande de dépôt (sinon impossible d'y glisser un panneau).
+  // Zone vide : cadre pointillé étiqueté en mode édition (la grille de
+  // construction), bande de dépôt pendant un drag — sinon rien.
   if (visible.length === 0) {
-    if (!draggingPanel) return null;
-    return isRight ? (
-      <div
-        data-dock-zone="right"
-        style={{
-          width: dropActive ? 150 : 84, flexShrink: 0, margin: 6, borderRadius: 12,
-          border: '2px dashed var(--color-outline-variant)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'var(--color-on-surface-variant)', fontSize: 11, textAlign: 'center',
-          padding: 8, transition: 'width 120ms', lineHeight: 1.4,
-        }}
-      >{t("layout.dropHere", { defaultValue: "Déposer ici" })}</div>
-    ) : (
+    if (!layoutEditing && !draggingPanel) return null;
+    const zoneLabel = zone === "top"
+      ? t("layout.zoneTop", { defaultValue: "Haut" })
+      : zone === "right"
+        ? t("layout.zoneRight", { defaultValue: "Droite" })
+        : t("layout.zoneBottom", { defaultValue: "Bas" });
+    if (isRight) {
+      return (
+        <div
+          data-dock-zone="right"
+          style={{
+            width: dropActive ? 150 : layoutEditing ? 110 : 84, flexShrink: 0, margin: 6, borderRadius: 12,
+            border: '2px dashed var(--color-outline-variant)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
+            color: 'var(--color-on-surface-variant)', fontSize: 11, textAlign: 'center',
+            padding: 8, transition: 'width 120ms', lineHeight: 1.4,
+          }}
+        >
+          {layoutEditing && <span style={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: 10 }}>{zoneLabel}</span>}
+          <span>{t("layout.dropHere", { defaultValue: "Déposer ici" })}</span>
+        </div>
+      );
+    }
+    return (
       <div
         data-dock-zone={zone}
         style={{
-          height: dropActive ? 104 : 64, flexShrink: 0, margin: 6, borderRadius: 12,
+          height: dropActive ? 104 : layoutEditing ? 76 : 64, flexShrink: 0, margin: 6, borderRadius: 12,
           border: '2px dashed var(--color-outline-variant)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
           color: 'var(--color-on-surface-variant)', fontSize: 11,
           transition: 'height 120ms',
         }}
-      >{t("layout.dropHere", { defaultValue: "Déposer ici" })}</div>
+      >
+        {layoutEditing && <span style={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: 10 }}>{zoneLabel}</span>}
+        <span>{t("layout.dropHere", { defaultValue: "Déposer ici" })}</span>
+      </div>
     );
   }
 
@@ -233,7 +252,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   const max = isRight ? DOCK_SIDE_MAX_SIZE : isTop ? DOCK_TOP_MAX_SIZE : DOCK_BOTTOM_MAX_SIZE;
   const defaultSize = isRight ? DOCK_SIDE_DEFAULT_SIZE : isTop ? DOCK_TOP_DEFAULT_SIZE : DOCK_BOTTOM_DEFAULT_SIZE;
 
-  const bar = (
+  const bar = !showBar ? null : (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 2, padding: '3px 4px', flexShrink: 0,
       background: 'var(--color-surface-container)',
@@ -283,6 +302,14 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
         );
       })}
       <div style={{ flex: 1 }} />
+      {layoutEditing && (
+        <button
+          type="button"
+          onClick={() => useLayoutStore.getState().closeDockPanel(active)}
+          title={t("layout.editHidePanel", { defaultValue: "Masquer ce bloc" })}
+          style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '2px 6px', borderRadius: 8 }}
+        >✕</button>
+      )}
       <ZoneMenu panel={active} zone={zone} />
     </div>
   );
@@ -312,9 +339,45 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
     outlineOffset: -1,
   };
 
+  // ── Drag d'un panneau (onglet, ou le bloc entier en mode édition) ────────
+  const beginPanelDrag = (e: React.PointerEvent, panel: DockPanelId) => {
+    if (e.button !== 0) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragPointer.current = e.pointerId;
+    setPanelDrag(panel);
+  };
+  const movePanelDrag = (e: React.PointerEvent, panel: DockPanelId) => {
+    if (dragPointer.current !== e.pointerId) return;
+    const over = zoneAtPoint(e.clientX, e.clientY);
+    if (over !== dragOverZone) setPanelDrag(panel, over);
+  };
+  const endPanelDrag = (e: React.PointerEvent, panel: DockPanelId) => {
+    if (dragPointer.current !== e.pointerId) return;
+    dragPointer.current = null;
+    const target = zoneAtPoint(e.clientX, e.clientY);
+    if (target && target !== zone) useLayoutStore.getState().moveDockPanel(panel, target);
+    setPanelDrag(null);
+  };
+
   const body = (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
       <DockZoneContext.Provider value={zone}><PanelBody /></DockZoneContext.Provider>
+      {/* Édition : le bloc se saisit N'IMPORTE OÙ (le contenu ne réagit plus
+          aux clics), on le dépose dans une zone. Hors édition : rien. */}
+      {layoutEditing && (
+        <div
+          onPointerDown={(e) => beginPanelDrag(e, active)}
+          onPointerMove={(e) => movePanelDrag(e, active)}
+          onPointerUp={(e) => endPanelDrag(e, active)}
+          onPointerCancel={() => { dragPointer.current = null; setPanelDrag(null); }}
+          title={t("layout.editLayoutHint", { defaultValue: "Glissez les blocs dans la grille (haut / droite / bas)" })}
+          style={{
+            position: 'absolute', inset: 0, zIndex: 3, cursor: 'grab', touchAction: 'none',
+            outline: '2px solid var(--color-primary)', outlineOffset: -2, borderRadius: 6,
+            background: 'rgba(168, 199, 250, 0.08)',
+          }}
+        />
+      )}
     </div>
   );
 
