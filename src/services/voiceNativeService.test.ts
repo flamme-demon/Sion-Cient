@@ -334,7 +334,7 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
   });
 
   it("matrixUserIdOf coupe le suffixe device LiveKit", () => {
-    expect(matrixUserIdOf("@narkow:sionchat.fr:qoNoEwRrbw")).toBe("@narkow:sionchat.fr");
+    expect(matrixUserIdOf("@narkow:sionchat.fr:DEVICE2")).toBe("@narkow:sionchat.fr");
     expect(matrixUserIdOf("@a:b")).toBe("@a:b");
     expect(matrixUserIdOf("local")).toBe("local");
   });
@@ -350,7 +350,7 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
       audioLevel: 0,
       connectionQuality: "unknown" as const,
     });
-    const participants = [mk("@picsou:sionchat.fr:XTBOJJBs3J"), mk("@narkow:sionchat.fr:qoNoEwRrbw")];
+    const participants = [mk("@picsou:sionchat.fr:DEVICE1"), mk("@narkow:sionchat.fr:DEVICE2")];
     // Picsou : Matrix dit sourdine, LiveKit ne sait pas → badge AFK.
     const merged = overlayMatrixVoiceState(participants, [
       { id: "@picsou:sionchat.fr", muted: false, deafened: true },
@@ -360,7 +360,7 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
     // Narkow : absent de Matrix → inchangé (même référence).
     expect(merged[1]).toBe(participants[1]);
     // Autres champs préservés.
-    expect(merged[0].identity).toBe("@picsou:sionchat.fr:XTBOJJBs3J");
+    expect(merged[0].identity).toBe("@picsou:sionchat.fr:DEVICE1");
   });
 
   it("overlayMatrixVoiceState ne ment jamais vers false et rend la réf si inchangé", () => {
