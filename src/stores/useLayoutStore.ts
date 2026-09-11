@@ -58,10 +58,11 @@ export const DOCK_SIDE_DEFAULT_SIZE = 360;
 export const DOCK_BOTTOM_MIN_SIZE = 140;
 export const DOCK_BOTTOM_MAX_SIZE = 520;
 export const DOCK_BOTTOM_DEFAULT_SIZE = 240;
-/** Zone haute : bandeau fin (barre vocale, onglets) — plus court par nature. */
-export const DOCK_TOP_MIN_SIZE = 64;
+/** Zone haute : bandeau fin (barre vocale, onglets) — une ligne de contenu,
+ *  donc court par nature. 96 px laissaient un grand vide sous la barre. */
+export const DOCK_TOP_MIN_SIZE = 44;
 export const DOCK_TOP_MAX_SIZE = 400;
-export const DOCK_TOP_DEFAULT_SIZE = 96;
+export const DOCK_TOP_DEFAULT_SIZE = 56;
 
 export interface DockZoneState {
   /** Onglets de la zone, dans l'ordre d'affichage. */
@@ -483,7 +484,7 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: "sion-layout",
-      version: 4,
+      version: 5,
       // L'état de drag (panneau saisi / zone survolée) est éphémère : il ne
       // doit jamais être réhydraté au lancement.
       partialize: (s) => ({
@@ -553,6 +554,17 @@ export const useLayoutStore = create<LayoutState>()(
             top: { panels: [], active: null, size: DOCK_TOP_DEFAULT_SIZE },
             ...(state.dockZones ?? {}),
           } as Record<DockZoneId, DockZoneState>;
+        }
+        if (version < 5) {
+          // v4 → v5 : le défaut de la zone HAUTE (96 px) laissait un grand vide
+          // sous la barre vocale. On ne corrige QUE la valeur par défaut
+          // d'origine — une taille choisie à la main est respectée.
+          if (state.dockZones?.top?.size === 96) {
+            state.dockZones = {
+              ...state.dockZones,
+              top: { ...state.dockZones.top, size: DOCK_TOP_DEFAULT_SIZE },
+            };
+          }
         }
         delete state.rightPanelWidth;
         delete state.rightPanelWidths;

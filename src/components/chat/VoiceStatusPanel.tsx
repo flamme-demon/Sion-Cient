@@ -55,7 +55,9 @@ export function VoiceStatusPanel() {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-      padding: zone === "bottom" ? '14px 16px' : 14,
+      // Le bandeau haut est une barre : peu de padding vertical, sinon la
+      // hauteur passe dans les marges et non dans le contenu.
+      padding: zone === "top" ? '10px 14px' : zone === "bottom" ? '14px 16px' : 14,
     }}>
       {/* État */}
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>

@@ -191,11 +191,11 @@ describe("useLayoutStore — dock à zones (§1.6)", () => {
     expect(s().dockZones.bottom.size).toBe(K.BOTTOM_MAX);
   });
 
-  it("borne aussi le bandeau HAUT (plus court par nature : 64→400)", () => {
+  it("borne aussi le bandeau HAUT (plus court par nature : 44→400)", () => {
     const s = () => useLayoutStore.getState();
 
     s().setDockZoneSize("top", 10);
-    expect(s().dockZones.top.size).toBe(64);
+    expect(s().dockZones.top.size).toBe(44);
     s().setDockZoneSize("top", 9999);
     expect(s().dockZones.top.size).toBe(400);
   });

@@ -44,7 +44,7 @@ beforeAll(async () => {
 describe("useLayoutStore — réparation d'un état persisté incomplet", () => {
   it("recrée la zone manquante (top) en gardant le reste intact", () => {
     const s = useLayoutStore.getState();
-    expect(s.dockZones.top).toEqual({ panels: [], active: null, size: 96 });
+    expect(s.dockZones.top).toEqual({ panels: [], active: null, size: 56 });
     // Les zones présentes gardent leurs panneaux et leur taille.
     expect(s.dockZones.right).toEqual({ panels: ["members"], active: "members", size: 400 });
     expect(s.dockZones.bottom.size).toBe(240);
