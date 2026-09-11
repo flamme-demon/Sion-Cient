@@ -157,6 +157,11 @@ interface LayoutState {
   closeAllDockPanels: () => void;
   /** Remet TOUT le layout à zéro : sidebar, zones, panneaux, partage. */
   resetLayout: () => void;
+  /** Drag en cours : panneau saisi et zone survolée (état éphémère, jamais
+   *  persisté) — alimente les bandes de dépôt et le surlignage. */
+  draggingPanel: DockPanelId | null;
+  dragOverZone: DockZoneId | null;
+  setPanelDrag: (panel: DockPanelId | null, zone?: DockZoneId | null) => void;
   /** Hauteur de la zone de partage (drag/clavier sur sa poignée). */
   setShareViewMaxVh: (vh: number) => void;
   /** Double-clic sur la poignée de la zone de partage. */
@@ -289,6 +294,9 @@ export const useLayoutStore = create<LayoutState>()(
           shareDock: "inline" as ShareDock,
           shareFloating: { ...SHARE_FLOATING_DEFAULT },
         }),
+      draggingPanel: null,
+      dragOverZone: null,
+      setPanelDrag: (panel, zone = null) => set({ draggingPanel: panel, dragOverZone: panel ? zone : null }),
       setShareViewMaxVh: (vh) => set({ shareViewMaxVh: clampShareViewVh(vh) }),
       resetShareViewMaxVh: () => set({ shareViewMaxVh: SHARE_VIEW_DEFAULT_VH }),
       shareDock: "inline" as ShareDock,
@@ -309,6 +317,16 @@ export const useLayoutStore = create<LayoutState>()(
     {
       name: "sion-layout",
       version: 3,
+      // L'état de drag (panneau saisi / zone survolée) est éphémère : il ne
+      // doit jamais être réhydraté au lancement.
+      partialize: (s) => ({
+        sidebarWidth: s.sidebarWidth,
+        sidebarMode: s.sidebarMode,
+        dockZones: s.dockZones,
+        shareViewMaxVh: s.shareViewMaxVh,
+        shareDock: s.shareDock,
+        shareFloating: s.shareFloating,
+      }),
       // v1 → v2 : largeur unique de la dock → largeur par panneau.
       // v2 → v3 : les trois largeurs par panneau → une taille pour la zone
       // droite (la plus large des trois, pour ne rien rétrécir), et les zones

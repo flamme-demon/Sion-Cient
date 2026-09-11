@@ -24,6 +24,11 @@ import { TranscriptPanel } from "../chat/TranscriptPanel";
  * (les panneaux qui y sont déplacés) et le menu du panneau actif (déplacer
  * vers l'autre zone, fermer). Les panneaux eux-mêmes ne connaissent plus ni
  * leur largeur ni leur place — ils sont du contenu pur.
+ *
+ * Les onglets se glissent à la souris (pointer events, jamais HTML5 DnD —
+ * WebKitGTK) vers l'autre zone ; pendant le drag, la zone survolée se
+ * surligne et une bande « Déposer ici » apparaît si elle est vide (sinon elle
+ * ne serait pas rendue, donc pas une cible).
  */
 const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   members: "members.title",
@@ -36,6 +41,14 @@ const PANEL_BODIES: Record<DockPanelId, () => ReactNode> = {
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
 };
+
+/** Zone sous un point de l'écran (les conteneurs portent `data-dock-zone`). */
+function zoneAtPoint(x: number, y: number): DockZoneId | null {
+  const el = document.elementFromPoint(x, y);
+  const holder = el?.closest?.("[data-dock-zone]") as HTMLElement | null;
+  const value = holder?.dataset.dockZone;
+  return value === "right" || value === "bottom" ? value : null;
+}
 
 /**
  * Un panneau n'est affiché que si son contenu existe pour le contexte courant
@@ -131,16 +144,57 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   const zoneState = useLayoutStore((s) => s.dockZones[zone]);
   const setDockZoneSize = useLayoutStore((s) => s.setDockZoneSize);
   const setDockZoneActive = useLayoutStore((s) => s.setDockZoneActive);
+  const setPanelDrag = useLayoutStore((s) => s.setPanelDrag);
+  const draggingPanel = useLayoutStore((s) => s.draggingPanel);
+  const dragOverZone = useLayoutStore((s) => s.dragOverZone);
   const availability = useDockAvailability();
+  const dragPointer = useRef<number | null>(null);
+
+  // Échap annule un drag en cours (comme les poignées de resize).
+  useEffect(() => {
+    if (!draggingPanel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") useLayoutStore.getState().setPanelDrag(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [draggingPanel]);
 
   const visible = zoneState.panels.filter((p) => availability[p]);
-  const active = visible.length === 0
-    ? null
-    : (zoneState.active && visible.includes(zoneState.active) ? zoneState.active : visible[0]);
-  if (!active) return null;
-
-  const PanelBody = PANEL_BODIES[active];
   const isRight = zone === "right";
+  const dropActive = dragOverZone === zone && !!draggingPanel;
+
+  // Zone vide : elle n'est pas rendue… sauf pendant un drag, où elle devient
+  // une bande de dépôt (sinon impossible d'y glisser un panneau).
+  if (visible.length === 0) {
+    if (!draggingPanel) return null;
+    return isRight ? (
+      <div
+        data-dock-zone="right"
+        style={{
+          width: dropActive ? 150 : 84, flexShrink: 0, margin: 6, borderRadius: 12,
+          border: '2px dashed var(--color-outline-variant)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--color-on-surface-variant)', fontSize: 11, textAlign: 'center',
+          padding: 8, transition: 'width 120ms', lineHeight: 1.4,
+        }}
+      >{t("layout.dropHere", { defaultValue: "Déposer ici" })}</div>
+    ) : (
+      <div
+        data-dock-zone="bottom"
+        style={{
+          height: dropActive ? 104 : 64, flexShrink: 0, margin: 6, borderRadius: 12,
+          border: '2px dashed var(--color-outline-variant)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--color-on-surface-variant)', fontSize: 11,
+          transition: 'height 120ms',
+        }}
+      >{t("layout.dropHere", { defaultValue: "Déposer ici" })}</div>
+    );
+  }
+
+  const active = zoneState.active && visible.includes(zoneState.active) ? zoneState.active : visible[0];
+  const PanelBody = PANEL_BODIES[active];
   const min = isRight ? DOCK_SIDE_MIN_SIZE : DOCK_BOTTOM_MIN_SIZE;
   const max = isRight ? DOCK_SIDE_MAX_SIZE : DOCK_BOTTOM_MAX_SIZE;
   const defaultSize = isRight ? DOCK_SIDE_DEFAULT_SIZE : DOCK_BOTTOM_DEFAULT_SIZE;
@@ -153,17 +207,45 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
     }}>
       {visible.map((p) => {
         const isActive = p === active;
+        const isDragged = draggingPanel === p;
         return (
           <button
             key={p}
             onClick={() => setDockZoneActive(zone, p)}
+            title={t("layout.dragPanel", { defaultValue: "Glisser pour déplacer le panneau vers l'autre zone" })}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.currentTarget.setPointerCapture(e.pointerId);
+              dragPointer.current = e.pointerId;
+              setPanelDrag(p);
+            }}
+            onPointerMove={(e) => {
+              if (dragPointer.current !== e.pointerId) return;
+              const over = zoneAtPoint(e.clientX, e.clientY);
+              if (over !== dragOverZone) setPanelDrag(p, over);
+            }}
+            onPointerUp={(e) => {
+              if (dragPointer.current !== e.pointerId) return;
+              dragPointer.current = null;
+              const target = zoneAtPoint(e.clientX, e.clientY);
+              if (target && target !== zone) useLayoutStore.getState().moveDockPanel(p, target);
+              setPanelDrag(null);
+            }}
+            onPointerCancel={() => { dragPointer.current = null; setPanelDrag(null); }}
             style={{
-              padding: '4px 10px', borderRadius: 8, border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 10px', borderRadius: 8, border: 'none',
+              cursor: isDragged ? 'grabbing' : 'grab',
               fontFamily: 'inherit', fontSize: 12, fontWeight: isActive ? 600 : 500,
               background: isActive ? 'var(--color-secondary-container)' : 'transparent',
               color: isActive ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)',
+              opacity: isDragged ? 0.6 : 1,
+              touchAction: 'none',
             }}
-          >{t(PANEL_TITLE_KEYS[p])}</button>
+          >
+            <span aria-hidden style={{ fontSize: 10, opacity: 0.7, lineHeight: 1 }}>⠿</span>
+            {t(PANEL_TITLE_KEYS[p])}
+          </button>
         );
       })}
       <div style={{ flex: 1 }} />
@@ -189,13 +271,16 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
     flexDirection: 'column',
     overflow: 'hidden',
     flexShrink: 0,
+    // Pendant un drag, la zone cible s'annonce (le survol l'intensifie).
+    outline: draggingPanel ? `1px solid ${dropActive ? 'var(--color-primary)' : 'var(--color-outline-variant)'}` : 'none',
+    outlineOffset: -1,
   };
 
   if (isRight) {
     return (
       <div style={{ display: 'flex', height: '100%', flexShrink: 0 }}>
         {handle}
-        <aside style={{ ...shellStyle, width: zoneState.size, borderLeft: '1px solid var(--color-outline-variant)' }}>
+        <aside data-dock-zone="right" style={{ ...shellStyle, width: zoneState.size, borderLeft: '1px solid var(--color-outline-variant)' }}>
           {bar}
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <PanelBody />
@@ -208,7 +293,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
       {handle}
-      <section style={{ ...shellStyle, height: zoneState.size, borderTop: '1px solid var(--color-outline-variant)' }}>
+      <section data-dock-zone="bottom" style={{ ...shellStyle, height: zoneState.size, borderTop: '1px solid var(--color-outline-variant)' }}>
         {bar}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <PanelBody />

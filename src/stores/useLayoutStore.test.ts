@@ -222,6 +222,27 @@ describe("useLayoutStore — dock à zones (§1.6)", () => {
     expect(s().dockZones.right.panels).toEqual([]);
   });
 
+  it("l'état de drag est éphémère et n'est jamais persisté", () => {
+    const s = () => useLayoutStore.getState();
+    expect(s().draggingPanel).toBeNull();
+
+    s().setPanelDrag("members");
+    expect(s().draggingPanel).toBe("members");
+    expect(s().dragOverZone).toBeNull();
+
+    s().setPanelDrag("members", "bottom");
+    expect(s().dragOverZone).toBe("bottom");
+
+    // Rien de tout ça ne part dans localStorage (partialize).
+    const raw = JSON.parse(store["sion-layout"]);
+    expect(raw.state.draggingPanel).toBeUndefined();
+    expect(raw.state.dragOverZone).toBeUndefined();
+
+    s().setPanelDrag(null);
+    expect(s().draggingPanel).toBeNull();
+    expect(s().dragOverZone).toBeNull();
+  });
+
   it("resetLayout remet tout à zéro", () => {
     const s = () => useLayoutStore.getState();
     s().setSidebarWidth(380);

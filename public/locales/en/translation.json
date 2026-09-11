@@ -393,6 +393,8 @@
     "moveToBottom": "Move to bottom",
     "moveToRight": "Move to the right",
     "closePanel": "Close the panel",
+    "dropHere": "Drop here",
+    "dragPanel": "Drag to move the panel to the other zone",
     "defaultChannels": "Default Channel",
     "defaultChannel": "Channel on startup",
     "noDefault": "None (first channel)",

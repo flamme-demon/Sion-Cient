@@ -393,6 +393,8 @@
     "moveToBottom": "Déplacer en bas",
     "moveToRight": "Déplacer à droite",
     "closePanel": "Fermer le panneau",
+    "dropHere": "Déposer ici",
+    "dragPanel": "Glisser pour déplacer le panneau vers l'autre zone",
     "defaultChannels": "Canal par défaut",
     "defaultChannel": "Canal au démarrage",
     "noDefault": "Aucun (premier canal)",
