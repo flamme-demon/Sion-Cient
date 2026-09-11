@@ -23,8 +23,6 @@ import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { loadHotkeys, onHotkeysChange, pruneHotkeys, resyncHotkeys } from "../../services/soundboardHotkeys";
-import { ResizeHandle } from "../layout/ResizeHandle";
-import { useLayoutStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH } from "../../stores/useLayoutStore";
 
 // Build a nested tree from "Films/Kamelott" paths so the pill navigation can
 // list top-level categories and drill into sub-categories.
@@ -73,8 +71,6 @@ type FilterMode = "all" | "favorites" | "top";
 
 export function SoundboardPanel() {
   const { t } = useTranslation();
-  const show = useAppStore((s) => s.showSoundboardPanel);
-  const close = useAppStore((s) => s.toggleSoundboardPanel);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const [sounds, setSounds] = useState<SoundEntry[]>([]);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -100,10 +96,6 @@ export function SoundboardPanel() {
   const playCounts = useSettingsStore((s) => s.soundboardPlayCounts);
   const incrementPlay = useSettingsStore((s) => s.incrementSoundboardPlay);
   const refreshRef = useRef<() => void>(() => {});
-  // Dock droite : largeur propre à ce panneau (cf. useLayoutStore).
-  const rightPanelWidth = useLayoutStore((s) => s.rightPanelWidths.soundboard);
-  const setRightPanelWidth = useLayoutStore((s) => s.setRightPanelWidth);
-  const resetRightPanelWidth = useLayoutStore((s) => s.resetRightPanelWidth);
 
   // Apply volume on first render so receivers pick it up
   useEffect(() => {
@@ -134,7 +126,6 @@ export function SoundboardPanel() {
   // (See the long comment history: must filter on the soundboard room id and
   // debounce, or busy-room scrollback sature le pool de connexions du webview.)
   useEffect(() => {
-    if (!show) return;
     let cancelled = false;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let cachedRoomId: string | null = null;
@@ -176,7 +167,17 @@ export function SoundboardPanel() {
       cl.off("Room.timeline", onTimeline);
       cl.off("Room.redaction", onRedaction);
     };
-  }, [show]);
+  }, []);
+
+  // Le salon soundboard peut ne pas être connu au premier essai (panneau
+  // monté tôt — au boot ou juste après un changement de salon, sync Matrix en
+  // cours) : on retente tant qu'il manque. L'intervalle meurt avec le
+  // démontage du panneau (il n'est monté que si un salon soundboard existe).
+  useEffect(() => {
+    if (roomId) return;
+    const id = setInterval(() => { void refreshRef.current(); }, 2000);
+    return () => clearInterval(id);
+  }, [roomId]);
 
   const canUpload = roomId ? canSendMessage(roomId) : false;
 
@@ -301,8 +302,6 @@ export function SoundboardPanel() {
     }
   };
 
-  if (!show) return null;
-
   // Translate vertical wheel into horizontal scroll so the pill rows are
   // navigable with a plain mouse wheel (no horizontal trackpad needed).
   const onPillWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -337,25 +336,7 @@ export function SoundboardPanel() {
   );
 
   return (
-    <>
-      <ResizeHandle
-        side="left"
-        value={rightPanelWidth}
-        min={RIGHT_PANEL_MIN_WIDTH}
-        max={RIGHT_PANEL_MAX_WIDTH}
-        onChange={(w) => setRightPanelWidth("soundboard", w)}
-        onReset={() => resetRightPanelWidth("soundboard")}
-        label={t("layout.resizeRightPanel", { defaultValue: "Redimensionner le panneau — double-clic pour la taille par défaut" })}
-      />
-      <aside style={{
-        width: rightPanelWidth,
-        flexShrink: 0,
-      background: 'var(--color-surface-container-low)',
-      borderLeft: '1px solid var(--color-outline-variant)',
-      display: 'flex',
-      flexDirection: 'column',
-      overflow: 'hidden',
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       <style>{`
         .sound-card:hover .sound-delete-btn { display: flex !important; }
         .sound-card:hover .sound-edit-btn { display: flex !important; }
@@ -708,7 +689,6 @@ export function SoundboardPanel() {
           onUploaded={() => { setEditTarget(null); refreshRef.current(); }}
         />
       )}
-      </aside>
-    </>
+    </div>
   );
 }

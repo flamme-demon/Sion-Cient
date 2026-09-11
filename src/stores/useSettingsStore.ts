@@ -84,9 +84,9 @@ interface SettingsState {
    *  default. null = use the bundled default. */
   voiceSounds: Record<VoiceCue, VoiceSoundCfg | null>;
   /** Remember whether the soundboard panel was open when the app was last
-   *  closed, so we can reopen it automatically on relaunch. Written
-   *  whenever `useAppStore.toggleSoundboardPanel` fires; read at startup
-   *  in App.tsx. */
+   *  closed, so we can reopen it automatically on relaunch. Written by the
+   *  dock store (`useLayoutStore`) whenever the soundboard panel opens or
+   *  closes; read at startup in App.tsx. */
   soundboardOpenAtLaunch: boolean;
   /** Soundboard category paths the local user has hidden from their view.
    *  A hidden category keeps its entry in the left tree (with a striked-

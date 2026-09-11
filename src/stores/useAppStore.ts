@@ -51,8 +51,6 @@ interface AppState {
   showAdmin: boolean;
   showSettings: boolean;
   showAccountPanel: boolean;
-  showMemberPanel: boolean;
-  showSoundboardPanel: boolean;
   pendingFiles: PendingFile[];
   isDraggingOver: boolean;
   editingMessage: { eventId: string; text: string } | null;
@@ -86,8 +84,6 @@ interface AppState {
   toggleAdmin: () => void;
   toggleSettings: () => void;
   toggleAccountPanel: () => void;
-  toggleMemberPanel: () => void;
-  toggleSoundboardPanel: () => void;
   addPendingFile: (file: File) => Promise<void> | void;
   fileError: string | null;
   kickMessage: string | null;
@@ -126,8 +122,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   showAdmin: false,
   showSettings: false,
   showAccountPanel: false,
-  showMemberPanel: false,
-  showSoundboardPanel: false,
   pendingFiles: [],
   isDraggingOver: false,
   editingMessage: null,
@@ -266,16 +260,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleAdmin: () => set((s) => ({ showAdmin: !s.showAdmin, showSettings: s.showAdmin ? s.showSettings : false })),
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings, showAdmin: s.showSettings ? s.showAdmin : false })),
   toggleAccountPanel: () => set((s) => ({ showAccountPanel: !s.showAccountPanel })),
-  toggleMemberPanel: () => set((s) => ({ showMemberPanel: !s.showMemberPanel, showSoundboardPanel: false })),
-  toggleSoundboardPanel: () => set((s) => {
-    const nextOpen = !s.showSoundboardPanel;
-    // Persist the open/closed state so the panel restores on relaunch.
-    // Lazy import keeps useAppStore free of the persisted-settings module.
-    import("./useSettingsStore").then(({ useSettingsStore }) => {
-      useSettingsStore.getState().setSoundboardOpenAtLaunch(nextOpen);
-    }).catch(() => { /* ignore */ });
-    return { showSoundboardPanel: nextOpen, showMemberPanel: false };
-  }),
   fileError: null,
   kickMessage: null,
   kickedFromRoom: null,

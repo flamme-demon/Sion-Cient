@@ -3,8 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
-import { ResizeHandle } from "../layout/ResizeHandle";
-import { useLayoutStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH } from "../../stores/useLayoutStore";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 import { armTranscription, disarmTranscription, endSessionForAll, summarizeMeeting } from "../../services/transcriptionService";
 import { backfillTranscript } from "../../services/matrixService";
 import { scopeTranscriptEntries } from "../../utils/transcriptScope";
@@ -36,12 +35,7 @@ const NO_SUMMARIES: Record<string, { text: string; ts: number }> = {};
  *  (durable Matrix events, visible to every room member). */
 export function TranscriptPanel() {
   const { t } = useTranslation();
-  const panelOpen = useTranscriptStore((s) => s.panelOpen);
-  // Dock droite : largeur propre à ce panneau (cf. useLayoutStore).
-  const rightPanelWidth = useLayoutStore((s) => s.rightPanelWidths.transcript);
-  const setRightPanelWidth = useLayoutStore((s) => s.setRightPanelWidth);
-  const resetRightPanelWidth = useLayoutStore((s) => s.resetRightPanelWidth);
-  const setPanelOpen = useTranscriptStore((s) => s.setPanelOpen);
+  // Dock : la coquille (largeur, zone, onglets) est portée par `DockZone`.
   const engineState = useTranscriptStore((s) => s.state);
   const engineError = useTranscriptStore((s) => s.error);
   const downloadPct = useTranscriptStore((s) => s.downloadPct);
@@ -111,7 +105,7 @@ export function TranscriptPanel() {
     }
   }, [viewedId]);
 
-  if (!panelOpen || !connectedVoice) return null;
+  if (!connectedVoice) return null;
 
   const busy = engineState === "starting";
   const armed = engineState === "armed";
@@ -300,25 +294,7 @@ export function TranscriptPanel() {
   );
 
   return (
-    <>
-      <ResizeHandle
-        side="left"
-        value={rightPanelWidth}
-        min={RIGHT_PANEL_MIN_WIDTH}
-        max={RIGHT_PANEL_MAX_WIDTH}
-        onChange={(w) => setRightPanelWidth("transcript", w)}
-        onReset={() => resetRightPanelWidth("transcript")}
-        label={t("layout.resizeRightPanel", { defaultValue: "Redimensionner le panneau — double-clic pour la taille par défaut" })}
-      />
-      <aside style={{
-        width: rightPanelWidth,
-        flexShrink: 0,
-      background: 'var(--color-surface-container-low)',
-      borderLeft: '1px solid var(--color-outline-variant)',
-      display: 'flex',
-      flexDirection: 'column',
-      overflow: 'hidden',
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid var(--color-outline-variant)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -327,7 +303,7 @@ export function TranscriptPanel() {
             {t("transcript.title", { defaultValue: "Transcription" })}
           </span>
           <button
-            onClick={() => setPanelOpen(false)}
+            onClick={() => useLayoutStore.getState().closeDockPanel("transcript")}
             title={t("members.close", { defaultValue: "Fermer" })}
             style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 18, padding: 2, lineHeight: 1 }}
           >×</button>
@@ -513,7 +489,6 @@ export function TranscriptPanel() {
           )}
         </div>
       )}
-      </aside>
-    </>
+    </div>
   );
 }

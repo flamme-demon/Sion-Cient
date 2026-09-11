@@ -3,12 +3,10 @@ import { ChatHeader } from "../chat/ChatHeader";
 import { PinnedBar } from "../chat/PinnedBar";
 import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
 import { ScreenShareView } from "../chat/ScreenShareView";
-import { TranscriptPanel } from "../chat/TranscriptPanel";
 import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
 import { DropZone } from "../chat/DropZone";
-import { MemberPanel } from "../chat/MemberPanel";
-import { SoundboardPanel } from "../chat/SoundboardPanel";
+import { DockZone } from "./DockZone";
 import { useAppStore } from "../../stores/useAppStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { readDroppedFile } from "../../utils/droppedFile";
@@ -81,24 +79,25 @@ export function MainArea() {
 
   return (
     <div
-      className="flex-1 flex min-w-0 relative"
+      className="flex-1 flex flex-col min-w-0 relative"
       style={needsVoiceBarPadding ? { paddingBottom: MOBILE_VOICE_BAR_HEIGHT } : undefined}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="flex-1 flex flex-col min-w-0 relative">
-        <ChatHeader />
-        <PinnedBar />
-        <TranscriptInviteBanner />
-        <ScreenShareView />
-        <MessageList />
-        <ChatInput />
-        <DropZone />
+      <div className="flex-1 flex min-h-0 min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 relative">
+          <ChatHeader />
+          <PinnedBar />
+          <TranscriptInviteBanner />
+          <ScreenShareView />
+          <MessageList />
+          <ChatInput />
+          <DropZone />
+        </div>
+        {!isMobile && <DockZone zone="right" />}
       </div>
-      {!isMobile && <MemberPanel />}
-      {!isMobile && <SoundboardPanel />}
-      {!isMobile && <TranscriptPanel />}
+      {!isMobile && <DockZone zone="bottom" />}
     </div>
   );
 }

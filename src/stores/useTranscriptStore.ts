@@ -53,8 +53,6 @@ interface TranscriptStore {
    *  channel — the visible invitation. Plus alimenté depuis le retrait du
    *  moteur JS : voir `armTranscription` (désactivé, flux PCM Rust à porter). */
   armedPeers: { identity: string; name: string }[];
-  /** Whether the transcript panel is visible. */
-  panelOpen: boolean;
   /** Our own engine state. */
   state: TranscribeState;
   /** Human-readable error (model load failed, …). */
@@ -68,7 +66,6 @@ interface TranscriptStore {
   summaryPct: number | null;
 
   addEntry: (entry: TranscriptEntry) => void;
-  setPanelOpen: (open: boolean) => void;
   setState: (state: TranscribeState, error?: string | null) => void;
   setDownloadPct: (pct: number | null) => void;
   setSummaryState: (state: "idle" | "downloading" | "running", pct?: number | null) => void;
@@ -87,7 +84,6 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
   history: {},
   summaries: {},
   armedPeers: [],
-  panelOpen: false,
   state: "off",
   error: null,
   downloadPct: null,
@@ -111,7 +107,6 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
       return { entries: { ...s.entries, [entry.roomId]: next } };
     }),
 
-  setPanelOpen: (open) => set({ panelOpen: open }),
   setState: (state, error = null) => set({ state, error }),
   setDownloadPct: (pct) => set({ downloadPct: pct }),
   setSummaryState: (state, pct = null) => set({ summaryState: state, summaryPct: pct }),

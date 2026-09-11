@@ -20,6 +20,7 @@ import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
 import { useVoiceChannel } from "./hooks/useVoiceChannel";
 import { shouldAutoJoinVoice } from "./services/voiceNativeService";
 import { useSettingsStore } from "./stores/useSettingsStore";
+import { useLayoutStore } from "./stores/useLayoutStore";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { MatrixRain, MATRIX_GREEN } from "./components/sidebar/MatrixRain";
 import { updateVoiceService } from "./services/androidVoiceService";
@@ -208,13 +209,16 @@ export default function App() {
   }, [credentials, connectionStatus, initSync]);
 
   // Restore the soundboard panel open/closed state from the previous
-  // session. Fires once on mount; subsequent toggles are already synced
-  // to the persisted setting inside `useAppStore.toggleSoundboardPanel`.
+  // session. Fires once on mount; subsequent toggles are already synced to
+  // the persisted setting by the dock store (`sion-layout`).
   useEffect(() => {
-    if (useSettingsStore.getState().soundboardOpenAtLaunch && !useAppStore.getState().showSoundboardPanel) {
-      useAppStore.getState().toggleSoundboardPanel();
+    const layout = useLayoutStore.getState();
+    const soundboardInDock =
+      layout.dockZones.right.panels.includes("soundboard") ||
+      layout.dockZones.bottom.panels.includes("soundboard");
+    if (useSettingsStore.getState().soundboardOpenAtLaunch && !soundboardInDock) {
+      layout.openDockPanel("soundboard");
     }
-     
   }, []);
 
   // Register push notifications when connected + sync room names for Android

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 
-// Le store persisté touche localStorage à chaque écriture : stub minimal
-// avant l'import du module (même schéma que appStoreVoice.test.ts).
+// Le store persisté touche localStorage dès l'évaluation : stub minimal avant
+// l'import dynamique (même schéma que appStoreVoice.test.ts).
 const store: Record<string, string> = {};
 beforeAll(() => {
   Object.defineProperty(globalThis, "localStorage", {
@@ -13,8 +13,8 @@ beforeAll(() => {
       clear: () => { for (const k of Object.keys(store)) delete store[k]; },
     },
   });
-  // Graine de layout v1 (largeur unique de la dock) : la migration v2 doit la
-  // transformer en largeurs par panneau, sans perdre la largeur de l'époque.
+  // Graine de layout v1 (largeur unique de la dock) : la migration doit la
+  // transformer en largeur par panneau (v2), puis en taille de zone (v3).
   store["sion-layout"] = JSON.stringify({
     state: { sidebarWidth: 300, sidebarMode: "full", rightPanelWidth: 280 },
     version: 1,
@@ -25,13 +25,14 @@ beforeAll(() => {
 let useLayoutStore: any;
 let K: {
   DEFAULT: number; MIN: number; MAX: number; SNAP_IN: number; SNAP_OUT: number;
-  RP_DEFAULT: number; RP_MIN: number; RP_MAX: number;
+  ZONE_MIN: number; ZONE_MAX: number; ZONE_DEFAULT: number;
+  BOTTOM_MIN: number; BOTTOM_MAX: number; BOTTOM_DEFAULT: number;
   SV_DEFAULT: number; SV_MIN: number; SV_MAX: number;
   FL_MIN_W: number; FL_MIN_H: number;
 };
-/** État issu de la réhydratation au premier import (migration v1 → v2),
+/** État issu de la réhydratation au premier import (migrations en chaîne),
  *  capturé ici car les `beforeEach` de test réinitialisent le store. */
-let migrated: { widths: Record<string, number>; sidebarWidth: number };
+let migrated: { dockRightSize: number; sidebarWidth: number };
 
 beforeAll(async () => {
   const mod = await import("./useLayoutStore");
@@ -42,9 +43,12 @@ beforeAll(async () => {
     MAX: mod.SIDEBAR_MAX_WIDTH,
     SNAP_IN: mod.SIDEBAR_RAIL_SNAP_IN,
     SNAP_OUT: mod.SIDEBAR_RAIL_SNAP_OUT,
-    RP_DEFAULT: mod.RIGHT_PANEL_DEFAULT_WIDTH,
-    RP_MIN: mod.RIGHT_PANEL_MIN_WIDTH,
-    RP_MAX: mod.RIGHT_PANEL_MAX_WIDTH,
+    ZONE_MIN: mod.DOCK_SIDE_MIN_SIZE,
+    ZONE_MAX: mod.DOCK_SIDE_MAX_SIZE,
+    ZONE_DEFAULT: mod.DOCK_SIDE_DEFAULT_SIZE,
+    BOTTOM_MIN: mod.DOCK_BOTTOM_MIN_SIZE,
+    BOTTOM_MAX: mod.DOCK_BOTTOM_MAX_SIZE,
+    BOTTOM_DEFAULT: mod.DOCK_BOTTOM_DEFAULT_SIZE,
     SV_DEFAULT: mod.SHARE_VIEW_DEFAULT_VH,
     SV_MIN: mod.SHARE_VIEW_MIN_VH,
     SV_MAX: mod.SHARE_VIEW_MAX_VH,
@@ -52,14 +56,17 @@ beforeAll(async () => {
     FL_MIN_H: mod.SHARE_FLOATING_MIN_H,
   };
   const rehydrated = useLayoutStore.getState();
-  migrated = { widths: rehydrated.rightPanelWidths, sidebarWidth: rehydrated.sidebarWidth };
+  migrated = { dockRightSize: rehydrated.dockZones.right.size, sidebarWidth: rehydrated.sidebarWidth };
 });
 
 const reset = () =>
   useLayoutStore.setState({
     sidebarWidth: K.DEFAULT,
     sidebarMode: "full",
-    rightPanelWidths: { members: K.RP_DEFAULT, soundboard: K.RP_DEFAULT, transcript: K.RP_DEFAULT },
+    dockZones: {
+      right: { panels: [], active: null, size: K.ZONE_DEFAULT },
+      bottom: { panels: [], active: null, size: K.BOTTOM_DEFAULT },
+    },
     shareViewMaxVh: K.SV_DEFAULT,
     shareDock: "inline",
     shareFloating: { x: -1, y: -1, w: 440, h: 300 },
@@ -140,31 +147,98 @@ describe("useLayoutStore — sidebar modulable", () => {
     expect(parsed.state.sidebarMode).toBe("rail");
   });
 
-  it("migre un layout v1 (largeur unique de la dock) vers les largeurs par panneau", () => {
-    expect(migrated.widths).toEqual({ members: 280, soundboard: 280, transcript: 280 });
+  it("migre un layout v1 (largeur unique de la dock) en taille de zone droite", () => {
+    expect(migrated.dockRightSize).toBe(280);
     expect(migrated.sidebarWidth).toBe(300);
   });
+});
 
-  it("borne la largeur de chaque panneau de la dock, indépendamment", () => {
+describe("useLayoutStore — dock à zones (§1.6)", () => {
+  beforeEach(reset);
+
+  it("borne la taille des zones (droite et basse)", () => {
     const s = () => useLayoutStore.getState();
 
-    s().setRightPanelWidth("soundboard", 10);
-    expect(s().rightPanelWidths.soundboard).toBe(K.RP_MIN);
+    s().setDockZoneSize("right", 10);
+    expect(s().dockZones.right.size).toBe(K.ZONE_MIN);
+    s().setDockZoneSize("right", 9999);
+    expect(s().dockZones.right.size).toBe(K.ZONE_MAX);
 
-    s().setRightPanelWidth("transcript", 9999);
-    expect(s().rightPanelWidths.transcript).toBe(K.RP_MAX);
-    // Indépendance : régler la transcription ne touche pas le soundboard.
-    expect(s().rightPanelWidths.soundboard).toBe(K.RP_MIN);
-
-    s().setRightPanelWidth("members", 420);
-    expect(s().rightPanelWidths.members).toBe(420);
-
-    s().resetRightPanelWidth("soundboard");
-    expect(s().rightPanelWidths.soundboard).toBe(K.RP_DEFAULT);
-    // Le reset d'un panneau laisse les autres tranquilles.
-    expect(s().rightPanelWidths.transcript).toBe(K.RP_MAX);
-    expect(s().rightPanelWidths.members).toBe(420);
+    s().setDockZoneSize("bottom", 10);
+    expect(s().dockZones.bottom.size).toBe(K.BOTTOM_MIN);
+    s().setDockZoneSize("bottom", 9999);
+    expect(s().dockZones.bottom.size).toBe(K.BOTTOM_MAX);
   });
+
+  it("ouvre, active, déplace et ferme les panneaux de la dock", () => {
+    const s = () => useLayoutStore.getState();
+
+    s().openDockPanel("members");
+    s().openDockPanel("soundboard");
+    expect(s().dockZones.right.panels).toEqual(["members", "soundboard"]);
+    expect(s().dockZones.right.active).toBe("soundboard");
+
+    // Re-cliquer un panneau ouvert mais en arrière-plan l'active (onglet).
+    s().toggleDockPanel("members");
+    expect(s().dockZones.right.active).toBe("members");
+    expect(s().dockZones.right.panels).toEqual(["members", "soundboard"]);
+
+    // Re-cliquer le panneau actif le ferme ; l'autre prend la main.
+    s().toggleDockPanel("members");
+    expect(s().dockZones.right.panels).toEqual(["soundboard"]);
+    expect(s().dockZones.right.active).toBe("soundboard");
+
+    // Déplacement vers la zone basse : sort de la droite, devient l'onglet actif.
+    s().moveDockPanel("soundboard", "bottom");
+    expect(s().dockZones.right.panels).toEqual([]);
+    expect(s().dockZones.right.active).toBeNull();
+    expect(s().dockZones.bottom.panels).toEqual(["soundboard"]);
+    expect(s().dockZones.bottom.active).toBe("soundboard");
+
+    // Fermeture depuis le menu de zone.
+    s().closeDockPanel("soundboard");
+    expect(s().dockZones.bottom.panels).toEqual([]);
+    expect(s().dockZones.bottom.active).toBeNull();
+  });
+
+  it("closeAllDockPanels ferme tout sans toucher aux tailles", () => {
+    const s = () => useLayoutStore.getState();
+    s().setDockZoneSize("right", 480);
+    s().openDockPanel("members");
+    s().openDockPanel("transcript");
+    s().moveDockPanel("transcript", "bottom");
+    s().closeAllDockPanels();
+    expect(s().dockZones.right.panels).toEqual([]);
+    expect(s().dockZones.bottom.panels).toEqual([]);
+    expect(s().dockZones.right.size).toBe(480);
+  });
+
+  it("déplacer un panneau déjà dans la zone ne le duplique pas", () => {
+    const s = () => useLayoutStore.getState();
+    s().openDockPanel("members");
+    s().moveDockPanel("members", "bottom");
+    s().moveDockPanel("members", "bottom");
+    expect(s().dockZones.bottom.panels).toEqual(["members"]);
+    expect(s().dockZones.right.panels).toEqual([]);
+  });
+
+  it("resetLayout remet tout à zéro", () => {
+    const s = () => useLayoutStore.getState();
+    s().setSidebarWidth(380);
+    s().setDockZoneSize("right", 480);
+    s().openDockPanel("members");
+    s().toggleShareDock();
+    s().resetLayout();
+    expect(s().sidebarMode).toBe("full");
+    expect(s().sidebarWidth).toBe(K.DEFAULT);
+    expect(s().dockZones.right.panels).toEqual([]);
+    expect(s().dockZones.right.size).toBe(K.ZONE_DEFAULT);
+    expect(s().shareDock).toBe("inline");
+  });
+});
+
+describe("useLayoutStore — zone de partage", () => {
+  beforeEach(reset);
 
   it("borne la hauteur de la zone de partage et la réinitialise", () => {
     const s = () => useLayoutStore.getState();

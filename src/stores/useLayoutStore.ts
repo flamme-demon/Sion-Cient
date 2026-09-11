@@ -25,15 +25,75 @@ export type SidebarMode = "full" | "rail" | "hidden";
 /** Ordre du cycle Ctrl+B : déployé → rail → masqué → déployé. */
 const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
 
-/** Dock droite : chaque panneau garde SA largeur (la poignée de la
- *  transcription ne doit pas bouger le soundboard quand les deux sont ouverts).
- *  Tous démarrent à la même valeur : tant que l'utilisateur n'a rien réglé,
- *  changer de panneau ne re-dimensionne pas la colonne. */
-export type RightPanelId = "members" | "soundboard" | "transcript";
+// ───────────────────────────── Dock (panneaux déplaçables) ─────────────────
+// Les trois panneaux de la dock (membres, soundboard, transcription) se
+// placent dans deux zones : à droite (colonne) ou en bas (bandeau). Une zone
+// peut contenir plusieurs panneaux — ils deviennent alors des onglets, comme
+// dans un éditeur. Le chat reste épinglé au centre (jamais déplaçable).
 
-export const RIGHT_PANEL_DEFAULT_WIDTH = 360;
-export const RIGHT_PANEL_MIN_WIDTH = 220;
-export const RIGHT_PANEL_MAX_WIDTH = 520;
+export type DockPanelId = "members" | "soundboard" | "transcript";
+export type DockZoneId = "right" | "bottom";
+
+export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["right", "bottom"];
+
+/** Zone où un panneau s'ouvre par défaut (l'utilisateur peut le déplacer). */
+export const DOCK_PANEL_DEFAULT_ZONE: Record<DockPanelId, DockZoneId> = {
+  members: "right",
+  soundboard: "right",
+  transcript: "right",
+};
+
+/** Zone droite : même plage que l'ancienne largeur par panneau. */
+export const DOCK_SIDE_MIN_SIZE = 220;
+export const DOCK_SIDE_MAX_SIZE = 520;
+export const DOCK_SIDE_DEFAULT_SIZE = 360;
+/** Zone basse : hauteur du bandeau. */
+export const DOCK_BOTTOM_MIN_SIZE = 140;
+export const DOCK_BOTTOM_MAX_SIZE = 520;
+export const DOCK_BOTTOM_DEFAULT_SIZE = 240;
+
+export interface DockZoneState {
+  /** Onglets de la zone, dans l'ordre d'affichage. */
+  panels: DockPanelId[];
+  /** Onglet actif — toujours membre de `panels`, sinon null (zone vide). */
+  active: DockPanelId | null;
+  /** Largeur (zone droite) ou hauteur (zone basse), en px. */
+  size: number;
+}
+
+const clampDockSize = (zone: DockZoneId, size: number) =>
+  zone === "right"
+    ? Math.min(DOCK_SIDE_MAX_SIZE, Math.max(DOCK_SIDE_MIN_SIZE, size))
+    : Math.min(DOCK_BOTTOM_MAX_SIZE, Math.max(DOCK_BOTTOM_MIN_SIZE, size));
+
+const defaultDockZones = (): Record<DockZoneId, DockZoneState> => ({
+  right: { panels: [], active: null, size: DOCK_SIDE_DEFAULT_SIZE },
+  bottom: { panels: [], active: null, size: DOCK_BOTTOM_DEFAULT_SIZE },
+});
+
+/** Zone qui contient le panneau, ou null s'il est fermé. */
+function zoneOf(zones: Record<DockZoneId, DockZoneState>, panel: DockPanelId): DockZoneId | null {
+  return DOCK_ZONE_IDS.find((id) => zones[id].panels.includes(panel)) ?? null;
+}
+
+/** Retire un panneau d'une zone en choisissant le nouvel onglet actif. */
+function removeFromZone(zone: DockZoneState, panel: DockPanelId): DockZoneState {
+  if (!zone.panels.includes(panel)) return zone;
+  const panels = zone.panels.filter((p) => p !== panel);
+  const active = zone.active === panel ? (panels[0] ?? null) : zone.active;
+  return { ...zone, panels, active };
+}
+
+/**
+ * Mémorise l'ouverture du soundboard pour le prochain lancement (relu au boot
+ * par App.tsx). Import paresseux : le store de layout ne dépend pas du store
+ * de réglages au chargement.
+ */
+function persistSoundboardAtLaunch(open: boolean): void {
+  import("./useSettingsStore")
+    .then(({ useSettingsStore }) => useSettingsStore.getState().setSoundboardOpenAtLaunch(open))
+    .catch(() => { /* hors Tauri : sans conséquence */ });
+}
 
 /** Zone de partage d'écran en ligne (dans le chat) : hauteur maximale de la
  *  vidéo, en % de la fenêtre. La réduire rend la place au chat. */
@@ -53,23 +113,15 @@ export const SHARE_FLOATING_MIN_H = 160;
  *  taille de fenêtre n'est pas connue du store, le calcul se fait au rendu. */
 const SHARE_FLOATING_DEFAULT = { x: -1, y: -1, w: 440, h: 300 };
 
-const defaultRightPanelWidths = (): Record<RightPanelId, number> => ({
-  members: RIGHT_PANEL_DEFAULT_WIDTH,
-  soundboard: RIGHT_PANEL_DEFAULT_WIDTH,
-  transcript: RIGHT_PANEL_DEFAULT_WIDTH,
-});
-
 const clampWidth = (w: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, w));
-const clampRightPanelWidth = (w: number) =>
-  Math.min(RIGHT_PANEL_MAX_WIDTH, Math.max(RIGHT_PANEL_MIN_WIDTH, w));
 
 interface LayoutState {
   /** Dernière largeur déployée, conservée pendant le mode rail pour que le
    *  déploiement suivant retrouve la taille choisie par l'utilisateur. */
   sidebarWidth: number;
   sidebarMode: SidebarMode;
-  /** Largeur par panneau de la dock droite. */
-  rightPanelWidths: Record<RightPanelId, number>;
+  /** Les deux zones de la dock (panneaux + onglet actif + taille de zone). */
+  dockZones: Record<DockZoneId, DockZoneState>;
   /** Hauteur max de la zone de partage d'écran en ligne (% de la fenêtre). */
   shareViewMaxVh: number;
   /** Affichage du partage : en ligne ou carte flottante (Ctrl+Maj+P). */
@@ -89,10 +141,22 @@ interface LayoutState {
   toggleSidebar: () => void;
   /** Retour à la largeur par défaut, déployé (double-clic sur la poignée). */
   resetSidebar: () => void;
-  /** Largeur d'un panneau de la dock (drag/clavier sur sa poignée). */
-  setRightPanelWidth: (panel: RightPanelId, raw: number) => void;
-  /** Double-clic sur la poignée d'un panneau de la dock. */
-  resetRightPanelWidth: (panel: RightPanelId) => void;
+  /** Ouvre un panneau dans sa zone par défaut (ou l'active s'il est ouvert). */
+  openDockPanel: (panel: DockPanelId) => void;
+  /** Clic sur le bouton du header : ouvre, active, ou ferme s'il est déjà actif. */
+  toggleDockPanel: (panel: DockPanelId) => void;
+  /** Ferme un panneau (croix du panneau ou de la zone). */
+  closeDockPanel: (panel: DockPanelId) => void;
+  /** Déplace un panneau vers l'autre zone (menu de la zone). */
+  moveDockPanel: (panel: DockPanelId, zone: DockZoneId) => void;
+  /** Sélectionne l'onglet actif d'une zone. */
+  setDockZoneActive: (zone: DockZoneId, panel: DockPanelId) => void;
+  /** Redimensionne une zone (drag/clavier sur sa poignée). */
+  setDockZoneSize: (zone: DockZoneId, size: number) => void;
+  /** Ferme tous les panneaux (les tailles de zone sont conservées). */
+  closeAllDockPanels: () => void;
+  /** Remet TOUT le layout à zéro : sidebar, zones, panneaux, partage. */
+  resetLayout: () => void;
   /** Hauteur de la zone de partage (drag/clavier sur sa poignée). */
   setShareViewMaxVh: (vh: number) => void;
   /** Double-clic sur la poignée de la zone de partage. */
@@ -110,7 +174,7 @@ export const useLayoutStore = create<LayoutState>()(
     (set) => ({
       sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
       sidebarMode: "full",
-      rightPanelWidths: defaultRightPanelWidths(),
+      dockZones: defaultDockZones(),
       shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
       setSidebarWidth: (raw) =>
         set((s) => {
@@ -132,10 +196,99 @@ export const useLayoutStore = create<LayoutState>()(
           return { sidebarMode: next };
         }),
       resetSidebar: () => set({ sidebarMode: "full" as SidebarMode, sidebarWidth: SIDEBAR_DEFAULT_WIDTH }),
-      setRightPanelWidth: (panel, raw) =>
-        set((s) => ({ rightPanelWidths: { ...s.rightPanelWidths, [panel]: clampRightPanelWidth(raw) } })),
-      resetRightPanelWidth: (panel) =>
-        set((s) => ({ rightPanelWidths: { ...s.rightPanelWidths, [panel]: RIGHT_PANEL_DEFAULT_WIDTH } })),
+      openDockPanel: (panel) =>
+        set((s) => {
+          const current = zoneOf(s.dockZones, panel);
+          if (panel === "soundboard") persistSoundboardAtLaunch(true);
+          if (current) {
+            return { dockZones: { ...s.dockZones, [current]: { ...s.dockZones[current], active: panel } } };
+          }
+          const zone = DOCK_PANEL_DEFAULT_ZONE[panel];
+          return {
+            dockZones: {
+              ...s.dockZones,
+              [zone]: {
+                ...s.dockZones[zone],
+                panels: [...s.dockZones[zone].panels, panel],
+                active: panel,
+              },
+            },
+          };
+        }),
+      toggleDockPanel: (panel) =>
+        set((s) => {
+          const current = zoneOf(s.dockZones, panel);
+          if (!current) {
+            if (panel === "soundboard") persistSoundboardAtLaunch(true);
+            const zone = DOCK_PANEL_DEFAULT_ZONE[panel];
+            return {
+              dockZones: {
+                ...s.dockZones,
+                [zone]: {
+                  ...s.dockZones[zone],
+                  panels: [...s.dockZones[zone].panels, panel],
+                  active: panel,
+                },
+              },
+            };
+          }
+          // Déjà actif : le bouton referme. Ouvert mais en arrière-plan : il
+          // passe devant (comportement d'un onglet).
+          if (s.dockZones[current].active === panel) {
+            if (panel === "soundboard") persistSoundboardAtLaunch(false);
+            return { dockZones: { ...s.dockZones, [current]: removeFromZone(s.dockZones[current], panel) } };
+          }
+          return { dockZones: { ...s.dockZones, [current]: { ...s.dockZones[current], active: panel } } };
+        }),
+      closeDockPanel: (panel) =>
+        set((s) => {
+          const current = zoneOf(s.dockZones, panel);
+          if (!current) return {};
+          if (panel === "soundboard") persistSoundboardAtLaunch(false);
+          return { dockZones: { ...s.dockZones, [current]: removeFromZone(s.dockZones[current], panel) } };
+        }),
+      moveDockPanel: (panel, zone) =>
+        set((s) => {
+          const from = zoneOf(s.dockZones, panel);
+          if (from === zone) {
+            return { dockZones: { ...s.dockZones, [zone]: { ...s.dockZones[zone], active: panel } } };
+          }
+          const zones = { ...s.dockZones };
+          if (from) zones[from] = removeFromZone(zones[from], panel);
+          zones[zone] = { ...zones[zone], panels: [...zones[zone].panels, panel], active: panel };
+          return { dockZones: zones };
+        }),
+      setDockZoneActive: (zone, panel) =>
+        set((s) =>
+          s.dockZones[zone].panels.includes(panel)
+            ? { dockZones: { ...s.dockZones, [zone]: { ...s.dockZones[zone], active: panel } } }
+            : {},
+        ),
+      setDockZoneSize: (zone, size) =>
+        set((s) => ({
+          dockZones: { ...s.dockZones, [zone]: { ...s.dockZones[zone], size: clampDockSize(zone, size) } },
+        })),
+      closeAllDockPanels: () =>
+        set((s) => {
+          if (s.dockZones.right.panels.includes("soundboard") || s.dockZones.bottom.panels.includes("soundboard")) {
+            persistSoundboardAtLaunch(false);
+          }
+          return {
+            dockZones: {
+              right: { ...s.dockZones.right, panels: [], active: null },
+              bottom: { ...s.dockZones.bottom, panels: [], active: null },
+            },
+          };
+        }),
+      resetLayout: () =>
+        set({
+          sidebarMode: "full" as SidebarMode,
+          sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+          dockZones: defaultDockZones(),
+          shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
+          shareDock: "inline" as ShareDock,
+          shareFloating: { ...SHARE_FLOATING_DEFAULT },
+        }),
       setShareViewMaxVh: (vh) => set({ shareViewMaxVh: clampShareViewVh(vh) }),
       resetShareViewMaxVh: () => set({ shareViewMaxVh: SHARE_VIEW_DEFAULT_VH }),
       shareDock: "inline" as ShareDock,
@@ -155,20 +308,39 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: "sion-layout",
-      version: 2,
-      // v1 → v2 : la largeur unique de la dock devient une largeur par
-      // panneau ; l'utilisateur alpha repart avec sa valeur actuelle sur les
-      // trois, aucune préférence perdue.
+      version: 3,
+      // v1 → v2 : largeur unique de la dock → largeur par panneau.
+      // v2 → v3 : les trois largeurs par panneau → une taille pour la zone
+      // droite (la plus large des trois, pour ne rien rétrécir), et les zones
+      // d'onglets remplacent les drapeaux d'ouverture.
       migrate: (persistedState, version) => {
-        const state = persistedState as Partial<LayoutState> & { rightPanelWidth?: number };
+        const state = persistedState as Partial<LayoutState> & {
+          rightPanelWidth?: number;
+          rightPanelWidths?: Record<string, number>;
+        };
         if (version < 2 && typeof state.rightPanelWidth === "number") {
           state.rightPanelWidths = {
-            members: clampRightPanelWidth(state.rightPanelWidth),
-            soundboard: clampRightPanelWidth(state.rightPanelWidth),
-            transcript: clampRightPanelWidth(state.rightPanelWidth),
+            members: state.rightPanelWidth,
+            soundboard: state.rightPanelWidth,
+            transcript: state.rightPanelWidth,
+          };
+        }
+        if (version < 3) {
+          const legacy = state.rightPanelWidths;
+          const widest = legacy
+            ? Math.max(legacy.members ?? 0, legacy.soundboard ?? 0, legacy.transcript ?? 0)
+            : 0;
+          state.dockZones = {
+            right: {
+              panels: [],
+              active: null,
+              size: clampDockSize("right", widest || DOCK_SIDE_DEFAULT_SIZE),
+            },
+            bottom: { panels: [], active: null, size: DOCK_BOTTOM_DEFAULT_SIZE },
           };
         }
         delete state.rightPanelWidth;
+        delete state.rightPanelWidths;
         return state as LayoutState;
       },
     },

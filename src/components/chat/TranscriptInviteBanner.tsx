@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 import { armTranscription } from "../../services/transcriptionService";
 import { MicIcon } from "../icons";
 
@@ -16,7 +17,6 @@ export function TranscriptInviteBanner() {
   const armedPeers = useTranscriptStore((s) => s.armedPeers);
   const session = useTranscriptStore((s) => (connectedVoice ? s.sessions[connectedVoice] : undefined)) || null;
   const engineState = useTranscriptStore((s) => s.state);
-  const setPanelOpen = useTranscriptStore((s) => s.setPanelOpen);
   const [dismissed, setDismissed] = useState(false);
 
   // A new/changed invitation cancels a previous dismissal.
@@ -41,7 +41,7 @@ export function TranscriptInviteBanner() {
   }
 
   const handleJoin = () => {
-    setPanelOpen(true);
+    useLayoutStore.getState().openDockPanel("transcript");
     armTranscription(connectedVoice).catch((err) => {
       console.error("[Sion][transcribe] arm failed:", err);
       useTranscriptStore.getState().setState("error", String((err as Error)?.message || err));

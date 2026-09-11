@@ -8,6 +8,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useVoiceChannel, republishVoicePresence } from "../../hooks/useVoiceChannel";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 
 /** "CC" captions glyph for the transcript toggle — drawn inline (the icons
  *  module has no captions icon) and tinted green while OUR engine runs. */
@@ -37,7 +38,9 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
   const clockSkewMin = useAppStore((s) => s.clockSkewMin);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
-  const transcriptPanelOpen = useTranscriptStore((s) => s.panelOpen);
+  const transcriptPanelOpen = useLayoutStore(
+    (s) => s.dockZones.right.panels.includes("transcript") || s.dockZones.bottom.panels.includes("transcript"),
+  );
   const transcriptState = useTranscriptStore((s) => s.state);
   const transcriptInvites = useTranscriptStore((s) => s.armedPeers.length);
   // Brief "done" feedback after the user hits the republish-presence recovery.
@@ -165,7 +168,7 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
               <HeadphoneIcon muted={isDeafened} />
             </button>
             <button
-              onClick={() => useTranscriptStore.getState().setPanelOpen(!transcriptPanelOpen)}
+              onClick={() => useLayoutStore.getState().toggleDockPanel("transcript")}
               title={t("transcript.togglePanel", { defaultValue: "Transcription de la réunion" })}
               style={iconBtnStyle(transcriptPanelOpen || transcriptState === 'on' || transcriptInvites > 0, 'accent')}
             >
@@ -242,7 +245,7 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
               transcribing — that's an explicit per-user opt-in inside the
               panel (each participant transcribes their own mic, locally). */}
           <button
-            onClick={() => useTranscriptStore.getState().setPanelOpen(!transcriptPanelOpen)}
+            onClick={() => useLayoutStore.getState().toggleDockPanel("transcript")}
             title={t("transcript.togglePanel", { defaultValue: "Transcription de la réunion" })}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,

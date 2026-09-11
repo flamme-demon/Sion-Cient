@@ -2,10 +2,9 @@ import { useEffect, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 import { getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { UserAvatar } from "../sidebar/UserAvatar";
-import { ResizeHandle } from "../layout/ResizeHandle";
-import { useLayoutStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH } from "../../stores/useLayoutStore";
 
 type Role = "admin" | "moderator" | "user";
 
@@ -23,23 +22,21 @@ function plToRole(pl: number): Role {
   return "user";
 }
 
+/**
+ * Liste des membres du salon courant — contenu pur : la coquille (largeur,
+ * zone droite ou basse, onglets) est portée par `DockZone` (§1.6).
+ */
 export function MemberPanel() {
   const { t } = useTranslation();
   const activeChannel = useAppStore((s) => s.activeChannel);
-  const showMemberPanel = useAppStore((s) => s.showMemberPanel);
-  const toggleMemberPanel = useAppStore((s) => s.toggleMemberPanel);
   const openUserContextMenu = useAppStore((s) => s.openUserContextMenu);
-  // Dock droite : largeur propre à ce panneau (cf. useLayoutStore).
-  const rightPanelWidth = useLayoutStore((s) => s.rightPanelWidths.members);
-  const setRightPanelWidth = useLayoutStore((s) => s.setRightPanelWidth);
-  const resetRightPanelWidth = useLayoutStore((s) => s.resetRightPanelWidth);
   const channels = useMatrixStore((s) => s.channels);
   const channel = channels.find((c) => c.id === activeChannel);
   const [tick, setTick] = useState(0);
 
   // Refresh list on Matrix state events (member joins/leaves, power level changes)
   useEffect(() => {
-    if (!showMemberPanel || !activeChannel) return;
+    if (!activeChannel) return;
     const client = getMatrixClient();
     if (!client) return;
     const room = client.getRoom(activeChannel);
@@ -55,7 +52,7 @@ export function MemberPanel() {
       r.off("RoomMember.powerLevel", bump);
       r.off("RoomState.events", bump);
     };
-  }, [showMemberPanel, activeChannel]);
+  }, [activeChannel]);
 
   const entries = useMemo<Entry[]>(() => {
     void tick;
@@ -83,7 +80,7 @@ export function MemberPanel() {
     return list;
   }, [activeChannel, tick]);
 
-  if (!showMemberPanel || !activeChannel || channel?.isDM) return null;
+  if (!activeChannel || channel?.isDM) return null;
 
   const sections: { role: Role; entries: Entry[] }[] = [
     { role: "admin", entries: entries.filter((e) => e.role === "admin") },
@@ -94,25 +91,7 @@ export function MemberPanel() {
   const roleLabel = (r: Role) => r === "admin" ? t("contextMenu.roleAdmin") : r === "moderator" ? t("contextMenu.roleModerator") : t("contextMenu.roleUser");
 
   return (
-    <>
-      <ResizeHandle
-        side="left"
-        value={rightPanelWidth}
-        min={RIGHT_PANEL_MIN_WIDTH}
-        max={RIGHT_PANEL_MAX_WIDTH}
-        onChange={(w) => setRightPanelWidth("members", w)}
-        onReset={() => resetRightPanelWidth("members")}
-        label={t("layout.resizeRightPanel", { defaultValue: "Redimensionner le panneau — double-clic pour la taille par défaut" })}
-      />
-      <aside style={{
-        width: rightPanelWidth,
-        flexShrink: 0,
-      background: 'var(--color-surface-container-low)',
-      borderLeft: '1px solid var(--color-outline-variant)',
-      display: 'flex',
-      flexDirection: 'column',
-      overflow: 'hidden',
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -124,7 +103,7 @@ export function MemberPanel() {
           {t("members.title")} ({entries.length})
         </span>
         <button
-          onClick={toggleMemberPanel}
+          onClick={() => useLayoutStore.getState().closeDockPanel("members")}
           title={t("members.close")}
           style={{
             border: 'none',
@@ -186,7 +165,6 @@ export function MemberPanel() {
           </div>
         ))}
       </div>
-      </aside>
-    </>
+    </div>
   );
 }
