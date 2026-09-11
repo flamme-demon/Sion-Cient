@@ -383,7 +383,7 @@ export default function App() {
             boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
           }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)' }}>
-              {t("layout.editLayoutHint", { defaultValue: "Glissez les blocs dans la grille (haut / droite / bas)" })}
+              {t("layout.editLayoutHint", { defaultValue: "Glissez les blocs (et le menu) dans la grille — haut / droite / bas" })}
             </span>
             <button
               onClick={() => useLayoutStore.getState().resetLayout()}

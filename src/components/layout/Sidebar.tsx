@@ -67,6 +67,9 @@ export function Sidebar() {
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const sidebarMode = useLayoutStore((s) => s.sidebarMode);
   const sidebarSide = useLayoutStore((s) => s.sidebarSide);
+  const layoutEditing = useLayoutStore((s) => s.layoutEditing);
+  // Drag du menu entier en mode édition (état local : c'est de l'UI éphémère).
+  const [sidebarDragging, setSidebarDragging] = useState(false);
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const setSidebarWidth = useLayoutStore((s) => s.setSidebarWidth);
   const resetSidebar = useLayoutStore((s) => s.resetSidebar);
@@ -130,16 +133,62 @@ export function Sidebar() {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        position: 'relative',
         // Pendant un drag vers le bas, le contenu (noms de salons) est rogné
         // plutôt que de déborder sur le chat.
         overflow: 'hidden',
       }}>
+        {/* Édition : le menu entier se saisit (le contenu ne réagit plus) et se
+            dépose sur le bord opposé — gauche ↔ droite. */}
+        {layoutEditing && (
+          <div
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              setSidebarDragging(true);
+              const onUp = (ev: PointerEvent) => {
+                window.removeEventListener("pointerup", onUp);
+                setSidebarDragging(false);
+                const el = document.elementFromPoint(ev.clientX, ev.clientY);
+                const target = (el?.closest?.("[data-drop-menu]") as HTMLElement | null)?.dataset?.dropMenu;
+                if (target === "left" || target === "right") {
+                  useLayoutStore.getState().setSidebarSide(target);
+                }
+              };
+              window.addEventListener("pointerup", onUp);
+            }}
+            title={t("layout.editSidebarHint", { defaultValue: "Glisser le menu vers le bord opposé" })}
+            style={{
+              position: 'absolute', inset: 0, zIndex: 6, cursor: 'grab', touchAction: 'none',
+              outline: '2px solid var(--color-primary)', outlineOffset: -2, borderRadius: 6,
+              background: 'rgba(168, 199, 250, 0.08)',
+            }}
+          />
+        )}
         <ServerHeader compact={compact} />
         <VerificationBanner compact={compact} />
         <ChannelList compact={compact} />
         <UserControls compact={compact} />
       </div>
       {!onRight && handle}
+      {/* Édition : cadre du bord OPPOSÉ — on y dépose le menu pour le changer
+          de côté (le menu se saisit directement dans son cadre actuel). */}
+      {layoutEditing && (
+        <div
+          data-drop-menu={onRight ? "left" : "right"}
+          style={{
+            position: 'fixed', top: 0, bottom: 0, zIndex: 7, width: 96,
+            ...(onRight ? { left: 0 } : { right: 0 }),
+            border: '2px dashed var(--color-primary)',
+            background: sidebarDragging ? 'rgba(168, 199, 250, 0.12)' : 'transparent',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--color-primary)', fontSize: 11, fontWeight: 700,
+            textTransform: 'uppercase', letterSpacing: '0.06em',
+          }}
+        >
+          {t("layout.zoneMenu", { defaultValue: "Menu" })}
+        </div>
+      )}
     </div>
   );
 }
