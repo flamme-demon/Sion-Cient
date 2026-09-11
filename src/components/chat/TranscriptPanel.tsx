@@ -174,7 +174,7 @@ export function TranscriptPanel() {
     }
   };
 
-  const statusDot = running ? "var(--color-error)" : armed ? "#ff9800" : engineState === "error" ? "var(--color-error)" : "var(--color-outline)";
+  const statusDot = running ? "var(--color-error)" : armed ? "var(--color-pending)" : engineState === "error" ? "var(--color-error)" : "var(--color-outline)";
 
   const primaryBtn = (label: string, onClick: () => void, opts?: { disabled?: boolean }) => (
     <button

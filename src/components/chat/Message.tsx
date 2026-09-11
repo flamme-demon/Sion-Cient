@@ -501,20 +501,20 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
           title={isDownloaded ? t("download.alreadySaved") : t("download.save")}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
-            color: isDownloaded ? '#4caf50' : 'var(--color-outline)',
+            color: isDownloaded ? 'var(--color-success)' : 'var(--color-outline)',
             padding: 4, borderRadius: 6,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0,
             position: 'relative',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = isDownloaded ? '#66bb6a' : 'var(--color-primary)')}
-          onMouseLeave={(e) => (e.currentTarget.style.color = isDownloaded ? '#4caf50' : 'var(--color-outline)')}
+          onMouseEnter={(e) => (e.currentTarget.style.color = isDownloaded ? 'var(--color-success-hover)' : 'var(--color-primary)')}
+          onMouseLeave={(e) => (e.currentTarget.style.color = isDownloaded ? 'var(--color-success)' : 'var(--color-outline)')}
         >
           <DownloadIcon />
           {isDownloaded && (
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{
               position: 'absolute', bottom: 0, right: -2,
-              color: '#4caf50',
+              color: 'var(--color-success)',
               background: 'var(--color-surface-container-high)',
               borderRadius: '50%',
               padding: 1,

@@ -47,6 +47,15 @@
   --color-orange: #f0a869;
   --color-accent: #a8c7fa;
 
+  /* États étendus — tokenisés pour le système de thèmes (phase 1). */
+  --color-warning: #ffb74d;
+  --color-pending: #ff9800;
+  --color-amber: #fbbf24;
+  --color-success: #4caf50;
+  --color-success-hover: #66bb6a;
+  --color-glow-strong: rgba(125, 220, 135, 0.3);
+  --color-glow: rgba(125, 220, 135, 0.12);
+
   /* Legacy aliases for compatibility */
   --color-bg-dark: #111318;
   --color-bg-panel: #1d2024;
@@ -205,8 +214,8 @@ body.layout-resizing video {
 }
 
 @keyframes speaking-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(125, 220, 135, 0.3); }
-  50% { box-shadow: 0 0 8px 3px rgba(125, 220, 135, 0.12); }
+  0%, 100% { box-shadow: 0 0 0 0 var(--color-glow-strong); }
+  50% { box-shadow: 0 0 8px 3px var(--color-glow); }
 }
 
 @keyframes sound-badge-pop {
@@ -403,8 +412,8 @@ select {
   padding-right: 30px !important;
 }
 select option {
-  background-color: #1f1f24;
-  color: #e6e6ea;
+  background-color: var(--color-surface-container);
+  color: var(--color-on-surface);
 }
 
 /* Mobile responsive */

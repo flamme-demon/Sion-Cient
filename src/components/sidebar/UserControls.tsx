@@ -263,7 +263,7 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
             {transcriptInvites > 0 && transcriptState !== 'on' && (
               <span style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: '#ff9800', animation: 'pulse 2s infinite',
+                background: 'var(--color-pending)', animation: 'pulse 2s infinite',
               }} />
             )}
           </button>

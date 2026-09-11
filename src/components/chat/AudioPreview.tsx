@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { decodeAudioFile, computePeaks, playSlice } from "../../services/audioTrim";
+import { themeColor } from "../../utils/themeColor";
 
 const CANVAS_W = 600;
 const HEIGHT = 56;
@@ -71,7 +72,7 @@ export function AudioPreview({ file, onDecoded }: Props) {
     }
     if (buffer && cursor > 0) {
       // Même ambre que le curseur du trimmer, pour la cohérence visuelle.
-      c.fillStyle = "#fbbf24";
+      c.fillStyle = themeColor("--color-amber", "#fbbf24");
       c.fillRect((cursor / buffer.duration) * w, 0, 2, h);
     }
   }, [peaks, cursor, buffer]);

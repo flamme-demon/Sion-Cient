@@ -78,9 +78,9 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
   };
 
   const colors = {
-    container: "var(--color-tertiary-container, #3a3000)",
-    text: "var(--color-on-tertiary-container, #ffe08a)",
-    dot: "var(--color-warning, #ffb74d)",
+    container: "var(--color-tertiary-container)",
+    text: "var(--color-on-tertiary-container)",
+    dot: "var(--color-warning)",
   };
 
   const renderCrossDeviceContent = (step: VerificationStep, emojis: EmojiData[], error: string | null) => {

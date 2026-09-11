@@ -442,7 +442,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
             minWidth: 18, height: 18, padding: '0 5px',
             borderRadius: 9,
             background: 'var(--color-error)',
-            color: 'var(--color-on-error, #fff)',
+            color: 'var(--color-on-error)',
             fontSize: 10, fontWeight: 700,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0,

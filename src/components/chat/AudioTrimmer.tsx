@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { decodeAudioFile, computePeaks, computePeaksRange, playSlice } from "../../services/audioTrim";
+import { themeColor } from "../../utils/themeColor";
 
 const CANVAS_W = 600;
 
@@ -69,7 +70,7 @@ function WaveLane({ peaks, winStart, winEnd, region, cursor, bodyDraggable, onHa
     }
     if (cursor !== null && cursor >= winStart && cursor <= winEnd) {
       const px = ((cursor - winStart) / span) * w;
-      c.fillStyle = "#fbbf24"; // amber: the "fix here" cursor, distinct from the selection edges
+      c.fillStyle = themeColor("--color-amber", "#fbbf24"); // amber: the "fix here" cursor, distinct from the selection edges
       c.fillRect(px, 0, 2, h);
     }
   }, [peaks, cursor, winStart, winEnd, span]);
@@ -364,7 +365,7 @@ export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
       </div>
       <span style={{ fontSize: 12, color: overLimit ? "var(--color-error)" : "var(--color-outline)", textAlign: "center" }}>
         {fmt(region.start)}–{fmt(region.end)} · {selLen.toFixed(1)} s / {maxSec} s max
-        {hasCursor && <span style={{ color: "#fbbf24" }}> · ● {fmt(cursor!)}</span>}
+        {hasCursor && <span style={{ color: "var(--color-amber)" }}> · ● {fmt(cursor!)}</span>}
       </span>
     </div>
   );
