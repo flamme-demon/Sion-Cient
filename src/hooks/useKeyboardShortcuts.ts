@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import { useLayoutStore } from "../stores/useLayoutStore";
 
 import { keyEventToString, normalizeCombo } from "../utils/keyCombo";
 
@@ -44,6 +45,31 @@ export function useKeyboardShortcuts() {
       toggleDeafen();
     }
   };
+
+  // Ctrl+B — replie/déplie le menu latéral. Ctrl+Maj+P — bascule le partage
+  // d'écran en ligne ↔ carte flottante. Raccourcis LOCAUX (fenêtre), pas
+  // globaux : ils doivent fonctionner aussi dans un champ de saisie non
+  // concerné, donc on les installe indépendamment du chemin rdev/Tauri.
+  // Ignorés quand le focus est dans un champ éditable.
+  useEffect(() => {
+    function handleLayoutKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.repeat) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      if (!e.shiftKey && e.code === "KeyB") {
+        e.preventDefault();
+        useLayoutStore.getState().toggleSidebar();
+        return;
+      }
+      if (e.shiftKey && e.code === "KeyP") {
+        e.preventDefault();
+        useLayoutStore.getState().toggleShareDock();
+      }
+    }
+    window.addEventListener("keydown", handleLayoutKeyDown);
+    return () => window.removeEventListener("keydown", handleLayoutKeyDown);
+  }, []);
 
   useEffect(() => {
     // Android has no global-shortcut backend (no rdev, no global-shortcut

@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
+import { ResizeHandle } from "../layout/ResizeHandle";
+import { useLayoutStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH } from "../../stores/useLayoutStore";
 import { armTranscription, disarmTranscription, endSessionForAll, summarizeMeeting } from "../../services/transcriptionService";
 import { backfillTranscript } from "../../services/matrixService";
 import { scopeTranscriptEntries } from "../../utils/transcriptScope";
@@ -35,6 +37,10 @@ const NO_SUMMARIES: Record<string, { text: string; ts: number }> = {};
 export function TranscriptPanel() {
   const { t } = useTranslation();
   const panelOpen = useTranscriptStore((s) => s.panelOpen);
+  // Dock droite : largeur propre à ce panneau (cf. useLayoutStore).
+  const rightPanelWidth = useLayoutStore((s) => s.rightPanelWidths.transcript);
+  const setRightPanelWidth = useLayoutStore((s) => s.setRightPanelWidth);
+  const resetRightPanelWidth = useLayoutStore((s) => s.resetRightPanelWidth);
   const setPanelOpen = useTranscriptStore((s) => s.setPanelOpen);
   const engineState = useTranscriptStore((s) => s.state);
   const engineError = useTranscriptStore((s) => s.error);
@@ -294,9 +300,19 @@ export function TranscriptPanel() {
   );
 
   return (
-    <aside style={{
-      width: 300,
-      flexShrink: 0,
+    <>
+      <ResizeHandle
+        side="left"
+        value={rightPanelWidth}
+        min={RIGHT_PANEL_MIN_WIDTH}
+        max={RIGHT_PANEL_MAX_WIDTH}
+        onChange={(w) => setRightPanelWidth("transcript", w)}
+        onReset={() => resetRightPanelWidth("transcript")}
+        label={t("layout.resizeRightPanel", { defaultValue: "Redimensionner le panneau — double-clic pour la taille par défaut" })}
+      />
+      <aside style={{
+        width: rightPanelWidth,
+        flexShrink: 0,
       background: 'var(--color-surface-container-low)',
       borderLeft: '1px solid var(--color-outline-variant)',
       display: 'flex',
@@ -497,6 +513,7 @@ export function TranscriptPanel() {
           )}
         </div>
       )}
-    </aside>
+      </aside>
+    </>
   );
 }

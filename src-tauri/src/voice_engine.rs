@@ -2348,6 +2348,26 @@ impl LiveKitEngine {
         Ok(found)
     }
 
+    /// État local (mute + volume) du son de partage d'un expéditeur — relu
+    /// par le front au chargement de la webview : un reload JS ne doit pas
+    /// perdre les coupures réglées au niveau moteur (sinon l'UI affiche
+    /// « à fond » pour une piste restée coupée et l'utilisateur n'entend rien).
+    pub fn screenshare_audio_state(&self, sender: &str) -> (bool, f32) {
+        let muted = self
+            .share_audio_muted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(sender);
+        let volume = self
+            .share_audio_volume
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(sender)
+            .copied()
+            .unwrap_or(1.0);
+        (muted, volume)
+    }
+
     fn spawn_event_pump(
         &self,
         mut events: tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,

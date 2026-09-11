@@ -2718,6 +2718,7 @@ pub fn run() {
         voice_native::voice_native_publish_data,
         voice_native::voice_native_set_screenshare_audio_muted,
         voice_native::voice_native_set_screenshare_audio_volume,
+        voice_native::voice_native_get_screenshare_audio_state,
         voice_native::voice_native_video_port,
         voice_native::voice_native_set_screensharing
     ]);
@@ -2755,6 +2756,7 @@ pub fn run() {
         voice_native::voice_native_publish_data,
         voice_native::voice_native_set_screenshare_audio_muted,
         voice_native::voice_native_set_screenshare_audio_volume,
+        voice_native::voice_native_get_screenshare_audio_state,
         voice_native::voice_native_video_port,
         voice_native::voice_native_set_screensharing
     ]);

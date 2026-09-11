@@ -7,9 +7,10 @@ import * as matrixService from "../../services/matrixService";
 import { UserAvatar } from "./UserAvatar";
 import { ArrowLeftIcon } from "../icons";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { SIDEBAR_RAIL_WIDTH } from "../../stores/useLayoutStore";
 import { ImageCropper } from "../chat/ImageCropper";
 
-export function AccountPopover() {
+export function AccountPopover({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const credentials = useAuthStore((s) => s.credentials);
   const updateCredentials = useAuthStore((s) => s.updateCredentials);
@@ -200,6 +201,23 @@ export function AccountPopover() {
         overflowY: 'auto',
         background: 'var(--color-surface-container-low)',
         zIndex: 200,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      } : compact ? {
+        // Rail : le panneau s'ancre juste à droite du rail — calé sur la
+        // largeur du rail il ferait 72px, inutilisable.
+        position: 'fixed',
+        left: SIDEBAR_RAIL_WIDTH + 8,
+        bottom: 16,
+        width: 320,
+        maxHeight: 'calc(100dvh - 80px - env(safe-area-inset-top, 0px))',
+        overflowY: 'auto',
+        background: 'var(--color-surface-container)',
+        borderRadius: 16,
+        padding: 16,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        zIndex: 100,
         display: 'flex',
         flexDirection: 'column',
         gap: 12,

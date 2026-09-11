@@ -138,6 +138,66 @@ body {
   background: var(--color-outline);
 }
 
+/* Poignée de redimensionnement des panneaux (socle layout modulable).
+   6px de zone de préhension, trait visuel de 2px centré qui s'allume au
+   survol et pendant le drag. */
+.panel-resize-handle {
+  flex-shrink: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  position: relative;
+  z-index: 5; /* au-dessus des contenus adjacents, canvas de partage inclus */
+}
+.panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  right: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.panel-resize-handle:hover::after,
+.panel-resize-handle:focus-visible::after {
+  background: var(--color-outline-variant);
+}
+.panel-resize-handle:active::after,
+body.layout-resizing .panel-resize-handle::after {
+  background: var(--color-primary);
+}
+
+/* Variante horizontale (hauteurs : zone de partage d'écran, futurs docks
+   bas). Même épaisseur, hitbox pleine largeur. */
+.panel-resize-handle--horizontal {
+  width: 100%;
+  height: 6px;
+  cursor: row-resize;
+}
+.panel-resize-handle--horizontal::after {
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  right: 0;
+}
+
+/* Pendant un drag de panneau : curseur global cohérent, pas de sélection de
+   texte, et les canvas/vidéos (partage d'écran) ne captent plus le pointeur.
+   Sans ça, WebKitGTK avale les pointermove au-dessus d'eux et le drag
+   décroche au moment de survoler le partage. */
+body.layout-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+body.layout-resizing canvas,
+body.layout-resizing video {
+  pointer-events: none;
+}
+
 /* Animations */
 @keyframes pulse {
   0%, 100% { opacity: 1; }

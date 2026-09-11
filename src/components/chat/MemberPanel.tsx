@@ -4,6 +4,8 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
 import { UserAvatar } from "../sidebar/UserAvatar";
+import { ResizeHandle } from "../layout/ResizeHandle";
+import { useLayoutStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH } from "../../stores/useLayoutStore";
 
 type Role = "admin" | "moderator" | "user";
 
@@ -27,6 +29,10 @@ export function MemberPanel() {
   const showMemberPanel = useAppStore((s) => s.showMemberPanel);
   const toggleMemberPanel = useAppStore((s) => s.toggleMemberPanel);
   const openUserContextMenu = useAppStore((s) => s.openUserContextMenu);
+  // Dock droite : largeur propre à ce panneau (cf. useLayoutStore).
+  const rightPanelWidth = useLayoutStore((s) => s.rightPanelWidths.members);
+  const setRightPanelWidth = useLayoutStore((s) => s.setRightPanelWidth);
+  const resetRightPanelWidth = useLayoutStore((s) => s.resetRightPanelWidth);
   const channels = useMatrixStore((s) => s.channels);
   const channel = channels.find((c) => c.id === activeChannel);
   const [tick, setTick] = useState(0);
@@ -88,9 +94,19 @@ export function MemberPanel() {
   const roleLabel = (r: Role) => r === "admin" ? t("contextMenu.roleAdmin") : r === "moderator" ? t("contextMenu.roleModerator") : t("contextMenu.roleUser");
 
   return (
-    <aside style={{
-      width: 240,
-      flexShrink: 0,
+    <>
+      <ResizeHandle
+        side="left"
+        value={rightPanelWidth}
+        min={RIGHT_PANEL_MIN_WIDTH}
+        max={RIGHT_PANEL_MAX_WIDTH}
+        onChange={(w) => setRightPanelWidth("members", w)}
+        onReset={() => resetRightPanelWidth("members")}
+        label={t("layout.resizeRightPanel", { defaultValue: "Redimensionner le panneau — double-clic pour la taille par défaut" })}
+      />
+      <aside style={{
+        width: rightPanelWidth,
+        flexShrink: 0,
       background: 'var(--color-surface-container-low)',
       borderLeft: '1px solid var(--color-outline-variant)',
       display: 'flex',
@@ -170,6 +186,7 @@ export function MemberPanel() {
           </div>
         ))}
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

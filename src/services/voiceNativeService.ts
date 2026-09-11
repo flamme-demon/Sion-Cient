@@ -103,6 +103,13 @@ export function setVoiceNativeShareAudioMuted(sender: string, muted: boolean): P
   return tauriInvoke<boolean>("voice_native_set_screenshare_audio_muted", { sender, muted });
 }
 
+/** État local du son d'un partage (mute + volume), relu au moteur — sert au
+ *  front pour se recaler après un reload de la webview : le moteur garde ses
+ *  réglages par partageur, pas la mémoire JS. */
+export function getVoiceNativeShareAudioState(sender: string): Promise<{ muted: boolean; volume: number }> {
+  return tauriInvoke<{ muted: boolean; volume: number }>("voice_native_get_screenshare_audio_state", { sender });
+}
+
 export function setVoiceNativeShareAudioVolume(sender: string, volume: number): Promise<boolean> {
   return tauriInvoke<boolean>("voice_native_set_screenshare_audio_volume", { sender, volume });
 }

@@ -4,7 +4,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import type { VerificationStep, EmojiData } from "../../stores/useMatrixStore";
 import { CloseIcon } from "../icons";
 
-export function VerificationBanner() {
+export function VerificationBanner({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const needsVerification = useMatrixStore((s) => s.needsVerification);
   const hasUndecryptableMessages = useMatrixStore((s) => s.hasUndecryptableMessages);
@@ -41,6 +41,10 @@ export function VerificationBanner() {
     }
     prevStepRef.current = verificationStep;
   }, [verificationStep, needsVerification]);
+
+  // Rail : la bannière (flux de vérification, saisie de clé) ne tient pas
+  // dans 72px — on la masque, le déploiement du menu la fait réapparaître.
+  if (compact) return null;
 
   if (!isVisible) return null;
 

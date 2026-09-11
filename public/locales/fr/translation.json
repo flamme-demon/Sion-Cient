@@ -13,6 +13,12 @@
     "save": "Télécharger",
     "alreadySaved": "Déjà téléchargé"
   },
+  "layout": {
+    "resizeSidebar": "Redimensionner le menu — double-clic pour la taille par défaut, Ctrl+B pour replier",
+    "expandSidebar": "Agrandir le menu (Ctrl+B)",
+    "resizeRightPanel": "Redimensionner le panneau — double-clic pour la taille par défaut",
+    "resizeShareView": "Réduire ou agrandir la zone de partage — double-clic pour la taille par défaut"
+  },
   "server": {
     "online": "En ligne",
     "name": "Mon Serveur"

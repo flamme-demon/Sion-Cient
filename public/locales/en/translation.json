@@ -13,6 +13,12 @@
     "save": "Download",
     "alreadySaved": "Already downloaded"
   },
+  "layout": {
+    "resizeSidebar": "Resize the menu — double-click for the default width, Ctrl+B to collapse",
+    "expandSidebar": "Expand menu (Ctrl+B)",
+    "resizeRightPanel": "Resize the panel — double-click for the default width",
+    "resizeShareView": "Shrink or grow the screen share area — double-click for the default size"
+  },
   "server": {
     "online": "Online",
     "name": "My Server"

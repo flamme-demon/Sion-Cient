@@ -8,10 +8,12 @@ import { useAdminStore } from "../../stores/useAdminStore";
 import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 
-export function ServerHeader() {
+export function ServerHeader({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
   const toggleAdmin = useAppStore((s) => s.toggleAdmin);
   const showAdmin = useAppStore((s) => s.showAdmin);
   const toggleSettings = useAppStore((s) => s.toggleSettings);
@@ -51,14 +53,41 @@ export function ServerHeader() {
   return (
     <div style={{
       display: 'flex',
+      flexDirection: compact ? 'column' : 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '16px 16px 12px 16px',
+      gap: compact ? 10 : 0,
+      padding: compact ? '16px 0 12px 0' : '16px 16px 12px 16px',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      {compact ? (
+        // Rail : le logo seul devient le bouton de redéploiement du menu.
+        <button
+          onClick={toggleSidebar}
+          title={t("layout.expandSidebar", { defaultValue: "Agrandir le menu (Ctrl+B)" })}
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 14,
+            border: 'none',
+            cursor: 'pointer',
+            background: 'var(--color-primary-container)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 16,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            color: 'var(--color-on-primary-container)',
+          }}
+        >
+          S
+        </button>
+      ) : (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
         <div style={{
           width: 40,
           height: 40,
+          flexShrink: 0,
           borderRadius: 14,
           background: 'var(--color-primary-container)',
           display: 'flex',
@@ -70,8 +99,8 @@ export function ServerHeader() {
         }}>
           S
         </div>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--color-on-surface)', letterSpacing: '0.01em' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--color-on-surface)', letterSpacing: '0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {serverName}
           </div>
           <div style={{ fontSize: 11, color: 'var(--color-green)', display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
@@ -80,7 +109,8 @@ export function ServerHeader() {
           </div>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      )}
+      <div style={{ display: 'flex', flexDirection: compact ? 'column' : 'row', gap: compact ? 4 : 2, alignItems: 'center' }}>
         {!isMobile && isAdmin !== false && (
           <button
             onClick={toggleAdmin}

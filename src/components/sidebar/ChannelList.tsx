@@ -17,7 +17,7 @@ const SORT_KEYS: Record<ChannelSortMode, string> = {
   activity: "channels.sortActivity",
 };
 
-export function ChannelList() {
+export function ChannelList({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const channels = useMatrixStore((s) => s.channels);
   const connectingVoice = useAppStore((s) => s.connectingVoiceChannel);
@@ -106,8 +106,9 @@ export function ChannelList() {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    padding: '7px 8px',
+    // Rail : boutons d'onglet réduits à leurs icônes.
+    gap: compact ? 0 : 6,
+    padding: compact ? '7px 2px' : '7px 8px',
     border: 'none',
     borderRadius: 10,
     cursor: 'pointer',
@@ -121,15 +122,19 @@ export function ChannelList() {
   });
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: compact ? '4px 6px' : '4px 12px' }}>
       {/* Tabs + sort */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px 8px 12px' }}>
-        <button onClick={() => setSidebarView("channels")} style={{ ...tabStyle(sidebarView === "channels"), position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: compact ? '8px 4px' : '8px 12px 8px 12px' }}>
+        <button
+          onClick={() => setSidebarView("channels")}
+          title={t("channels.tabChannels")}
+          style={{ ...tabStyle(sidebarView === "channels"), position: 'relative' }}
+        >
           <HashIcon />
-          {t("channels.tabChannels")}
+          {!compact && t("channels.tabChannels")}
           {sidebarView !== "channels" && unreadChannels > 0 && (
             <span style={{
-              position: 'absolute', top: 2, right: 2,
+              position: 'absolute', top: 2, right: compact ? 6 : 2,
               minWidth: 8, height: 8,
               borderRadius: 4,
               background: 'var(--color-error)',
@@ -138,6 +143,7 @@ export function ChannelList() {
         </button>
         <button
           onClick={() => setSidebarView("dm")}
+          title={t("channels.tabDM")}
           onContextMenu={async (e) => {
             e.preventDefault();
             const myUserId = useMatrixStore.getState().currentUserId;
@@ -177,16 +183,17 @@ export function ChannelList() {
           style={{ ...tabStyle(sidebarView === "dm"), position: 'relative' }}
         >
           <MessageBubbleIcon />
-          {t("channels.tabDM")}
+          {!compact && t("channels.tabDM")}
           {sidebarView !== "dm" && unreadDMs > 0 && (
             <span style={{
-              position: 'absolute', top: 2, right: 2,
+              position: 'absolute', top: 2, right: compact ? 6 : 2,
               minWidth: 8, height: 8,
               borderRadius: 4,
               background: 'var(--color-error)',
             }} />
           )}
         </button>
+        {!compact && (
         <div ref={menuRef} style={{ position: 'relative', marginLeft: 'auto', flexShrink: 0 }}>
           <button
             onClick={() => setMenuOpen((v) => !v)}
@@ -249,6 +256,7 @@ export function ChannelList() {
             </div>
           )}
         </div>
+        )}
       </div>
       {connectingVoice ? (
         <div style={{
@@ -257,7 +265,8 @@ export function ChannelList() {
           position: 'relative', overflow: 'hidden', borderRadius: 12,
           minHeight: 200,
         }}>
-          <MatrixRain width={236} height={200} />
+          <MatrixRain width={compact ? 52 : 236} height={200} />
+          {!compact && (
           <div style={{
             position: 'absolute', bottom: 16,
             fontSize: 12, fontWeight: 600, color: '#0f0',
@@ -267,11 +276,12 @@ export function ChannelList() {
           }}>
             {t("voice.connecting")}
           </div>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {sortedChannels.map((ch) => (
-            <ChannelItem key={ch.id} channel={ch} />
+            <ChannelItem key={ch.id} channel={ch} compact={compact} />
           ))}
         </div>
       )}

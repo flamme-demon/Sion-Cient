@@ -13,12 +13,12 @@ import { voiceNativePublishData, bytesToB64 } from "./voiceNativeService";
 export const CURSOR_TOPIC = "sion-cursor";
 export const CURSOR_CLICK_TOPIC = "sion-cursor-click";
 
-/** Durée de vie d'un curseur sans nouvelles : 60 s. Un pointeur immobile
- *  pointe toujours quelque chose d'utile — l'effacer (puis le faire
- *  réapparaître ailleurs à la reprise) est perçu comme une téléportation.
- *  Les vrais départs sont nettoyés explicitement (expire, leave), donc une
- *  longue expiration ne laisse que des fantômes de crash. */
-const CURSOR_TTL_MS = 60000;
+/** Durée de vie d'un curseur distant sans nouvelles : 5 s. Passé ce délai,
+ *  un pointeur immobile — ou dont le viewer a changé de fenêtre sans
+ *  déclencher de `leave` — disparaît au lieu de rester figé (le viewer
+ *  envoie aussi un masquage explicite après 5 s d'immobilité ; ce TTL est le
+ *  filet de sécurité). Un flux vivant ré-arme le TTL à chaque position. */
+const CURSOR_TTL_MS = 5000;
 
 /** Expiry for click ripples — the effect itself animates for ~600 ms, so
  *  beyond 800 ms the stored entry is just stale state. */

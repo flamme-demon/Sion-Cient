@@ -23,6 +23,8 @@ import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { loadHotkeys, onHotkeysChange, pruneHotkeys, resyncHotkeys } from "../../services/soundboardHotkeys";
+import { ResizeHandle } from "../layout/ResizeHandle";
+import { useLayoutStore, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH } from "../../stores/useLayoutStore";
 
 // Build a nested tree from "Films/Kamelott" paths so the pill navigation can
 // list top-level categories and drill into sub-categories.
@@ -98,6 +100,10 @@ export function SoundboardPanel() {
   const playCounts = useSettingsStore((s) => s.soundboardPlayCounts);
   const incrementPlay = useSettingsStore((s) => s.incrementSoundboardPlay);
   const refreshRef = useRef<() => void>(() => {});
+  // Dock droite : largeur propre à ce panneau (cf. useLayoutStore).
+  const rightPanelWidth = useLayoutStore((s) => s.rightPanelWidths.soundboard);
+  const setRightPanelWidth = useLayoutStore((s) => s.setRightPanelWidth);
+  const resetRightPanelWidth = useLayoutStore((s) => s.resetRightPanelWidth);
 
   // Apply volume on first render so receivers pick it up
   useEffect(() => {
@@ -331,9 +337,19 @@ export function SoundboardPanel() {
   );
 
   return (
-    <aside style={{
-      width: 360,
-      flexShrink: 0,
+    <>
+      <ResizeHandle
+        side="left"
+        value={rightPanelWidth}
+        min={RIGHT_PANEL_MIN_WIDTH}
+        max={RIGHT_PANEL_MAX_WIDTH}
+        onChange={(w) => setRightPanelWidth("soundboard", w)}
+        onReset={() => resetRightPanelWidth("soundboard")}
+        label={t("layout.resizeRightPanel", { defaultValue: "Redimensionner le panneau — double-clic pour la taille par défaut" })}
+      />
+      <aside style={{
+        width: rightPanelWidth,
+        flexShrink: 0,
       background: 'var(--color-surface-container-low)',
       borderLeft: '1px solid var(--color-outline-variant)',
       display: 'flex',
@@ -353,14 +369,14 @@ export function SoundboardPanel() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '14px 16px 10px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)' }}>{t("soundboard.title")}</span>
-          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{t("soundboard.soundCount", { count: playable.length })}</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t("soundboard.title")}</span>
+          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', flexShrink: 0 }}>{t("soundboard.soundCount", { count: playable.length })}</span>
         </div>
         <button
           onClick={close}
           title={t("soundboard.close")}
-          style={{ border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 20, padding: 2, lineHeight: 1 }}
+          style={{ flexShrink: 0, border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 20, padding: 2, lineHeight: 1 }}
         >×</button>
       </div>
 
@@ -370,9 +386,10 @@ export function SoundboardPanel() {
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Tabs — défilement horizontal (masqué) pour ne jamais rogner quand le
+          panneau est étroit. */}
       {roomId && (canUpload || canManageMembers) && (
-        <div style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)' }}>
+        <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)', overflowX: 'auto' }}>
           {([
             { key: "sounds" as const, label: t("soundboard.tabSounds"), show: true },
             { key: "voices" as const, label: t("tts.tab"), show: canUpload },
@@ -383,7 +400,7 @@ export function SoundboardPanel() {
               onClick={() => setTab(x.key)}
               style={{
                 padding: '8px 0', border: 'none', background: 'transparent', cursor: 'pointer',
-                fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                fontSize: 13, fontWeight: 600, fontFamily: 'inherit', flexShrink: 0, whiteSpace: 'nowrap',
                 borderBottom: tab === x.key ? '2px solid var(--color-primary)' : '2px solid transparent',
                 color: tab === x.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
               }}
@@ -441,9 +458,11 @@ export function SoundboardPanel() {
 
       {roomId && tab === "sounds" && (
         <>
-          {/* Search + add */}
+          {/* Search + add — le conteneur de l'input doit pouvoir se comprimer
+              (minWidth 0), sinon la ligne déborde et rogne le bouton « + »
+              quand le panneau est étroit. */}
           <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center' }}>
               <span style={{ position: 'absolute', left: 12, color: 'var(--color-on-surface-variant)', display: 'flex', pointerEvents: 'none' }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -454,9 +473,10 @@ export function SoundboardPanel() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t("soundboard.searchPlaceholder")}
                 style={{
-                  flex: 1, padding: '9px 12px 9px 34px', borderRadius: 12,
+                  flex: 1, minWidth: 0, padding: '9px 12px 9px 34px', borderRadius: 12,
                   border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-container)',
                   color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', outline: 'none',
+                  boxSizing: 'border-box',
                 }}
               />
             </div>
@@ -688,6 +708,7 @@ export function SoundboardPanel() {
           onUploaded={() => { setEditTarget(null); refreshRef.current(); }}
         />
       )}
-    </aside>
+      </aside>
+    </>
   );
 }

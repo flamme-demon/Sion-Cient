@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon } from "../icons";
 import { ChannelIcon } from "./ChannelIcon";
 import { UserAvatar } from "./UserAvatar";
@@ -66,7 +66,7 @@ function getParticipantInfo(identity: string, roomId: string | null, localUserId
   return { name: localpart, avatarUrl: undefined, isLocal: false };
 }
 
-export function ChannelItem({ channel }: { channel: Channel }) {
+export function ChannelItem({ channel, compact = false }: { channel: Channel; compact?: boolean }) {
   const activeChannel = useAppStore((s) => s.activeChannel);
   const connectedVoiceChannel = useAppStore((s) => s.connectedVoiceChannel);
   const setActiveChannel = useAppStore((s) => s.setActiveChannel);
@@ -204,6 +204,50 @@ export function ChannelItem({ channel }: { channel: Channel }) {
       });
   }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened, matrixConnected]);
 
+  // Carte de survol (rail uniquement) : au survol d'un salon vocal occupé, on
+  // ouvre à droite du rail une lecture confortable — avatars 36px (UserAvatar
+  // complet : anneaux parole/soundboard, badge emoji), pseudos, badges
+  // AFK/micro, clic droit → menu utilisateur. ~140 ms à l'ouverture pour ne
+  // pas flasher au passage de la souris, ~240 ms de grâce à la fermeture pour
+  // laisser le temps de voyager du bouton vers la carte.
+  const showHoverCard = compact && channel.hasVoice && voiceUsers.length > 0;
+  const [hoverCard, setHoverCard] = useState<{ left: number; top: number } | null>(null);
+  const hoverOpenTimerRef = useRef<number | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+
+  const openHoverCard = (e: React.MouseEvent<HTMLElement>) => {
+    if (!showHoverCard) return;
+    if (hoverCloseTimerRef.current) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+    if (hoverCard || hoverOpenTimerRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    hoverOpenTimerRef.current = window.setTimeout(() => {
+      hoverOpenTimerRef.current = null;
+      setHoverCard({ left: rect.right + 10, top: rect.top });
+    }, 140);
+  };
+
+  const closeHoverCard = () => {
+    if (hoverOpenTimerRef.current) {
+      window.clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
+    }
+    if (hoverCloseTimerRef.current) window.clearTimeout(hoverCloseTimerRef.current);
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null;
+      setHoverCard(null);
+    }, 240);
+  };
+
+  // Nettoyage : un démontage (changement de salon) ne doit pas laisser un
+  // timer orphelin faire un setState fantôme.
+  useEffect(() => () => {
+    if (hoverOpenTimerRef.current) window.clearTimeout(hoverOpenTimerRef.current);
+    if (hoverCloseTimerRef.current) window.clearTimeout(hoverCloseTimerRef.current);
+  }, []);
+
   // Context menu state (right-click on a DM offers "leave conversation")
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const closeCtxMenu = () => setCtxMenu(null);
@@ -239,6 +283,13 @@ export function ChannelItem({ channel }: { channel: Channel }) {
       <button
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onMouseEnter={openHoverCard}
+        onMouseLeave={closeHoverCard}
+        title={compact && !hoverCard
+          ? (channel.hasVoice && voiceUsers.length > 0
+              ? `${channel.name} — ${voiceUsers.map((u) => u.name).join(", ")}`
+              : channel.name)
+          : undefined}
         onContextMenu={(e) => {
           if (!channel.isDM) return;
           e.preventDefault();
@@ -248,8 +299,12 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           width: '100%',
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
-          padding: '10px 16px',
+          position: 'relative',
+          // Rail : icône seule, centrée (le nom passe en infobulle). Les
+          // salons vocaux occupés gagnent une rangée d'avatars sous l'icône.
+          gap: compact ? 0 : 10,
+          justifyContent: compact ? 'center' : undefined,
+          padding: compact ? (channel.hasVoice && voiceUsers.length > 0 ? '6px 0' : '9px 0') : '10px 16px',
           borderRadius: 28,
           border: 'none',
           cursor: 'pointer',
@@ -263,11 +318,126 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           letterSpacing: '0.01em',
         }}
       >
-        <ChannelIcon icon={channel.icon} />
+        {compact && channel.hasVoice && voiceUsers.length > 0 ? (
+          // Rail + vocal occupé : l'icône du salon surmonte une rangée de
+          // mini-avatars (3 max + « +N ») — on voit qui est là sans déployer.
+          // Anneau vert sur les parleurs quand on est connecté au salon.
+          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <ChannelIcon icon={channel.icon} />
+            <span style={{ display: 'flex', alignItems: 'center' }}>
+              {voiceUsers.slice(0, 3).map((u, i) => {
+                // Mêmes états que le mode déployé, adaptés à 16px :
+                //  - anneau jaune pendant un son du soundboard (il prime sur le
+                //    vert, comme UserAvatar), sinon anneau vert du parleur ;
+                //  - AFK : avatar assombri + badge casque barré en coin.
+                const ringColor = u.playingSoundEmoji
+                  ? 'var(--color-yellow)'
+                  : isConnectedChannel && u.speaking ? 'var(--color-green)' : null;
+                const badge = u.playingSoundEmoji ? 'sound' : u.deafened ? 'afk' : u.muted ? 'muted' : null;
+                return (
+                  <span
+                    key={u.id}
+                    title={u.deafened ? `${u.name} — AFK (sourdine)` : u.muted ? `${u.name} — micro coupé` : u.name}
+                    style={{ position: 'relative', display: 'inline-flex', flexShrink: 0, marginLeft: i === 0 ? 0 : -7 }}
+                  >
+                    <span
+                      style={{
+                        width: 20, height: 20, borderRadius: '50%',
+                        border: '2px solid var(--color-surface-container-low)',
+                        background: u.avatarUrl ? `center/cover no-repeat url(${u.avatarUrl})` : 'var(--color-surface-container-highest)',
+                        color: 'var(--color-on-surface)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 9, fontWeight: 700, overflow: 'hidden',
+                        opacity: u.deafened ? 0.55 : 1,
+                        boxShadow: ringColor ? `0 0 0 2px ${ringColor}` : undefined,
+                      }}
+                    >
+                      {!u.avatarUrl && (Array.from(u.name)[0] || '?').toUpperCase()}
+                    </span>
+                    {badge === 'sound' && (
+                      <span
+                        aria-hidden
+                        style={{
+                          position: 'absolute', bottom: -4, right: -4, zIndex: 2,
+                          width: 12, height: 12, borderRadius: '50%',
+                          background: 'var(--color-surface-container-low)',
+                          border: '1.5px solid var(--color-yellow)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 8, lineHeight: 1, pointerEvents: 'none',
+                        }}
+                      >
+                        {u.playingSoundEmoji}
+                      </span>
+                    )}
+                    {badge === 'afk' && (
+                      <span
+                        aria-hidden
+                        style={{
+                          position: 'absolute', bottom: -4, right: -4, zIndex: 2,
+                          width: 14, height: 14, borderRadius: '50%', overflow: 'hidden',
+                          background: 'var(--color-surface-container-highest)',
+                          border: '1.5px solid var(--color-surface-container-low)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        <span style={{ display: 'flex', transform: 'scale(0.6)' }}>
+                          <HeadphoneIcon muted />
+                        </span>
+                      </span>
+                    )}
+                    {badge === 'muted' && (
+                      // Micro coupé (sans AFK) : même badge que la grande
+                      // liste, indispensable en rail où il n'y a pas de place
+                      // pour le détail.
+                      <span
+                        aria-hidden
+                        style={{
+                          position: 'absolute', bottom: -4, right: -4, zIndex: 2,
+                          width: 14, height: 14, borderRadius: '50%', overflow: 'hidden',
+                          background: 'var(--color-surface-container-highest)',
+                          border: '1.5px solid var(--color-surface-container-low)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        <span style={{ display: 'flex', transform: 'scale(0.6)' }}>
+                          <MicIcon muted />
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                );
+              })}
+              {voiceUsers.length > 3 && (
+                <span
+                  title={voiceUsers.slice(3).map((u) => u.name).join(", ")}
+                  style={{
+                    height: 20, minWidth: 20, padding: '0 3px', borderRadius: 999, flexShrink: 0,
+                    marginLeft: -7, border: '2px solid var(--color-surface-container-low)',
+                    background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface-variant)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700,
+                  }}
+                >+{voiceUsers.length - 3}</span>
+              )}
+            </span>
+          </span>
+        ) : (
+          <ChannelIcon icon={channel.icon} />
+        )}
+        {!compact && (
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
           {channel.isDM ? `💬 ${channel.name}` : channel.name}
         </span>
+        )}
         {unreadCount > 0 && !isActive && (
+          compact ? (
+            <span style={{
+              position: 'absolute', top: 4, right: 8,
+              minWidth: 8, height: 8, borderRadius: 4,
+              background: 'var(--color-error)',
+            }} />
+          ) : (
           <span style={{
             minWidth: 18, height: 18, padding: '0 5px',
             borderRadius: 9,
@@ -280,9 +450,18 @@ export function ChannelItem({ channel }: { channel: Channel }) {
           }}>
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
+          )
         )}
         {channel.hasVoice && (
-          voiceUsers.length > 0 ? (
+          compact ? (
+            // Les mini-avatars ci-dessus portent déjà la présence ; sans
+            // personne dans le salon, l'icône haut-parleur suffit.
+            voiceUsers.length > 0 ? null : (
+              <span style={{ position: 'absolute', bottom: 3, right: 8, display: 'flex', color: isConnectedChannel ? 'var(--color-green)' : 'var(--color-outline)' }}>
+                <SpeakerIcon />
+              </span>
+            )
+          ) : voiceUsers.length > 0 ? (
             <span
               onClick={(e) => { if (!isConnectedChannel) { e.stopPropagation(); setExpandedVoice((v) => !v); } }}
               style={{ display: 'flex', alignItems: 'center', flexShrink: 0, cursor: isConnectedChannel ? 'inherit' : 'pointer' }}
@@ -321,9 +500,91 @@ export function ChannelItem({ channel }: { channel: Channel }) {
         )}
       </button>
 
+      {/* Carte de survol du rail (voir `openHoverCard`) : lecture confortable
+          des occupants — avatars 36px avec leurs états, pseudos, badges.
+          `position: fixed` échappe à l'`overflow` de la liste. */}
+      {hoverCard && showHoverCard && (
+        <div
+          onMouseEnter={openHoverCard}
+          onMouseLeave={closeHoverCard}
+          style={{
+            position: 'fixed',
+            left: hoverCard.left,
+            top: Math.max(8, Math.min(hoverCard.top, window.innerHeight - (68 + voiceUsers.length * 46 + 16))),
+            zIndex: 300,
+            background: 'var(--color-surface-container-high)',
+            borderRadius: 16,
+            padding: '10px 10px 8px 10px',
+            minWidth: 208,
+            maxWidth: 280,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 6px 8px 6px' }}>
+            <span style={{ display: 'flex', color: isConnectedChannel ? 'var(--color-green)' : 'var(--color-on-surface-variant)' }}>
+              <SpeakerIcon />
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {channel.name}
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--color-on-surface-variant)', flexShrink: 0 }}>
+              {voiceUsers.length}
+            </span>
+          </div>
+          {voiceUsers.map((u) => (
+            <div
+              key={u.id}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openUserContextMenu({ userId: u.id, userName: u.name, x: e.clientX, y: e.clientY });
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 6px', borderRadius: 10, cursor: 'default' }}
+            >
+              <UserAvatar
+                name={u.name}
+                speaking={isConnectedChannel && u.speaking}
+                size="md"
+                avatarUrl={u.avatarUrl || undefined}
+                playingSoundEmoji={isConnectedChannel ? u.playingSoundEmoji : undefined}
+              />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: 'var(--color-on-surface)', opacity: u.deafened ? 0.6 : 1 }}>
+                {u.name}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, opacity: 0.75 }}>
+                {/* Parité avec la liste déployée : rôle (couronne/bouclier),
+                    badge AFK, micro, casque, qualité réseau — rien ne manque. */}
+                {u.role !== "user" && (
+                  <span style={{ display: 'flex', color: roleColor(u.role), flexShrink: 0 }}>{roleIcon(u.role)}</span>
+                )}
+                {u.deafened && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+                    padding: '1px 5px', borderRadius: 6,
+                    background: 'var(--color-surface-container)',
+                    color: 'var(--color-on-surface-variant)',
+                  }}>
+                    AFK
+                  </span>
+                )}
+                {u.muted && !u.deafened && <MicIcon muted />}
+                {u.deafened && <HeadphoneIcon muted />}
+                {u.connectionQuality && u.connectionQuality !== "excellent" && u.connectionQuality !== "unknown" && (
+                  <SignalBarsIcon quality={u.connectionQuality} size={12} />
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Voice users — full detail only for your connected channel, or when you
-          click the stacked avatars to peek at another channel. */}
-      {channel.hasVoice && voiceUsers.length > 0 && (isConnectedChannel || expandedVoice) && (
+          click the stacked avatars to peek at another channel. Jamais en rail :
+          les noms ne tiennent pas dans 72px, la pastille suffit. */}
+      {!compact && channel.hasVoice && voiceUsers.length > 0 && (isConnectedChannel || expandedVoice) && (
         <div style={{
           display: 'flex',
           flexDirection: 'column',

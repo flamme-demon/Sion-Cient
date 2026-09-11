@@ -21,7 +21,7 @@ function TranscriptIcon({ active }: { active: boolean }) {
   );
 }
 
-export function UserControls() {
+export function UserControls({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const isMuted = useAppStore((s) => s.isMuted);
   const isDeafened = useAppStore((s) => s.isDeafened);
@@ -94,15 +94,33 @@ export function UserControls() {
 
   return (
     <div style={{
-      padding: '12px 12px 16px 12px',
+      padding: compact ? '12px 8px 16px 8px' : '12px 12px 16px 12px',
       background: 'var(--color-surface-container)',
       position: 'relative',
+      display: compact ? 'flex' : undefined,
+      flexDirection: compact ? 'column' : undefined,
+      alignItems: compact ? 'center' : undefined,
+      gap: compact ? 8 : undefined,
     }}>
-      <AccountPopover />
+      <AccountPopover compact={compact} />
 
       {/* Horloge décalée : l'utilisateur ne voit plus personne en vocal et les
           autres ne le voient plus non plus, sans qu'aucun symptôme ne l'explique. */}
       {clockSkewMin !== 0 && (
+        compact ? (
+          // Rail : pastille d'alerte, le détail complet passe en infobulle.
+          <div
+            title={t("voice.clockSkew", { minutes: Math.abs(clockSkewMin) })}
+            style={{
+              width: 32, height: 32, borderRadius: 10, flexShrink: 0,
+              background: 'var(--color-error-container)', color: 'var(--color-error)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 15, fontWeight: 700, cursor: 'help',
+            }}
+          >
+            !
+          </div>
+        ) : (
         <div style={{
           marginBottom: 10, padding: '8px 10px', borderRadius: 12,
           background: 'var(--color-error-container)', color: 'var(--color-on-error-container)',
@@ -110,9 +128,61 @@ export function UserControls() {
         }}>
           {t("voice.clockSkew", { minutes: Math.abs(clockSkewMin) })}
         </div>
+        )
       )}
 
       {inVoice && (
+        compact ? (
+          // Rail : la carte vocale se réduit à une colonne d'icônes — état,
+          // récupération E2EE, micro, son, transcription, raccrocher.
+          <div style={{
+            padding: '8px 0', borderRadius: 12, width: '100%', flexShrink: 0,
+            background: 'var(--color-surface-container-high)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+          }}>
+            <span
+              title={`${t("voice.connected")} — ${activeVoice.name}`}
+              style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--color-green)', animation: 'pulse 2s infinite', cursor: 'help' }}
+            />
+            {(e2eeUnhealthy || republished) && (
+              <button
+                onClick={handleRepublish}
+                title={t("voice.republishPresence")}
+                style={{
+                  border: 'none', cursor: 'pointer', padding: 8, borderRadius: 10, display: 'flex',
+                  background: republished ? 'var(--color-primary-container)' : 'var(--color-error-container)',
+                  color: republished ? 'var(--color-primary)' : 'var(--color-error)',
+                  transition: 'all 150ms',
+                }}
+              >
+                <RefreshIcon />
+              </button>
+            )}
+            <button onClick={() => toggleMute()} style={iconBtnStyle(isMuted)} title={isMuted ? t("controls.unmute") : t("controls.mute")}>
+              <MicIcon muted={isMuted} />
+            </button>
+            <button onClick={toggleDeafen} style={iconBtnStyle(isDeafened)} title={isDeafened ? t("controls.undeafen") : t("controls.deafen")}>
+              <HeadphoneIcon muted={isDeafened} />
+            </button>
+            <button
+              onClick={() => useTranscriptStore.getState().setPanelOpen(!transcriptPanelOpen)}
+              title={t("transcript.togglePanel", { defaultValue: "Transcription de la réunion" })}
+              style={iconBtnStyle(transcriptPanelOpen || transcriptState === 'on' || transcriptInvites > 0, 'accent')}
+            >
+              <TranscriptIcon active={transcriptState === 'on'} />
+            </button>
+            <button
+              onClick={() => connectedVoice && leaveVoiceChannel(connectedVoice)}
+              title={t("voice.disconnect")}
+              style={{
+                border: 'none', cursor: 'pointer', padding: 8, borderRadius: 12, display: 'flex',
+                background: 'var(--color-error-container)', color: 'var(--color-error)',
+              }}
+            >
+              <DisconnectIcon />
+            </button>
+          </div>
+        ) : (
         <div style={{
           marginBottom: 10, padding: 10, borderRadius: 12,
           background: 'var(--color-surface-container-high)',
@@ -198,9 +268,32 @@ export function UserControls() {
             )}
           </button>
         </div>
+        )
       )}
 
       {/* User row */}
+      {compact ? (
+        // Rail : avatar (ouvre le panneau compte) puis les actions en colonne.
+        // En vocal, micro/son/transcription vivent déjà dans la carte ci-dessus.
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, marginTop: 'auto', flexShrink: 0 }}>
+          <div onClick={toggleAccountPanel} title={displayName} style={{ cursor: 'pointer', display: 'flex' }}>
+            <UserAvatar name={displayName} speaking={false} size="md" avatarUrl={avatarUrl} />
+          </div>
+          {!inVoice && (
+            <>
+              <button onClick={() => toggleMute()} style={iconBtnStyle(isMuted)} title={isMuted ? t("controls.unmute") : t("controls.mute")}>
+                <MicIcon muted={isMuted} />
+              </button>
+              <button onClick={toggleDeafen} style={iconBtnStyle(isDeafened)} title={isDeafened ? t("controls.undeafen") : t("controls.deafen")}>
+                <HeadphoneIcon muted={isDeafened} />
+              </button>
+            </>
+          )}
+          <button onClick={toggleSettings} data-panel-toggle style={iconBtnStyle(showSettings, 'accent')} title={t("settings.title")}>
+            <SettingsIcon />
+          </button>
+        </div>
+      ) : (
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div onClick={toggleAccountPanel} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
           <UserAvatar name={displayName} speaking={false} size="md" avatarUrl={avatarUrl} />
@@ -226,6 +319,7 @@ export function UserControls() {
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }

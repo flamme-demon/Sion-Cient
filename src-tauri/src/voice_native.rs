@@ -867,7 +867,15 @@ fn forward_cursor_to_overlay(topic: Option<&str>, payload_b64: &str, sender: &st
         .unwrap_or_else(|e| e.into_inner())
         .identity
         .clone();
-    if payload.t.as_deref() != self_identity.as_deref() {
+    // Masquage SANS cible = « je ne pointe plus AUCUN partage » (blur,
+    // minimisation, fermeture de l'app) : il doit effacer notre overlay
+    // aussi, sinon un alt-tab ou un redémarrage laissait un curseur fantôme
+    // jusqu'au TTL. Une position sans cible reste ignorée — ambiguë avec
+    // plusieurs partages concurrents.
+    let untargeted_expire = topic == Some(TOPIC_CURSOR)
+        && payload.expire == Some(true)
+        && payload.t.is_none();
+    if payload.t.as_deref() != self_identity.as_deref() && !untargeted_expire {
         // Throttle : 3 premières occurrences seulement (sinon 60 logs/s).
         static MISMATCH_LOGS: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(0);
@@ -913,7 +921,14 @@ fn forward_cursor_to_overlay(topic: Option<&str>, payload_b64: &str, sender: &st
                 name,
                 x,
                 y,
-                now + 60_000,
+                // TTL court (5 s) : un curseur qui n'a plus bougé — ou dont
+                // le viewer a changé de fenêtre sans envoyer de `leave` —
+                // s'efface tout seul au sweep (l'overlay programme un réveil
+                // `WaitUntil` sur l'expiration). Un flux vivant ré-arme le
+                // TTL à chaque position (~60 Hz). Avant, 60 s laissaient une
+                // flèche fantôme figée sur l'écran du partageur après un
+                // alt-tab.
+                now + 5_000,
             );
         }
     }
@@ -2005,6 +2020,36 @@ pub fn voice_native_set_screenshare_audio_volume(
     #[allow(unreachable_code)]
     {
         let _ = (&app, &sender, &volume);
+        Err("voix native indisponible".to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeShareAudioState {
+    muted: bool,
+    volume: f32,
+}
+
+/// État local du son d'un partage (mute + volume). Le front s'en sert pour se
+/// recaler au chargement : le moteur garde ses réglages par partageur à
+/// travers un reload de la webview, pas la mémoire JS — sans ce recalage,
+/// l'UI affichait « non muté / à fond » pour une piste restée coupée.
+#[tauri::command]
+pub fn voice_native_get_screenshare_audio_state(
+    app: tauri::AppHandle<TauriRuntime>,
+    sender: String,
+) -> Result<NativeShareAudioState, String> {
+    #[cfg(feature = "native-voice")]
+    {
+        return with_engine(&app, "état du son du partage natif", |e| {
+            let (muted, volume) = e.screenshare_audio_state(&sender);
+            Ok(NativeShareAudioState { muted, volume })
+        });
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&app, &sender);
         Err("voix native indisponible".to_string())
     }
 }
