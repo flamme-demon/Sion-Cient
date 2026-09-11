@@ -36,9 +36,9 @@ const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
 // dans un éditeur. Le chat reste épinglé au centre (jamais déplaçable).
 
 export type DockPanelId = "members" | "soundboard" | "transcript" | "voice";
-export type DockZoneId = "right" | "bottom";
+export type DockZoneId = "top" | "right" | "bottom";
 
-export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["right", "bottom"];
+export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["top", "right", "bottom"];
 
 /** Zone où un panneau s'ouvre par défaut (l'utilisateur peut le déplacer).
  *  Le bloc « connexion vocale » vient du menu latéral : son défaut logique
@@ -58,6 +58,10 @@ export const DOCK_SIDE_DEFAULT_SIZE = 360;
 export const DOCK_BOTTOM_MIN_SIZE = 140;
 export const DOCK_BOTTOM_MAX_SIZE = 520;
 export const DOCK_BOTTOM_DEFAULT_SIZE = 240;
+/** Zone haute : bandeau fin (barre vocale, onglets) — plus court par nature. */
+export const DOCK_TOP_MIN_SIZE = 64;
+export const DOCK_TOP_MAX_SIZE = 400;
+export const DOCK_TOP_DEFAULT_SIZE = 96;
 
 export interface DockZoneState {
   /** Onglets de la zone, dans l'ordre d'affichage. */
@@ -85,12 +89,18 @@ export const FLOATING_PANEL_MIN_H = 200;
  *  chantier — et le menu reste simple). */
 export const FLOATING_PANEL_MAX = 2;
 
-const clampDockSize = (zone: DockZoneId, size: number) =>
-  zone === "right"
-    ? Math.min(DOCK_SIDE_MAX_SIZE, Math.max(DOCK_SIDE_MIN_SIZE, size))
-    : Math.min(DOCK_BOTTOM_MAX_SIZE, Math.max(DOCK_BOTTOM_MIN_SIZE, size));
+const clampDockSize = (zone: DockZoneId, size: number) => {
+  if (zone === "right") {
+    return Math.min(DOCK_SIDE_MAX_SIZE, Math.max(DOCK_SIDE_MIN_SIZE, size));
+  }
+  const [min, max] = zone === "top"
+    ? [DOCK_TOP_MIN_SIZE, DOCK_TOP_MAX_SIZE]
+    : [DOCK_BOTTOM_MIN_SIZE, DOCK_BOTTOM_MAX_SIZE];
+  return Math.min(max, Math.max(min, size));
+};
 
 const defaultDockZones = (): Record<DockZoneId, DockZoneState> => ({
+  top: { panels: [], active: null, size: DOCK_TOP_DEFAULT_SIZE },
   right: { panels: [], active: null, size: DOCK_SIDE_DEFAULT_SIZE },
   bottom: { panels: [], active: null, size: DOCK_BOTTOM_DEFAULT_SIZE },
 });
@@ -424,6 +434,7 @@ export const useLayoutStore = create<LayoutState>()(
           }
           return {
             dockZones: {
+              top: { ...s.dockZones.top, panels: [], active: null },
               right: { ...s.dockZones.right, panels: [], active: null },
               bottom: { ...s.dockZones.bottom, panels: [], active: null },
             },
@@ -464,7 +475,7 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: "sion-layout",
-      version: 3,
+      version: 4,
       // L'état de drag (panneau saisi / zone survolée) est éphémère : il ne
       // doit jamais être réhydraté au lancement.
       partialize: (s) => ({
@@ -478,6 +489,23 @@ export const useLayoutStore = create<LayoutState>()(
         shareDock: s.shareDock,
         shareFloating: s.shareFloating,
       }),
+      // Réparation défensive : quel que soit l'état persisté (version
+      // intermédiaire, zone ajoutée plus tard…), les trois zones DOIVENT
+      // exister — une zone manquante faisait planter la dock au premier rendu
+      // (écran blanc). Le `merge` tourne après `migrate`, à chaque
+      // réhydratation.
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as Partial<LayoutState>;
+        return {
+          ...current,
+          ...saved,
+          dockZones: {
+            ...defaultDockZones(),
+            ...(saved.dockZones ?? {}),
+          },
+          floatingPanels: saved.floatingPanels ?? {},
+        } as LayoutState;
+      },
       // v1 → v2 : largeur unique de la dock → largeur par panneau.
       // v2 → v3 : les trois largeurs par panneau → une taille pour la zone
       // droite (la plus large des trois, pour ne rien rétrécir), et les zones
@@ -500,6 +528,7 @@ export const useLayoutStore = create<LayoutState>()(
             ? Math.max(legacy.members ?? 0, legacy.soundboard ?? 0, legacy.transcript ?? 0)
             : 0;
           state.dockZones = {
+            top: { panels: [], active: null, size: DOCK_TOP_DEFAULT_SIZE },
             right: {
               panels: [],
               active: null,
@@ -507,6 +536,15 @@ export const useLayoutStore = create<LayoutState>()(
             },
             bottom: { panels: [], active: null, size: DOCK_BOTTOM_DEFAULT_SIZE },
           };
+        }
+        if (version < 4) {
+          // v3 → v4 : apparition de la zone HAUTE (barre vocale en long).
+          // Un état v3 n'a que right/bottom : sans ce bloc, `dockZones.top`
+          // serait `undefined` et la dock planterait au premier rendu.
+          state.dockZones = {
+            top: { panels: [], active: null, size: DOCK_TOP_DEFAULT_SIZE },
+            ...(state.dockZones ?? {}),
+          } as Record<DockZoneId, DockZoneState>;
         }
         delete state.rightPanelWidth;
         delete state.rightPanelWidths;

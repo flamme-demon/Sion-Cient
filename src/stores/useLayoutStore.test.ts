@@ -64,6 +64,9 @@ const reset = () =>
     sidebarWidth: K.DEFAULT,
     sidebarMode: "full",
     dockZones: {
+      // 96 = DOCK_TOP_DEFAULT_SIZE (bandeau haut) — répété ici comme les
+      // bornes des cartes flottantes : toute dérive doit se voir dans le diff.
+      top: { panels: [], active: null, size: 96 },
       right: { panels: [], active: null, size: K.ZONE_DEFAULT },
       bottom: { panels: [], active: null, size: K.BOTTOM_DEFAULT },
     },
@@ -186,6 +189,25 @@ describe("useLayoutStore — dock à zones (§1.6)", () => {
     expect(s().dockZones.bottom.size).toBe(K.BOTTOM_MIN);
     s().setDockZoneSize("bottom", 9999);
     expect(s().dockZones.bottom.size).toBe(K.BOTTOM_MAX);
+  });
+
+  it("borne aussi le bandeau HAUT (plus court par nature : 64→400)", () => {
+    const s = () => useLayoutStore.getState();
+
+    s().setDockZoneSize("top", 10);
+    expect(s().dockZones.top.size).toBe(64);
+    s().setDockZoneSize("top", 9999);
+    expect(s().dockZones.top.size).toBe(400);
+  });
+
+  it("un panneau se déplace aussi vers le bandeau haut", () => {
+    const s = () => useLayoutStore.getState();
+
+    s().openDockPanel("members");
+    s().moveDockPanel("members", "top");
+    expect(s().dockZones.top.panels).toEqual(["members"]);
+    expect(s().dockZones.top.active).toBe("members");
+    expect(s().dockZones.right.panels).toEqual([]);
   });
 
   it("ouvre, active, déplace et ferme les panneaux de la dock", () => {

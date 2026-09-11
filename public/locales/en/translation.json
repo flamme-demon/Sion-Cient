@@ -31,6 +31,7 @@
     "moveToBottom": "Move to bottom",
     "moveToRight": "Move to the right",
     "closePanel": "Close the panel",
+    "moveToTop": "Move to the top",
     "dropHere": "Drop here",
     "dragPanel": "Drag to move the panel to the other zone",
     "floatPanel": "Detach as a floating window",

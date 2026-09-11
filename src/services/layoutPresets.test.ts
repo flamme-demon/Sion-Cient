@@ -34,6 +34,7 @@ const reset = () => {
     shareDock: "inline",
     shareViewMaxVh: VH.DEFAULT,
     dockZones: {
+      top: { panels: [], active: null, size: 96 },
       right: { panels: [], active: null, size: 360 },
       bottom: { panels: [], active: null, size: 240 },
     },

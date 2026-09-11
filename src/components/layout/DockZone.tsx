@@ -4,12 +4,16 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import {
   useLayoutStore,
+  DOCK_ZONE_IDS,
   DOCK_SIDE_MIN_SIZE,
   DOCK_SIDE_MAX_SIZE,
   DOCK_SIDE_DEFAULT_SIZE,
   DOCK_BOTTOM_MIN_SIZE,
   DOCK_BOTTOM_MAX_SIZE,
   DOCK_BOTTOM_DEFAULT_SIZE,
+  DOCK_TOP_MIN_SIZE,
+  DOCK_TOP_MAX_SIZE,
+  DOCK_TOP_DEFAULT_SIZE,
   type DockPanelId,
   type DockZoneId,
 } from "../../stores/useLayoutStore";
@@ -117,17 +121,22 @@ function ZoneMenu({ panel, zone }: { panel: DockPanelId; zone: DockZoneId }) {
             borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
           }}
         >
-          <button
-            role="menuitem"
-            onClick={() => { useLayoutStore.getState().moveDockPanel(panel, zone === "right" ? "bottom" : "right"); setOpen(false); }}
-            style={itemStyle}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            {zone === "right"
-              ? t("layout.moveToBottom", { defaultValue: "Déplacer en bas" })
-              : t("layout.moveToRight", { defaultValue: "Déplacer à droite" })}
-          </button>
+          {DOCK_ZONE_IDS.filter((z) => z !== zone).map((z) => (
+            <button
+              key={z}
+              role="menuitem"
+              onClick={() => { useLayoutStore.getState().moveDockPanel(panel, z); setOpen(false); }}
+              style={itemStyle}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              {z === "top"
+                ? t("layout.moveToTop", { defaultValue: "Déplacer en haut" })
+                : z === "right"
+                  ? t("layout.moveToRight", { defaultValue: "Déplacer à droite" })
+                  : t("layout.moveToBottom", { defaultValue: "Déplacer en bas" })}
+            </button>
+          ))}
           <button
             role="menuitem"
             onClick={() => { useLayoutStore.getState().floatDockPanel(panel); setOpen(false); }}
@@ -186,6 +195,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
 
   const visible = zoneState.panels.filter((p) => availability[p]);
   const isRight = zone === "right";
+  const isTop = zone === "top";
   const dropActive = dragOverZone === zone && !!draggingPanel;
 
   // Zone vide : elle n'est pas rendue… sauf pendant un drag, où elle devient
@@ -205,7 +215,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
       >{t("layout.dropHere", { defaultValue: "Déposer ici" })}</div>
     ) : (
       <div
-        data-dock-zone="bottom"
+        data-dock-zone={zone}
         style={{
           height: dropActive ? 104 : 64, flexShrink: 0, margin: 6, borderRadius: 12,
           border: '2px dashed var(--color-outline-variant)',
@@ -219,9 +229,9 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
 
   const active = zoneState.active && visible.includes(zoneState.active) ? zoneState.active : visible[0];
   const PanelBody = PANEL_BODIES[active];
-  const min = isRight ? DOCK_SIDE_MIN_SIZE : DOCK_BOTTOM_MIN_SIZE;
-  const max = isRight ? DOCK_SIDE_MAX_SIZE : DOCK_BOTTOM_MAX_SIZE;
-  const defaultSize = isRight ? DOCK_SIDE_DEFAULT_SIZE : DOCK_BOTTOM_DEFAULT_SIZE;
+  const min = isRight ? DOCK_SIDE_MIN_SIZE : isTop ? DOCK_TOP_MIN_SIZE : DOCK_BOTTOM_MIN_SIZE;
+  const max = isRight ? DOCK_SIDE_MAX_SIZE : isTop ? DOCK_TOP_MAX_SIZE : DOCK_BOTTOM_MAX_SIZE;
+  const defaultSize = isRight ? DOCK_SIDE_DEFAULT_SIZE : isTop ? DOCK_TOP_DEFAULT_SIZE : DOCK_BOTTOM_DEFAULT_SIZE;
 
   const bar = (
     <div style={{
@@ -279,7 +289,9 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
 
   const handle = (
     <ResizeHandle
-      side={isRight ? "left" : "top"}
+      // Le bord INTÉRIEUR de la zone : gauche pour la colonne droite, bas pour
+      // le bandeau haut, haut pour le bandeau bas.
+      side={isRight ? "left" : isTop ? "bottom" : "top"}
       value={zoneState.size}
       min={min}
       max={max}
@@ -300,16 +312,33 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
     outlineOffset: -1,
   };
 
+  const body = (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <DockZoneContext.Provider value={zone}><PanelBody /></DockZoneContext.Provider>
+    </div>
+  );
+
   if (isRight) {
     return (
       <div style={{ display: 'flex', height: '100%', flexShrink: 0 }}>
         {handle}
         <aside data-dock-zone="right" style={{ ...shellStyle, width: zoneState.size, borderLeft: '1px solid var(--color-outline-variant)' }}>
           {bar}
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <DockZoneContext.Provider value={zone}><PanelBody /></DockZoneContext.Provider>
-          </div>
+          {body}
         </aside>
+      </div>
+    );
+  }
+
+  // Bandeau haut : contenu puis poignée (le bord intérieur est en bas).
+  if (isTop) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        <section data-dock-zone="top" style={{ ...shellStyle, height: zoneState.size, borderBottom: '1px solid var(--color-outline-variant)' }}>
+          {bar}
+          {body}
+        </section>
+        {handle}
       </div>
     );
   }
@@ -319,9 +348,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
       {handle}
       <section data-dock-zone="bottom" style={{ ...shellStyle, height: zoneState.size, borderTop: '1px solid var(--color-outline-variant)' }}>
         {bar}
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <DockZoneContext.Provider value={zone}><PanelBody /></DockZoneContext.Provider>
-        </div>
+        {body}
       </section>
     </div>
   );
