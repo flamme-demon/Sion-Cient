@@ -12,6 +12,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { MemberPanel } from "../chat/MemberPanel";
 import { SoundboardPanel } from "../chat/SoundboardPanel";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
+import { VoiceStatusPanel } from "../chat/VoiceStatusPanel";
 
 /**
  * Panneaux détachés en cartes flottantes (roadmap §1.6, étape 3) — même
@@ -27,12 +28,14 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   members: "members.title",
   soundboard: "soundboard.title",
   transcript: "transcript.title",
+  voice: "layout.voicePanelTitle",
 };
 
 const PANEL_BODIES: Record<DockPanelId, () => ReactNode> = {
   members: MemberPanel,
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
+  voice: VoiceStatusPanel,
 };
 
 /** Panneau visible pour le contexte courant ? (mêmes règles que la dock) */
@@ -42,7 +45,7 @@ function useDockAvailability(): Record<DockPanelId, boolean> {
   const hasSoundboard = useMatrixStore((s) => s.channels.some((c) => c.isSoundboard));
   const isDM = useMatrixStore((s) => s.channels.find((c) => c.id === activeChannel)?.isDM ?? false);
   return useMemo(
-    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice }),
+    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: false }),
     [activeChannel, isDM, hasSoundboard, connectedVoice],
   );
 }

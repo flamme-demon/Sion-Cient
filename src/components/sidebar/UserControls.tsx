@@ -38,6 +38,9 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
   const clockSkewMin = useAppStore((s) => s.clockSkewMin);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
+  // Le bloc voix vit-il dans le menu (oui par défaut) ou a-t-il été détaché
+  // dans la dock ?
+  const voiceInMenu = useLayoutStore((s) => s.voiceInMenu);
   const transcriptPanelOpen = useLayoutStore(
     (s) => s.dockZones.right.panels.includes("transcript") || s.dockZones.bottom.panels.includes("transcript"),
   );
@@ -134,7 +137,7 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
         )
       )}
 
-      {inVoice && (
+      {inVoice && voiceInMenu && (
         compact ? (
           // Rail : la carte vocale se réduit à une colonne d'icônes — état,
           // récupération E2EE, micro, son, transcription, raccrocher.
@@ -216,6 +219,21 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
                   <RefreshIcon />
                 </button>
               )}
+              {/* Détacher : le bloc part dans le bandeau bas de la dock. */}
+              <button
+                onClick={() => useLayoutStore.getState().sendVoiceToDock()}
+                title={t("layout.voiceSendToDock", { defaultValue: "Placer dans la dock (bandeau bas)" })}
+                style={{
+                  flexShrink: 0, border: 'none', cursor: 'pointer', padding: 7, borderRadius: 10, display: 'flex',
+                  background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface-variant)',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3v12" />
+                  <path d="m7 10 5 5 5-5" />
+                  <path d="M4 21h16" />
+                </svg>
+              </button>
               <button
                 onClick={() => connectedVoice && leaveVoiceChannel(connectedVoice)}
                 title={t("voice.disconnect")}

@@ -36,7 +36,10 @@
     "floatPanel": "Détacher en fenêtre flottante",
     "dockPanelBack": "Rattacher à la dock",
     "moveMenuRight": "Déplacer le menu à droite",
-    "moveMenuLeft": "Déplacer le menu à gauche"
+    "moveMenuLeft": "Déplacer le menu à gauche",
+    "voicePanelTitle": "Connexion vocale",
+    "voiceSendToDock": "Placer dans la dock (bandeau bas)",
+    "voiceBackToMenu": "Renvoyer dans le menu"
   },
   "server": {
     "online": "En ligne",

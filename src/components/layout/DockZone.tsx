@@ -18,6 +18,7 @@ import { DockZoneContext } from "./dockZoneContext";
 import { MemberPanel } from "../chat/MemberPanel";
 import { SoundboardPanel } from "../chat/SoundboardPanel";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
+import { VoiceStatusPanel } from "../chat/VoiceStatusPanel";
 
 /**
  * Une zone de la dock (roadmap §1.6) : à droite en colonne, ou en bas en
@@ -35,12 +36,14 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   members: "members.title",
   soundboard: "soundboard.title",
   transcript: "transcript.title",
+  voice: "layout.voicePanelTitle",
 };
 
 const PANEL_BODIES: Record<DockPanelId, () => ReactNode> = {
   members: MemberPanel,
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
+  voice: VoiceStatusPanel,
 };
 
 /** Zone sous un point de l'écran (les conteneurs portent `data-dock-zone`). */
@@ -63,7 +66,7 @@ function useDockAvailability(): Record<DockPanelId, boolean> {
   const hasSoundboard = useMatrixStore((s) => s.channels.some((c) => c.isSoundboard));
   const isDM = useMatrixStore((s) => s.channels.find((c) => c.id === activeChannel)?.isDM ?? false);
   return useMemo(
-    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice }),
+    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: !!connectedVoice }),
     [activeChannel, isDM, hasSoundboard, connectedVoice],
   );
 }
@@ -134,6 +137,17 @@ function ZoneMenu({ panel, zone }: { panel: DockPanelId; zone: DockZoneId }) {
           >
             {t("layout.floatPanel", { defaultValue: "Détacher en fenêtre flottante" })}
           </button>
+          {panel === "voice" && (
+            <button
+              role="menuitem"
+              onClick={() => { useLayoutStore.getState().returnVoiceToMenu(); setOpen(false); }}
+              style={itemStyle}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              {t("layout.voiceBackToMenu", { defaultValue: "Renvoyer dans le menu" })}
+            </button>
+          )}
           <button
             role="menuitem"
             onClick={() => { useLayoutStore.getState().closeDockPanel(panel); setOpen(false); }}

@@ -261,6 +261,35 @@ describe("useLayoutStore — dock à zones (§1.6)", () => {
     expect(s().dragOverZone).toBeNull();
   });
 
+  it("le bloc voix se détache dans la dock et revient au menu", () => {
+    const s = () => useLayoutStore.getState();
+    expect(s().voiceInMenu).toBe(true);
+
+    // Détachement par défaut : bandeau bas, onglet actif.
+    s().sendVoiceToDock();
+    expect(s().voiceInMenu).toBe(false);
+    expect(s().dockZones.bottom.panels).toEqual(["voice"]);
+    expect(s().dockZones.bottom.active).toBe("voice");
+    expect(JSON.parse(store["sion-layout"]).state.voiceInMenu).toBe(false);
+
+    // Déplacement vers la droite : une seule instance, la zone basse se vide.
+    s().moveDockPanel("voice", "right");
+    expect(s().dockZones.bottom.panels).toEqual([]);
+    expect(s().dockZones.right.panels).toEqual(["voice"]);
+
+    // Retour au menu : plus aucune zone ne le contient.
+    s().returnVoiceToMenu();
+    expect(s().voiceInMenu).toBe(true);
+    expect(s().dockZones.right.panels).toEqual([]);
+
+    // Fermer le bloc alors qu'il est détaché le renvoie aussi au menu
+    // (sinon l'utilisateur perdrait ses commandes vocales).
+    s().sendVoiceToDock();
+    s().closeDockPanel("voice");
+    expect(s().voiceInMenu).toBe(true);
+    expect(s().dockZones.bottom.panels).toEqual([]);
+  });
+
   it("resetLayout remet tout à zéro", () => {
     const s = () => useLayoutStore.getState();
     s().setSidebarWidth(380);

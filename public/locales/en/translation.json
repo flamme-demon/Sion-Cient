@@ -36,7 +36,10 @@
     "floatPanel": "Detach as a floating window",
     "dockPanelBack": "Attach back to the dock",
     "moveMenuRight": "Move the menu to the right",
-    "moveMenuLeft": "Move the menu to the left"
+    "moveMenuLeft": "Move the menu to the left",
+    "voicePanelTitle": "Voice connection",
+    "voiceSendToDock": "Move to the dock (bottom bar)",
+    "voiceBackToMenu": "Send back to the menu"
   },
   "server": {
     "online": "Online",

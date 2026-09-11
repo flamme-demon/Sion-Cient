@@ -35,16 +35,19 @@ const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
 // peut contenir plusieurs panneaux — ils deviennent alors des onglets, comme
 // dans un éditeur. Le chat reste épinglé au centre (jamais déplaçable).
 
-export type DockPanelId = "members" | "soundboard" | "transcript";
+export type DockPanelId = "members" | "soundboard" | "transcript" | "voice";
 export type DockZoneId = "right" | "bottom";
 
 export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["right", "bottom"];
 
-/** Zone où un panneau s'ouvre par défaut (l'utilisateur peut le déplacer). */
+/** Zone où un panneau s'ouvre par défaut (l'utilisateur peut le déplacer).
+ *  Le bloc « connexion vocale » vient du menu latéral : son défaut logique
+ *  quand on le détache est le bandeau bas, à côté de la soundboard. */
 export const DOCK_PANEL_DEFAULT_ZONE: Record<DockPanelId, DockZoneId> = {
   members: "right",
   soundboard: "right",
   transcript: "right",
+  voice: "bottom",
 };
 
 /** Zone droite : même plage que l'ancienne largeur par panneau. */
@@ -166,6 +169,13 @@ interface LayoutState {
   setSidebarSide: (side: SidebarSide) => void;
   /** Bascule gauche ↔ droite. */
   toggleSidebarSide: () => void;
+  /** Le bloc « connexion vocale » vit-il dans le menu latéral (true, défaut)
+   *  ou dans une zone de la dock (false) ? */
+  voiceInMenu: boolean;
+  /** Détache le bloc voix vers une zone de la dock (défaut : bandeau bas). */
+  sendVoiceToDock: (zone?: DockZoneId) => void;
+  /** Renvoie le bloc voix dans le menu latéral. */
+  returnVoiceToMenu: () => void;
   /** Retour à la largeur par défaut, déployé (double-clic sur la poignée). */
   resetSidebar: () => void;
   /** Ouvre un panneau dans sa zone par défaut (ou l'active s'il est ouvert). */
@@ -215,6 +225,7 @@ export const useLayoutStore = create<LayoutState>()(
       sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
       sidebarMode: "full",
       sidebarSide: "left" as SidebarSide,
+      voiceInMenu: true,
       dockZones: defaultDockZones(),
       shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
       setSidebarWidth: (raw) =>
@@ -240,6 +251,27 @@ export const useLayoutStore = create<LayoutState>()(
       setSidebarSide: (side) => set({ sidebarSide: side }),
       toggleSidebarSide: () =>
         set((s) => ({ sidebarSide: s.sidebarSide === "left" ? ("right" as SidebarSide) : ("left" as SidebarSide) })),
+      sendVoiceToDock: (zone) =>
+        set((s) => {
+          const target = zone ?? DOCK_PANEL_DEFAULT_ZONE.voice;
+          const from = zoneOf(s.dockZones, "voice");
+          const zones = { ...s.dockZones };
+          if (from) zones[from] = removeFromZone(zones[from], "voice");
+          zones[target] = {
+            ...zones[target],
+            panels: zones[target].panels.includes("voice") ? zones[target].panels : [...zones[target].panels, "voice"],
+            active: "voice",
+          };
+          return { voiceInMenu: false, dockZones: zones };
+        }),
+      returnVoiceToMenu: () =>
+        set((s) => {
+          const from = zoneOf(s.dockZones, "voice");
+          return {
+            voiceInMenu: true,
+            dockZones: from ? { ...s.dockZones, [from]: removeFromZone(s.dockZones[from], "voice") } : s.dockZones,
+          };
+        }),
       openDockPanel: (panel) =>
         set((s) => {
           const current = zoneOf(s.dockZones, panel);
@@ -304,6 +336,9 @@ export const useLayoutStore = create<LayoutState>()(
               ? { ...s.dockZones, [current]: removeFromZone(s.dockZones[current], panel) }
               : s.dockZones,
             floatingPanels: nextFloating,
+            // Fermer le bloc voix alors qu'il est détaché le renvoie au menu :
+            // sans ça, l'utilisateur perdrait ses commandes vocales.
+            ...(panel === "voice" ? { voiceInMenu: true } : {}),
           };
         }),
       moveDockPanel: (panel, zone) =>
@@ -400,6 +435,7 @@ export const useLayoutStore = create<LayoutState>()(
           sidebarMode: "full" as SidebarMode,
           sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
           sidebarSide: "left" as SidebarSide,
+          voiceInMenu: true,
           dockZones: defaultDockZones(),
           floatingPanels: {},
           shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
@@ -435,6 +471,7 @@ export const useLayoutStore = create<LayoutState>()(
         sidebarWidth: s.sidebarWidth,
         sidebarMode: s.sidebarMode,
         sidebarSide: s.sidebarSide,
+        voiceInMenu: s.voiceInMenu,
         dockZones: s.dockZones,
         floatingPanels: s.floatingPanels,
         shareViewMaxVh: s.shareViewMaxVh,
