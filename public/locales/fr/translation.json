@@ -379,7 +379,7 @@
     "themeImported": "Thème « {{name}} » importé.",
     "themeErrInvalid": "Fichier de thème invalide.",
     "themeRemove": "Supprimer ce thème",
-    "themeHint": "Un thème est un simple fichier JSON (name + tokens). Exportez, changez les couleurs, partagez — les thèmes partiels sont acceptés.",
+    "themeHint": "Un thème est un simple fichier JSON (name + tokens). Copiez le thème actuel, changez les couleurs, partagez — les thèmes partiels sont acceptés.",
     "defaultChannels": "Canal par défaut",
     "defaultChannel": "Canal au démarrage",
     "noDefault": "Aucun (premier canal)",

@@ -379,7 +379,7 @@
     "themeImported": "Theme “{{name}}” imported.",
     "themeErrInvalid": "Invalid theme file.",
     "themeRemove": "Remove this theme",
-    "themeHint": "A theme is a plain JSON file (name + tokens). Export, tweak the colors, share it — partial themes are accepted.",
+    "themeHint": "A theme is a plain JSON file (name + tokens). Copy the current theme, tweak the colors, share it — partial themes are accepted.",
     "defaultChannels": "Default Channel",
     "defaultChannel": "Channel on startup",
     "noDefault": "None (first channel)",
