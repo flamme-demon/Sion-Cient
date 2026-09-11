@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, type RemoteCursor, type RemoteCursorClick } from "../../services/cursorService";
-import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
+import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useLayoutStore, SHARE_VIEW_MIN_VH, SHARE_VIEW_MAX_VH, SHARE_FLOATING_MIN_W, SHARE_FLOATING_MIN_H } from "../../stores/useLayoutStore";
@@ -550,6 +550,17 @@ function DockIcon() {
   );
 }
 
+/** Icône « PIP natif » — écran + vignette posée dessus (fenêtre OS). */
+function NativePipIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="4" width="20" height="14" rx="2" />
+      <rect x="12" y="11" width="9" height="6" rx="1" />
+      <path d="M8 21h8" />
+    </svg>
+  );
+}
+
 interface FloatingShareCardProps {
   identity: string;
   name: string;
@@ -747,6 +758,15 @@ export function ScreenShareView() {
   // first available one when their pick is gone — no effect needed.
   const activeShare = activeShares.find((s) => s.participantIdentity === selectedId) ?? activeShares[0] ?? null;
   const activeIdentity = activeShare?.participantIdentity ?? null;
+
+  // PIP natif (fenêtre OS au-dessus des autres applis) : état reflété depuis
+  // Rust — elle peut s'être fermée seule (fin de partage, clic droit).
+  const [nativePipOpen, setNativePipOpen] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void pipNativeStatus().then((open) => { if (alive) setNativePipOpen(open); });
+    return () => { alive = false; };
+  }, [activeIdentity]);
 
   // Cache des dernières frames natives (binaire par expéditeur) + miroir de
   // l'identité active pour le callback d'événement (abonnement unique).
@@ -1512,6 +1532,32 @@ export function ScreenShareView() {
         >
           <FloatIcon />
         </button>
+        {activeIdentity && (
+          <button
+            type="button"
+            onClick={() => {
+              if (nativePipOpen) {
+                void pipNativeClose();
+                setNativePipOpen(false);
+                return;
+              }
+              void pipNativeOpen(activeIdentity).then((ok) => setNativePipOpen(ok));
+            }}
+            title={t("screenShare.nativePip", { defaultValue: "PIP natif — fenêtre au-dessus des autres applications (glisser pour déplacer, clic droit pour fermer)" })}
+            aria-label={t("screenShare.nativePip", { defaultValue: "PIP natif — fenêtre au-dessus des autres applications (glisser pour déplacer, clic droit pour fermer)" })}
+            aria-pressed={nativePipOpen}
+            className="flex items-center transition-colors shrink-0"
+            style={{
+              padding: '0 10px', alignSelf: 'stretch',
+              border: 'none', borderLeft: '1px solid var(--color-outline-variant)',
+              background: nativePipOpen ? 'var(--color-secondary-container)' : 'transparent',
+              color: nativePipOpen ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)',
+              cursor: 'pointer',
+            }}
+          >
+            <NativePipIcon />
+          </button>
+        )}
       </div>
       {mosaic && mosaicShares.length > 0 ? (
         /* Vue mosaïque : une tuile par partage, chacune peint ses propres

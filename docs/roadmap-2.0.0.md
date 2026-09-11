@@ -16,7 +16,10 @@ au sortir de 2.0.0-alpha.1.
 > navigateur (son + volume + plein écran), **mosaïque** (tuiles multi-partages,
 > son et curseurs par tuile), **PIP interne** (Ctrl+Maj+P : drag, snap, cumul
 > mosaïque, position persistée), curseurs assainis (TTL 5 s, watchdog,
-> masquage global), recalage de l'état audio moteur après reload.
+> masquage global), recalage de l'état audio moteur après reload, et **PIP
+> natif** (§2.2, v1) — fenêtre OS always-on-top (winit + softbuffer) branchée
+> sur les JPEG déjà côté Rust : bouton dans la barre du partage, glisser pour
+> déplacer, clic droit ou Échap pour fermer, se ferme avec le partage.
 > ✅ **Chantier 3, phase 1** : tokenisation complète — aucune couleur en dur
 > hors « Matrix » et habillages posés sur le média (constants nommées),
 > `utils/themeColor` pour les canvas, et **garde anti-hex en test**
@@ -26,13 +29,14 @@ au sortir de 2.0.0-alpha.1.
 > avant le premier rendu (aucun flash), section **Apparence** dans les Réglages
 > (vignettes, « Sion Dark » / « AMOLED », suppression) — et l'**import/export
 > JSON** de la phase 5 est livré au passage.
-> ⏳ **Restent** — Chantier 1 : éditeur — **drag & drop** des panneaux entre
-> zones (pointer events) + mode Arrange (Ctrl+Shift+L), panneaux **flottants**
-> (primitive partagée avec la carte PIP), presets exportables/importables,
+> ⏳ **Restent** — Chantier 1 : panneaux **flottants** (primitive partagée avec
+> la carte PIP), mode Arrange (Ctrl+Shift+L), presets exportables/importables,
 > finitions container queries pour le dock bas. Chantier 3 : « Sion Light »
 > (phase 3), accent seed (phase 4), fin de la phase 5 (préview au survol, sync
-> Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 : PIP natif
-> always-on-top (§2.2), spike PiP OS (§2.3), mini-player (§2.4).
+> Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 : finitions du
+> PIP natif (position/taille persistées, coin d'ancrage, double-clic → app au
+> premier plan) et mini-player des vidéos du chat (§2.4) — le PiP OS (§2.3)
+> est écarté, WebKitGTK ne l'expose pas (spike du 11/09).
 
 ---
 
@@ -248,7 +252,7 @@ Toujours pas d'iframe : le partage est un `<canvas>` alimenté en JPEG natif.
 « Réduire » = un **mode d'affichage** du `ScreenShareView`, pas un changement
 de technologie. Trois niveaux, à faire dans cet ordre.
 
-### 2.1 Niveau 1 — PIP interne à l'app (v1 recommandé)
+### 2.1 Niveau 1 — PIP interne à l'app — ✅ livré
 
 Une carte flottante **dans la webview**, au-dessus de tout :
 
@@ -267,31 +271,39 @@ Une carte flottante **dans la webview**, au-dessus de tout :
 - Position/taille persistées dans `useLayoutStore.shareFloating`.
 - Raccourci : **Ctrl+Shift+P** (basculer inline/flottant).
 
-### 2.2 Niveau 2 — PIP natif always-on-top (si besoin réel)
+### 2.2 Niveau 2 — PIP natif always-on-top — ✅ livré (v1)
 
-But : voir le partage **au-dessus des autres applications**, app Sion
-minimisée. Le chemin est déjà balisé par `cursor_overlay.rs` :
+Implémenté dans `src-tauri/src/pip_window.rs` :
 
-- Fenêtre native winit + softbuffer (comme l'overlay), **ou** 2e webview Tauri
-  `alwaysOnTop + decorations:false`. La première est plus légère et réutilise
-  le décodage.
-- Intérêt majeur : les frames JPEG sont **déjà côté Rust**
-  (`native_video_transport.rs`) avant d'aller à la webview. On peut y brancher
-  un second consommateur qui décode (`image`/`zune-jpeg`) et blit dans la
-  fenêtre PIP — zéro aller-retour JS, zéro décodage double.
-- À traiter : position multi-écrans persistée, coin d'ancrage, clic pour
-  ramener la fenêtre principale, Wayland/X11 (déjà résolu dans le module
-  overlay).
-- Coût : le plus gros des trois niveaux. À ne lancer que si le niveau 1 est
-  utilisé et qu'il manque le « au-dessus des autres apps ».
+- Fenêtre winit sans décoration, `AlwaysOnTop`, **X11 forcé sous Linux**
+  (Wayland ignore l'always-on-top pour un toplevel ordinaire) — mêmes choix
+  que `cursor_overlay.rs`, même thread d'event loop dédié.
+- Second consommateur branché dans `native_video_transport::broadcast()` :
+  `pip_window::on_frame()` dépose le JPEG dans l'état partagé, la boucle le
+  décode (`image`) à ~20 fps maximum et le blitte (letterbox) — **zéro
+  passage par la webview, zéro décodage double**, comme prévu ici.
+- Commandes `pip_native_open(sender)` / `pip_native_close` /
+  `pip_native_status` ; bouton dédié dans la barre d'onglets du partage ;
+  la fenêtre se ferme d'elle-même avec le partage (`on_share_removed`).
+- Contrôles : glisser = déplacer (`drag_window`), clic droit ou Échap =
+  fermer. Position mémorisée en mémoire de session.
 
-### 2.3 Niveau 3 — PiP OS (Document PiP) : à tester tôt, ne pas en dépendre
+Reste (finitions) : position/taille persistées entre sessions, coin d'ancrage
+et tailles S/M/L, double-clic → ramener la fenêtre principale au premier plan.
+
+### 2.3 Niveau 3 — PiP OS (Document PiP) — ❌ spike fait, non supporté ici
 
 `canvas.captureStream()` → `<video>` caché → `requestPictureInPicture()`.
-Ça donne le **faux-PiP flottant du système** gratuitement… quand la plateforme
-le supporte. WebKitGTK (Linux) est douteux, WebView2 (Windows) plausible.
-À valider par un spike de 30 min ; si ça marche, c'est un bonus offert au
-niveau 1, sinon fallback niveaux 1/2. Ne pas placer d'espoir de planning dessus.
+Ça donnerait le **faux-PiP flottant du système** gratuitement… quand la
+plateforme le supporte.
+
+**Spike fait (11/09/2026)** : sonde exécutée dans le WebKitGTK de Sion
+(UA `AppleWebKit/605.1.15`, Version/60.5) → `document.pictureInPictureEnabled`
+absent et `HTMLVideoElement.prototype.requestPictureInPicture` **undefined** ;
+seul `captureStream` existe. Verdict : **pas de PiP OS sur Linux/WebKitGTK** —
+le niveau 3 est mort ici, et c'est le PIP natif (§2.2) qui couvre le besoin
+« au-dessus des autres apps ». À re-tester si WebView2 (Windows) est visé : le
+support y est plausible.
 
 ### 2.4 Vidéos du chat (précision)
 

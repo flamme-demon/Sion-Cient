@@ -112,6 +112,10 @@ pub fn broadcast(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
     if port() == 0 {
         return;
     }
+    // Second consommateur, sans passer par la webview : la fenêtre PIP native
+    // (si elle est ouverte sur CE partage) reçoit l'image telle quelle.
+    #[cfg(not(target_os = "android"))]
+    crate::pip_window::on_frame(sender, width, height, jpeg);
     let Some(packet) = packet(sender, width, height, jpeg) else {
         return;
     };
@@ -140,6 +144,9 @@ pub fn broadcast(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
 /// files des webviews. Cela évite de réafficher une vieille frame après une
 /// reconnexion de la vue.
 pub fn remove(sender: &str) {
+    // Le PIP natif suit le partage : s'il affichait celui-ci, il se ferme.
+    #[cfg(not(target_os = "android"))]
+    crate::pip_window::on_share_removed(sender);
     last_packets()
         .lock()
         .unwrap_or_else(|e| e.into_inner())

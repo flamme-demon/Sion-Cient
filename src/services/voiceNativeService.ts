@@ -464,3 +464,35 @@ export function overlayMatrixVoiceState(
   });
   return touched ? out : participants;
 }
+
+// ── PIP natif (fenêtre OS au-dessus de toutes les applis) ───────────────────
+//
+// Complète la carte PIP interne : ici, c'est une vraie fenêtre native winit
+// (Rust) qui décode le flux JPEG déjà côté Rust — aucun aller-retour webview.
+
+/** Ouvre la fenêtre PIP native sur ce partage. `false` si refusé. */
+export async function pipNativeOpen(sender: string): Promise<boolean> {
+  try {
+    await tauriInvoke<null>("pip_native_open", { sender });
+    return true;
+  } catch (err) {
+    console.warn("[Sion][PIP] ouverture de la fenêtre native refusée:", err);
+    return false;
+  }
+}
+
+export async function pipNativeClose(): Promise<void> {
+  try {
+    await tauriInvoke<null>("pip_native_close");
+  } catch {
+    /* hors Tauri : rien à fermer */
+  }
+}
+
+export async function pipNativeStatus(): Promise<boolean> {
+  try {
+    return await tauriInvoke<boolean>("pip_native_status");
+  } catch {
+    return false;
+  }
+}

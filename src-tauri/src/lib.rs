@@ -5,6 +5,8 @@ use tauri::Manager;
 
 #[cfg(not(target_os = "android"))]
 mod cursor_overlay;
+#[cfg(not(target_os = "android"))]
+mod pip_window;
 #[cfg(target_os = "linux")]
 mod portal_shortcuts;
 #[cfg(not(target_os = "android"))]
@@ -2679,6 +2681,9 @@ pub fn run() {
         save_imported_audio,
         cursor_overlay::cursor_overlay_open,
         cursor_overlay::cursor_overlay_close,
+        pip_window::pip_native_open,
+        pip_window::pip_native_close,
+        pip_window::pip_native_status,
         transcribe::transcribe_start,
         transcribe::transcribe_start_native,
         transcribe::transcribe_stop,

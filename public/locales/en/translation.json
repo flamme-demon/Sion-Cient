@@ -395,6 +395,7 @@
     "closePanel": "Close the panel",
     "dropHere": "Drop here",
     "dragPanel": "Drag to move the panel to the other zone",
+    "nativePip": "Native PIP — window above other applications (drag to move, right-click to close)",
     "defaultChannels": "Default Channel",
     "defaultChannel": "Channel on startup",
     "noDefault": "None (first channel)",
