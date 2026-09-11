@@ -38,9 +38,14 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
   const clockSkewMin = useAppStore((s) => s.clockSkewMin);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
-  // Le bloc voix vit-il dans le menu (oui par défaut) ou a-t-il été détaché
-  // dans la dock ?
-  const voiceInMenu = useLayoutStore((s) => s.voiceInMenu);
+  // Le bloc voix vit-il dans le menu ? Dérivé de la DOCK, jamais d'un drapeau
+  // séparé : deux sources de vérité se désynchronisent (état hérité : drapeau
+  // « au menu » + panneau présent dans une zone) et le bloc s'affichait des
+  // DEUX côtés pendant l'édition.
+  const dockZones = useLayoutStore((s) => s.dockZones);
+  const voiceInMenu = !dockZones.top.panels.includes("voice")
+    && !dockZones.right.panels.includes("voice")
+    && !dockZones.bottom.panels.includes("voice");
   const layoutEditing = useLayoutStore((s) => s.layoutEditing);
   const transcriptPanelOpen = useLayoutStore(
     (s) => s.dockZones.right.panels.includes("transcript") || s.dockZones.bottom.panels.includes("transcript"),

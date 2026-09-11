@@ -179,8 +179,10 @@ interface LayoutState {
   setSidebarSide: (side: SidebarSide) => void;
   /** Bascule gauche ↔ droite. */
   toggleSidebarSide: () => void;
-  /** Le bloc « connexion vocale » vit-il dans le menu latéral (true, défaut)
-   *  ou dans une zone de la dock (false) ? */
+  /** Le bloc « connexion vocale » vit-il dans le menu latéral ? INDICATIF :
+   *  la source de vérité est l'appartenance du panneau `voice` à une zone de
+   *  la dock (cf. `dockZones`) — c'est elle qui décide où le bloc se rend, et
+   *  un drapeau séparé finissait par diverger (bloc affiché des deux côtés). */
   voiceInMenu: boolean;
   /** Détache le bloc voix vers une zone de la dock (défaut : bandeau bas). */
   sendVoiceToDock: (zone?: DockZoneId) => void;
