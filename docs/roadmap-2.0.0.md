@@ -20,7 +20,8 @@ au sortir de 2.0.0-alpha.1.
 > masquage global), recalage de l'état audio moteur après reload, et **PIP
 > natif** (§2.2, v1) — fenêtre OS always-on-top (winit + softbuffer) branchée
 > sur les JPEG déjà côté Rust : bouton dans la barre du partage, glisser pour
-> déplacer, clic droit ou Échap pour fermer, se ferme avec le partage.
+> déplacer, clic droit ou Échap pour fermer, se ferme avec le partage — et
+> **mini-lecteur flottant** des vidéos du chat (§2.4).
 > ✅ **Chantier 3, phase 1** : tokenisation complète — aucune couleur en dur
 > hors « Matrix » et habillages posés sur le média (constants nommées),
 > `utils/themeColor` pour les canvas, et **garde anti-hex en test**
@@ -34,9 +35,9 @@ au sortir de 2.0.0-alpha.1.
 > (Ctrl+Shift+L) et finitions container queries du dock bas. Chantier 3 :
 > « Sion Light » (phase 3), accent seed (phase 4), fin de la phase 5 (préview
 > au survol, sync Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 :
-> finitions du PIP natif (position/taille persistées, coin d'ancrage,
-> double-clic → app au premier plan) et mini-player des vidéos du chat (§2.4) —
-> le PiP OS (§2.3) est écarté, WebKitGTK ne l'expose pas (spike du 11/09).
+> ne restent que les finitions du PIP natif (position/taille persistées entre
+> sessions, coin d'ancrage, double-clic → app au premier plan) — le PiP OS est
+> écarté, WebKitGTK ne l'expose pas (spike du 11/09).
 
 ---
 
@@ -307,12 +308,15 @@ le niveau 3 est mort ici, et c'est le PIP natif (§2.2) qui couvre le besoin
 « au-dessus des autres apps ». À re-tester si WebView2 (Windows) est visé : le
 support y est plausible.
 
-### 2.4 Vidéos du chat (précision)
+### 2.4 Vidéos du chat — ✅ livré
 
-Les vidéos de messages sont des `<video>` natifs (`Message.tsx:306`). Elles
-bénéficient déjà du comportement du navigateur/webview. Si tu veux un
-mini-player pour celles-ci aussi, c'est le même conteneur flottant du §2.1,
-mais hors périmètre prioritaire — à noter en backlog.
+Les vidéos de messages sont des `<video>` natifs. Le **mini-lecteur flottant**
+reprend la lecture dans la même carte que le PIP du partage (drag par le
+bandeau, snap aux coins, resize, position en mémoire de session) : bouton
+« Mini-lecteur » sous chaque vidéo, `useMiniPlayerStore` non persisté (la
+source est un objectURL qui meurt au reload), entrée à la position courante,
+lecture dès les métadonnées chargées — on peut changer de salon ou scroller,
+la vidéo continue.
 
 ---
 

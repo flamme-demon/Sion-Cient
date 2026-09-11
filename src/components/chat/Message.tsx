@@ -27,6 +27,7 @@ import { createDecryptedObjectUrl } from "../../utils/decryptMedia";
 import { openFileWithDefaultApp, downloadFileToDownloads } from "../../utils/openExternal";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
+import { useMiniPlayerStore } from "../../stores/useMiniPlayerStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 
@@ -108,6 +109,7 @@ function useResolvedUrl(attachment: FileAttachment, enabled: boolean = true): st
 }
 
 function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachment: FileAttachment }) {
+  const { t } = useTranslation();
   const [transcodedUrl, setTranscodedUrl] = useState<string | null>(null);
   const [transcoding, setTranscoding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +118,9 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
   const [installing, setInstalling] = useState<number | null>(null);
   const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
+  // Élément <video> de la carte : le mini-lecteur reprend la lecture à la
+  // position courante au moment où on détache.
+  const videoElRef = useRef<HTMLVideoElement>(null);
 
   const handleError = () => {
     // Native playback failed — transcode to WebM via ffmpeg
@@ -304,6 +309,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   return (
     <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
       <video
+        ref={videoElRef}
         key={videoSrc}
         controls
         playsInline
@@ -312,8 +318,27 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         style={{ width: '100%', maxHeight: 400, display: 'block' }}
         onError={transcodedUrl ? undefined : handleError}
       />
-      <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
-        {attachment.name} — {formatFileSize(attachment.size)}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {attachment.name} — {formatFileSize(attachment.size)}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            const el = videoElRef.current;
+            const at = el?.currentTime ?? 0;
+            el?.pause();
+            useMiniPlayerStore.getState().open({ src: videoSrc, title: attachment.name, time: at, playing: true });
+          }}
+          title={t("chat.miniPlayer", { defaultValue: "Lire dans le mini-lecteur flottant" })}
+          style={{
+            flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+            border: '1px solid var(--color-outline-variant)', background: 'transparent',
+            color: 'var(--color-on-surface-variant)', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+          }}
+        >
+          {t("chat.miniPlayerTitle", { defaultValue: "Mini-lecteur" })}
+        </button>
       </div>
     </div>
   );

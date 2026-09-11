@@ -8,6 +8,7 @@ import { ChatInput } from "../chat/ChatInput";
 import { DropZone } from "../chat/DropZone";
 import { DockZone } from "./DockZone";
 import { FloatingPanels } from "./FloatingPanels";
+import { MiniPlayerCard } from "../chat/MiniPlayerCard";
 import { useAppStore } from "../../stores/useAppStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { readDroppedFile } from "../../utils/droppedFile";
@@ -100,6 +101,7 @@ export function MainArea() {
       </div>
       {!isMobile && <DockZone zone="bottom" />}
       {!isMobile && <FloatingPanels />}
+      {!isMobile && <MiniPlayerCard />}
     </div>
   );
 }
