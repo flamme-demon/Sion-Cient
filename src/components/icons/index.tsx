@@ -292,6 +292,17 @@ export function UsersIcon({ className }: IconProps) {
   );
 }
 
+/** Disposition : un grand cadre, un rail à gauche, un panneau à droite. */
+export function LayoutIcon({ className }: IconProps) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+      <line x1="16" y1="3" x2="16" y2="21" />
+    </svg>
+  );
+}
+
 export function DownloadIcon({ className }: IconProps) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>

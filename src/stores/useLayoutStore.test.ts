@@ -95,13 +95,31 @@ describe("useLayoutStore — sidebar modulable", () => {
     expect(useLayoutStore.getState().sidebarWidth).toBe(K.MIN);
   });
 
-  it("Ctrl+B bascule déployé ↔ rail et retrouve la largeur choisie", () => {
+  it("Ctrl+B cycle déployé → rail → masqué → déployé (largeur conservée)", () => {
     useLayoutStore.getState().setSidebarWidth(320);
     useLayoutStore.getState().toggleSidebar();
     expect(useLayoutStore.getState().sidebarMode).toBe("rail");
 
     useLayoutStore.getState().toggleSidebar();
+    expect(useLayoutStore.getState().sidebarMode).toBe("hidden");
+
+    useLayoutStore.getState().toggleSidebar();
     expect(useLayoutStore.getState().sidebarMode).toBe("full");
+    expect(useLayoutStore.getState().sidebarWidth).toBe(320);
+  });
+
+  it("mode masqué : le drag n'a plus d'effet, setSidebarMode ramène le rail", () => {
+    useLayoutStore.getState().setSidebarWidth(320);
+    useLayoutStore.getState().setSidebarMode("hidden");
+
+    // Aucune poignée à tirer quand la sidebar est masquée.
+    useLayoutStore.getState().setSidebarWidth(1000);
+    expect(useLayoutStore.getState().sidebarMode).toBe("hidden");
+    expect(useLayoutStore.getState().sidebarWidth).toBe(320);
+
+    // Poignée de révélation : un clic ramène le rail, la largeur est intacte.
+    useLayoutStore.getState().setSidebarMode("rail");
+    expect(useLayoutStore.getState().sidebarMode).toBe("rail");
     expect(useLayoutStore.getState().sidebarWidth).toBe(320);
   });
 

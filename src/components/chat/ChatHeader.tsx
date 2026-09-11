@@ -10,6 +10,7 @@ import * as matrixService from "../../services/matrixService";
 import { getMatrixClient } from "../../services/matrixService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { ScreenShareOptionsModal } from "./ScreenShareOptionsModal";
+import { LayoutPresetsMenu } from "../layout/LayoutPresetsMenu";
 
 function buildWavePath(amplitude: number, phase: number): string {
   if (amplitude < 0.01) return "M0,10 L400,10";
@@ -309,6 +310,7 @@ export function ChatHeader() {
               </svg>
             </button>
           )}
+          {!isMobile && <LayoutPresetsMenu />}
           {!isMobile && (
             channel?.hasVoice ? (
               <span style={{

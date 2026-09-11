@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 // Dimensions du layout desktop. La sidebar est la première pièce modulable :
-// déployée librement entre MIN et MAX, ou repliée en rail d'icônes.
+// déployée librement entre MIN et MAX, repliée en rail d'icônes, ou masquée.
 export const SIDEBAR_DEFAULT_WIDTH = 260;
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 400;
@@ -18,7 +18,12 @@ export const SIDEBAR_RAIL_WIDTH = 72;
 export const SIDEBAR_RAIL_SNAP_IN = 160;
 export const SIDEBAR_RAIL_SNAP_OUT = 190;
 
-export type SidebarMode = "full" | "rail";
+/** Déployé, rail d'icônes, ou masqué (le bord gauche garde une poignée de
+ *  révélation, et Ctrl+B cycle les trois états). */
+export type SidebarMode = "full" | "rail" | "hidden";
+
+/** Ordre du cycle Ctrl+B : déployé → rail → masqué → déployé. */
+const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
 
 /** Dock droite : chaque panneau garde SA largeur (la poignée de la
  *  transcription ne doit pas bouger le soundboard quand les deux sont ouverts).
@@ -75,9 +80,12 @@ interface LayoutState {
    * Applique une largeur issue d'un drag (ou du clavier). `raw` peut sortir
    * de [MIN, MAX] : sous SNAP_IN on accroche le rail, au-dessus de SNAP_OUT
    * on redéploie, entre les deux on garde l'état courant (zone morte).
+   * Sans effet en mode masqué (aucune poignée à tirer).
    */
   setSidebarWidth: (raw: number) => void;
-  /** Bascule déployé ↔ rail (Ctrl+B). */
+  /** Fixe le mode explicitement — presets de layout et poignée de révélation. */
+  setSidebarMode: (mode: SidebarMode) => void;
+  /** Ctrl+B : cycle déployé → rail → masqué → déployé. */
   toggleSidebar: () => void;
   /** Retour à la largeur par défaut, déployé (double-clic sur la poignée). */
   resetSidebar: () => void;
@@ -106,6 +114,7 @@ export const useLayoutStore = create<LayoutState>()(
       shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
       setSidebarWidth: (raw) =>
         set((s) => {
+          if (s.sidebarMode === "hidden") return {};
           if (s.sidebarMode === "full") {
             if (raw < SIDEBAR_RAIL_SNAP_IN) return { sidebarMode: "rail" as SidebarMode };
             return { sidebarWidth: clampWidth(raw) };
@@ -116,8 +125,12 @@ export const useLayoutStore = create<LayoutState>()(
           }
           return {};
         }),
+      setSidebarMode: (mode) => set({ sidebarMode: mode }),
       toggleSidebar: () =>
-        set((s) => ({ sidebarMode: s.sidebarMode === "full" ? ("rail" as SidebarMode) : ("full" as SidebarMode) })),
+        set((s) => {
+          const next = SIDEBAR_MODE_CYCLE[(SIDEBAR_MODE_CYCLE.indexOf(s.sidebarMode) + 1) % SIDEBAR_MODE_CYCLE.length];
+          return { sidebarMode: next };
+        }),
       resetSidebar: () => set({ sidebarMode: "full" as SidebarMode, sidebarWidth: SIDEBAR_DEFAULT_WIDTH }),
       setRightPanelWidth: (panel, raw) =>
         set((s) => ({ rightPanelWidths: { ...s.rightPanelWidths, [panel]: clampRightPanelWidth(raw) } })),

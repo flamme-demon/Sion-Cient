@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ServerHeader } from "../sidebar/ServerHeader";
 import { ChannelList } from "../sidebar/ChannelList";
@@ -14,6 +15,48 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_RAIL_SNAP_OUT,
 } from "../../stores/useLayoutStore";
+
+/**
+ * Poignée de révélation du mode masqué : une bande de 8 px sur le bord gauche
+ * (jamais cliquable par accident), qui s'élargit au survol en un petit
+ * chevron — un clic ramène la sidebar en rail. Ctrl+B cycle les trois modes.
+ */
+function HiddenSidebarHandle({ onReveal }: { onReveal: () => void }) {
+  const { t } = useTranslation();
+  const [hover, setHover] = useState(false);
+  const label = t("layout.showSidebar", { defaultValue: "Afficher le menu (Ctrl+B)" });
+
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ position: 'relative', width: 8, flexShrink: 0, height: '100%' }}
+    >
+      <button
+        onClick={onReveal}
+        title={label}
+        aria-label={label}
+        style={{
+          position: 'absolute', top: '50%', left: 0, transform: 'translateY(-50%)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: hover ? 20 : 6, height: 64, overflow: 'hidden',
+          padding: 0, cursor: 'pointer',
+          borderRadius: '0 8px 8px 0',
+          border: '1px solid var(--color-outline-variant)', borderLeft: 'none',
+          background: hover ? 'var(--color-surface-container-high)' : 'var(--color-surface-container)',
+          color: 'var(--color-on-surface-variant)',
+          transition: 'width 150ms',
+        }}
+      >
+        {hover && (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 6 15 12 9 18" />
+          </svg>
+        )}
+      </button>
+    </div>
+  );
+}
 
 export function Sidebar() {
   const isMobile = useIsMobile();
@@ -41,6 +84,11 @@ export function Sidebar() {
         <AccountPopover />
       </div>
     );
+  }
+
+  // Masquée : seule la poignée de révélation reste (déployer = clic ou Ctrl+B).
+  if (sidebarMode === "hidden") {
+    return <HiddenSidebarHandle onReveal={() => useLayoutStore.getState().setSidebarMode("rail")} />;
   }
 
   const compact = sidebarMode === "rail";
