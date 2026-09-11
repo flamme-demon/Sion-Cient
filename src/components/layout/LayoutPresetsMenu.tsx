@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { LayoutIcon } from "../icons";
 import { applyLayoutPreset, type LayoutPresetId } from "../../services/layoutPresets";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 
 /**
  * Menu « Dispositions » (roadmap §1.4) : trois présets qui remettent d'aplomb
@@ -12,6 +13,7 @@ import { applyLayoutPreset, type LayoutPresetId } from "../../services/layoutPre
 export function LayoutPresetsMenu() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const sidebarSide = useLayoutStore((s) => s.sidebarSide);
   const ref = useRef<HTMLDivElement>(null);
 
   // Fermeture au clic extérieur (le menu vit dans le header, sans overlay :
@@ -89,6 +91,23 @@ export function LayoutPresetsMenu() {
               <span style={{ display: 'block', fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>{it.hint}</span>
             </button>
           ))}
+          <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 4px' }} />
+          <button
+            role="menuitem"
+            onClick={() => { useLayoutStore.getState().toggleSidebarSide(); setOpen(false); }}
+            style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              padding: '8px 10px', borderRadius: 8, border: 'none',
+              background: 'transparent', color: 'var(--color-on-surface)',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            {sidebarSide === "left"
+              ? t("layout.moveMenuRight", { defaultValue: "Déplacer le menu à droite" })
+              : t("layout.moveMenuLeft", { defaultValue: "Déplacer le menu à gauche" })}
+          </button>
         </div>
       )}
     </div>

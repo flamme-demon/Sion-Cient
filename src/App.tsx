@@ -31,6 +31,8 @@ export default function App() {
   const { t } = useTranslation();
   const showAdmin = useAppStore((s) => s.showAdmin);
   const showSettings = useAppStore((s) => s.showSettings);
+  // Côté du menu principal (gauche ou droite) — voir « Dispositions ».
+  const sidebarSide = useLayoutStore((s) => s.sidebarSide);
   const userContextMenu = useAppStore((s) => s.userContextMenu);
   const closeUserContextMenu = useAppStore((s) => s.closeUserContextMenu);
   const mobileView = useAppStore((s) => s.mobileView);
@@ -362,8 +364,9 @@ export default function App() {
       <div className="app-root">
         {/* Mobile: show sidebar OR chat based on mobileView */}
         {/* Desktop: always show sidebar */}
-        {(!isMobile || mobileView === "sidebar") && <Sidebar />}
+        {(!isMobile || mobileView === "sidebar") && sidebarSide === "left" && <Sidebar />}
         {(!isMobile || mobileView === "chat") && <MainArea />}
+        {(!isMobile || mobileView === "sidebar") && sidebarSide === "right" && <Sidebar />}
 
         {/* Panels: overlay on mobile, side panel on desktop */}
         {showAdmin && <AdminPanel />}

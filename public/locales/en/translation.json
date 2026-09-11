@@ -34,7 +34,9 @@
     "dropHere": "Drop here",
     "dragPanel": "Drag to move the panel to the other zone",
     "floatPanel": "Detach as a floating window",
-    "dockPanelBack": "Attach back to the dock"
+    "dockPanelBack": "Attach back to the dock",
+    "moveMenuRight": "Move the menu to the right",
+    "moveMenuLeft": "Move the menu to the left"
   },
   "server": {
     "online": "Online",

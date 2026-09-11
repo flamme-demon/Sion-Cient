@@ -18,9 +18,13 @@ export const SIDEBAR_RAIL_WIDTH = 72;
 export const SIDEBAR_RAIL_SNAP_IN = 160;
 export const SIDEBAR_RAIL_SNAP_OUT = 190;
 
-/** Déployé, rail d'icônes, ou masqué (le bord gauche garde une poignée de
+/** Déployé, rail d'icônes, ou masqué (le bord garde une poignée de
  *  révélation, et Ctrl+B cycle les trois états). */
 export type SidebarMode = "full" | "rail" | "hidden";
+
+/** Côté du menu principal : à gauche (défaut) ou à droite. En bas, jamais —
+ *  une liste de salons horizontale n'a aucun sens. */
+export type SidebarSide = "left" | "right";
 
 /** Ordre du cycle Ctrl+B : déployé → rail → masqué → déployé. */
 const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
@@ -137,6 +141,8 @@ interface LayoutState {
    *  déploiement suivant retrouve la taille choisie par l'utilisateur. */
   sidebarWidth: number;
   sidebarMode: SidebarMode;
+  /** Côté du menu principal (gauche par défaut, droite possible). */
+  sidebarSide: SidebarSide;
   /** Les deux zones de la dock (panneaux + onglet actif + taille de zone). */
   dockZones: Record<DockZoneId, DockZoneState>;
   /** Hauteur max de la zone de partage d'écran en ligne (% de la fenêtre). */
@@ -156,6 +162,10 @@ interface LayoutState {
   setSidebarMode: (mode: SidebarMode) => void;
   /** Ctrl+B : cycle déployé → rail → masqué → déployé. */
   toggleSidebar: () => void;
+  /** Fixe le côté du menu (gauche / droite). */
+  setSidebarSide: (side: SidebarSide) => void;
+  /** Bascule gauche ↔ droite. */
+  toggleSidebarSide: () => void;
   /** Retour à la largeur par défaut, déployé (double-clic sur la poignée). */
   resetSidebar: () => void;
   /** Ouvre un panneau dans sa zone par défaut (ou l'active s'il est ouvert). */
@@ -204,6 +214,7 @@ export const useLayoutStore = create<LayoutState>()(
     (set) => ({
       sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
       sidebarMode: "full",
+      sidebarSide: "left" as SidebarSide,
       dockZones: defaultDockZones(),
       shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
       setSidebarWidth: (raw) =>
@@ -226,6 +237,9 @@ export const useLayoutStore = create<LayoutState>()(
           return { sidebarMode: next };
         }),
       resetSidebar: () => set({ sidebarMode: "full" as SidebarMode, sidebarWidth: SIDEBAR_DEFAULT_WIDTH }),
+      setSidebarSide: (side) => set({ sidebarSide: side }),
+      toggleSidebarSide: () =>
+        set((s) => ({ sidebarSide: s.sidebarSide === "left" ? ("right" as SidebarSide) : ("left" as SidebarSide) })),
       openDockPanel: (panel) =>
         set((s) => {
           const current = zoneOf(s.dockZones, panel);
@@ -385,6 +399,7 @@ export const useLayoutStore = create<LayoutState>()(
         set({
           sidebarMode: "full" as SidebarMode,
           sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+          sidebarSide: "left" as SidebarSide,
           dockZones: defaultDockZones(),
           floatingPanels: {},
           shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
@@ -419,6 +434,7 @@ export const useLayoutStore = create<LayoutState>()(
       partialize: (s) => ({
         sidebarWidth: s.sidebarWidth,
         sidebarMode: s.sidebarMode,
+        sidebarSide: s.sidebarSide,
         dockZones: s.dockZones,
         floatingPanels: s.floatingPanels,
         shareViewMaxVh: s.shareViewMaxVh,

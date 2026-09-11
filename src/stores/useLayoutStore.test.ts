@@ -138,6 +138,23 @@ describe("useLayoutStore — sidebar modulable", () => {
     expect(useLayoutStore.getState().sidebarWidth).toBe(K.DEFAULT);
   });
 
+  it("le menu change de côté (gauche ↔ droite) et le choix est persisté", () => {
+    const s = () => useLayoutStore.getState();
+    expect(s().sidebarSide).toBe("left");
+
+    s().toggleSidebarSide();
+    expect(s().sidebarSide).toBe("right");
+    expect(JSON.parse(store["sion-layout"]).state.sidebarSide).toBe("right");
+
+    s().setSidebarSide("left");
+    expect(s().sidebarSide).toBe("left");
+
+    // Le grand reset ramène le menu à gauche.
+    s().toggleSidebarSide();
+    s().resetLayout();
+    expect(s().sidebarSide).toBe("left");
+  });
+
   it("persiste le layout sous la clé sion-layout (mémoire au relaunch)", () => {
     useLayoutStore.getState().setSidebarWidth(320);
     useLayoutStore.getState().toggleSidebar(); // → rail

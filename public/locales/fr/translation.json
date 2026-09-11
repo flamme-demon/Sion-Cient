@@ -34,7 +34,9 @@
     "dropHere": "Déposer ici",
     "dragPanel": "Glisser pour déplacer le panneau vers l'autre zone",
     "floatPanel": "Détacher en fenêtre flottante",
-    "dockPanelBack": "Rattacher à la dock"
+    "dockPanelBack": "Rattacher à la dock",
+    "moveMenuRight": "Déplacer le menu à droite",
+    "moveMenuLeft": "Déplacer le menu à gauche"
   },
   "server": {
     "online": "En ligne",
