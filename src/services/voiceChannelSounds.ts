@@ -288,6 +288,9 @@ export function resetVoiceCues() {
   lostPeers.clear();
   recentLeaves.clear();
   recentlyKicked.clear();
+  for (const timer of pendingLeaves.values()) clearTimeout(timer);
+  pendingLeaves.clear();
+  bouncedBack.clear();
 }
 
 export function playJoinCue() {
@@ -331,17 +334,49 @@ export function previewCue(cue: Cue) {
   play(cue);
 }
 
+// ── Anti-clignotement des reconnexions ─────────────────────────────────────
+// Une reconnexion d'un pair se présente comme : piste dépubliée → « parti »
+// (raison UnknownReason) → « rejoint » → piste republiée, le tout dans la même
+// seconde (constaté en log le 12/09). Annoncer un départ ET un retour pour ça,
+// c'est sonoriser un événement qui n'a pas eu lieu. Le départ est donc RETARDÉ
+// de `LEAVE_GRACE_MS` : si le pair revient pendant la fenêtre, les deux cues
+// sont annulés — il n'a jamais semblé absent.
+const LEAVE_GRACE_MS = 1800;
+const pendingLeaves = new Map<string, ReturnType<typeof setTimeout>>();
+/** Pairs revenus pendant leur fenêtre de grâce : leur « join » ne sonne pas. */
+const bouncedBack = new Set<string>();
+
+/** Un pair vient d'apparaître dans la liste des participants. */
+export function onParticipantJoined(identity: string) {
+  const pending = pendingLeaves.get(identity);
+  if (pending != null) {
+    // Clignotement : on annule le départ en attente ET on tait le retour.
+    clearTimeout(pending);
+    pendingLeaves.delete(identity);
+    bouncedBack.add(identity);
+    return;
+  }
+  // Le retour consomme la marque ; les apparitions suivantes sonnent normalement.
+  if (bouncedBack.delete(identity)) return;
+  playJoinCue();
+}
+
 export function onParticipantLeft(identity: string) {
   const now = Date.now();
   const prev = recentLeaves.get(identity);
   if (prev != null && now - prev < LEAVE_DEDUP_MS) {
-    // Duplicate ParticipantDisconnected — first call already played the cue.
+    // Duplicate ParticipantDisconnected — first call already scheduled the cue.
     lostPeers.delete(identity);
     return;
   }
+  if (pendingLeaves.has(identity)) return;
   recentLeaves.set(identity, now);
   const timedOut = lostPeers.delete(identity);
   // A kicked peer's departure is already announced by the kick cue.
   if (wasRecentlyKicked(identity)) return;
-  play(timedOut ? "timeout" : "leave");
+  const timer = setTimeout(() => {
+    pendingLeaves.delete(identity);
+    play(timedOut ? "timeout" : "leave");
+  }, LEAVE_GRACE_MS);
+  pendingLeaves.set(identity, timer);
 }

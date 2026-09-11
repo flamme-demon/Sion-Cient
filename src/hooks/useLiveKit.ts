@@ -3,7 +3,7 @@ import { useLiveKitStore } from "../stores/useLiveKitStore";
 import { connectNativeSession, disconnectNativeSession } from "../services/nativeVoiceSession";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { setNativeCursorDisplayName } from "../services/cursorService";
-import { playJoinCue, onParticipantLeft, noteConnectionLost, resetVoiceCues } from "../services/voiceChannelSounds";
+import { onParticipantJoined, onParticipantLeft, noteConnectionLost, resetVoiceCues } from "../services/voiceChannelSounds";
 import type { ParticipantInfo } from "../types/livekit";
 import type { VoiceNativeData, VoiceNativeE2eeState } from "../services/voiceNativeService";
 
@@ -71,7 +71,7 @@ export function useLiveKit() {
       // déjà présents) ne déclenche rien, et notre propre identité est ignorée.
       if (!firstSnapshot.current) {
         for (const p of updatedParticipants) {
-          if (!isLocalIdentity(p.identity) && !lastQualities.current.has(p.identity)) playJoinCue();
+          if (!isLocalIdentity(p.identity) && !lastQualities.current.has(p.identity)) onParticipantJoined(p.identity);
         }
         for (const [id, quality] of lastQualities.current) {
           if (updatedParticipants.some((p) => p.identity === id)) continue;
