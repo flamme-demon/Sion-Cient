@@ -55,6 +55,8 @@
   --color-success-hover: #66bb6a;
   --color-glow-strong: rgba(125, 220, 135, 0.3);
   --color-glow: rgba(125, 220, 135, 0.12);
+  /* Séparateurs fins — surchargé par le thème actif au boot. */
+  --color-border: rgba(255, 255, 255, 0.08);
 
   /* Legacy aliases for compatibility */
   --color-bg-dark: #111318;

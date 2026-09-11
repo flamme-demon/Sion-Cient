@@ -24,6 +24,11 @@ function screenShareAudioState(identity: string): { muted: boolean; volume: numb
   return shareAudioState.get(identity) ?? { muted: false, volume: 1 };
 }
 
+/** Letterbox du partage : le cadre noir autour de la vidéo (et sous la
+ *  mosaïque) n'est pas une surface de l'app — les pixels média ne sont pas
+ *  thémés. Marquée `theme-exempt` pour le garde anti-couleurs-en-dur. */
+const LETTERBOX_BLACK = "#000"; // theme-exempt — letterbox média
+
 /** Speaker with an X — the muted counterpart to the maison SpeakerIcon,
  *  matched in stroke/size so the toggle doesn't jump. */
 function SpeakerMutedIcon() {
@@ -212,7 +217,7 @@ async function paintFrameToCanvas(canvas: HTMLCanvasElement, frame: VoiceNativeB
     }
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
-    ctx.fillStyle = "#000";
+    ctx.fillStyle = LETTERBOX_BLACK;
     ctx.fillRect(0, 0, bw, bh);
     const scale = Math.min(bw / frame.width, bh / frame.height);
     const dw = Math.max(1, frame.width * scale);
@@ -511,8 +516,8 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
             else c.requestFullscreen().catch(() => { /* ignore */ });
           }}
           style={fill
-            ? { width: '100%', height: '100%', background: '#000', display: 'block' }
-            : { width: '100%', aspectRatio: '16 / 9', background: '#000', display: 'block' }}
+            ? { width: '100%', height: '100%', background: LETTERBOX_BLACK, display: 'block' }
+            : { width: '100%', aspectRatio: '16 / 9', background: LETTERBOX_BLACK, display: 'block' }}
         />
         <div ref={cursorBoxRef} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'hidden' }}>
           <div ref={cursorLayerRef} style={{ position: 'absolute', inset: 0 }} />
@@ -1519,7 +1524,7 @@ export function ScreenShareView() {
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
           gap: 8,
-          background: '#000',
+          background: LETTERBOX_BLACK,
         }}>
           {mosaicShares.map((s) => {
             const tileActive = s.participantIdentity === activeIdentity;

@@ -14,6 +14,9 @@ import { ExternalAudioImport } from "../chat/ExternalAudioImport";
 import { isModelDownloaded, ensureModelDownloaded, summaryAssetsStatus, ensureSummaryAssets, deleteAsrModel, deleteSummaryAssets } from "../../services/transcriptionService";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
 import { detectTtsEngine, listTtsModels, installTtsModel, deleteTtsModel, pickTtsEnginePath, TTS_MODEL_LABELS, type TtsModelInfo } from "../../services/ttsService";
+import { useThemeStore } from "../../stores/useThemeStore";
+import { BUILTIN_THEMES } from "../../themes/builtin";
+import { getActiveTheme, parseThemeFile, themeToJson, resolveThemeTokens } from "../../services/themeService";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -29,6 +32,51 @@ export function SettingsPanel() {
   const [recordingMute, setRecordingMute] = useState(false);
   const [recordingDeafen, setRecordingDeafen] = useState(false);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+
+  // --- Apparence (thèmes) ---
+  const themeId = useThemeStore((s) => s.themeId);
+  const customThemes = useThemeStore((s) => s.customThemes);
+  const setThemeId = useThemeStore((s) => s.setThemeId);
+  const upsertCustomTheme = useThemeStore((s) => s.upsertCustomTheme);
+  const removeCustomTheme = useThemeStore((s) => s.removeCustomTheme);
+  const themeFileRef = useRef<HTMLInputElement>(null);
+  const [themeMsg, setThemeMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const allThemes = [...BUILTIN_THEMES, ...customThemes];
+
+  const handleThemeImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (themeFileRef.current) themeFileRef.current.value = "";
+    if (!file) return;
+    try {
+      const parsed = parseThemeFile(await file.text());
+      if ("error" in parsed) {
+        setThemeMsg({ ok: false, text: `${t("settings.themeErrInvalid")} (${parsed.error})` });
+        return;
+      }
+      upsertCustomTheme(parsed.theme);
+      setThemeMsg({ ok: true, text: t("settings.themeImported", { name: parsed.theme.name }) });
+    } catch {
+      setThemeMsg({ ok: false, text: t("settings.themeErrInvalid") });
+    }
+  };
+
+  const handleThemeExport = () => {
+    // WebKitGTK n'expose pas toujours navigator.clipboard : textarea +
+    // execCommand, l'implémentation la plus compatible, déclenchée par le clic.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = themeToJson(getActiveTheme());
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      setThemeMsg({ ok, text: ok ? t("settings.themeCopied") : t("settings.themeCopyFailed") });
+    } catch {
+      setThemeMsg({ ok: false, text: t("settings.themeCopyFailed") });
+    }
+  };
 
   const mutedSpeakAlert = useSettingsStore((s) => s.mutedSpeakAlert);
   const joinMuted = useSettingsStore((s) => s.joinMuted);
@@ -124,7 +172,9 @@ export function SettingsPanel() {
       const file = new File([bytes], p.split(/[/\\]/).pop() || "sound");
       setCueEditor({ cue, file, path: p, label });
     } catch { /* cancelled / not in Tauri */ }
-  }, []);
+    // `setCueEditor` est référencé explicitement : le React Compiler l'infère
+    // comme dépendance et refuse sinon de préserver la mémoïsation manuelle.
+  }, [setCueEditor]);
   // One configurable-sound row (preview / pick file / pick URL / reset).
   // Shared by the gated voice cues (join/leave/timeout) and the always-on
   // event sounds (poke/kick/memberKicked).
@@ -257,6 +307,11 @@ export function SettingsPanel() {
     fontSize: 12, fontFamily: 'inherit', outline: 'none',
   };
   const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
+  const smallBtnStyle: React.CSSProperties = {
+    flex: 1, padding: '8px 10px', borderRadius: 12, border: '1px solid var(--color-outline-variant)',
+    background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)',
+    fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+  };
 
   // Tab definitions
   const tabs: { id: SettingsTab; label: string; icon: string }[] = [
@@ -308,6 +363,69 @@ export function SettingsPanel() {
 
         {/* === GENERAL === */}
         {activeTab === "general" && (<>
+          {/* Apparence — thèmes en fichiers JSON (import/export, cf. §3 de la roadmap) */}
+          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 10 }}>{t("settings.appearance")}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {allThemes.map((th) => {
+                const active = th.id === themeId;
+                const tokens = resolveThemeTokens(th);
+                return (
+                  <div key={th.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button
+                      onClick={() => setThemeId(th.id)}
+                      style={{
+                        flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '8px 10px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                        border: active ? '2px solid var(--color-primary)' : '1px solid var(--color-outline-variant)',
+                        background: active ? 'var(--color-secondary-container)' : 'transparent',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span style={{ display: 'flex', flexShrink: 0 }}>
+                        {(["color-surface", "color-surface-container-high", "color-primary"] as const).map((k, i) => (
+                          <span
+                            key={k}
+                            style={{
+                              width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                              marginLeft: i === 0 ? 0 : -5,
+                              border: '1px solid var(--color-outline)',
+                              background: tokens[k],
+                            }}
+                          />
+                        ))}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: active ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {th.name}
+                        </span>
+                        {th.author && (
+                          <span style={{ display: 'block', fontSize: 10, color: active ? 'var(--color-on-secondary-container)' : 'var(--color-outline)' }}>{th.author}</span>
+                        )}
+                      </span>
+                      {active && <span style={{ fontSize: 13, color: 'var(--color-primary)', flexShrink: 0 }}>✓</span>}
+                    </button>
+                    {th.id.startsWith("custom-") && (
+                      <button
+                        onClick={() => removeCustomTheme(th.id)}
+                        title={t("settings.themeRemove")}
+                        style={{ flexShrink: 0, border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: 4, fontSize: 14, lineHeight: 1 }}
+                      >×</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => themeFileRef.current?.click()} style={smallBtnStyle}>{t("settings.themeImport")}</button>
+              <button onClick={handleThemeExport} style={smallBtnStyle}>{t("settings.themeExport")}</button>
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--color-outline)', marginTop: 8, lineHeight: 1.45 }}>{t("settings.themeHint")}</div>
+            {themeMsg && (
+              <div style={{ fontSize: 11, marginTop: 6, color: themeMsg.ok ? 'var(--color-green)' : 'var(--color-error)' }}>{themeMsg.text}</div>
+            )}
+            <input ref={themeFileRef} type="file" accept="application/json,.json" onChange={handleThemeImport} style={{ display: 'none' }} />
+          </div>
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.language")}</div>

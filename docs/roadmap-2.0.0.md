@@ -3,23 +3,31 @@
 Proposition d'architecture pour la 2.0.0 finale, basée sur l'état réel du code
 au sortir de 2.0.0-alpha.1.
 
-> **État d'avancement (11/09/2026)** —
+> **État d'avancement (11/09/2026, soir)** —
 > ✅ **Chantier 1 (layout)** : socle complet — `useLayoutStore` persisté (v2 +
-> migration), `ResizeHandle` vertical/horizontal (clavier + aria), sidebar
-> 200→400 px + rail 72 px (Ctrl+B, snap à hystérésis), dock droite **par
-> panneau** (220→520, mémorisée individuellement), défensifs étroits (onglets
-> scrollables, min-width). Bonus livrés : mini-avatars d'occupants + états +
-> carte de survol au rail.
-> ✅ **Chantier 2 (partage) — premières briques** : hauteur du partage
-> redimensionnable et persistée, barre d'onglets navigateur (son + volume +
-> plein écran dans le cadre), **mode mosaïque** (tuiles multi-partages, son et
-> curseurs par tuile), assainissement curseurs (TTL 5 s, watchdog d'immobilité,
-> masquage global au blur/quit) et recalage de l'état audio moteur après reload.
-> ⏳ **Restent** — Chantier 1 : presets (§1.4) puis **layout editor** (§1.6 :
-> zones dockables, drag & drop entre zones, onglets de zone, dock bas,
-> flottants, presets partagés, mode Arrange). Chantier 2 : **carte PIP
-> flottante** (§2.1), PIP natif always-on-top (§2.2), spike PiP OS (§2.3),
-> mini-player des vidéos du chat (§2.4). Chantier 3 (thèmes) : intact.
+> migration), `ResizeHandle` double axe, sidebar 200→400 px + rail 72 px
+> (Ctrl+B, snap), dock droite **par panneau** (220→520), défensifs étroits.
+> Bonus : mini-avatars d'occupants (parole/son/AFK/micro) + carte de survol
+> complète (rôles, réseau, clic droit).
+> ✅ **Chantier 2 (partage)** : hauteur réglable persistée, barre d'onglets
+> navigateur (son + volume + plein écran), **mosaïque** (tuiles multi-partages,
+> son et curseurs par tuile), **PIP interne** (Ctrl+Maj+P : drag, snap, cumul
+> mosaïque, position persistée), curseurs assainis (TTL 5 s, watchdog,
+> masquage global), recalage de l'état audio moteur après reload.
+> ✅ **Chantier 3, phase 1** : tokenisation complète — aucune couleur en dur
+> hors « Matrix » et habillages posés sur le média (constants nommées),
+> `utils/themeColor` pour les canvas, et **garde anti-hex en test**
+> (`services/themeGuard.test.ts` : échappatoires `themeColor(…, "#repli")` et
+> marqueur `theme-exempt`).
+> ✅ **Chantier 3, phase 2** : `themeStore` persisté + `applyTheme` appliqué
+> avant le premier rendu (aucun flash), section **Apparence** dans les Réglages
+> (vignettes, « Sion Dark » / « AMOLED », suppression) — et l'**import/export
+> JSON** de la phase 5 est livré au passage.
+> ⏳ **Restent** — Chantier 3 : « Sion Light » (phase 3), accent seed (phase 4),
+> fin de la phase 5 (préview au survol, sync Matrix `com.sion.theme`, garde de
+> contraste WCAG). Chantier 2 : PIP natif always-on-top (§2.2), spike PiP OS
+> (§2.3), mini-player (§2.4). Chantier 1 : presets (§1.4), éditeur de layout
+> (§1.6).
 
 ---
 
@@ -364,18 +372,20 @@ Avant de faire des thèmes, finir l'audit — **zéro changement visuel** :
 - Vérifier les endroits qui supposent « fond sombre » (bordures claires,
   `box-shadow` noirs) — c'est la que se cache la vraie dette d'un thème clair.
 
-Un script CI simple peut interdire un nouveau `#xxxxxx` dans `src/components/`
-(hors fichiers de thème) pour verrouiller l'acquis.
+✅ L'acquis est verrouillé par `src/services/themeGuard.test.ts` : tout nouveau
+`#hex` sous `src/` (hors `src/themes/`, qui EST le thème) fait échouer la suite
+de tests — sauf les deux échappatoires documentées, le repli de
+`themeColor("--token", "#repli")` et la ligne marquée `theme-exempt`.
 
 ### 3.4 Phases
 
 | Phase | Contenu | Risque |
 |---|---|---|
-| 1 | Tokenisation complète (§3.3) + garde CI anti-hex | très faible |
-| 2 | `themeStore` + `applyTheme` + section **Apparence** dans SettingsPanel + « Sion Dark » (actuel) + « AMOLED » | faible |
+| ✅ 1 | Tokenisation complète (§3.3) + garde anti-hex (`services/themeGuard.test.ts`) | très faible |
+| ✅ 2 | `themeStore` + `applyTheme` + section **Apparence** dans SettingsPanel + « Sion Dark » (actuel) + « AMOLED » | faible |
 | 3 | « Sion Light » — le vrai morceau : repassage visuel de chaque écran, contrastes, images, canvas | moyen |
 | 4 | Accent seed (génération de palette type Material You, ~150 l. de HCT simplifié ou vendor `material-color-utilities`) | moyen |
-| 5 | Import/export JSON + préview au survol + (option) sync Matrix `com.sion.theme` en account data → le thème suit le compte sur tous les appareils | faible |
+| 5 | ✅ Import/export JSON (livré avec la phase 2 — thèmes partiels acceptés, `custom-` rétabli au re-import) — reste : préview au survol + (option) sync Matrix `com.sion.theme` en account data → le thème suit le compte sur tous les appareils | faible |
 
 **Apparence dans SettingsPanel** : grille de vignettes (aperçu 3 couleurs :
 surface / primary / texte), toggle dark/light, picker accent, bouton « importer

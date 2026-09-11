@@ -5,7 +5,7 @@ import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useSettingsStore, type ChannelSortMode } from "../../stores/useSettingsStore";
 import { SortIcon, HashIcon, MessageBubbleIcon } from "../icons";
 import { ChannelItem } from "./ChannelItem";
-import { MatrixRain } from "./MatrixRain";
+import { MatrixRain, MATRIX_GREEN } from "./MatrixRain";
 import { findAdminRoom } from "../../services/adminCommandService";
 import { getMatrixClient } from "../../services/matrixService";
 
@@ -219,7 +219,7 @@ export function ChannelList({ compact = false }: { compact?: boolean }) {
               top: '100%',
               right: 0,
               marginTop: 4,
-              background: 'var(--color-bg-dark)',
+              background: 'var(--color-surface-container)',
               border: '1px solid var(--color-border, rgba(255,255,255,0.1))',
               borderRadius: 6,
               padding: '4px 0',
@@ -269,7 +269,7 @@ export function ChannelList({ compact = false }: { compact?: boolean }) {
           {!compact && (
           <div style={{
             position: 'absolute', bottom: 16,
-            fontSize: 12, fontWeight: 600, color: '#0f0',
+            fontSize: 12, fontWeight: 600, color: MATRIX_GREEN,
             textShadow: '0 0 8px rgba(0,255,70,0.6)',
             letterSpacing: '0.1em',
             animation: 'pulse 1.5s ease-in-out infinite',

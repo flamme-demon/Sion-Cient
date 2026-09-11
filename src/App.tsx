@@ -21,7 +21,7 @@ import { useVoiceChannel } from "./hooks/useVoiceChannel";
 import { shouldAutoJoinVoice } from "./services/voiceNativeService";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useIsMobile } from "./hooks/useIsMobile";
-import { MatrixRain } from "./components/sidebar/MatrixRain";
+import { MatrixRain, MATRIX_GREEN } from "./components/sidebar/MatrixRain";
 import { updateVoiceService } from "./services/androidVoiceService";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "./services/matrixService";
@@ -307,7 +307,7 @@ export default function App() {
         }}>
           <div style={{
             fontSize: 28, fontWeight: 700, marginBottom: 8,
-            color: '#0f0',
+            color: MATRIX_GREEN,
             textShadow: '0 0 12px rgba(0,255,70,0.5)',
           }}>
             {t("auth.pendingApprovalTitle")}
@@ -328,7 +328,7 @@ export default function App() {
               width: '100%', padding: '14px 0', border: '1px solid rgba(0,255,70,0.3)',
               cursor: 'pointer', borderRadius: 28, fontSize: 15, fontWeight: 600,
               fontFamily: 'inherit', background: 'rgba(0,255,70,0.1)',
-              color: '#0f0', marginBottom: 12, transition: 'all 200ms',
+              color: MATRIX_GREEN, marginBottom: 12, transition: 'all 200ms',
             }}
           >
             {t("auth.checkApproval")}

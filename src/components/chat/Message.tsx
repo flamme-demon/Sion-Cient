@@ -319,6 +319,11 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   );
 }
 
+/** Encre des contrôles du visualiseur plein écran : posée sur les pixels de
+ *  l'image, jamais sur une surface de l'app — donc volontairement neutre et
+ *  hors thème (marqué pour le garde anti-couleurs-en-dur). */
+const LIGHTBOX_INK = "#fff"; // theme-exempt — contrôles posés sur le média
+
 function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
   // Fit (default) ↔ real size. Clicking the image toggles; at 100% the
   // overlay scrolls so very large screenshots can actually be read.
@@ -366,7 +371,7 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
           position: 'fixed', top: 'max(env(safe-area-inset-top, 0px), 16px)', left: 16,
           background: 'rgba(255,255,255,0.15)', borderRadius: 18,
           padding: '7px 14px', cursor: 'pointer',
-          color: '#fff', fontSize: 13, fontWeight: 600, userSelect: 'none',
+          color: LIGHTBOX_INK, fontSize: 13, fontWeight: 600, userSelect: 'none',
         }}
       >{zoomed ? '100 %' : 'Ajusté'}</div>
       <button
@@ -375,7 +380,7 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
           position: 'fixed', top: 'max(env(safe-area-inset-top, 0px), 16px)', right: 16,
           background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%',
           width: 36, height: 36, cursor: 'pointer',
-          color: '#fff', fontSize: 18, lineHeight: '36px', textAlign: 'center',
+          color: LIGHTBOX_INK, fontSize: 18, lineHeight: '36px', textAlign: 'center',
         }}
       >✕</button>
     </div>

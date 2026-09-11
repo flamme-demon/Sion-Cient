@@ -7,11 +7,16 @@ import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 import { attachConsole } from "@tauri-apps/plugin-log";
+import { installThemeSync } from "./services/themeService";
 
 // Route Rust `log::*` records into the webview console — the only way to see
 // them on the shipped Windows build (no terminal). Pairs with the Rust
 // logger's Webview target. No-op outside Tauri.
 attachConsole().catch(() => {});
+
+// Thème : appliqué avant le premier rendu (aucun flash du thème par défaut),
+// puis à chaque changement depuis les réglages.
+installThemeSync();
 
 // Intercept all clicks on external links to open in default browser (Tauri)
 document.addEventListener("click", (e) => {

@@ -2,6 +2,12 @@ import { useRef, useEffect } from "react";
 
 const CHARS = "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+/** Vert Matrix — l'esthétique de l'écran d'attente (rain + lueurs) et du
+ *  raccordement vocal. Volontairement HORS thème : elle reste verte quelle
+ *  que soit la palette, donc marquée `theme-exempt` pour le garde anti-
+ *  couleurs-en-dur (`services/themeGuard.test.ts`). */
+export const MATRIX_GREEN = "#0f0"; // theme-exempt — esthétique Matrix
+
 interface Column {
   y: number;
   speed: number;
