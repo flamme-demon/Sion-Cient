@@ -292,6 +292,39 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
         )
       )}
 
+      {/* Bloc vocal détaché : chemin de retour visible depuis le menu, là où
+          l'utilisateur le cherche — plutôt qu'un panneau qu'on ne retrouve
+          plus (il n'existe que pendant l'appel). */}
+      {inVoice && !voiceInMenu && (
+        compact ? (
+          <button
+            onClick={() => useLayoutStore.getState().returnVoiceToMenu()}
+            title={t("layout.voiceInDock", { defaultValue: "Connexion vocale dans la dock — récupérer" })}
+            style={{
+              width: 32, height: 32, borderRadius: 10, flexShrink: 0, cursor: 'pointer',
+              border: '1px dashed var(--color-outline-variant)', background: 'transparent',
+              color: 'var(--color-on-surface-variant)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <SpeakerIcon />
+          </button>
+        ) : (
+          <button
+            onClick={() => useLayoutStore.getState().returnVoiceToMenu()}
+            title={t("layout.voiceBackToMenu", { defaultValue: "Renvoyer dans le menu" })}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              marginBottom: 10, padding: '8px 10px', borderRadius: 12, cursor: 'pointer',
+              border: '1px dashed var(--color-outline-variant)', background: 'transparent',
+              color: 'var(--color-on-surface-variant)', fontSize: 11, fontFamily: 'inherit',
+            }}
+          >
+            <SpeakerIcon />
+            {t("layout.voiceInDock", { defaultValue: "Connexion vocale dans la dock — récupérer" })}
+          </button>
+        )
+      )}
+
       {/* User row */}
       {compact ? (
         // Rail : avatar (ouvre le panneau compte) puis les actions en colonne.

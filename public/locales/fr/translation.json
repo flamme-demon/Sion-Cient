@@ -39,7 +39,10 @@
     "moveMenuLeft": "Déplacer le menu à gauche",
     "voicePanelTitle": "Connexion vocale",
     "voiceSendToDock": "Placer dans la dock (bandeau bas)",
-    "voiceBackToMenu": "Renvoyer dans le menu"
+    "voiceBackToMenu": "Renvoyer dans le menu",
+    "voiceBackToMenuShort": "Menu",
+    "voiceInDock": "Connexion vocale dans la dock — récupérer",
+    "hangUp": "Raccrocher"
   },
   "server": {
     "online": "En ligne",

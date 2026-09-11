@@ -85,27 +85,39 @@ export function VoiceStatusPanel() {
         t("transcript.togglePanel", { defaultValue: "Transcription de la réunion" }),
       )}
 
-      {/* Retour au menu latéral */}
+      {/* Retour au menu latéral — LIBELLÉ, pas juste une icône : collée à la
+          croix rouge, la flèche se lisait comme un second « fermer ». */}
       <button
         onClick={() => useLayoutStore.getState().returnVoiceToMenu()}
         title={t("layout.voiceBackToMenu", { defaultValue: "Renvoyer dans le menu" })}
-        aria-label={t("layout.voiceBackToMenu", { defaultValue: "Renvoyer dans le menu" })}
-        style={{ flexShrink: 0, border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', padding: 6, borderRadius: 10, display: 'flex' }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+          padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
+          border: '1px solid var(--color-outline-variant)', background: 'transparent',
+          color: 'var(--color-on-surface-variant)', fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+        }}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 14 4 9l5-5" />
           <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
         </svg>
+        {t("layout.voiceBackToMenuShort", { defaultValue: "Menu" })}
       </button>
 
-      {/* Raccrocher */}
+      {/* Raccrocher — c'est un DÉPART du salon vocal, pas une fermeture de
+          panneau : le libellé le dit, la croix seule se confondait. */}
       <button
         onClick={() => leaveVoiceChannel(connectedVoice)}
         title={t("voice.disconnect")}
-        aria-label={t("voice.disconnect")}
-        style={{ flexShrink: 0, border: 'none', cursor: 'pointer', padding: 7, borderRadius: 10, display: 'flex', background: 'var(--color-error-container)', color: 'var(--color-error)' }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+          padding: '6px 12px', borderRadius: 999, border: 'none', cursor: 'pointer',
+          background: 'var(--color-error-container)', color: 'var(--color-error)',
+          fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+        }}
       >
         <DisconnectIcon />
+        {t("layout.hangUp", { defaultValue: "Raccrocher" })}
       </button>
     </div>
   );
