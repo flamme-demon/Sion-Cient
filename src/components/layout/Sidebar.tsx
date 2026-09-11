@@ -159,7 +159,7 @@ export function Sidebar() {
             }}
             title={t("layout.editSidebarHint", { defaultValue: "Glisser le menu vers le bord opposé" })}
             style={{
-              position: 'absolute', inset: 0, zIndex: 6, cursor: 'grab', touchAction: 'none',
+              position: 'absolute', inset: 0, zIndex: 3, cursor: 'grab', touchAction: 'none',
               outline: '2px solid var(--color-primary)', outlineOffset: -2, borderRadius: 6,
               background: 'rgba(168, 199, 250, 0.08)',
             }}

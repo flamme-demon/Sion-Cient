@@ -270,21 +270,8 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
                   <RefreshIcon />
                 </button>
               )}
-              {/* Détacher : le bloc part dans le bandeau bas de la dock. */}
-              <button
-                onClick={() => useLayoutStore.getState().sendVoiceToDock()}
-                title={t("layout.voiceSendToDock", { defaultValue: "Placer dans la dock (bandeau bas)" })}
-                style={{
-                  flexShrink: 0, border: 'none', cursor: 'pointer', padding: 7, borderRadius: 10, display: 'flex',
-                  background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface-variant)',
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 3v12" />
-                  <path d="m7 10 5 5 5-5" />
-                  <path d="M4 21h16" />
-                </svg>
-              </button>
+              {/* Plus de bouton « détacher » ici : le bloc se range dans
+                  l'éditeur (Dispositions → Réorganiser), au glisser. */}
               <button
                 onClick={() => connectedVoice && leaveVoiceChannel(connectedVoice)}
                 title={t("voice.disconnect")}
