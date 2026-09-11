@@ -71,6 +71,7 @@ const reset = () =>
       bottom: { panels: [], active: null, size: K.BOTTOM_DEFAULT },
     },
     floatingPanels: {},
+    voiceInMenu: true,
     shareViewMaxVh: K.SV_DEFAULT,
     shareDock: "inline",
     shareFloating: { x: -1, y: -1, w: 440, h: 300 },
@@ -251,6 +252,36 @@ describe("useLayoutStore — dock à zones (§1.6)", () => {
     expect(s().dockZones.right.panels).toEqual([]);
     expect(s().dockZones.bottom.panels).toEqual([]);
     expect(s().dockZones.right.size).toBe(480);
+  });
+
+  it("l'insertion se fait DEVANT le bloc visé — c'est l'ordre choisi", () => {
+    const s = () => useLayoutStore.getState();
+    s().openDockPanel("members");
+    s().openDockPanel("soundboard");
+    expect(s().dockZones.right.panels).toEqual(["members", "soundboard"]);
+
+    // Insérer la transcription devant la soundboard.
+    s().moveDockPanel("transcript", "right", "soundboard");
+    expect(s().dockZones.right.panels).toEqual(["members", "transcript", "soundboard"]);
+
+    // Réordonner dans la MÊME zone : la soundboard passe en tête.
+    s().moveDockPanel("soundboard", "right", "members");
+    expect(s().dockZones.right.panels).toEqual(["soundboard", "members", "transcript"]);
+
+    // Sans cible : en fin de zone.
+    s().moveDockPanel("soundboard", "right");
+    expect(s().dockZones.right.panels).toEqual(["members", "transcript", "soundboard"]);
+  });
+
+  it("le bloc voix se place sous la soundboard dans le bandeau bas", () => {
+    const s = () => useLayoutStore.getState();
+    s().openDockPanel("soundboard");
+    s().moveDockPanel("soundboard", "bottom");
+    s().sendVoiceToDock(); // par défaut : zone basse, en fin de liste
+    expect(s().dockZones.bottom.panels).toEqual(["soundboard", "voice"]);
+    // L'utilisateur peut inverser l'ordre, c'est le tableau qui fait foi.
+    s().moveDockPanel("voice", "bottom", "soundboard");
+    expect(s().dockZones.bottom.panels).toEqual(["voice", "soundboard"]);
   });
 
   it("déplacer un panneau déjà dans la zone ne le duplique pas", () => {

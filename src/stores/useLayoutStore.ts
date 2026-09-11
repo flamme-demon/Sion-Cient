@@ -201,8 +201,10 @@ interface LayoutState {
   toggleDockPanel: (panel: DockPanelId) => void;
   /** Ferme un panneau (croix du panneau ou de la zone). */
   closeDockPanel: (panel: DockPanelId) => void;
-  /** Déplace un panneau vers l'autre zone (menu de la zone). */
-  moveDockPanel: (panel: DockPanelId, zone: DockZoneId) => void;
+  /** Déplace un panneau vers une zone — `before` l'insère DEVANT ce bloc
+   *  (omis/null = en fin de zone). C'est le glisser qui s'en sert (position du
+   *  curseur) et c'est ainsi qu'on réordonne dans une même zone. */
+  moveDockPanel: (panel: DockPanelId, zone: DockZoneId, before?: DockPanelId | null) => void;
   /** Sélectionne l'onglet actif d'une zone. */
   setDockZoneActive: (zone: DockZoneId, panel: DockPanelId) => void;
   /** Redimensionne une zone (drag/clavier sur sa poignée). */
@@ -360,15 +362,17 @@ export const useLayoutStore = create<LayoutState>()(
             ...(panel === "voice" ? { voiceInMenu: true } : {}),
           };
         }),
-      moveDockPanel: (panel, zone) =>
+      moveDockPanel: (panel, zone, before = null) =>
         set((s) => {
           const from = zoneOf(s.dockZones, panel);
-          if (from === zone) {
-            return { dockZones: { ...s.dockZones, [zone]: { ...s.dockZones[zone], active: panel } } };
-          }
           const zones = { ...s.dockZones };
           if (from) zones[from] = removeFromZone(zones[from], panel);
-          zones[zone] = { ...zones[zone], panels: [...zones[zone].panels, panel], active: panel };
+          // Réordonner dans la MÊME zone passe par le même chemin : on retire
+          // puis on réinsère à la position demandée.
+          const rest = zones[zone].panels.filter((p) => p !== panel);
+          const index = before ? Math.max(0, rest.indexOf(before)) : rest.length;
+          const panels = [...rest.slice(0, index), panel, ...rest.slice(index)];
+          zones[zone] = { ...zones[zone], panels, active: panel };
           return { dockZones: zones };
         }),
       setDockZoneActive: (zone, panel) =>
