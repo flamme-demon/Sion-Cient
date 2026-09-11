@@ -54,6 +54,18 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libwayland-dev
 
+      - name: Install clang 21 (libc++ hermétique de libwebrtc)
+        # Le webrtc-sys vendored exige clang >= 21 : le libc++ hermétique
+        # embarqué dans libwebrtc.a utilise des builtins récents. Ubuntu 24.04
+        # n'a que clang 18 → dépôt LLVM officiel.
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-21.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y clang-21
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 'stable'
@@ -73,3 +85,6 @@ jobs:
       - name: Rust unit tests
         working-directory: src-tauri
         run: cargo test -j4
+        env:
+          CC: clang-21
+          CXX: clang++-21
