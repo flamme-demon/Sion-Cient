@@ -889,6 +889,20 @@ async fn pick_audio_file() -> Option<String> {
         .map(|h| h.path().to_string_lossy().to_string())
 }
 
+/// Native file picker for a panel background image. Returns the absolute
+/// path, or None if cancelled. Les octets sont ensuite lus par
+/// `read_dropped_file` (IPC binaire, pas de base64).
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn pick_image_file() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Sélectionner une image")
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"])
+        .pick_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string())
+}
+
 /// Read an arbitrary local file as base64. Used to load a user-picked cue
 /// sound (outside the bundle) so the renderer can turn it into a blob URL —
 /// la webview ne peut pas lire un `file://` arbitraire. Capped at 5 MB
@@ -2665,6 +2679,7 @@ pub fn run() {
         system_locale,
         pick_ffmpeg_path,
         pick_audio_file,
+        pick_image_file,
         read_file_b64,
         read_clipboard_image,
         read_dropped_file,

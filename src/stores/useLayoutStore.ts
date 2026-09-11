@@ -150,6 +150,16 @@ const SHARE_FLOATING_DEFAULT = { x: -1, y: -1, w: 440, h: 300 };
 
 const clampWidth = (w: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, w));
 
+/** Portée d'un fond d'image : le chat, le menu des salons, ou un bloc de dock. */
+export type BackgroundScope = "chat" | "channels" | DockPanelId;
+
+/** Fond d'image d'un panneau : chemin local + opacité. L'image est posée SOUS
+ *  le fond du thème, donc le contraste du texte ne dépend pas du fond. */
+export interface PanelBackgroundCfg {
+  path: string;
+  opacity: number;
+}
+
 interface LayoutState {
   /** Dernière largeur déployée, conservée pendant le mode rail pour que le
    *  déploiement suivant retrouve la taille choisie par l'utilisateur. */
@@ -193,6 +203,10 @@ interface LayoutState {
    *  blocs saisissables partout — éphémère, jamais persisté. */
   layoutEditing: boolean;
   setLayoutEditing: (editing: boolean) => void;
+  /** Fonds d'image par panneau (chemin + opacité) — voir `PanelBackground`. */
+  panelBackgrounds: Partial<Record<BackgroundScope, PanelBackgroundCfg>>;
+  /** Associe (ou retire avec `null`) le fond d'image d'un panneau. */
+  setPanelBackground: (scope: BackgroundScope, cfg: PanelBackgroundCfg | null) => void;
   /** Retour à la largeur par défaut, déployé (double-clic sur la poignée). */
   resetSidebar: () => void;
   /** Ouvre un panneau dans sa zone par défaut (ou l'active s'il est ouvert). */
@@ -246,6 +260,7 @@ export const useLayoutStore = create<LayoutState>()(
       sidebarSide: "left" as SidebarSide,
       voiceInMenu: true,
       layoutEditing: false,
+      panelBackgrounds: {},
       dockZones: defaultDockZones(),
       shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
       setSidebarWidth: (raw) =>
@@ -293,6 +308,13 @@ export const useLayoutStore = create<LayoutState>()(
           };
         }),
       setLayoutEditing: (editing) => set({ layoutEditing: editing }),
+      setPanelBackground: (scope, cfg) =>
+        set((s) => {
+          const next = { ...s.panelBackgrounds };
+          if (cfg) next[scope] = cfg;
+          else delete next[scope];
+          return { panelBackgrounds: next };
+        }),
       openDockPanel: (panel) =>
         set((s) => {
           const current = zoneOf(s.dockZones, panel);
@@ -498,6 +520,7 @@ export const useLayoutStore = create<LayoutState>()(
         voiceInMenu: s.voiceInMenu,
         dockZones: s.dockZones,
         floatingPanels: s.floatingPanels,
+        panelBackgrounds: s.panelBackgrounds,
         shareViewMaxVh: s.shareViewMaxVh,
         shareDock: s.shareDock,
         shareFloating: s.shareFloating,

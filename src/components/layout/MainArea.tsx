@@ -9,6 +9,8 @@ import { DropZone } from "../chat/DropZone";
 import { DockZone } from "./DockZone";
 import { FloatingPanels } from "./FloatingPanels";
 import { MiniPlayerCard } from "../chat/MiniPlayerCard";
+import { BackgroundControls } from "./PanelBackground";
+import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import { useAppStore } from "../../stores/useAppStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { readDroppedFile } from "../../utils/droppedFile";
@@ -19,6 +21,8 @@ export function MainArea() {
   const addPendingFile = useAppStore((s) => s.addPendingFile);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const isMobile = useIsMobile();
+  // Fond d'image du chat (optionnel) — voir « Réorganiser » pour le choisir.
+  const chatBg = usePanelBackgroundStyle("chat");
 
   const handleDragOver = useCallback((e: DragEvent) => {
     e.preventDefault();
@@ -89,7 +93,8 @@ export function MainArea() {
     >
       {!isMobile && <DockZone zone="top" />}
       <div className="flex-1 flex min-h-0 min-w-0">
-        <div className="flex-1 flex flex-col min-w-0 relative">
+        <div className="flex-1 flex flex-col min-w-0 relative" style={chatBg}>
+          <BackgroundControls scope="chat" />
           <ChatHeader />
           <PinnedBar />
           <TranscriptInviteBanner />

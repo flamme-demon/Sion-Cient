@@ -19,6 +19,8 @@ import {
 } from "../../stores/useLayoutStore";
 import { ResizeHandle } from "./ResizeHandle";
 import { DockZoneContext } from "./dockZoneContext";
+import { BackgroundControls } from "./PanelBackground";
+import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import { MemberPanel } from "../chat/MemberPanel";
 import { SoundboardPanel } from "../chat/SoundboardPanel";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
@@ -219,6 +221,15 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   const availability = useDockAvailability();
   const dragPointer = useRef<number | null>(null);
 
+  // Fonds d'image des blocs — hooks appelés dans un ordre FIXE, avant tout
+  // retour anticipé (un appel conditionnel ferait varier l'ordre des hooks).
+  const blockBgs = {
+    members: usePanelBackgroundStyle("members"),
+    soundboard: usePanelBackgroundStyle("soundboard"),
+    transcript: usePanelBackgroundStyle("transcript"),
+    voice: usePanelBackgroundStyle("voice"),
+  };
+
   // Échap annule un drag en cours (comme les poignées de resize).
   useEffect(() => {
     if (!draggingPanel) return;
@@ -352,11 +363,15 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
               minHeight: 0,
               display: 'flex',
               flexDirection: 'column',
+              position: 'relative',
+              // Fond d'image éventuel du bloc (sous son contenu).
+              ...(blockBgs[p] ?? {}),
               // Séparateur entre deux blocs empilés.
               borderTop: i > 0 ? '1px solid var(--color-outline-variant)' : undefined,
               opacity: isDragged ? 0.6 : 1,
             }}
           >
+            <BackgroundControls scope={p} />
             {layoutEditing && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
