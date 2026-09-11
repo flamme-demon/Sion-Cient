@@ -213,10 +213,11 @@ export default function App() {
   // the persisted setting by the dock store (`sion-layout`).
   useEffect(() => {
     const layout = useLayoutStore.getState();
-    const soundboardInDock =
+    const soundboardOpen =
       layout.dockZones.right.panels.includes("soundboard") ||
-      layout.dockZones.bottom.panels.includes("soundboard");
-    if (useSettingsStore.getState().soundboardOpenAtLaunch && !soundboardInDock) {
+      layout.dockZones.bottom.panels.includes("soundboard") ||
+      !!layout.floatingPanels["soundboard"];
+    if (useSettingsStore.getState().soundboardOpenAtLaunch && !soundboardOpen) {
       layout.openDockPanel("soundboard");
     }
   }, []);

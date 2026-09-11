@@ -8,10 +8,11 @@ au sortir de 2.0.0-alpha.1.
 > migrations), `ResizeHandle` double axe, sidebar 200→400 px / rail 72 px /
 > **masquée** (Ctrl+B cycle les trois, poignée de révélation sur le bord),
 > dock à **deux zones redimensionnables** (droite 220→520, bas 140→520) avec
-> **onglets** quand un panneau y est déplacé, déplacement par menu (⋮ →
-> « Déplacer en bas / à droite »), `resetLayout`, et **presets Chat / Voix /
-> Streaming** dans l'en-tête du salon. Bonus : mini-avatars d'occupants
-> (parole/son/AFK/micro) + carte de survol complète (rôles, réseau, clic droit).
+> **onglets**, panneaux déplaçables **par menu et par glisser-déposer**, et
+> **détachables en cartes flottantes** (glisser, resize, rattacher, position
+> et taille persistées) ; `resetLayout`, **presets Chat / Voix / Streaming**
+> dans l'en-tête du salon. Bonus : mini-avatars d'occupants (parole/son/AFK/
+> micro) + carte de survol complète (rôles, réseau, clic droit).
 > ✅ **Chantier 2 (partage)** : hauteur réglable persistée, barre d'onglets
 > navigateur (son + volume + plein écran), **mosaïque** (tuiles multi-partages,
 > son et curseurs par tuile), **PIP interne** (Ctrl+Maj+P : drag, snap, cumul
@@ -29,14 +30,13 @@ au sortir de 2.0.0-alpha.1.
 > avant le premier rendu (aucun flash), section **Apparence** dans les Réglages
 > (vignettes, « Sion Dark » / « AMOLED », suppression) — et l'**import/export
 > JSON** de la phase 5 est livré au passage.
-> ⏳ **Restent** — Chantier 1 : panneaux **flottants** (primitive partagée avec
-> la carte PIP), mode Arrange (Ctrl+Shift+L), presets exportables/importables,
-> finitions container queries pour le dock bas. Chantier 3 : « Sion Light »
-> (phase 3), accent seed (phase 4), fin de la phase 5 (préview au survol, sync
-> Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 : finitions du
-> PIP natif (position/taille persistées, coin d'ancrage, double-clic → app au
-> premier plan) et mini-player des vidéos du chat (§2.4) — le PiP OS (§2.3)
-> est écarté, WebKitGTK ne l'expose pas (spike du 11/09).
+> ⏳ **Restent** — Chantier 1 : presets exportables/importables, mode Arrange
+> (Ctrl+Shift+L) et finitions container queries du dock bas. Chantier 3 :
+> « Sion Light » (phase 3), accent seed (phase 4), fin de la phase 5 (préview
+> au survol, sync Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 :
+> finitions du PIP natif (position/taille persistées, coin d'ancrage,
+> double-clic → app au premier plan) et mini-player des vidéos du chat (§2.4) —
+> le PiP OS (§2.3) est écarté, WebKitGTK ne l'expose pas (spike du 11/09).
 
 ---
 
@@ -233,13 +233,15 @@ le dock bas multi-onglets devient central.
 **Découpage** :
 
 1. ✅ Zones resizable (§1.1-1.5) — le socle. Presets (§1.4) livrés avec.
-2. 🟡 Éditeur de zones : zones droite/bas + onglets + déplacement par menu +
-   persistance + reset ✅ — reste le **drag & drop** entre zones (pointer
-   events, ~2-4 j).
-3. Flottants : ouvrir un panneau en carte flottante (après le PIP, primitive
-   partagée) (~2-3 j).
-4. Presets + export/import JSON + mode Arrange + finitions container queries au
-   fil des panneaux (~3-5 j, étalable).
+2. ✅ Éditeur de zones : zones droite/bas + onglets + déplacement par menu **et
+   par drag & drop** (pointer events, bande « Déposer ici ») + persistance +
+   reset.
+3. ✅ Flottants : détacher un panneau en carte (glisser, resize, rattacher,
+   position/taille persistées) — même primitive que la carte PIP, plafond de
+   2 cartes.
+4. Restent : presets **exportables/importables**, mode Arrange (Ctrl+Shift+L —
+   moins utile maintenant que les onglets se glissent) et finitions container
+   queries au fil des panneaux (~3-5 j, étalable).
 
 Ce qu'on ne fait **pas** : placement libre (canvas), sidebar horizontale,
 multi-instances d'un même panneau, éditeur sur mobile (desktop-only).

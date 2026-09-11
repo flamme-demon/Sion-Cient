@@ -7,6 +7,7 @@ import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
 import { DropZone } from "../chat/DropZone";
 import { DockZone } from "./DockZone";
+import { FloatingPanels } from "./FloatingPanels";
 import { useAppStore } from "../../stores/useAppStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { readDroppedFile } from "../../utils/droppedFile";
@@ -98,6 +99,7 @@ export function MainArea() {
         {!isMobile && <DockZone zone="right" />}
       </div>
       {!isMobile && <DockZone zone="bottom" />}
+      {!isMobile && <FloatingPanels />}
     </div>
   );
 }

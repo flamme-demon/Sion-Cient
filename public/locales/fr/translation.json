@@ -395,6 +395,8 @@
     "closePanel": "Fermer le panneau",
     "dropHere": "Déposer ici",
     "dragPanel": "Glisser pour déplacer le panneau vers l'autre zone",
+    "floatPanel": "Détacher en fenêtre flottante",
+    "dockPanelBack": "Rattacher à la dock",
     "nativePip": "PIP natif — fenêtre au-dessus des autres applications (glisser pour déplacer, clic droit pour fermer)",
     "defaultChannels": "Canal par défaut",
     "defaultChannel": "Canal au démarrage",

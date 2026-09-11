@@ -61,6 +61,23 @@ export interface DockZoneState {
   size: number;
 }
 
+/** Carte flottante d'un panneau (même primitive que la carte PIP du partage) :
+ *  x/y < 0 = « coller en bas à droite », calculé au premier rendu. */
+export interface FloatingPanelRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export const FLOATING_PANEL_DEFAULT = { x: -1, y: -1, w: 360, h: 440 };
+export const FLOATING_PANEL_MIN_W = 260;
+export const FLOATING_PANEL_MIN_H = 200;
+
+/** Combien de panneaux peuvent flotter en même temps (au-delà, l'écran est un
+ *  chantier — et le menu reste simple). */
+export const FLOATING_PANEL_MAX = 2;
+
 const clampDockSize = (zone: DockZoneId, size: number) =>
   zone === "right"
     ? Math.min(DOCK_SIDE_MAX_SIZE, Math.max(DOCK_SIDE_MIN_SIZE, size))
@@ -153,6 +170,14 @@ interface LayoutState {
   setDockZoneActive: (zone: DockZoneId, panel: DockPanelId) => void;
   /** Redimensionne une zone (drag/clavier sur sa poignée). */
   setDockZoneSize: (zone: DockZoneId, size: number) => void;
+  /** Cartes flottantes ouvertes (rect par panneau, x/y < 0 = bas-droite). */
+  floatingPanels: Partial<Record<DockPanelId, FloatingPanelRect>>;
+  /** Détache un panneau de sa zone en carte flottante (plafonné). */
+  floatDockPanel: (panel: DockPanelId) => void;
+  /** Rattache une carte flottante à une zone (défaut : sa zone d'origine). */
+  dockFloatingPanel: (panel: DockPanelId, zone?: DockZoneId) => void;
+  /** Position/taille d'une carte flottante (merge partiel, bornes min). */
+  setFloatingRect: (panel: DockPanelId, rect: Partial<FloatingPanelRect>) => void;
   /** Ferme tous les panneaux (les tailles de zone sont conservées). */
   closeAllDockPanels: () => void;
   /** Remet TOUT le layout à zéro : sidebar, zones, panneaux, partage. */
@@ -222,6 +247,13 @@ export const useLayoutStore = create<LayoutState>()(
         }),
       toggleDockPanel: (panel) =>
         set((s) => {
+          // Flottant : le bouton du header referme la carte.
+          if (s.floatingPanels[panel]) {
+            if (panel === "soundboard") persistSoundboardAtLaunch(false);
+            const next = { ...s.floatingPanels };
+            delete next[panel];
+            return { floatingPanels: next };
+          }
           const current = zoneOf(s.dockZones, panel);
           if (!current) {
             if (panel === "soundboard") persistSoundboardAtLaunch(true);
@@ -247,10 +279,18 @@ export const useLayoutStore = create<LayoutState>()(
         }),
       closeDockPanel: (panel) =>
         set((s) => {
+          const floating = s.floatingPanels[panel];
           const current = zoneOf(s.dockZones, panel);
-          if (!current) return {};
+          if (!current && !floating) return {};
           if (panel === "soundboard") persistSoundboardAtLaunch(false);
-          return { dockZones: { ...s.dockZones, [current]: removeFromZone(s.dockZones[current], panel) } };
+          const nextFloating = { ...s.floatingPanels };
+          delete nextFloating[panel];
+          return {
+            dockZones: current
+              ? { ...s.dockZones, [current]: removeFromZone(s.dockZones[current], panel) }
+              : s.dockZones,
+            floatingPanels: nextFloating,
+          };
         }),
       moveDockPanel: (panel, zone) =>
         set((s) => {
@@ -273,9 +313,64 @@ export const useLayoutStore = create<LayoutState>()(
         set((s) => ({
           dockZones: { ...s.dockZones, [zone]: { ...s.dockZones[zone], size: clampDockSize(zone, size) } },
         })),
+      floatingPanels: {},
+      floatDockPanel: (panel) =>
+        set((s) => {
+          const already = s.floatingPanels[panel];
+          // Plafond : au-delà, on refuse poliment plutôt que d'empiler des
+          // cartes qui se recouvrent.
+          if (!already && Object.keys(s.floatingPanels).length >= FLOATING_PANEL_MAX) return {};
+          const from = zoneOf(s.dockZones, panel);
+          return {
+            dockZones: from
+              ? { ...s.dockZones, [from]: removeFromZone(s.dockZones[from], panel) }
+              : s.dockZones,
+            floatingPanels: already
+              ? s.floatingPanels
+              : { ...s.floatingPanels, [panel]: { ...FLOATING_PANEL_DEFAULT } },
+          };
+        }),
+      dockFloatingPanel: (panel, zone) =>
+        set((s) => {
+          if (!s.floatingPanels[panel]) return {};
+          const next = { ...s.floatingPanels };
+          delete next[panel];
+          const target = zone ?? DOCK_PANEL_DEFAULT_ZONE[panel];
+          return {
+            floatingPanels: next,
+            dockZones: {
+              ...s.dockZones,
+              [target]: {
+                ...s.dockZones[target],
+                panels: s.dockZones[target].panels.includes(panel)
+                  ? s.dockZones[target].panels
+                  : [...s.dockZones[target].panels, panel],
+                active: panel,
+              },
+            },
+          };
+        }),
+      setFloatingRect: (panel, rect) =>
+        set((s) => {
+          const current = s.floatingPanels[panel];
+          if (!current) return {};
+          return {
+            floatingPanels: {
+              ...s.floatingPanels,
+              [panel]: {
+                ...current,
+                ...rect,
+                w: Math.max(FLOATING_PANEL_MIN_W, rect.w ?? current.w),
+                h: Math.max(FLOATING_PANEL_MIN_H, rect.h ?? current.h),
+              },
+            },
+          };
+        }),
       closeAllDockPanels: () =>
         set((s) => {
-          if (s.dockZones.right.panels.includes("soundboard") || s.dockZones.bottom.panels.includes("soundboard")) {
+          const soundboardInDock =
+            s.dockZones.right.panels.includes("soundboard") || s.dockZones.bottom.panels.includes("soundboard");
+          if (soundboardInDock || s.floatingPanels["soundboard"]) {
             persistSoundboardAtLaunch(false);
           }
           return {
@@ -283,6 +378,7 @@ export const useLayoutStore = create<LayoutState>()(
               right: { ...s.dockZones.right, panels: [], active: null },
               bottom: { ...s.dockZones.bottom, panels: [], active: null },
             },
+            floatingPanels: {},
           };
         }),
       resetLayout: () =>
@@ -290,6 +386,7 @@ export const useLayoutStore = create<LayoutState>()(
           sidebarMode: "full" as SidebarMode,
           sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
           dockZones: defaultDockZones(),
+          floatingPanels: {},
           shareViewMaxVh: SHARE_VIEW_DEFAULT_VH,
           shareDock: "inline" as ShareDock,
           shareFloating: { ...SHARE_FLOATING_DEFAULT },
@@ -323,6 +420,7 @@ export const useLayoutStore = create<LayoutState>()(
         sidebarWidth: s.sidebarWidth,
         sidebarMode: s.sidebarMode,
         dockZones: s.dockZones,
+        floatingPanels: s.floatingPanels,
         shareViewMaxVh: s.shareViewMaxVh,
         shareDock: s.shareDock,
         shareFloating: s.shareFloating,

@@ -67,6 +67,7 @@ const reset = () =>
       right: { panels: [], active: null, size: K.ZONE_DEFAULT },
       bottom: { panels: [], active: null, size: K.BOTTOM_DEFAULT },
     },
+    floatingPanels: {},
     shareViewMaxVh: K.SV_DEFAULT,
     shareDock: "inline",
     shareFloating: { x: -1, y: -1, w: 440, h: 300 },
@@ -297,5 +298,63 @@ describe("useLayoutStore — zone de partage", () => {
 
     s().toggleShareDock();
     expect(s().shareDock).toBe("inline");
+  });
+});
+
+describe("useLayoutStore — panneaux flottants (§1.6)", () => {
+  beforeEach(reset);
+
+  // Mêmes bornes que le store (`FLOATING_PANEL_MIN_W/H`, `FLOATING_PANEL_MAX`) —
+  // répétées ici pour que toute dérive de contrat soit visible dans le diff.
+  const MIN_W = 260;
+  const MIN_H = 200;
+  const MAX_FLOATING = 2;
+
+  it("détache un panneau en carte flottante, puis le rattache", () => {
+    const s = () => useLayoutStore.getState();
+    s().openDockPanel("members");
+
+    s().floatDockPanel("members");
+    expect(s().dockZones.right.panels).toEqual([]);
+    expect(s().floatingPanels.members).toEqual({ x: -1, y: -1, w: 360, h: 440 });
+
+    // Bornes minimales appliquées même via un merge partiel.
+    s().setFloatingRect("members", { w: 10, h: 10 });
+    expect(s().floatingPanels.members.w).toBe(MIN_W);
+    expect(s().floatingPanels.members.h).toBe(MIN_H);
+
+    // Déplacement/taille mémorisés.
+    s().setFloatingRect("members", { x: 100, y: 80, w: 420 });
+    expect(s().floatingPanels.members).toMatchObject({ x: 100, y: 80, w: 420 });
+
+    // Rattachement : retour dans la dock, l'onglet devient actif, la carte
+    // disparaît.
+    s().dockFloatingPanel("members");
+    expect(s().floatingPanels.members).toBeUndefined();
+    expect(s().dockZones.right.panels).toEqual(["members"]);
+    expect(s().dockZones.right.active).toBe("members");
+  });
+
+  it("plafond de cartes flottantes, fermeture par le bouton du header, nettoyage global", () => {
+    const s = () => useLayoutStore.getState();
+    s().floatDockPanel("members");
+    s().floatDockPanel("soundboard");
+    // Au-delà du plafond, le troisième reste fermé.
+    s().floatDockPanel("transcript");
+    expect(Object.keys(s().floatingPanels)).toHaveLength(MAX_FLOATING);
+    expect(s().floatingPanels.transcript).toBeUndefined();
+
+    // Clic sur le bouton du header : la carte flottante se referme.
+    s().toggleDockPanel("members");
+    expect(s().floatingPanels.members).toBeUndefined();
+
+    // closeDockPanel ferme aussi une carte flottante (croix de la carte).
+    s().closeDockPanel("soundboard");
+    expect(s().floatingPanels).toEqual({});
+
+    // Et le grand nettoyage n'oublie personne.
+    s().floatDockPanel("members");
+    s().resetLayout();
+    expect(s().floatingPanels).toEqual({});
   });
 });

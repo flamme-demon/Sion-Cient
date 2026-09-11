@@ -126,6 +126,15 @@ function ZoneMenu({ panel, zone }: { panel: DockPanelId; zone: DockZoneId }) {
           </button>
           <button
             role="menuitem"
+            onClick={() => { useLayoutStore.getState().floatDockPanel(panel); setOpen(false); }}
+            style={itemStyle}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            {t("layout.floatPanel", { defaultValue: "Détacher en fenêtre flottante" })}
+          </button>
+          <button
+            role="menuitem"
             onClick={() => { useLayoutStore.getState().closeDockPanel(panel); setOpen(false); }}
             style={itemStyle}
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
