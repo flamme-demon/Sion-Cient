@@ -16,7 +16,6 @@ ICON_FILE="/usr/share/icons/hicolor/128x128/apps/sion-client.png"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_DIR="$PROJECT_DIR/src-tauri/target/release"
-CEF_DIR=$(find "$RELEASE_DIR/build" -name "cef_linux_x86_64" -type d 2>/dev/null | head -1)
 
 # --- Uninstall ---
 if [ "$1" = "--uninstall" ]; then
@@ -33,21 +32,12 @@ fi
 echo "Build du frontend..."
 (cd "$PROJECT_DIR" && bun run build)
 
-echo "Compilation Rust + CEF (peut prendre plusieurs minutes)..."
+echo "Compilation Rust + voix native (peut prendre plusieurs minutes)..."
 (cd "$PROJECT_DIR/src-tauri" && cargo build --release)
-
-# Refresh CEF_DIR after build
-CEF_DIR=$(find "$RELEASE_DIR/build" -name "cef_linux_x86_64" -type d 2>/dev/null | head -1)
 
 # --- Checks ---
 if [ ! -f "$RELEASE_DIR/$APP_NAME" ]; then
     echo "Binaire non trouve: $RELEASE_DIR/$APP_NAME"
-    echo "Le build a echoue."
-    exit 1
-fi
-
-if [ -z "$CEF_DIR" ]; then
-    echo "Binaires CEF non trouves dans $RELEASE_DIR/build/"
     echo "Le build a echoue."
     exit 1
 fi
@@ -61,14 +51,10 @@ sudo mkdir -p "$INSTALL_DIR"
 sudo cp "$RELEASE_DIR/$APP_NAME" "$INSTALL_DIR/"
 sudo chmod +x "$INSTALL_DIR/$APP_NAME"
 
-# Libs CEF
-echo "Copie des bibliotheques CEF (~1.6 GB)..."
-for f in libcef.so libEGL.so libGLESv2.so libvulkan.so.1 libvk_swiftshader.so \
-         chrome_100_percent.pak chrome_200_percent.pak resources.pak \
-         icudtl.dat v8_context_snapshot.bin vk_swiftshader_icd.json; do
-    [ -f "$CEF_DIR/$f" ] && sudo cp "$CEF_DIR/$f" "$INSTALL_DIR/"
+# Bibliothèques natives (ggml/transcribe copiées par build.rs à côté du binaire)
+for f in "$RELEASE_DIR"/lib*.so*; do
+    [ -f "$f" ] && sudo cp "$f" "$INSTALL_DIR/"
 done
-sudo cp -r "$CEF_DIR/locales" "$INSTALL_DIR/"
 
 # Script de lancement
 sudo tee "$INSTALL_DIR/launch.sh" > /dev/null << 'LAUNCH'

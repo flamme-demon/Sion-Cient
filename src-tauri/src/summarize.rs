@@ -33,7 +33,11 @@ fn llama_dir(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf>
 }
 
 fn llama_bin_name() -> &'static str {
-    if cfg!(target_os = "windows") { "llama-cli.exe" } else { "llama-cli" }
+    if cfg!(target_os = "windows") {
+        "llama-cli.exe"
+    } else {
+        "llama-cli"
+    }
 }
 
 /// Binaries usable for raw completion, in order of preference. Since ~b10000
@@ -52,7 +56,11 @@ fn completion_bin_names() -> &'static [&'static str] {
 /// The GPU backend library shipped only by the Vulkan archives — its absence
 /// identifies a CPU-only install.
 fn vulkan_lib_name() -> &'static str {
-    if cfg!(target_os = "windows") { "ggml-vulkan.dll" } else { "libggml-vulkan.so" }
+    if cfg!(target_os = "windows") {
+        "ggml-vulkan.dll"
+    } else {
+        "libggml-vulkan.so"
+    }
 }
 
 /// Marker written after a deliberate fall-back to the CPU build, so a
@@ -68,7 +76,12 @@ pub(crate) fn host_has_vulkan() -> bool {
     #[cfg(target_os = "windows")]
     {
         return std::env::var_os("WINDIR")
-            .map(|w| std::path::Path::new(&w).join("System32").join("vulkan-1.dll").exists())
+            .map(|w| {
+                std::path::Path::new(&w)
+                    .join("System32")
+                    .join("vulkan-1.dll")
+                    .exists()
+            })
             .unwrap_or(false);
     }
     #[cfg(target_os = "linux")]
@@ -121,7 +134,13 @@ fn find_llama(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf
 }
 
 fn summary_model_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
-    Some(app.path().app_data_dir().ok()?.join("models").join(SUMMARY_MODEL_FILE))
+    Some(
+        app.path()
+            .app_data_dir()
+            .ok()?
+            .join("models")
+            .join(SUMMARY_MODEL_FILE),
+    )
 }
 
 /// What the summary feature needs and whether each piece is present.
@@ -162,8 +181,12 @@ pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<Strin
 
     let rel: serde_json::Value = client
         .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
-        .send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Asset names as of b10059. Order = preference.
     let suffixes: &[&str] = if cfg!(target_os = "windows") {
@@ -177,7 +200,8 @@ pub async fn download_llama(app: tauri::AppHandle<TauriRuntime>) -> Result<Strin
         let Some(url) = rel["assets"].as_array().and_then(|assets| {
             assets.iter().find_map(|a| {
                 let name = a["name"].as_str()?;
-                name.ends_with(suffix).then(|| a["browser_download_url"].as_str().map(String::from))?
+                name.ends_with(suffix)
+                    .then(|| a["browser_download_url"].as_str().map(String::from))?
             })
         }) else {
             last_err = format!("asset '*{suffix}' introuvable");
@@ -223,7 +247,11 @@ async fn fetch_and_install_llama(
         return Err(format!("HTTP {}", resp.status()));
     }
     let total = resp.content_length();
-    let archive = std::env::temp_dir().join(if cfg!(target_os = "windows") { "sion_llama_dl.zip" } else { "sion_llama_dl.tar.gz" });
+    let archive = std::env::temp_dir().join(if cfg!(target_os = "windows") {
+        "sion_llama_dl.zip"
+    } else {
+        "sion_llama_dl.tar.gz"
+    });
     let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
     let mut downloaded: u64 = 0;
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
@@ -242,12 +270,18 @@ async fn fetch_and_install_llama(
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let out = hidden_command("tar")
-        .arg("-xf").arg(&archive).arg("-C").arg(dir)
+        .arg("-xf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(dir)
         .output()
         .map_err(|e| format!("tar introuvable: {e}"))?;
     let _ = std::fs::remove_file(&archive);
     if !out.status.success() {
-        return Err(format!("extraction échouée: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!(
+            "extraction échouée: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
     }
 
     let bin = find_file(dir, llama_bin_name()).ok_or("llama-cli absent de l'archive")?;
@@ -348,7 +382,8 @@ pub async fn download_summary_model(app: tauri::AppHandle<TauriRuntime>) -> Resu
         return Ok(dest.to_string_lossy().into_owned());
     }
     std::fs::create_dir_all(dest.parent().unwrap()).map_err(|e| e.to_string())?;
-    let url = format!("https://huggingface.co/{SUMMARY_MODEL_REPO}/resolve/main/{SUMMARY_MODEL_FILE}");
+    let url =
+        format!("https://huggingface.co/{SUMMARY_MODEL_REPO}/resolve/main/{SUMMARY_MODEL_FILE}");
     let _ = app.emit("summary-model-progress", 0u64);
 
     let client = reqwest::Client::builder()
@@ -430,7 +465,9 @@ fn run_bounded(mut cmd: std::process::Command) -> Result<String, String> {
         let mut tail: Vec<u8> = Vec::new();
         let mut buf = [0u8; 8192];
         while let Ok(n) = stderr.read(&mut buf) {
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             tail.extend_from_slice(&buf[..n]);
             if tail.len() > 4096 {
                 tail.drain(..tail.len() - 4096);
@@ -462,10 +499,15 @@ fn run_bounded(mut cmd: std::process::Command) -> Result<String, String> {
     let stderr_tail = stderr_tail.join().unwrap_or_default();
 
     if overflow {
-        return Err("llama produit une sortie anormalement volumineuse (binaire incompatible ?)".into());
+        return Err(
+            "llama produit une sortie anormalement volumineuse (binaire incompatible ?)".into(),
+        );
     }
     if timed_out {
-        return Err(format!("llama n'a pas terminé en {} min", LLAMA_TIMEOUT.as_secs() / 60));
+        return Err(format!(
+            "llama n'a pas terminé en {} min",
+            LLAMA_TIMEOUT.as_secs() / 60
+        ));
     }
     match status {
         Ok(s) if s.success() => Ok(String::from_utf8_lossy(&out).into_owned()),
@@ -509,24 +551,36 @@ pub fn summarize_transcript(
     let prompt_file = std::env::temp_dir().join("sion_summary_prompt.txt");
     std::fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
 
-    let threads = std::thread::available_parallelism().map(|n| n.get().min(6)).unwrap_or(4);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(6))
+        .unwrap_or(4);
     let mut cmd = hidden_command(&bin);
-    cmd.arg("-m").arg(&model)
-        .arg("-f").arg(&prompt_file)
+    cmd.arg("-m")
+        .arg(&model)
+        .arg("-f")
+        .arg(&prompt_file)
         .arg("-no-cnv")
         .arg("--no-display-prompt")
         .arg("--simple-io")
-        .arg("-c").arg("16384")
-        .arg("-n").arg("1200")
-        .arg("--temp").arg("0.4")
-        .arg("-t").arg(threads.to_string());
+        .arg("-c")
+        .arg("16384")
+        .arg("-n")
+        .arg("1200")
+        .arg("--temp")
+        .arg("0.4")
+        .arg("-t")
+        .arg(threads.to_string());
     // The prebuilt ubuntu tarball ships libllama.so next to the binary.
     #[cfg(target_os = "linux")]
     if let Some(parent) = bin.parent() {
         cmd.env("LD_LIBRARY_PATH", parent);
     }
 
-    log::info!("[Sion][summary] running {:?} ({} chars of transcript)", bin.file_name().unwrap_or_default(), transcript.len());
+    log::info!(
+        "[Sion][summary] running {:?} ({} chars of transcript)",
+        bin.file_name().unwrap_or_default(),
+        transcript.len()
+    );
     let started = std::time::Instant::now();
     let out = run_bounded(cmd);
     let _ = std::fs::remove_file(&prompt_file);
@@ -540,7 +594,11 @@ pub fn summarize_transcript(
     }
     .trim()
     .to_string();
-    log::info!("[Sion][summary] done in {} s, {} chars", started.elapsed().as_secs(), text.len());
+    log::info!(
+        "[Sion][summary] done in {} s, {} chars",
+        started.elapsed().as_secs(),
+        text.len()
+    );
     if text.is_empty() {
         return Err("le modèle n'a rien produit".into());
     }

@@ -1,7 +1,7 @@
 import { Filter, Direction } from "matrix-js-sdk";
 import { getSharedAudioContext } from "./audioContext";
 import { getMatrixClient, findSoundboardRoom, uploadFile } from "./matrixService";
-import { getCurrentRoom, setPlayingSound } from "./livekitService";
+import { voiceNativePublishData, bytesToB64 } from "./voiceNativeService";
 import { useAppStore } from "../stores/useAppStore";
 
 export interface SoundEntry {
@@ -468,6 +468,44 @@ function clampGain(v: number): number {
   return Math.max(SOUND_GAIN_MIN, Math.min(SOUND_GAIN_MAX, v));
 }
 
+/** Decode a browser-supported sound and convert it once to the native render
+ * format. Linear resampling is sufficient here: clips are limited to 20 s and
+ * WebRTC receives the final 48 kHz mono PCM without a realtime IPC stream. */
+async function decodeNativeSoundboardPcm(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Sound decode failed: ${response.status}`);
+  const encoded = await response.arrayBuffer();
+  const decoded = await getSharedAudioContext().decodeAudioData(encoded);
+  const outputLength = Math.ceil(decoded.length * 48_000 / decoded.sampleRate);
+  const bytes = new Uint8Array(outputLength * 2);
+  const channels = Array.from(
+    { length: decoded.numberOfChannels },
+    (_, channel) => decoded.getChannelData(channel),
+  );
+  for (let i = 0; i < outputLength; i++) {
+    const position = i * decoded.sampleRate / 48_000;
+    const left = Math.min(Math.floor(position), decoded.length - 1);
+    const right = Math.min(left + 1, decoded.length - 1);
+    const fraction = position - left;
+    let sample = 0;
+    for (const channel of channels) {
+      sample += channel[left] + (channel[right] - channel[left]) * fraction;
+    }
+    sample = Math.max(-1, Math.min(1, sample / channels.length));
+    const pcm = sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767);
+    bytes[i * 2] = pcm & 0xff;
+    bytes[i * 2 + 1] = (pcm >> 8) & 0xff;
+  }
+  const { bytesToB64 } = await import("./voiceNativeService");
+  return bytesToB64(bytes);
+}
+
+async function playSoundNative(url: string, gain: number): Promise<void> {
+  const { playVoiceNativeSoundboard } = await import("./voiceNativeService");
+  const pcmB64 = await decodeNativeSoundboardPcm(url);
+  await playVoiceNativeSoundboard(pcmB64, playbackVolume * clampGain(gain));
+}
+
 /** Build the playback chain for one HTMLAudioElement and start playback.
  *  Web Audio is needed (vs `audio.volume`) because element volume is
  *  capped at 1.0 — boosting beyond that requires a GainNode. The
@@ -529,7 +567,13 @@ export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promis
   if (useAppStore.getState().isDeafened) return;
 
   const url = await resolveBlobUrl(mxcUrl);
-  // Attach to the DOM so Chromium doesn't GC the element mid-play (which
+  // En appel, le clip est mixé par le moteur Rust dans le rendu WebRTC (donc
+  // aussi dans la référence AEC). Hors appel, lecture locale DOM classique.
+  if (useAppStore.getState().connectedVoiceChannel) {
+    await playSoundNative(url, gain);
+    return;
+  }
+  // Attach to the DOM so the webview doesn't GC the element mid-play (which
   // manifests as AbortError: "media was removed from the document").
   const audio = document.createElement("audio");
   audio.src = url;
@@ -567,7 +611,6 @@ const afkDecoder = new TextDecoder();
  * resolve the sound from their local soundboard cache first.
  */
 export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs: number | null, gain: number = 1.0): void {
-  const room = getCurrentRoom();
   const resolvedEmoji = emoji || "🔊";
   const resolvedDuration = durationMs ?? 3000;
   const payload = afkEncoder.encode(JSON.stringify({
@@ -580,44 +623,24 @@ export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs:
     // SoundEntry.gain for the played sound.
     gain,
   }));
-  // Chemin natif (chantier no-CEF) : pas de room JS, on passe par le moteur
-  // Rust (`voice_native_publish_data`, reliable comme ici). Le badge local
-  // est posé côté Rust (commande `voice_native_publish_data`) car la liste
-  // des participants affichée vient du moteur, pas de `setPlayingSound`.
-  if (!room) {
-    import("./voiceNativeService").then(({ getActiveVoiceEngine, voiceNativePublishData, bytesToB64 }) => {
-      if (getActiveVoiceEngine() !== "native") return;
-      voiceNativePublishData(AFK_LIKE_TOPIC, bytesToB64(payload)).catch((err) => {
-        console.warn("[Sion] soundboard broadcast natif failed:", err);
-      });
-    }).catch(() => {});
-    return;
-  }
-  // Local "now playing" badge on own avatar — mirrors what remote peers will
-  // show when they receive the broadcast.
-  setPlayingSound(room.localParticipant.identity, resolvedEmoji, resolvedDuration);
-  try {
-    room.localParticipant.publishData(payload, { reliable: true, topic: AFK_LIKE_TOPIC }).catch((err) => {
-      console.warn("[Sion] soundboard broadcast failed:", err);
-    });
-  } catch (err) {
-    console.warn("[Sion] soundboard publishData threw:", err);
-  }
+  // Moteur Rust : `voice_native_publish_data`. Le badge local est posé côté
+  // Rust (le data-channel ne revient pas vers l'expéditeur).
+  voiceNativePublishData(AFK_LIKE_TOPIC, bytesToB64(payload)).catch((err) => {
+    console.warn("[Sion] soundboard broadcast natif failed:", err);
+  });
 }
 
 export const SOUNDBOARD_TOPIC = AFK_LIKE_TOPIC;
 
 /**
- * Handles a data-channel payload for the soundboard topic. Called by the
- * LiveKit DataReceived listener in livekitService.
+ * Handles a data-channel payload for the soundboard topic. Called by le
+ * relais data-channel natif (`useLiveKit` → `voice-native-data`).
  */
-export async function handleRemoteBroadcast(payload: Uint8Array, senderIdentity: string): Promise<void> {
+export async function handleRemoteBroadcast(payload: Uint8Array, _senderIdentity: string): Promise<void> {
   try {
     const data = JSON.parse(afkDecoder.decode(payload)) as { mxc?: string; emoji?: string; duration?: number; gain?: number };
     if (!data.mxc) return;
-    // Badge always renders (independent of soundboardEnabled) — receivers
-    // who disabled the soundboard still want to see who's triggering sounds.
-    setPlayingSound(senderIdentity, data.emoji || "🔊", data.duration ?? 3000);
+    // Le badge "now playing" est posé par le moteur Rust à la réception.
     const { useSettingsStore } = await import("../stores/useSettingsStore");
     if (!useSettingsStore.getState().soundboardEnabled) return;
     // Older senders may not include `gain` — default to 1.0 (no boost).
@@ -633,7 +656,7 @@ export async function handleRemoteBroadcast(payload: Uint8Array, senderIdentity:
 export function playErrorBuzzer(): void {
   if (useAppStore.getState().isDeafened) return;
   try {
-    // Reuse the shared context (browsers/CEF cap concurrent AudioContexts) —
+    // Reuse the shared context (les webviews plafonnent les AudioContexts concurrents) —
     // a per-call `new AudioContext()` risked hitting the cap and leaked when
     // start/stop threw before its close timer fired.
     const ctx = getSharedAudioContext();

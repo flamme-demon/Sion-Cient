@@ -291,6 +291,62 @@ body {
   cursor: pointer;
 }
 
+/* Shared themed range used by audio strength and volume controls. */
+.sion-range {
+  --sion-range-progress: 0%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.sion-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-primary) 0,
+    var(--color-primary) var(--sion-range-progress),
+    var(--color-surface-container-highest) var(--sion-range-progress),
+    var(--color-surface-container-highest) 100%
+  );
+}
+.sion-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -5px;
+  border: 2px solid var(--color-surface-container);
+  border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.sion-range:disabled {
+  cursor: not-allowed;
+}
+
+/* Les <select> natifs de WebKitGTK suivent le thème GTK (fond clair) et
+   ignorent `background`/`color` tant que `appearance` n'est pas désactivé.
+   On force le rendu Sion + chevron pour tous les selects de l'app, et un
+   schéma sombre pour les popups natifs (options, scrollbars). */
+:root {
+  color-scheme: dark;
+}
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23c9c9d0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px !important;
+}
+select option {
+  background-color: #1f1f24;
+  color: #e6e6ea;
+}
+
 /* Mobile responsive */
 @media (max-width: 767px) {
   body {

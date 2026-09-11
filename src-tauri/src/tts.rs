@@ -118,7 +118,10 @@ const MODELS: &[TtsModel] = &[
             ("preprocessor_config.json", "preprocessor_config.json"),
             ("tokenizer_config.json", "tokenizer_config.json"),
             ("vocab.json", "vocab.json"),
-            ("speech_tokenizer/config.json", "speech_tokenizer/config.json"),
+            (
+                "speech_tokenizer/config.json",
+                "speech_tokenizer/config.json",
+            ),
             (
                 "speech_tokenizer/configuration.json",
                 "speech_tokenizer/configuration.json",
@@ -321,10 +324,17 @@ pub async fn download_tts_engine(app: tauri::AppHandle<TauriRuntime>) -> Result<
         .map_err(|e| e.to_string())?;
     let mut resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {} — build indisponible pour cette plateforme", resp.status()));
+        return Err(format!(
+            "HTTP {} — build indisponible pour cette plateforme",
+            resp.status()
+        ));
     }
     let total = resp.content_length();
-    let archive = dir.join(if is_zip { "engine.zip" } else { "engine.tar.gz" });
+    let archive = dir.join(if is_zip {
+        "engine.zip"
+    } else {
+        "engine.tar.gz"
+    });
     let mut out = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
     let mut got: u64 = 0;
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
@@ -376,7 +386,8 @@ pub async fn download_tts_engine(app: tauri::AppHandle<TauriRuntime>) -> Result<
     }
     let _ = app.emit("tts-engine-progress", 100u64);
 
-    let bin = crate::find_file(&dir, engine_bin_name()).ok_or("binaire introuvable après extraction")?;
+    let bin =
+        crate::find_file(&dir, engine_bin_name()).ok_or("binaire introuvable après extraction")?;
     Ok(bin.to_string_lossy().into_owned())
 }
 
@@ -422,10 +433,7 @@ pub async fn download_tts_model(
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{remote}",
-            m.repo
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/{remote}", m.repo);
         let mut resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
             return Err(format!("{remote}: HTTP {}", resp.status()));
@@ -777,9 +785,17 @@ mod tests {
     fn model_arg_coherent_avec_les_fichiers() {
         for m in MODELS {
             if m.files.len() == 1 {
-                assert!(m.model_arg.is_some(), "{} : fichier unique sans model_arg", m.id);
+                assert!(
+                    m.model_arg.is_some(),
+                    "{} : fichier unique sans model_arg",
+                    m.id
+                );
             } else {
-                assert!(m.model_arg.is_none(), "{} : dossier mais model_arg défini", m.id);
+                assert!(
+                    m.model_arg.is_none(),
+                    "{} : dossier mais model_arg défini",
+                    m.id
+                );
             }
         }
     }
@@ -806,7 +822,11 @@ mod tests {
         std::fs::create_dir_all(&orphan).unwrap();
         let bin = orphan.join("audiocpp_cli");
         std::fs::write(&bin, b"").unwrap();
-        assert_eq!(model_specs_dir(&bin), None, "ne doit pas remonter indéfiniment");
+        assert_eq!(
+            model_specs_dir(&bin),
+            None,
+            "ne doit pas remonter indéfiniment"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -835,7 +855,9 @@ mod tests {
     /// coûterait une génération complète sur CPU pour rien.
     #[test]
     fn oom_gpu_ne_confond_pas_les_autres_echecs() {
-        assert!(!is_gpu_oom("audiocpp a échoué (1): invalid WAV RIFF header"));
+        assert!(!is_gpu_oom(
+            "audiocpp a échoué (1): invalid WAV RIFF header"
+        ));
         assert!(!is_gpu_oom("model spec not found for family 'qwen3_tts'"));
         assert!(!is_gpu_oom("génération interrompue (délai dépassé)"));
     }
@@ -854,8 +876,12 @@ mod tests {
     /// l'identique échouerait pareil, c'est le repli CPU qui répond.
     #[test]
     fn non_terminaison_ne_recouvre_pas_les_autres_echecs() {
-        assert!(!is_runaway("vk::Device::allocateMemory: ErrorOutOfDeviceMemory"));
-        assert!(!is_runaway("audiocpp a échoué (1): invalid WAV RIFF header"));
+        assert!(!is_runaway(
+            "vk::Device::allocateMemory: ErrorOutOfDeviceMemory"
+        ));
+        assert!(!is_runaway(
+            "audiocpp a échoué (1): invalid WAV RIFF header"
+        ));
     }
 
     #[test]

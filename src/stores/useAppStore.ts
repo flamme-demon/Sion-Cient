@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import * as livekitService from "../services/livekitService";
 import * as voiceNativeService from "../services/voiceNativeService";
 import * as matrixService from "../services/matrixService";
 import { playMuteCue, playUnmuteCue, playDeafenCue, playUndeafenCue } from "../services/voiceChannelSounds";
@@ -9,6 +8,16 @@ import { playMuteCue, playUnmuteCue, playDeafenCue, playUndeafenCue } from "../s
 // messages loaded during the initial sync must not count as unread,
 // otherwise channels display "99+" as soon as the client connects.
 export const APP_SESSION_START_TS = Date.now();
+
+/** Sérialise les bascules moteur mute/deafen : un enchaînement rapide F8/F9
+ *  ne doit pas lancer des commandes concurrentes (le deafen sort le moteur de
+ *  son holder, un mute simultané le croit absent — bug F9 — et le
+ *  stop/start playout s'entrelace mal). Les appels s'exécutent dans l'ordre. */
+let engineToggleChain: Promise<unknown> = Promise.resolve();
+function chainEngineToggle(op: () => Promise<unknown>): Promise<unknown> {
+  engineToggleChain = engineToggleChain.catch(() => {}).then(op);
+  return engineToggleChain;
+}
 
 export interface PendingFile {
   id: string;
@@ -56,10 +65,6 @@ interface AppState {
    *  i.e. we can't decrypt a peer). Best available proxy for "voice E2EE is
    *  unhealthy right now"; surfaces the manual republish-presence recovery. */
   e2eeUnhealthy: boolean;
-  /** CEF a perdu sa connexion au serveur audio : PulseAudio annonce des entrées
-   *  mais CEF n'en voit aucune. Chromium ne rétablit jamais ce lien et n'expose
-   *  rien pour le forcer — seul un redémarrage répare, d'où le bandeau. */
-  audioBackendLost: boolean;
   /** Écart estimé entre l'horloge locale et le serveur, en minutes. 0 = aligné.
    *  Au-delà de la tolérance, l'utilisateur disparaît des salons vocaux des
    *  autres et n'y voit plus personne — sans le moindre indice. */
@@ -103,7 +108,6 @@ interface AppState {
   setIsSpeaking: (v: boolean) => void;
   setPendingAutoJoinVoice: (roomId: string | null) => void;
   setE2EEUnhealthy: (v: boolean) => void;
-  setAudioBackendLost: (v: boolean) => void;
   setClockSkewMin: (v: number) => void;
   openUserContextMenu: (state: UserContextMenuState) => void;
   closeUserContextMenu: () => void;
@@ -133,7 +137,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingAutoJoinVoice: null,
   connectingVoiceChannel: null,
   e2eeUnhealthy: false,
-  audioBackendLost: false,
   clockSkewMin: 0,
   userContextMenu: null,
   downloadNotification: null,
@@ -153,103 +156,112 @@ export const useAppStore = create<AppState>((set, get) => ({
   // d'ARRÊTER un partage inexistant au lieu d'en démarrer un.
   disconnectVoice: () => set({ connectedVoiceChannel: null, isMuted: false, isDeafened: false, e2eeUnhealthy: false, isScreenSharing: false }),
   setE2EEUnhealthy: (v: boolean) => set({ e2eeUnhealthy: v }),
-  setAudioBackendLost: (v: boolean) => set({ audioBackendLost: v }),
   setClockSkewMin: (v: number) => set({ clockSkewMin: v }),
   toggleMute: async (silent = false) => {
     const newMuted = !get().isMuted;
-    const engine = voiceNativeService.getActiveVoiceEngine();
-    console.log(`[Sion][mute] toggleMute() store: ${get().isMuted} → ${newMuted} (moteur=${engine}, silent=${silent})`);
+    console.log(`[Sion][mute] toggleMute() store: ${get().isMuted} → ${newMuted} (silent=${silent})`);
     set({ isMuted: newMuted });
+    // Mirror into the call.member state event so clients in other voice
+    // channels see our mute indicator. Fire-and-forget — the publish is
+    // debounced and a failure is purely cosmetic for those other clients.
+    matrixService.publishLocalVoiceState({ muted: newMuted });
+    try {
+      await chainEngineToggle(() => voiceNativeService.setVoiceNativeMuted(newMuted));
+    } catch (err) {
+      console.error("[Sion] Failed to toggle microphone:", err);
+    }
     // `silent` is set ONLY when deafen triggers the implicit mute below (passed
     // as a literal `true`) — the deafen cue already played, so we skip the mute
     // cue to avoid a double sound. We must compare `=== true` and NOT rely on
     // truthiness: this is also wired straight to button `onClick` handlers,
     // which inject the click event as the first arg — a truthy object that
     // would otherwise swallow the cue on every manual mute/unmute.
+    // Le cue est joué APRÈS l'action moteur : le stop/start de capture peut
+    // suspendre le sink audio partagé et couper un son démarré juste avant.
     if (silent !== true) {
       if (newMuted) playMuteCue();
       else playUnmuteCue();
-    }
-    // Mirror into the call.member state event so clients in other voice
-    // channels see our mute indicator. Fire-and-forget — the publish is
-    // debounced and a failure is purely cosmetic for those other clients.
-    matrixService.publishLocalVoiceState({ muted: newMuted });
-    try {
-      if (voiceNativeService.getActiveVoiceEngine() === "native") {
-        await voiceNativeService.setVoiceNativeMuted(newMuted);
-      } else {
-        await livekitService.toggleMicrophone(!newMuted);
-      }
-    } catch (err) {
-      console.error("[Sion] Failed to toggle microphone:", err);
     }
   },
   toggleDeafen: async () => {
     const newDeafened = !get().isDeafened;
     console.log(`[Sion][deafen] toggleDeafen() store: ${get().isDeafened} → ${newDeafened}`);
     set({ isDeafened: newDeafened });
-    if (newDeafened) playDeafenCue();
-    else playUndeafenCue();
-    if (voiceNativeService.getActiveVoiceEngine() === "native") {
-      // ORDRE IMPOSÉ (bug F9 du 08/09) : le deafen Rust SORT le moteur de
-      // son holder pendant l'opération — un mute tiré en même temps le
-      // croit absent et abandonne en silence (micro live + sourdine).
-      // On attend donc la fin du deafen avant de couper le micro
-      // (le Rust attend aussi, cf. `wait_for_engine` : double sécurité).
-      try {
-        await voiceNativeService.setVoiceNativeDeafened(newDeafened);
-      } catch (err) {
-        console.error("[Sion] Failed to set native deafen:", err);
-      }
-    } else {
-      livekitService.setDeafened(newDeafened);
+    // ORDRE IMPOSÉ (bug F9 du 08/09) : le deafen Rust SORT le moteur de
+    // son holder pendant l'opération — un mute tiré en même temps le
+    // croit absent et abandonne en silence (micro live + sourdine).
+    // On attend donc la fin du deafen avant de couper le micro
+    // (le Rust attend aussi, cf. `wait_for_engine` : double sécurité).
+    try {
+      await chainEngineToggle(() => voiceNativeService.setVoiceNativeDeafened(newDeafened));
+    } catch (err) {
+      console.error("[Sion] Failed to set native deafen:", err);
     }
     matrixService.publishLocalVoiceState({ deafened: newDeafened });
     // Deafen also mutes the mic — silently, so only the deafen cue plays.
     if (newDeafened && !get().isMuted) {
       get().toggleMute(true);
-    } else if (newDeafened && voiceNativeService.getActiveVoiceEngine() === "native") {
+    } else if (newDeafened) {
       // Garde-fou : le store peut croire le micro déjà coupé alors que le
       // moteur publie encore (désync historique : "muté" affiché + micro
       // live — les pairs entendent tout). La coupure moteur est idempotente
       // ("micro déjà coupé" si vraiment coupé), donc on force sans risque.
       console.log("[Sion][deafen] micro déjà marqué muté — coupure moteur forcée (idempotente)");
-      voiceNativeService.setVoiceNativeMuted(true).catch((err) => {
+      chainEngineToggle(() => voiceNativeService.setVoiceNativeMuted(true)).catch((err) => {
         console.error("[Sion] Failed to force native mute on deafen:", err);
       });
     }
+    // Cue APRÈS le stop/start du playout : sinon le sink partagé peut
+    // suspendre et avaler le son (sourdine/unsourdine intermittente).
+    if (newDeafened) playDeafenCue();
+    else playUndeafenCue();
   },
   toggleScreenShare: async () => {
     const newSharing = !get().isScreenSharing;
-    if (voiceNativeService.getActiveVoiceEngine() === "native") {
-      // Chemin natif : capture + publication Rust (écran principal, 15 im/s,
-      // son du système sauf opt-out). État posé après succès moteur, jamais
-      // de partage fantôme affiché (pas de revert nécessaire : on ne pose
-      // qu'après succès). `screenShareAudioWarning` ("Sans son") miroir JS.
-      const { useSettingsStore } = await import("./useSettingsStore");
-      const wantAudio = useSettingsStore.getState().screenShareAudio;
-      try {
-        await voiceNativeService.setVoiceNativeScreensharing(newSharing, undefined, wantAudio);
-      } catch (err) {
-        console.warn("[Sion][voix-native] partage d'écran natif impossible:", err);
-        return;
-      }
-      set({ isScreenSharing: newSharing, screenShareAudioWarning: newSharing && !wantAudio });
-      // Overlay curseurs (miroir JS) : éteint/affiché avec le partage pour
-      // que les viewers puissent pointer sur notre écran.
-      import("../services/cursorOverlayService").then((overlay) => {
-        if (newSharing) overlay.openCursorOverlay().catch(() => {});
-        else overlay.closeCursorOverlay().catch(() => {});
-      }).catch(() => {});
+    // Capture + publication Rust avec les réglages du menu. État posé après
+    // succès moteur, jamais de partage fantôme affiché. `screenShareAudioWarning`
+    // ("Sans son") reflète l'absence de piste audio publiée.
+    const { useSettingsStore } = await import("./useSettingsStore");
+    const settings = useSettingsStore.getState();
+    const wantAudio = settings.screenShareAudio;
+    // L'identifiant `screen:N:0` est un index de moniteur historique qui ne
+    // correspond pas forcément au DesktopCapturer natif. Sur Wayland, laisser
+    // le portail KDE fournir sa propre source ; réutiliser ce nombre peut
+    // sélectionner un flux périmé et produire une piste noire.
+    const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+    const sourceMatch = isWindows
+      ? settings.screenShareSourceId?.match(/^screen:(\d+):/)
+      : null;
+    const sourceId = sourceMatch ? Number(sourceMatch[1]) : undefined;
+    let audioPublished = false;
+    try {
+      const autoQuality = settings.screenShareQualityMode === "auto";
+        const result = await voiceNativeService.setVoiceNativeScreensharing(newSharing, {
+          sourceId,
+          withAudio: wantAudio,
+          // Automatique = dimensions de la source conservées dans un plafond
+          // 1440p/30 ; congestion WebRTC et simulcast adaptent ensuite le débit.
+          resolution: autoQuality ? "1440p" : settings.screenShareResolution,
+          framerate: autoQuality ? 30 : settings.screenShareFramerate,
+          videoCodec: settings.screenShareCodec,
+        });
+      audioPublished = result.audioPublished;
+    } catch (err) {
+      console.warn("[Sion][voix-native] partage d'écran natif impossible:", err);
+      set({ fileError: `Partage d'écran impossible : ${String(err)}` });
+      setTimeout(() => set({ fileError: null }), 5000);
       return;
     }
-    set({ isScreenSharing: newSharing });
-    try {
-      await livekitService.toggleScreenShare(newSharing);
-    } catch (err) {
-      console.error("[Sion] Failed to toggle screen share:", err);
-      set({ isScreenSharing: !newSharing });
-    }
+    set({
+      isScreenSharing: newSharing,
+      screenShareAudioWarning: newSharing && wantAudio && !audioPublished,
+    });
+    // Overlay curseurs : éteint/affiché avec le partage pour que les viewers
+    // puissent pointer sur notre écran.
+    import("../services/cursorOverlayService").then((overlay) => {
+      if (newSharing) overlay.openCursorOverlay().catch(() => {});
+      else overlay.closeCursorOverlay().catch(() => {});
+    }).catch(() => {});
   },
   toggleAdmin: () => set((s) => ({ showAdmin: !s.showAdmin, showSettings: s.showAdmin ? s.showSettings : false })),
   toggleSettings: () => set((s) => ({ showSettings: !s.showSettings, showAdmin: s.showSettings ? s.showAdmin : false })),

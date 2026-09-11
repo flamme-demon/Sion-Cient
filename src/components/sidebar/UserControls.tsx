@@ -1,13 +1,12 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, SignalBarsIcon, RefreshIcon } from "../icons";
+import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, RefreshIcon } from "../icons";
 import { UserAvatar } from "./UserAvatar";
 import { AccountPopover } from "./AccountPopover";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useVoiceChannel, republishVoicePresence } from "../../hooks/useVoiceChannel";
-import { getCurrentRoom } from "../../services/livekitService";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
 
 /** "CC" captions glyph for the transcript toggle — drawn inline (the icons
@@ -20,35 +19,6 @@ function TranscriptIcon({ active }: { active: boolean }) {
       <path d="M17 10.2a2.4 2.4 0 0 0-3.4 0 2.7 2.7 0 0 0 0 3.6 2.4 2.4 0 0 0 3.4 0" />
     </svg>
   );
-}
-
-type Quality = "excellent" | "good" | "poor" | "lost" | "unknown";
-
-const normQuality = (q: unknown): Quality => {
-  const s = String(q ?? "");
-  return (["excellent", "good", "poor", "lost"].includes(s) ? s : "unknown") as Quality;
-};
-
-/** Poll the local LiveKit connection for RTT (ms) + quality, only while in voice. */
-function useVoiceStats(active: boolean) {
-  const [rtt, setRtt] = useState<number | null>(null);
-  const [quality, setQuality] = useState<Quality>("unknown");
-  useEffect(() => {
-    if (!active) { setRtt(null); setQuality("unknown"); return; }
-    const tick = () => {
-      const room = getCurrentRoom();
-      if (!room) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const engine = (room as any).engine;
-      const r = engine?.client?.rtt ?? engine?.rtt ?? null;
-      setRtt(typeof r === "number" ? r : null);
-      setQuality(normQuality(room.localParticipant?.connectionQuality));
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [active]);
-  return { rtt, quality };
 }
 
 export function UserControls() {
@@ -64,7 +34,6 @@ export function UserControls() {
   const channels = useMatrixStore((s) => s.channels);
   const credentials = useAuthStore((s) => s.credentials);
   const e2eeUnhealthy = useAppStore((s) => s.e2eeUnhealthy);
-  const audioBackendLost = useAppStore((s) => s.audioBackendLost);
   const clockSkewMin = useAppStore((s) => s.clockSkewMin);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
@@ -90,7 +59,6 @@ export function UserControls() {
 
   const activeVoice = channels.find((c) => c.id === connectedVoice);
   const inVoice = !!(connectedVoice && activeVoice);
-  const { rtt, quality } = useVoiceStats(inVoice);
 
   // Icon-only audio buttons (used on the user row when NOT in a voice channel).
   const iconBtnStyle = (active: boolean, variant?: 'error' | 'accent') => ({
@@ -132,20 +100,6 @@ export function UserControls() {
     }}>
       <AccountPopover />
 
-      {/* Backend audio perdu : la panne est invisible autrement — l'utilisateur
-          constate seulement qu'il n'a plus de micro, sans savoir pourquoi ni
-          quoi faire. Affiché hors vocal aussi, puisque c'est précisément ce
-          qui empêche de rejoindre. */}
-      {audioBackendLost && (
-        <div style={{
-          marginBottom: 10, padding: '8px 10px', borderRadius: 12,
-          background: 'var(--color-error-container)', color: 'var(--color-on-error-container)',
-          fontSize: 11, lineHeight: 1.4,
-        }}>
-          {t("voice.audioBackendLost")}
-        </div>
-      )}
-
       {/* Horloge décalée : l'utilisateur ne voit plus personne en vocal et les
           autres ne le voient plus non plus, sans qu'aucun symptôme ne l'explique. */}
       {clockSkewMin !== 0 && (
@@ -169,10 +123,6 @@ export function UserControls() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-green)', flexShrink: 0, animation: 'pulse 2s infinite' }} />
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-green)', whiteSpace: 'nowrap' }}>{t("voice.connected")}</span>
-              <SignalBarsIcon quality={quality} size={13} />
-              {rtt != null && (
-                <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', whiteSpace: 'nowrap' }}>{Math.round(rtt)} ms</span>
-              )}
             </div>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
               {/* Recovery: re-publish our voice presence + E2EE keys without

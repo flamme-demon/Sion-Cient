@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const invokeMock = vi.fn();
 const listenMock = vi.fn();
@@ -10,6 +10,7 @@ vi.mock("./matrixService", () => ({ getMatrixClient: (...args: unknown[]) => get
 
 import {
   getVoiceNativeStatus,
+  isVoiceNativeAvailable,
   voiceNativeConnect,
   voiceNativeDisconnect,
   setVoiceNativeMuted,
@@ -17,27 +18,32 @@ import {
   setVoiceNativeE2EEKey,
   onVoiceNativeStatus,
   onVoiceNativeParticipants,
-  onVoiceNativeSpeaking,
   onVoiceNativeData,
-  onVoiceNativeFrame,
+  onVoiceNativeLocalShareFailed,
   onVoiceNativeFrameStopped,
   setVoiceNativeShareAudioMuted,
+  setVoiceNativeShareAudioVolume,
   setVoiceNativeScreensharing,
+  parseVoiceNativeVideoPacket,
   overlayMatrixVoiceState,
   matrixUserIdOf,
   resolveNativeDisplayName,
   voiceNativePublishData,
+  playVoiceNativeSoundboard,
+  getVoiceNativeAudioLevel,
+  startVoiceNativeMicrophoneTest,
+  stopVoiceNativeAudioTest,
+  testVoiceNativeSpeaker,
+  setVoiceNativeAudioQuality,
   toConnectionQuality,
-  selectVoiceEngine,
   shouldAutoJoinVoice,
   b64ToBytes,
   bytesToB64,
-  getActiveVoiceEngine,
-  setActiveVoiceEngine,
   VOICE_NATIVE_STATUS_EVENT,
   VOICE_NATIVE_PARTICIPANTS_EVENT,
-  VOICE_NATIVE_SPEAKING_EVENT,
 } from "./voiceNativeService";
+
+afterEach(() => vi.unstubAllGlobals());
 
 beforeEach(() => {
   invokeMock.mockReset();
@@ -46,7 +52,20 @@ beforeEach(() => {
   getMatrixClientMock.mockReturnValue(null);
 });
 
-describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
+describe("voiceNativeService (pont voix native, moteur Rust)", () => {
+  it("ne confond pas Tauri et un moteur natif réellement compilé", async () => {
+    vi.stubGlobal("__TAURI_INTERNALS__", undefined);
+    await expect(isVoiceNativeAvailable()).resolves.toBe(false);
+    expect(invokeMock).not.toHaveBeenCalled();
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    invokeMock.mockResolvedValue(false);
+    await expect(isVoiceNativeAvailable()).resolves.toBe(false);
+    invokeMock.mockResolvedValue(true);
+    await expect(isVoiceNativeAvailable()).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenLastCalledWith("voice_native_available", undefined);
+    invokeMock.mockRejectedValue(new Error("ancienne version sans commande"));
+    await expect(isVoiceNativeAvailable()).resolves.toBe(false);
+  });
   it("getVoiceNativeStatus relaie le snapshot Rust tel quel", async () => {
     const snapshot = {
       state: "disconnected",
@@ -82,6 +101,31 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
       displayName: "flamme",
       encrypted: true,
     });
+  });
+
+  it("connect transmet les périphériques, traitements et qualité native", async () => {
+    invokeMock.mockResolvedValue({ state: "connecting" });
+    const devices = { inputDevice: "mic", outputDevice: "speaker" };
+    const processing = { echoCancellation: true, autoGainControl: true, noiseSuppression: true, mix: 0.5 };
+    await voiceNativeConnect("wss://livekit", "jwt", "salon", "flamme", false, devices, processing, "musicStereo");
+    expect(invokeMock).toHaveBeenLastCalledWith("voice_native_connect", expect.objectContaining({
+      inputDevice: "mic", outputDevice: "speaker", processing, audioQuality: "musicStereo",
+    }));
+  });
+
+  it("relaie les tests audio et le changement de qualité au Rust", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    await startVoiceNativeMicrophoneTest("mic", "settings");
+    expect(invokeMock).toHaveBeenLastCalledWith("voice_native_start_microphone_test", { deviceId: "mic", owner: "settings" });
+    await stopVoiceNativeAudioTest("settings");
+    expect(invokeMock).toHaveBeenLastCalledWith("voice_native_stop_audio_test", { owner: "settings" });
+    invokeMock.mockResolvedValue({ sequence: 7, rms: 0.04 });
+    await expect(getVoiceNativeAudioLevel()).resolves.toEqual({ sequence: 7, rms: 0.04 });
+    invokeMock.mockResolvedValue(undefined);
+    await testVoiceNativeSpeaker("speaker");
+    expect(invokeMock).toHaveBeenLastCalledWith("voice_native_test_speaker", { outputDevice: "speaker" });
+    await setVoiceNativeAudioQuality("voiceHD");
+    expect(invokeMock).toHaveBeenLastCalledWith("voice_native_set_audio_quality", { quality: "voiceHD" });
   });
 
   it("setVoiceNativeE2EEKey transfère clé brute au provider natif", async () => {
@@ -120,22 +164,17 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
 
     const onStatus = vi.fn();
     const onParts = vi.fn();
-    const onSpeaking = vi.fn();
     await onVoiceNativeStatus(onStatus);
     await onVoiceNativeParticipants(onParts);
-    await onVoiceNativeSpeaking(onSpeaking);
 
     expect(listenMock).toHaveBeenCalledWith(VOICE_NATIVE_STATUS_EVENT, expect.any(Function));
     expect(listenMock).toHaveBeenCalledWith(VOICE_NATIVE_PARTICIPANTS_EVENT, expect.any(Function));
-    expect(listenMock).toHaveBeenCalledWith(VOICE_NATIVE_SPEAKING_EVENT, expect.any(Function));
 
     handlers.get(VOICE_NATIVE_STATUS_EVENT)?.({ payload: { state: "connected" } });
     handlers.get(VOICE_NATIVE_PARTICIPANTS_EVENT)?.({ payload: [{ identity: "@a:b:c" }] });
-    handlers.get(VOICE_NATIVE_SPEAKING_EVENT)?.({ payload: { identity: "@a:b:c", speaking: true } });
 
     expect(onStatus).toHaveBeenCalledWith({ state: "connected" });
     expect(onParts).toHaveBeenCalledWith([{ identity: "@a:b:c" }]);
-    expect(onSpeaking).toHaveBeenCalledWith({ identity: "@a:b:c", speaking: true });
   });
 
   it("toConnectionQuality mappe le vocabulaire LiveKit, inconnu → unknown", () => {
@@ -150,23 +189,6 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(shouldAutoJoinVoice("!a", "!b", null)).toBe(false);
     expect(shouldAutoJoinVoice("!a", null, "!a")).toBe(false);
     expect(shouldAutoJoinVoice("", null, null)).toBe(false);
-  });
-
-  it("selectVoiceEngine : natif seulement si demandé ET disponible", () => {
-    expect(selectVoiceEngine("native", true)).toBe("native");
-    expect(selectVoiceEngine("native", false)).toBe("js");
-    expect(selectVoiceEngine("js", true)).toBe("js");
-    expect(selectVoiceEngine("n'importe quoi", true)).toBe("js");
-  });
-
-  it("le tracker de moteur actif pilote les toggles (défaut null = JS)", () => {
-    setActiveVoiceEngine(null);
-    expect(getActiveVoiceEngine()).toBeNull();
-    setActiveVoiceEngine("native");
-    expect(getActiveVoiceEngine()).toBe("native");
-    setActiveVoiceEngine("js");
-    expect(getActiveVoiceEngine()).toBe("js");
-    setActiveVoiceEngine(null);
   });
 
   it("b64ToBytes décode les payloads data-channel natifs", () => {
@@ -197,6 +219,15 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     });
   });
 
+  it("playVoiceNativeSoundboard transmet le PCM et le gain au mixeur", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    await playVoiceNativeSoundboard("AQD//w==", 0.35);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_play_soundboard", {
+      pcmB64: "AQD//w==",
+      gain: 0.35,
+    });
+  });
+
   it("onVoiceNativeData aplatit topic/payload_b64/sender pour le dispatch front", async () => {
     const calls: Array<(ev: unknown) => void> = [];
     listenMock.mockImplementation((_event: unknown, cb: (ev: unknown) => void) => {
@@ -208,20 +239,6 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(listenMock).toHaveBeenCalledWith("voice-native-data", expect.any(Function));
     calls[0]({ payload: { topic: "sion-soundboard", payload_b64: "e30=", sender: "@a:b:c" } });
     expect(seen).toEqual([{ topic: "sion-soundboard", payload_b64: "e30=", sender: "@a:b:c" }]);
-  });
-
-  it("onVoiceNativeFrame relaie sender/dimensions/jpeg pour le rendu partage", async () => {
-    const calls: Array<(ev: unknown) => void> = [];
-    listenMock.mockImplementation((_event: unknown, cb: (ev: unknown) => void) => {
-      calls.push(cb);
-      return Promise.resolve(() => {});
-    });
-    const seen: unknown[] = [];
-    await onVoiceNativeFrame((ev) => seen.push(ev));
-    expect(listenMock).toHaveBeenCalledWith("voice-native-frame", expect.any(Function));
-    const frame = { sender: "@p:h", width: 1280, height: 720, jpeg_b64: "e30=" };
-    calls[0]({ payload: frame });
-    expect(seen).toEqual([frame]);
   });
 
   it("onVoiceNativeFrameStopped relaie le sender pour masquer le partage", async () => {
@@ -237,6 +254,19 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     expect(seen).toEqual([{ sender: "@p:h" }]);
   });
 
+  it("onVoiceNativeLocalShareFailed relaie la panne de capture locale", async () => {
+    const calls: Array<(ev: unknown) => void> = [];
+    listenMock.mockImplementation((_event: unknown, cb: (ev: unknown) => void) => {
+      calls.push(cb);
+      return Promise.resolve(() => {});
+    });
+    const seen: unknown[] = [];
+    await onVoiceNativeLocalShareFailed((ev) => seen.push(ev));
+    expect(listenMock).toHaveBeenCalledWith("voice-native-local-share-failed", expect.any(Function));
+    calls[0]({ payload: { reason: "capture interrompue" } });
+    expect(seen).toEqual([{ reason: "capture interrompue" }]);
+  });
+
   it("setVoiceNativeShareAudioMuted transmet sender + muted (retour = piste trouvée ?)", async () => {
     invokeMock.mockResolvedValue(true);
     await expect(setVoiceNativeShareAudioMuted("@p:h", true)).resolves.toBe(true);
@@ -248,26 +278,59 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
     await expect(setVoiceNativeShareAudioMuted("@p:h", false)).resolves.toBe(false);
   });
 
+  it("setVoiceNativeShareAudioVolume transmet le gain local", async () => {
+    invokeMock.mockResolvedValue(true);
+    await expect(setVoiceNativeShareAudioVolume("@p:h", 0.35)).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screenshare_audio_volume", {
+      sender: "@p:h",
+      volume: 0.35,
+    });
+  });
+
   it("setVoiceNativeScreensharing transmet enabled (+ sourceId optionnel)", async () => {
-    invokeMock.mockResolvedValue(undefined);
+    invokeMock.mockResolvedValue({ audioPublished: true });
     await setVoiceNativeScreensharing(true);
     expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
       enabled: true,
       sourceId: null,
       withAudio: true,
+      resolution: "1080p",
+      framerate: 15,
+      videoCodec: "vp9",
     });
-    await setVoiceNativeScreensharing(false, 42);
+    await setVoiceNativeScreensharing(false, {
+      sourceId: 42,
+      withAudio: false,
+      resolution: "1440p",
+      framerate: 60,
+      videoCodec: "h264",
+    });
     expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
       enabled: false,
       sourceId: 42,
-      withAudio: true,
-    });
-    await setVoiceNativeScreensharing(true, undefined, false);
-    expect(invokeMock).toHaveBeenCalledWith("voice_native_set_screensharing", {
-      enabled: true,
-      sourceId: null,
       withAudio: false,
+      resolution: "1440p",
+      framerate: 60,
+      videoCodec: "h264",
     });
+  });
+
+  it("parseVoiceNativeVideoPacket décode l'en-tête binaire sans base64", () => {
+    const sender = new TextEncoder().encode("@picsou:sion");
+    const jpeg = new Uint8Array([0xff, 0xd8, 1, 2, 0xff, 0xd9]);
+    const packet = new Uint8Array(14 + sender.length + jpeg.length);
+    packet.set([0x53, 0x56, 0x46, 0x31]);
+    const view = new DataView(packet.buffer);
+    view.setUint16(4, sender.length, true);
+    view.setUint32(6, 1920, true);
+    view.setUint32(10, 804, true);
+    packet.set(sender, 14);
+    packet.set(jpeg, 14 + sender.length);
+    const parsed = parseVoiceNativeVideoPacket(packet.buffer);
+    expect(parsed?.sender).toBe("@picsou:sion");
+    expect(parsed?.width).toBe(1920);
+    expect(parsed?.height).toBe(804);
+    expect(Array.from(parsed?.jpeg ?? [])).toEqual(Array.from(jpeg));
   });
 
   it("matrixUserIdOf coupe le suffixe device LiveKit", () => {
@@ -329,6 +392,13 @@ describe("voiceNativeService (pont voix native, chantier no-CEF)", () => {
       getUser: () => null,
     });
     expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow le Magnifique");
+    // Le nom de membre peut être son MXID brut : il ne doit pas masquer le
+    // vrai pseudo du profil global.
+    getMatrixClientMock.mockReturnValue({
+      getRoom: () => ({ getMember: () => ({ name: "@narkow:sionchat.fr" }) }),
+      getUser: () => ({ displayName: "Narkow" }),
+    });
+    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow");
     // Pas de membre, displayname global : repli global.
     getMatrixClientMock.mockReturnValue({
       getRoom: () => null,

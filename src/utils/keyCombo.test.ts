@@ -37,13 +37,13 @@ describe("keyEventToString", () => {
 });
 
 describe("globalComboIssue", () => {
-  it("rejects empty, bare printable keys, and CEF-stolen F-keys", () => {
+  it("rejects empty, bare printable keys, and webview-stolen F-keys", () => {
     expect(globalComboIssue("")).toBe("empty");
     expect(globalComboIssue("KeyA")).toBe("bare");
     expect(globalComboIssue("Backquote")).toBe("bare");
     expect(globalComboIssue("F12")).toBe("f12");
     expect(globalComboIssue("Ctrl+F12")).toBe("f12");
-    expect(globalComboIssue("F5")).toBe("cef-fkey");
+    expect(globalComboIssue("F5")).toBe("webview-fkey");
   });
 
   it("accepts modifier combos and free F-keys", () => {

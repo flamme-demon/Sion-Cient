@@ -1,18 +1,16 @@
 //! Native cursor overlay window — transparent, click-through, always-on-top.
 //!
-//! Replaces the previous Tauri-webview approach which was broken on Linux
-//! under the CEF runtime fork (the fork doesn't forward `transparent: true`
-//! to CEF window creation, so additional webviews came up opaque). We draw
-//! the overlay ourselves with winit + tiny-skia — works on Linux (X11 +
-//! Wayland) and Windows, roughly one Rust backend instead of CEF-specific
-//! quirks on every platform.
+//! Remplace l'ancienne approche webview transparente, peu fiable selon le
+//! runtime (fenêtre opaque sur certaines plateformes). On dessine l'overlay
+//! avec winit + tiny-skia — Linux (X11 + Wayland) et Windows, un seul backend
+//! Rust au lieu de contournements propres à chaque plateforme.
 //!
 //! Architecture:
 //!   - A single background thread hosts the winit event loop. It's spawned
 //!     on first `cursor_overlay_open` and stays alive until the app exits
 //!     or `cursor_overlay_shutdown` is called.
-//!   - The JS side pushes cursor/click events via `cursor_overlay_push*`
-//!     commands; they land in a shared `Mutex<OverlayState>`.
+//!   - `voice_native::forward_cursor_to_overlay` pousse les curseurs/clics
+//!     reçus du réseau; they land in a shared `Mutex<OverlayState>`.
 //!   - The event loop requests a redraw at ~60 Hz whenever the state is
 //!     non-empty. tiny-skia draws cursor arrows + click ripples into a
 //!     `Pixmap`, which `softbuffer` blits to the window surface.
@@ -20,10 +18,10 @@
 //!     `with_transparent(true)` + `with_cursor_hittest(false)` — no
 //!     platform-specific XShape / set_input_region code to maintain.
 //!
-//! Why not use winit across ALL windowing (replacing CEF): winit is a
-//! windowing library, it doesn't render webviews. The main Sion UI needs
-//! the full HTML/CSS/JS stack, so CEF stays for that. This overlay only
-//! paints cursors and ripples — simple enough for native 2D.
+//! Why not use winit across ALL windowing: winit is a windowing library, it
+//! doesn't render webviews. La fenêtre principale Sion a besoin de la pile
+//! HTML/CSS/JS (WRY), tandis que cet overlay ne peint que curseurs et ondes —
+//! assez simple pour de la 2D native.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,26 +45,21 @@ use winit::window::{Window, WindowAttributes, WindowId, WindowLevel};
 const FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 static FONT: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
 fn font() -> Option<&'static FontRef<'static>> {
-    FONT.get_or_init(|| {
-        FontRef::try_from_slice(FONT_BYTES).ok()
-    }).as_ref()
+    FONT.get_or_init(|| FontRef::try_from_slice(FONT_BYTES).ok())
+        .as_ref()
 }
 
-/// One remote viewer's cursor, kept between frames until `expires_at`.
-/// We track both the network-reported target position and the currently-
-/// rendered position so we can lerp between updates and hide the 30 Hz
-/// broadcast cadence.
+/// One remote viewer's cursor, kept between updates until `expires_at`.
+/// The last network position is painted directly: smoothing here would add
+/// latency before the overlay is captured and encoded into the share.
 #[derive(Clone, Debug)]
 struct CursorEntry {
     identity: String,
     /// Display name to render in the pill below the cursor.
     name: String,
     /// Latest broadcast position (normalised [0, 1]).
-    target_x: f32,
-    target_y: f32,
-    /// Smoothed render position; eased toward target every frame.
-    render_x: f32,
-    render_y: f32,
+    x: f32,
+    y: f32,
     expires_at: Instant,
 }
 
@@ -108,6 +101,11 @@ struct OverlayHandle {
 }
 
 static HANDLE: OnceLock<OverlayHandle> = OnceLock::new();
+static OVERLAY_OPEN: AtomicBool = AtomicBool::new(false);
+
+pub fn cursor_overlay_is_open() -> bool {
+    OVERLAY_OPEN.load(Ordering::Acquire)
+}
 
 /// Start the winit event-loop thread on first use. Idempotent — subsequent
 /// calls return the existing handle.
@@ -135,10 +133,10 @@ fn get_or_start_handle() -> Option<&'static OverlayHandle> {
             // Windows; not macOS (Sion doesn't target macOS anyway).
             #[cfg(target_os = "linux")]
             use winit::platform::wayland::EventLoopBuilderExtWayland;
-            #[cfg(target_os = "linux")]
-            use winit::platform::x11::EventLoopBuilderExtX11;
             #[cfg(target_os = "windows")]
             use winit::platform::windows::EventLoopBuilderExtWindows;
+            #[cfg(target_os = "linux")]
+            use winit::platform::x11::EventLoopBuilderExtX11;
 
             let mut builder = EventLoop::<UserEvent>::with_user_event();
             #[cfg(target_os = "linux")]
@@ -193,7 +191,11 @@ fn get_or_start_handle() -> Option<&'static OverlayHandle> {
         }
     };
 
-    let handle = OverlayHandle { state, proxy, thread_alive };
+    let handle = OverlayHandle {
+        state,
+        proxy,
+        thread_alive,
+    };
     let _ = HANDLE.set(handle);
     HANDLE.get()
 }
@@ -230,8 +232,14 @@ fn make_sticky_x11(window: &Window) -> Result<(), Box<dyn std::error::Error>> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let root = conn.setup().roots[screen_num].root;
     let net_wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
-    let net_wm_state_sticky = conn.intern_atom(false, b"_NET_WM_STATE_STICKY")?.reply()?.atom;
-    let net_wm_state_above = conn.intern_atom(false, b"_NET_WM_STATE_ABOVE")?.reply()?.atom;
+    let net_wm_state_sticky = conn
+        .intern_atom(false, b"_NET_WM_STATE_STICKY")?
+        .reply()?
+        .atom;
+    let net_wm_state_above = conn
+        .intern_atom(false, b"_NET_WM_STATE_ABOVE")?
+        .reply()?
+        .atom;
     let net_wm_desktop = conn.intern_atom(false, b"_NET_WM_DESKTOP")?.reply()?.atom;
 
     // La spec EWMH distingue les deux cas : une fenêtre DÉJÀ MAPPÉE se pilote
@@ -250,12 +258,7 @@ fn make_sticky_x11(window: &Window) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // _NET_WM_STATE_ADD = 1, source indication 1 = "application".
-    let event = ClientMessageEvent::new(
-        32,
-        xid,
-        net_wm_state,
-        [1, net_wm_state_sticky, 0, 1, 0],
-    );
+    let event = ClientMessageEvent::new(32, xid, net_wm_state, [1, net_wm_state_sticky, 0, 1, 0]);
     conn.send_event(
         false,
         root,
@@ -324,10 +327,16 @@ impl App {
     /// reasonable default size so the window still appears even on
     /// headless/CI setups.
     fn build_window(&self, event_loop: &ActiveEventLoop) -> Option<Arc<Window>> {
-        let mon = event_loop.primary_monitor()
+        let mon = event_loop
+            .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());
         let (size, pos) = if let Some(m) = mon {
-            log::info!("[Sion][CursorOverlay] using monitor {:?} size={:?} pos={:?}", m.name(), m.size(), m.position());
+            log::info!(
+                "[Sion][CursorOverlay] using monitor {:?} size={:?} pos={:?}",
+                m.name(),
+                m.size(),
+                m.position()
+            );
             (
                 winit::dpi::PhysicalSize::new(m.size().width, m.size().height),
                 winit::dpi::PhysicalPosition::new(m.position().x, m.position().y),
@@ -389,17 +398,17 @@ impl App {
             }
         }
 
-        let (Some(window), Some(surface), Some(pixmap)) = (self.window.as_ref(), self.surface.as_mut(), self.pixmap.as_mut()) else {
+        let (Some(window), Some(surface), Some(pixmap)) = (
+            self.window.as_ref(),
+            self.surface.as_mut(),
+            self.pixmap.as_mut(),
+        ) else {
             log::warn!("[Sion][CursorOverlay] redraw skipped — window/surface/pixmap not ready");
             return;
         };
 
-        // Sweep expired entries + ease render position toward target.
-        // Broadcasts arrive at ~60 Hz, matching our redraw cadence. We
-        // mostly snap (lerp 0.7) so the cursor feels native-smooth, with
-        // just enough easing to absorb a dropped packet or two without
-        // visible "skip" — at 0.7 a 50 px gap collapses to <2 px in 4
-        // frames (~67 ms) which the eye reads as smooth motion.
+        // Sweep expired entries. Positions are already sampled at ~60 Hz and
+        // are painted as received, avoiding another 30–70 ms before capture.
         let now = Instant::now();
         let (cursor_count, click_count) = {
             let mut state = match self.state.lock() {
@@ -408,11 +417,6 @@ impl App {
             };
             state.cursors.retain(|_, c| c.expires_at > now);
             state.clicks.retain(|c| c.expires_at > now);
-            for c in state.cursors.values_mut() {
-                let lerp = 0.7_f32;
-                c.render_x += (c.target_x - c.render_x) * lerp;
-                c.render_y += (c.target_y - c.render_y) * lerp;
-            }
             (state.cursors.len(), state.clicks.len())
         };
 
@@ -422,7 +426,9 @@ impl App {
         if (cursor_count > 0 || click_count > 0) && self.frame_counter % 60 == 0 {
             log::info!(
                 "[Sion][CursorOverlay] frame #{} cursors={} clicks={}",
-                self.frame_counter, cursor_count, click_count,
+                self.frame_counter,
+                cursor_count,
+                click_count,
             );
         }
 
@@ -467,7 +473,9 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     return;
                 }
-                let Some(window) = self.build_window(event_loop) else { return; };
+                let Some(window) = self.build_window(event_loop) else {
+                    return;
+                };
                 // softbuffer context/surface are bound to the window.
                 let context = match Context::new(window.clone()) {
                     Ok(c) => c,
@@ -484,7 +492,10 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 };
                 let size = window.inner_size();
-                if let (Ok(w), Ok(h)) = (std::num::NonZeroU32::try_from(size.width), std::num::NonZeroU32::try_from(size.height)) {
+                if let (Ok(w), Ok(h)) = (
+                    std::num::NonZeroU32::try_from(size.width),
+                    std::num::NonZeroU32::try_from(size.height),
+                ) {
                     let _ = surface.resize(w, h);
                 }
                 let pixmap = Pixmap::new(size.width, size.height);
@@ -495,8 +506,14 @@ impl ApplicationHandler<UserEvent> for App {
                 let pos = window.outer_position().ok();
                 log::info!(
                     "[Sion][CursorOverlay] window created size={}x{} pos={:?} pixmap={}",
-                    size.width, size.height, pos,
-                    if self.pixmap.is_some() { "ok" } else { "ALLOC FAILED" },
+                    size.width,
+                    size.height,
+                    pos,
+                    if self.pixmap.is_some() {
+                        "ok"
+                    } else {
+                        "ALLOC FAILED"
+                    },
                 );
             }
             UserEvent::Hide => {
@@ -518,7 +535,12 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
         match event {
             WindowEvent::CloseRequested => {
                 // User closed the window (shouldn't happen since it's
@@ -550,17 +572,12 @@ impl ApplicationHandler<UserEvent> for App {
                 // plein écran + le texte à chaque frame coûtent cher sur la
                 // machine du sharer (qui capture + encode déjà) → saccades
                 // pour tout le monde. On n'anime que si nécessaire :
-                // - clics actifs ou curseurs pas encore stabilisés (lerp) :
-                //   on maintient la cadence ~60 Hz ;
+                // - clics actifs : on maintient une cadence d'animation ;
                 // - sinon (curseurs figés) : on dort jusqu'à la prochaine
                 //   expiration (sweep), zéro CPU entre-temps.
                 let (animate, wake_at) = {
                     let s = self.state.lock().unwrap();
                     let clicks = !s.clicks.is_empty();
-                    let unsettled = s.cursors.values().any(|c| {
-                        (c.render_x - c.target_x).abs() > 0.0005
-                            || (c.render_y - c.target_y).abs() > 0.0005
-                    });
                     let mut wake: Option<Instant> = None;
                     for c in s.cursors.values() {
                         wake = Some(wake.map_or(c.expires_at, |t| t.min(c.expires_at)));
@@ -568,23 +585,25 @@ impl ApplicationHandler<UserEvent> for App {
                     for c in &s.clicks {
                         wake = Some(wake.map_or(c.expires_at, |t| t.min(c.expires_at)));
                     }
-                    (clicks || unsettled, wake)
+                    (clicks, wake)
                 };
-                // Cadence ~30 Hz (et non 60) : à 5120 px de large, le
+                // Cadence ~30 Hz pour les clics : à 5120 px de large, le
                 // remplissage plein écran + le texte à chaque frame saturent
-                // le CPU du sharer (qui capture + encode déjà) → saccades
-                // pour tout le monde. Le lerp 0.7 converge en ~2 frames
-                // (~66 ms), indiscernable de 60 Hz à l'œil.
+                // inutilement le CPU du sharer, qui capture et encode déjà.
                 if animate {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
                         Instant::now() + Duration::from_millis(33),
                     ));
-                    if let Some(w) = &self.window { w.request_redraw(); }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                 } else if let Some(t) = wake_at {
                     // Un seul redraw à l'expiration (le sweep purge alors).
                     // `request_redraw` dès maintenant : la demande reste en
                     // file et n'est servie qu'au réveil à `t`.
-                    if let Some(w) = &self.window { w.request_redraw(); }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                     event_loop.set_control_flow(ControlFlow::WaitUntil(t));
                 } else {
                     event_loop.set_control_flow(ControlFlow::Wait);
@@ -599,7 +618,9 @@ impl ApplicationHandler<UserEvent> for App {
                     let _ = surface.resize(w, h);
                 }
                 self.pixmap = Pixmap::new(size.width, size.height);
-                if let Some(w) = &self.window { w.request_redraw(); }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
             _ => {}
         }
@@ -650,23 +671,26 @@ mod draw {
     }
 
     fn draw_cursor(pixmap: &mut Pixmap, w: f32, h: f32, cursor: &CursorEntry) {
-        let x = (cursor.render_x.clamp(0.0, 1.0)) * w;
-        let y = (cursor.render_y.clamp(0.0, 1.0)) * h;
+        let x = (cursor.x.clamp(0.0, 1.0)) * w;
+        let y = (cursor.y.clamp(0.0, 1.0)) * h;
         let color = color_for_identity(&cursor.identity);
 
         // Compact arrow path (~14×17 units) modelled on the macOS / GNOME
         // cursor shape — tip at (0,0), short tail down-right, no overhang.
         let scale = 1.4_f32;
         let mut pb = PathBuilder::new();
-        pb.move_to(x + 0.0 * scale,  y + 0.0 * scale);   // tip
-        pb.line_to(x + 0.0 * scale,  y + 14.0 * scale);  // left side down
-        pb.line_to(x + 3.5 * scale,  y + 11.0 * scale);  // notch
-        pb.line_to(x + 6.0 * scale,  y + 16.0 * scale);  // tail tip
-        pb.line_to(x + 7.5 * scale,  y + 15.0 * scale);  // tail base
-        pb.line_to(x + 5.0 * scale,  y + 10.0 * scale);  // notch up
-        pb.line_to(x + 10.0 * scale, y + 10.0 * scale);  // right side
+        pb.move_to(x + 0.0 * scale, y + 0.0 * scale); // tip
+        pb.line_to(x + 0.0 * scale, y + 14.0 * scale); // left side down
+        pb.line_to(x + 3.5 * scale, y + 11.0 * scale); // notch
+        pb.line_to(x + 6.0 * scale, y + 16.0 * scale); // tail tip
+        pb.line_to(x + 7.5 * scale, y + 15.0 * scale); // tail base
+        pb.line_to(x + 5.0 * scale, y + 10.0 * scale); // notch up
+        pb.line_to(x + 10.0 * scale, y + 10.0 * scale); // right side
         pb.close();
-        let path = match pb.finish() { Some(p) => p, None => return };
+        let path = match pb.finish() {
+            Some(p) => p,
+            None => return,
+        };
 
         // White stroke first (wider) for contrast against any background.
         let mut stroke_paint = Paint::default();
@@ -683,7 +707,13 @@ mod draw {
         let mut fill_paint = Paint::default();
         fill_paint.set_color(color);
         fill_paint.anti_alias = true;
-        pixmap.fill_path(&path, &fill_paint, FillRule::Winding, Transform::identity(), None);
+        pixmap.fill_path(
+            &path,
+            &fill_paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
 
         // Name pill — drawn just below + right of the cursor tail so it
         // doesn't sit on top of the click target. Coloured background +
@@ -692,7 +722,15 @@ mod draw {
         if !cursor.name.is_empty() {
             let pill_anchor_x = x + 4.0;
             let pill_anchor_y = y + (16.0 * scale) + 4.0;
-            draw_name_pill(pixmap, w, h, pill_anchor_x, pill_anchor_y, &cursor.name, color);
+            draw_name_pill(
+                pixmap,
+                w,
+                h,
+                pill_anchor_x,
+                pill_anchor_y,
+                &cursor.name,
+                color,
+            );
         }
     }
 
@@ -761,26 +799,30 @@ mod draw {
         let mut chars_iter = display.chars().peekable();
         while let Some(ch) = chars_iter.next() {
             let glyph_id = scale_font.glyph_id(ch);
-            let glyph = glyph_id.with_scale_and_position(
-                PxScale::from(px),
-                ab_glyph::point(pen_x, baseline_y),
-            );
+            let glyph = glyph_id
+                .with_scale_and_position(PxScale::from(px), ab_glyph::point(pen_x, baseline_y));
             if let Some(outlined) = font.outline_glyph(glyph) {
                 let bb = outlined.px_bounds();
                 outlined.draw(|gx, gy, alpha| {
                     let dx = bb.min.x as i32 + gx as i32;
                     let dy = bb.min.y as i32 + gy as i32;
-                    if dx < 0 || dy < 0 { return; }
+                    if dx < 0 || dy < 0 {
+                        return;
+                    }
                     let (px_w, px_h) = (pixmap.width() as i32, pixmap.height() as i32);
-                    if dx >= px_w || dy >= px_h { return; }
+                    if dx >= px_w || dy >= px_h {
+                        return;
+                    }
                     let idx = (dy as u32 * pixmap.width() + dx as u32) as usize * 4;
                     let data = pixmap.data_mut();
-                    if idx + 3 >= data.len() { return; }
+                    if idx + 3 >= data.len() {
+                        return;
+                    }
                     // Source over: white text with `alpha`, blend over the
                     // existing premultiplied background.
                     let src_a = (alpha * 255.0) as u32;
                     let inv = 255 - src_a;
-                    data[idx]     = ((255 * src_a + data[idx]     as u32 * inv) / 255) as u8;
+                    data[idx] = ((255 * src_a + data[idx] as u32 * inv) / 255) as u8;
                     data[idx + 1] = ((255 * src_a + data[idx + 1] as u32 * inv) / 255) as u8;
                     data[idx + 2] = ((255 * src_a + data[idx + 2] as u32 * inv) / 255) as u8;
                     data[idx + 3] = ((255 * src_a + data[idx + 3] as u32 * inv) / 255) as u8;
@@ -804,17 +846,25 @@ mod draw {
         let base_radius = 18.0_f32;
         let total_ms = 600.0_f32;
         for (i, stagger_ms) in [0.0, 120.0, 240.0].iter().enumerate() {
-            let elapsed = (now.saturating_duration_since(click.born_at).as_millis() as f32) - stagger_ms;
-            if elapsed <= 0.0 || elapsed >= total_ms { continue; }
+            let elapsed =
+                (now.saturating_duration_since(click.born_at).as_millis() as f32) - stagger_ms;
+            if elapsed <= 0.0 || elapsed >= total_ms {
+                continue;
+            }
             let t = elapsed / total_ms; // 0..1
             let scale = 0.4 + (3.0 - 0.4) * t;
             let alpha_f = 0.85 * (1.0 - t);
             let alpha = (alpha_f.clamp(0.0, 1.0) * 255.0) as u8;
             let radius = base_radius * scale;
-            if radius < 1.0 { continue; }
+            if radius < 1.0 {
+                continue;
+            }
             let mut pb = PathBuilder::new();
             pb.push_circle(x, y, radius);
-            let path = match pb.finish() { Some(p) => p, None => continue };
+            let path = match pb.finish() {
+                Some(p) => p,
+                None => continue,
+            };
             let mut paint = Paint::default();
             // Use the identity colour with per-ring alpha.
             paint.set_color(Color::from_rgba8(
@@ -839,18 +889,24 @@ mod draw {
 
 #[tauri::command]
 pub fn cursor_overlay_open() -> bool {
-    let Some(handle) = get_or_start_handle() else { return false; };
+    let Some(handle) = get_or_start_handle() else {
+        return false;
+    };
     if !handle.thread_alive.load(Ordering::Acquire) {
         log::warn!("[Sion][CursorOverlay] thread is not alive anymore, open skipped");
         return false;
     }
+    OVERLAY_OPEN.store(true, Ordering::Release);
     let _ = handle.proxy.send_event(UserEvent::Show);
     true
 }
 
 #[tauri::command]
 pub fn cursor_overlay_close() {
-    let Some(handle) = HANDLE.get() else { return; };
+    OVERLAY_OPEN.store(false, Ordering::Release);
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
     let _ = handle.proxy.send_event(UserEvent::Hide);
     if let Ok(mut state) = handle.state.lock() {
         state.cursors.clear();
@@ -858,38 +914,42 @@ pub fn cursor_overlay_close() {
     }
 }
 
-#[tauri::command]
 pub fn cursor_overlay_push(identity: String, name: String, x: f32, y: f32, expires_at_ms: u64) {
-    let Some(handle) = HANDLE.get() else { return; };
+    if !cursor_overlay_is_open() {
+        return;
+    }
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
     if let Ok(mut state) = handle.state.lock() {
         let ttl = Duration::from_millis(expires_at_ms.saturating_sub(now_ms()));
-        state.cursors.entry(identity.clone())
+        state
+            .cursors
+            .entry(identity.clone())
             .and_modify(|c| {
-                // Existing cursor: just update target + name, keep render
-                // position so the lerp continues from where we are.
-                c.target_x = x;
-                c.target_y = y;
+                c.x = x;
+                c.y = y;
                 c.name = name.clone();
                 c.expires_at = Instant::now() + ttl;
             })
             .or_insert_with(|| CursorEntry {
                 identity,
                 name,
-                target_x: x,
-                target_y: y,
-                // Seed render = target on first appearance so the cursor
-                // shows up at the right spot, not at (0, 0).
-                render_x: x,
-                render_y: y,
+                x,
+                y,
                 expires_at: Instant::now() + ttl,
             });
     }
     let _ = handle.proxy.send_event(UserEvent::Show); // kick redraw
 }
 
-#[tauri::command]
 pub fn cursor_overlay_clear(identity: String) {
-    let Some(handle) = HANDLE.get() else { return; };
+    if !cursor_overlay_is_open() {
+        return;
+    }
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
     if let Ok(mut state) = handle.state.lock() {
         state.cursors.remove(&identity);
     }
@@ -898,9 +958,13 @@ pub fn cursor_overlay_clear(identity: String) {
     let _ = handle.proxy.send_event(UserEvent::Show);
 }
 
-#[tauri::command]
 pub fn cursor_overlay_push_click(id: String, identity: String, x: f32, y: f32, expires_at_ms: u64) {
-    let Some(handle) = HANDLE.get() else { return; };
+    if !cursor_overlay_is_open() {
+        return;
+    }
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
     if let Ok(mut state) = handle.state.lock() {
         let now = Instant::now();
         let ttl = Duration::from_millis(expires_at_ms.saturating_sub(now_ms()));
@@ -943,10 +1007,7 @@ fn repack_rgba_to_bgra_parallel(dst: &mut [u32], src: &[u8]) {
     }
     let chunk_px = total.div_ceil(threads);
     std::thread::scope(|s| {
-        for (d, sc) in dst
-            .chunks_mut(chunk_px)
-            .zip(src.chunks(chunk_px * 4))
-        {
+        for (d, sc) in dst.chunks_mut(chunk_px).zip(src.chunks(chunk_px * 4)) {
             s.spawn(move || repack_chunk(d, sc));
         }
     });

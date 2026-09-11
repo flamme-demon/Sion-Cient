@@ -377,12 +377,13 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             type="range"
+            className="sion-range"
             min={SOUND_GAIN_MIN}
             max={SOUND_GAIN_MAX}
             step={0.05}
             value={gain}
             onChange={(e) => setGain(parseFloat(e.target.value))}
-            style={{ flex: 1, accentColor: 'var(--color-primary)' }}
+            style={{ flex: 1, '--sion-range-progress': `${Math.round((gain - SOUND_GAIN_MIN) / (SOUND_GAIN_MAX - SOUND_GAIN_MIN) * 100)}%` } as React.CSSProperties}
           />
           {/* In add mode the trimmer's own "Écouter la sélection" button (which
               now applies gain) is the single preview; only edit mode — which has

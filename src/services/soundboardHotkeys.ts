@@ -119,9 +119,9 @@ export function validateCombo(combo: string, muteShortcut: string, deafenShortcu
   if (normalizeCombo(combo) === normalizeCombo(muteShortcut)) return "Conflit avec le raccourci mute";
   if (normalizeCombo(combo) === normalizeCombo(deafenShortcut)) return "Conflit avec le raccourci sourdine";
   if (issue === "f12") return "F12 est réservé";
-  if (issue === "cef-fkey") {
+  if (issue === "webview-fkey") {
     const main = normalizeCombo(combo).split("+").pop();
-    return `${main} est réservée par CEF (aide/recherche/reload/plein-écran). Choisissez F2/F4/F6/F8/F9/F10 ou un combo Ctrl+/Alt+`;
+    return `${main} est réservée par la webview (aide/recherche/reload/plein-écran). Choisissez F2/F4/F6/F8/F9/F10 ou un combo Ctrl+/Alt+`;
   }
   // A plain single character or number without modifier would swallow text
   // input system-wide — reject. Function keys (F1..F11) are OK without modifier.

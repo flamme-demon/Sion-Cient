@@ -255,8 +255,9 @@ export function LoginPage() {
           <select
             value={useSettingsStore.getState().language || i18n.language?.slice(0, 2)}
             onChange={(e) => { useSettingsStore.getState().setLanguage(e.target.value); }}
-            style={{ background: 'transparent', border: 'none', color: 'var(--color-on-surface-variant)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+            style={{ border: 'none', color: 'var(--color-on-surface-variant)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
           >
+            <option value="">AUTO</option>
             <option value="fr">FR</option>
             <option value="en">EN</option>
           </select>

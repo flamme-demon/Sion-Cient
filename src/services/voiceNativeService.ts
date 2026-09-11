@@ -1,13 +1,14 @@
 /**
- * Pont front vers la voix native (chantier suppression CEF).
+ * Pont front vers la voix native (moteur LiveKit Rust, unique moteur).
  *
- * Le chemin JS (`livekitService`, `livekit-client` dans la webview) reste le
- * défaut. Ce service expose l'API Tauri de `voice_native.rs` (état +
- * événements) pour brancher progressivement l'UI dessus sans big-bang :
- * `useLiveKitStore` continuera de consommer la même forme `ParticipantInfo`.
+ * Ce service expose l'API Tauri de `voice_native.rs` (état + événements).
+ * `useLiveKitStore` consomme la même forme `ParticipantInfo` que l'ancien
+ * moteur JS supprimé ; il ne reste plus aucun `livekit-client` dans la
+ * webview.
  */
 
 import type { ConnectionQuality, ParticipantInfo } from "../types/livekit";
+import type { AudioQualityPreset } from "../stores/useSettingsStore";
 import { getMatrixClient } from "./matrixService";
 
 export type VoiceNativeState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -27,17 +28,13 @@ export interface VoiceNativeStatus {
 export const VOICE_NATIVE_STATUS_EVENT = "voice-native-status";
 /** Liste des participants natifs (même forme que `ParticipantInfo`). */
 export const VOICE_NATIVE_PARTICIPANTS_EVENT = "voice-native-participants";
-/** `{ identity, speaking }` — alimente le rond vert. */
-export const VOICE_NATIVE_SPEAKING_EVENT = "voice-native-speaking";
 /** Relais data-channel brut `{ topic, payload_b64, sender }` (sérialisé avec
  *  tag `type: "data_received"`) — dispatché par le front vers les handlers
  *  existants (soundboard, AFK, curseurs…) au fil de la migration. */
 export const VOICE_NATIVE_DATA_EVENT = "voice-native-data";
-
-export interface VoiceNativeSpeaking {
-  identity: string;
-  speaking: boolean;
-}
+/** La capture locale est tombée après publication : le front doit fermer
+ * l'overlay et demander la dépublication immédiatement. */
+export const VOICE_NATIVE_LOCAL_SHARE_FAILED_EVENT = "voice-native-local-share-failed";
 
 /** État E2EE d'un participant (`Ok`, `MissingKey`, `DecryptionFailed`…).
  *  Diagnostic décisif en salon chiffré (cf. `E2eeStateChanged` Rust). */
@@ -52,26 +49,8 @@ export interface VoiceNativeData {
   sender: string | null;
 }
 
-/** Moteur effectivement utilisé par la session en cours (pas la préférence
- *  settings). Piloté par `useVoiceChannel` au join/leave — les toggles
- *  mute/deafen/screen-share s'y réfèrent pour choisir JS vs natif. */
-let activeVoiceEngine: "js" | "native" | null = null;
-
-export function getActiveVoiceEngine(): "js" | "native" | null {
-  return activeVoiceEngine;
-}
-
-export function setActiveVoiceEngine(engine: "js" | "native" | null): void {
-  activeVoiceEngine = engine;
-}
-
-/** Résout le moteur à utiliser : "native" seulement si demandé dans les
- *  settings ET disponible (Tauri). Sinon "js" — le défaut stable. */
-export function selectVoiceEngine(
-  preference: string,
-  available: boolean,
-): "js" | "native" {
-  return preference === "native" && available ? "native" : "js";
+export interface VoiceNativeLocalShareFailed {
+  reason: string;
 }
 
 /** L'auto-join ne doit jamais percuter un join manuel en cours ni voler une
@@ -110,18 +89,48 @@ export function voiceNativePublishData(topic: string, payloadB64: string, reliab
   return tauriInvoke<void>("voice_native_publish_data", { topic, payloadB64, reliable });
 }
 
+/** Envoie un clip déjà décodé (PCM i16 mono, 48 kHz) au mixeur de rendu
+ * WebRTC. Le clip traverse l'IPC une fois puis le callback audio le consomme
+ * nativement par tranches de 10 ms. */
+export function playVoiceNativeSoundboard(pcmB64: string, gain: number): Promise<void> {
+  return tauriInvoke<void>("voice_native_play_soundboard", { pcmB64, gain });
+}
+
 /** Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
  *  toggle 🔊 JS). Retourne `true` si une piste `ScreenshareAudio` existe.
- *  Pas de volume par piste côté natif : le slider reste JS-only. */
+ *  Le volume local de cette piste se règle séparément ci-dessous. */
 export function setVoiceNativeShareAudioMuted(sender: string, muted: boolean): Promise<boolean> {
   return tauriInvoke<boolean>("voice_native_set_screenshare_audio_muted", { sender, muted });
 }
 
+export function setVoiceNativeShareAudioVolume(sender: string, volume: number): Promise<boolean> {
+  return tauriInvoke<boolean>("voice_native_set_screenshare_audio_volume", { sender, volume });
+}
+
 /** Démarre / arrête le partage de NOTRE écran en mode natif (miroir de
  *  `toggleScreenShare` JS). `withAudio=false` (case décochée) = vidéo seule,
- *  les viewers voient "sans son". `sourceId` réservé au futur picker. */
-export function setVoiceNativeScreensharing(enabled: boolean, sourceId?: number, withAudio = true): Promise<void> {
-  return tauriInvoke<void>("voice_native_set_screensharing", { enabled, sourceId: sourceId ?? null, withAudio });
+ *  les viewers voient "sans son". */
+export interface NativeScreenShareResult { audioPublished: boolean }
+export function setVoiceNativeScreensharing(
+  enabled: boolean,
+  options: {
+    sourceId?: number;
+    withAudio?: boolean;
+    resolution?: "720p" | "1080p" | "1440p";
+    framerate?: 5 | 15 | 30 | 60;
+    /** Codec d'encodage de la piste publiée : `vp9` (défaut, le plus net),
+     *  `h264` (VAAPI, CPU quasi nul) ou `vp8` (compatibilité). */
+    videoCodec?: "vp9" | "h264" | "vp8";
+  } = {},
+): Promise<NativeScreenShareResult> {
+  return tauriInvoke<NativeScreenShareResult>("voice_native_set_screensharing", {
+    enabled,
+    sourceId: options.sourceId ?? null,
+    withAudio: options.withAudio ?? true,
+    resolution: options.resolution ?? "1080p",
+    framerate: options.framerate ?? 15,
+    videoCodec: options.videoCodec ?? "vp9",
+  });
 }
 
 async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -129,11 +138,63 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
   return invoke<T>(cmd, args);
 }
 
-export function isVoiceNativeAvailable(): boolean {
-  return (
+export async function isVoiceNativeAvailable(): Promise<boolean> {
+  if (!(
     typeof window !== "undefined" &&
     !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-  );
+  )) return false;
+  try {
+    return await tauriInvoke<boolean>("voice_native_available");
+  } catch {
+    return false;
+  }
+}
+
+export interface NativeAudioDevice { id: string; name: string; index: number }
+export interface NativeAudioDevices {
+  recording: NativeAudioDevice[];
+  playout: NativeAudioDevice[];
+}
+
+export function getVoiceNativeAudioDevices(): Promise<NativeAudioDevices> {
+  return tauriInvoke("voice_native_audio_devices");
+}
+
+export interface NativeAudioProcessing {
+  echoCancellation: boolean;
+  autoGainControl: boolean;
+  noiseSuppression: boolean;
+  mix: number;
+}
+
+export function setVoiceNativeAudioProcessing(processing: NativeAudioProcessing): Promise<void> {
+  return tauriInvoke("voice_native_set_audio_processing", { processing });
+}
+
+export function switchVoiceNativeAudioDevice(kind: "input" | "output", deviceId: string): Promise<void> {
+  return tauriInvoke("voice_native_switch_audio_device", { kind, deviceId });
+}
+
+export interface NativeAudioLevel { sequence: number; rms: number }
+
+export function startVoiceNativeMicrophoneTest(deviceId: string, owner: string): Promise<void> {
+  return tauriInvoke("voice_native_start_microphone_test", { deviceId, owner });
+}
+
+export function stopVoiceNativeAudioTest(owner: string): Promise<void> {
+  return tauriInvoke("voice_native_stop_audio_test", { owner });
+}
+
+export function getVoiceNativeAudioLevel(): Promise<NativeAudioLevel> {
+  return tauriInvoke("voice_native_audio_level");
+}
+
+export function testVoiceNativeSpeaker(outputDevice: string): Promise<void> {
+  return tauriInvoke("voice_native_test_speaker", { outputDevice });
+}
+
+export function setVoiceNativeAudioQuality(quality: AudioQualityPreset): Promise<void> {
+  return tauriInvoke("voice_native_set_audio_quality", { quality });
 }
 
 export function getVoiceNativeStatus(): Promise<VoiceNativeStatus> {
@@ -152,6 +213,8 @@ export interface VoiceNativeDebug {
   playout_devices: { id: string; name: string; index: number }[];
   attached_tracks: number;
   participants: number;
+  processing: { instances: number; echo_cancellation: boolean; auto_gain_control: boolean;
+    webrtc_noise_suppression: boolean; rnnoise: boolean; mix: number } | null;
 }
 
 /** Diagnostic instantané (DevTools : `await getVoiceNativeDebug()` après
@@ -166,6 +229,9 @@ export function voiceNativeConnect(
   roomName: string,
   displayName: string,
   encrypted = false,
+  devices?: { inputDevice: string; outputDevice: string },
+  processing?: NativeAudioProcessing,
+  audioQuality?: AudioQualityPreset,
 ): Promise<VoiceNativeStatus> {
   return tauriInvoke<VoiceNativeStatus>("voice_native_connect", {
     url,
@@ -173,6 +239,9 @@ export function voiceNativeConnect(
     roomName,
     displayName,
     encrypted,
+    ...devices,
+    ...(processing ? { processing } : {}),
+    ...(audioQuality ? { audioQuality } : {}),
   });
 }
 
@@ -216,13 +285,6 @@ export async function onVoiceNativeParticipants(
   return listen<ParticipantInfo[]>(VOICE_NATIVE_PARTICIPANTS_EVENT, (e) => cb(e.payload));
 }
 
-export async function onVoiceNativeSpeaking(
-  cb: (ev: VoiceNativeSpeaking) => void,
-): Promise<() => void> {
-  const { listen } = await import("@tauri-apps/api/event");
-  return listen<VoiceNativeSpeaking>(VOICE_NATIVE_SPEAKING_EVENT, (e) => cb(e.payload));
-}
-
 export async function onVoiceNativeE2eeState(
   cb: (ev: VoiceNativeE2eeState) => void,
 ): Promise<() => void> {
@@ -240,27 +302,70 @@ export async function onVoiceNativeData(
   );
 }
 
-/** JPEG d'une frame de partage d'écran distant (émis ~4 im/s par expéditeur). */
-export const VOICE_NATIVE_FRAME_EVENT = "voice-native-frame";
+export async function onVoiceNativeLocalShareFailed(
+  cb: (ev: VoiceNativeLocalShareFailed) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeLocalShareFailed>(VOICE_NATIVE_LOCAL_SHARE_FAILED_EVENT, (e) =>
+    cb(e.payload),
+  );
+}
+
 /** `{ sender }` — fin de partage (unsubscribe, leave, fin de piste). */
 export const VOICE_NATIVE_FRAME_STOPPED_EVENT = "voice-native-frame-stopped";
-
-export interface VoiceNativeFrame {
-  sender: string;
-  width: number;
-  height: number;
-  jpeg_b64: string;
-}
 
 export interface VoiceNativeFrameStopped {
   sender: string;
 }
 
-export async function onVoiceNativeFrame(
-  cb: (ev: VoiceNativeFrame) => void,
+export interface VoiceNativeBinaryFrame {
+  sender: string;
+  width: number;
+  height: number;
+  jpeg: Uint8Array;
+  receivedAt: number;
+}
+
+export function parseVoiceNativeVideoPacket(data: ArrayBuffer): VoiceNativeBinaryFrame | null {
+  if (data.byteLength < 14) return null;
+  const bytes = new Uint8Array(data);
+  if (bytes[0] !== 0x53 || bytes[1] !== 0x56 || bytes[2] !== 0x46 || bytes[3] !== 0x31) return null;
+  const view = new DataView(data);
+  const senderLength = view.getUint16(4, true);
+  const jpegOffset = 14 + senderLength;
+  if (jpegOffset + 4 > data.byteLength) return null;
+  const width = view.getUint32(6, true);
+  const height = view.getUint32(10, true);
+  if (!width || !height) return null;
+  const sender = new TextDecoder().decode(bytes.subarray(14, jpegOffset));
+  if (!sender) return null;
+  return {
+    sender,
+    width,
+    height,
+    jpeg: bytes.slice(jpegOffset),
+    receivedAt: performance.now(),
+  };
+}
+
+/** Ouvre le flux vidéo local binaire. Le WebSocket transporte les JPEG sans
+ * JSON/base64 et garde l'IPC Tauri réservé aux petits événements de contrôle. */
+export async function connectVoiceNativeVideoStream(
+  onFrame: (frame: VoiceNativeBinaryFrame) => void,
 ): Promise<() => void> {
-  const { listen } = await import("@tauri-apps/api/event");
-  return listen<VoiceNativeFrame>(VOICE_NATIVE_FRAME_EVENT, (e) => cb(e.payload));
+  const port = await tauriInvoke<number>("voice_native_video_port");
+  if (!port) throw new Error("transport vidéo natif indisponible");
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  socket.binaryType = "arraybuffer";
+  socket.onmessage = (event) => {
+    if (!(event.data instanceof ArrayBuffer)) return;
+    const frame = parseVoiceNativeVideoPacket(event.data);
+    if (frame) onFrame(frame);
+  };
+  return () => {
+    socket.onmessage = null;
+    socket.close();
+  };
 }
 
 export async function onVoiceNativeFrameStopped(
@@ -303,10 +408,10 @@ export function resolveNativeDisplayName(identity: string, roomId: string | null
     if (client) {
       if (roomId) {
         const memberName = client.getRoom(roomId)?.getMember?.(userId)?.name;
-        if (memberName) return memberName;
+        if (memberName && !/^@[^:]+:[^:]+(?::.+)?$/.test(memberName)) return memberName;
       }
       const globalName = client.getUser(userId)?.displayName;
-      if (globalName) return globalName;
+      if (globalName && !/^@[^:]+:[^:]+(?::.+)?$/.test(globalName)) return globalName;
     }
   } catch { /* ignore — repli localpart ci-dessous */ }
   return userId.replace("@", "").split(":")[0] || identity;

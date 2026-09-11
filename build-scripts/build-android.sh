@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Build Android — désactive temporairement le CEF (incompatible Android)
+# Build Android.
+# NOTE : la voix dépend du moteur Rust (`native-voice`), qui n'est pas
+# compilé ici (pas de libwebrtc pour Android — les patches webrtc-sys ne
+# s'appliquent pas). La voix Android est donc inactive tant que le moteur
+# n'y est pas porté.
 set -euo pipefail
 
 CARGO_TOML="src-tauri/Cargo.toml"
@@ -7,26 +11,17 @@ CARGO_TOML="src-tauri/Cargo.toml"
 # Force rustup toolchain (Arch Linux a un rustc système sans target Android)
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$HOME/.cargo/bin:$PATH"
 
+# Désactive les features desktop natives le temps du build Android.
 enable_android() {
     echo "[Sion] Mode Android..."
-    sed -i 's/^default = \["cef"\]/default = []/' "$CARGO_TOML"
-    sed -i 's/^cef = \[/# cef = [/' "$CARGO_TOML"
-    sed -i 's/^tauri-runtime-cef/# tauri-runtime-cef/' "$CARGO_TOML"
-    sed -i 's/^cef = { version/# cef = { version/' "$CARGO_TOML"
-    sed -i 's/^\[patch\.crates-io\]/# [patch.crates-io]/' "$CARGO_TOML"
-    sed -i '/^# \[patch\.crates-io\]/,$ { /^[^#]/ s/^/# / }' "$CARGO_TOML"
+    sed -i 's/^default = \["native-voice"\]/default = []/' "$CARGO_TOML"
 }
 
 restore_desktop() {
     echo "[Sion] Mode Desktop..."
-    sed -i 's/^default = \[\]/default = ["cef"]/' "$CARGO_TOML"
-    sed -i 's/^# cef = \[/cef = [/' "$CARGO_TOML"
-    sed -i 's/^# tauri-runtime-cef/tauri-runtime-cef/' "$CARGO_TOML"
-    sed -i 's/^# cef = { version/cef = { version/' "$CARGO_TOML"
-    sed -i 's/^# \[patch\.crates-io\]/[patch.crates-io]/' "$CARGO_TOML"
-    sed -i '/^\[patch\.crates-io\]/,$ { s/^# // }' "$CARGO_TOML"
-    echo "[Sion] Mise à jour Cargo.lock pour CEF..."
-    cd src-tauri && cargo update -p tauri --quiet 2>/dev/null; cd ..
+    sed -i 's/^default = \[\]/default = ["native-voice"]/' "$CARGO_TOML"
+    echo "[Sion] Mise à jour Cargo.lock..."
+    cd src-tauri && cargo update -p tauri --quiet 2>/dev/null || true; cd ..
 }
 
 trap restore_desktop EXIT

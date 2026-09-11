@@ -4,11 +4,9 @@ import { persist } from "zustand/middleware";
 export type ChannelSortMode = "created" | "name" | "activity";
 export type SidebarView = "channels" | "dm";
 export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
+/** Codec de la piste de partage d'écran (cf. `screenshare_publish_options`). */
+export type ShareVideoCodec = "vp9" | "h264" | "vp8";
 export type NotificationMode = "all" | "mentions" | "minimal";
-/** Moteur voix : "js" = livekit-client dans la webview (défaut, stable),
- *  "native" = Room LiveKit en Rust hors webview (chantier suppression CEF,
- *  expérimental — build avec --features native-voice requis). */
-export type VoiceEngineChoice = "js" | "native";
 
 // join/leave/timeout are gated by the `voiceChannelSounds` toggle; poke/kick/
 // memberKicked are user-event notifications that always play; mute/unmute/
@@ -40,10 +38,9 @@ interface SettingsState {
   sidebarView: SidebarView;
   echoCancellation: boolean;
   autoGainControl: boolean;
-  /** RNNoise-based noise suppression (Jean-Marc Valin's model, via
-   *  `nnnoiseless`). Runs on the Rust side in place of Chromium's native
-   *  noise filter — keeping both enabled would double-filter voice.
-   *  Lightweight (~5% of a core). */
+  /** RNNoise Rust (port `nnnoiseless`) dans l'APM de capture WebRTC natif.
+   *  Remplace le filtre de bruit de Chromium, qui n'est plus utilisé pour la
+   *  voix. */
   aiNoiseSuppression: boolean;
   /** Dry/wet mix for RNNoise (0.0 = full passthrough, 1.0 = full denoise).
    *  RNNoise is causal (0 lookahead) so any mix value is artifact-free — the
@@ -51,12 +48,15 @@ interface SettingsState {
   aiNoiseSuppressionMix: number;
   audioQuality: AudioQualityPreset;
   linkPreviews: boolean;
+  nativeAudioInputDevice: string;
+  nativeAudioOutputDevice: string;
+  setNativeAudioInputDevice: (id: string) => void;
+  setNativeAudioOutputDevice: (id: string) => void;
   audioInputDevice: string;
   audioOutputDevice: string;
-  voiceEngine: VoiceEngineChoice;
   /** Optional path to an ffmpeg executable, used to transcode videos whose
-   *  codec CEF can't play natively (e.g. H.264 on the minimal CEF build,
-   *  notably Windows). Empty = use `ffmpeg` from PATH. */
+   *  codec n'est pas décodé par la webview (dépend des codecs système,
+   *  notamment sous Linux/WebKitGTK). Empty = use `ffmpeg` from PATH. */
   ffmpegPath: string;
   /** Absolute path to a yt-dlp binary for importing audio from external-media
    *  URLs (soundboard + voice cues). Empty = app-managed download / PATH. */
@@ -105,10 +105,17 @@ interface SettingsState {
    *  shows viewers' cursors. Off by default — it creates an extra Tauri
    *  window and gets captured back in the stream. Can be toggled mid-share. */
   screenShareCursorOverlay: boolean;
+  /** Auto garde la définition native jusqu'à 1440p/30 et laisse WebRTC
+   *  adapter le débit. Custom applique les deux plafonds choisis dessous. */
+  screenShareQualityMode: "auto" | "custom";
   screenShareResolution: "720p" | "1080p" | "1440p";
   screenShareFramerate: 5 | 15 | 30 | 60;
-  /** CEF/Windows only: which desktop source to capture (e.g. "screen:0:0").
-   *  Windows CEF has no working Chrome source picker (it crashes on stop/focus),
+  /** Codec de la piste de partage publiée : `vp9` (défaut, le plus net pour
+   *  le texte), `h264` (encodage matériel VAAPI, CPU quasi nul) ou `vp8`
+   *  (compatibilité maximale, logiciel). */
+  screenShareCodec: ShareVideoCodec;
+  /** Windows only: which desktop source to capture (e.g. "screen:0:0").
+   *  Le sélecteur natif Windows est utilisé directement,
    *  so we pick a single monitor ourselves via the legacy getUserMedia desktop
    *  constraint. null = primary screen (screen:0:0). Unused on Linux (xdg
    *  portal), macOS (native picker) and web (getDisplayMedia). */
@@ -145,7 +152,6 @@ interface SettingsState {
   setTtsEnginePath: (v: string) => void;
   setTtsModel: (v: string) => void;
   setAudioOutputDevice: (v: string) => void;
-  setVoiceEngine: (v: VoiceEngineChoice) => void;
   setDefaultChannel: (v: string) => void;
   setAutoJoinVoice: (v: boolean) => void;
   setEnableGifs: (v: boolean) => void;
@@ -162,8 +168,10 @@ interface SettingsState {
   setSoundboardView: (v: { mode: "all" | "favorites" | "top"; category: string | null }) => void;
   setScreenShareAudio: (v: boolean) => void;
   setScreenShareCursorOverlay: (v: boolean) => void;
+  setScreenShareQualityMode: (v: "auto" | "custom") => void;
   setScreenShareResolution: (v: "720p" | "1080p" | "1440p") => void;
   setScreenShareFramerate: (v: 5 | 15 | 30 | 60) => void;
+  setScreenShareCodec: (v: ShareVideoCodec) => void;
   setScreenShareSourceId: (v: string | null) => void;
   setTranscribeModel: (v: "whisper-base" | "whisper-small" | "whisper-medium" | "parakeet-v3") => void;
   setTranscribeLang: (v: "auto" | "fr" | "en") => void;
@@ -188,15 +196,16 @@ export const useSettingsStore = create<SettingsState>()(
       aiNoiseSuppressionMix: 1.0,
       audioQuality: "voiceHD",
       linkPreviews: true,
+      nativeAudioInputDevice: "",
+      nativeAudioOutputDevice: "",
+      setNativeAudioInputDevice: (id) => set({ nativeAudioInputDevice: id }),
+      setNativeAudioOutputDevice: (id) => set({ nativeAudioOutputDevice: id }),
       audioInputDevice: "",
       ffmpegPath: "",
       ytdlpPath: "",
       ttsEnginePath: "",
       ttsModel: "chatterbox",
       audioOutputDevice: "",
-      // "js" par défaut : comportement inchangé. Le natif s'active
-      // explicitement (et exige un build --features native-voice).
-      voiceEngine: "js" as VoiceEngineChoice,
       defaultChannel: "",
       autoJoinVoice: false,
       enableGifs: false,
@@ -213,8 +222,10 @@ export const useSettingsStore = create<SettingsState>()(
       soundboardView: { mode: "all", category: null },
       screenShareAudio: true,
       screenShareCursorOverlay: false,
+      screenShareQualityMode: "auto" as const,
       screenShareResolution: "1080p" as const,
       screenShareFramerate: 15 as const,
+      screenShareCodec: "vp9" as const,
       screenShareSourceId: null,
       transcribeModel: "parakeet-v3",
       transcribeLang: "auto",
@@ -232,17 +243,11 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoGainControl: (v) => set({ autoGainControl: v }),
       setAiNoiseSuppression: (v) => {
         set({ aiNoiseSuppression: v });
-        // Re-capture the mic so the denoise shim (re)wraps the track.
-        import("../services/livekitService").then(({ refreshMicrophoneForDenoise }) => refreshMicrophoneForDenoise()).catch(() => {});
-        if (!v) {
-          import("../services/denoiseService").then(({ disableDenoise }) => disableDenoise()).catch(() => {});
-        }
       },
       setAiNoiseSuppressionMix: (v) => {
-        const clamped = Math.max(0, Math.min(1, v));
-        set({ aiNoiseSuppressionMix: clamped });
-        // Live wet/dry update on the active RNNoise worklet — no mic republish.
-        import("../services/denoiseService").then(({ setDenoiseMix }) => setDenoiseMix(clamped)).catch(() => {});
+        // Live wet/dry update : la valeur est poussée au moteur natif par
+        // NativeAudioSettings (`setVoiceNativeAudioProcessing`).
+        set({ aiNoiseSuppressionMix: Math.max(0, Math.min(1, v)) });
       },
       setAudioQuality: (v) => set({ audioQuality: v }),
       setLinkPreviews: (v) => set({ linkPreviews: v }),
@@ -252,7 +257,6 @@ export const useSettingsStore = create<SettingsState>()(
       setTtsEnginePath: (v) => set({ ttsEnginePath: v.trim() }),
       setTtsModel: (v) => set({ ttsModel: v }),
       setAudioOutputDevice: (v) => set({ audioOutputDevice: v }),
-      setVoiceEngine: (v) => set({ voiceEngine: v }),
       setDefaultChannel: (v) => set({ defaultChannel: v }),
       setAutoJoinVoice: (v) => set({ autoJoinVoice: v }),
       setEnableGifs: (v) => set({ enableGifs: v }),
@@ -286,23 +290,27 @@ export const useSettingsStore = create<SettingsState>()(
         set({ screenShareCursorOverlay: v });
         // Toggle live if a share is already in progress so the user doesn't
         // have to stop/restart the share to see the change.
-        import("../services/livekitService").then(({ getCurrentRoom }) => {
-          const room = getCurrentRoom();
-          if (!room?.localParticipant.isScreenShareEnabled) return;
+        import("./useAppStore").then(({ useAppStore }) => {
+          if (!useAppStore.getState().isScreenSharing) return;
           import("../services/cursorOverlayService").then((svc) => {
             if (v) svc.openCursorOverlay().catch(() => {});
             else svc.closeCursorOverlay().catch(() => {});
           }).catch(() => {});
         }).catch(() => {});
       },
+      setScreenShareQualityMode: (v) => set({ screenShareQualityMode: v }),
       setScreenShareResolution: (v) => set({ screenShareResolution: v }),
       setScreenShareFramerate: (v) => set({ screenShareFramerate: v }),
+      setScreenShareCodec: (v) => set({ screenShareCodec: v }),
       setScreenShareSourceId: (v) => set({ screenShareSourceId: v }),
       setTranscribeModel: (v) => set({ transcribeModel: v }),
       setTranscribeLang: (v) => set({ transcribeLang: v }),
       setLanguage: (v) => {
         set({ language: v });
-        import("i18next").then((i18n) => i18n.default.changeLanguage(v));
+        // v vide = « Système » : on redétecte via le navigateur (le défaut de
+        // l'app reste le français si la locale n'est pas reconnue).
+        const target = v || navigator.language?.slice(0, 2) || "fr";
+        import("i18next").then((i18n) => i18n.default.changeLanguage(target));
       },
       setNotificationMode: (v) => {
         set({ notificationMode: v });

@@ -2281,47 +2281,18 @@ if (typeof window !== "undefined") {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__SION_DEBUG__ = {
     getClient: () => matrixService.getMatrixClient(),
-    // Get the current LiveKit Room so tests can inspect remote participants,
-    // subscribed tracks, and whether audio is actually coming through.
-    getLKRoom: () => {
+    // Snapshot du moteur voix Rust (état, participants, appareils, tracks
+    // attachées). Remplace l'ancien `getLKRoom` du moteur LiveKit JS.
+    getVoiceDebug: () => {
       // Lazy import to avoid a circular dependency at module load.
-       
-      return import("../services/livekitService").then(m => m.getCurrentRoom());
+      return import("../services/voiceNativeService").then(m => m.getVoiceNativeDebug());
     },
-    // One-shot dump of LiveKit voice state: self + remotes, with their tracks.
+    // One-shot dump de l'état voix natif.
     dumpVoice: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const room: any = await (window as any).__SION_DEBUG__.getLKRoom();
-      if (!room) { console.log("[Sion] no current LiveKit room"); return; }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const summarize = (p: any) => ({
-        identity: p.identity,
-        name: p.name,
-        isLocal: p === room.localParticipant,
-        tracks: Array.from(p.trackPublications?.values?.() ?? []).map(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (pub: any) => ({
-            sid: pub.trackSid,
-            source: pub.source,
-            kind: pub.kind,
-            muted: pub.isMuted,
-            subscribed: pub.isSubscribed,
-            hasTrack: !!pub.track,
-          }),
-        ),
-      });
-      const all = [room.localParticipant, ...room.remoteParticipants.values()].map(summarize);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows: any[] = [];
-      for (const p of all) {
-        if (p.tracks.length === 0) {
-          rows.push({ who: p.identity, sid: "(none)", source: "", kind: "", muted: "", subscribed: "", hasTrack: false });
-        } else {
-          for (const t of p.tracks) rows.push({ who: p.identity, ...t });
-        }
-      }
-      console.table(rows);
-      return all;
+      const debug = await (window as any).__SION_DEBUG__.getVoiceDebug();
+      console.log("[Sion] voice debug:", debug);
+      return debug;
     },
     // Fix up an existing room so members who join later can see past messages.
     // Requires PL >= 50 in the room (admin-equivalent).

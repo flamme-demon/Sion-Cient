@@ -23,8 +23,7 @@ jobs:
   # -------------------------------------------------------------------------
   # Linux AppImage. Uses the existing build-scripts/build-appimage.sh which
   # downloads linuxdeploy on demand, so the workflow only has to install
-  # bun + rust + a handful of system libs that CEF (and FUSE for AppImage
-  # mounting) need at build time.
+  # bun + rust + the WRY/WebKitGTK and audio system libs.
   # -------------------------------------------------------------------------
   build-linux:
     runs-on: ubuntu-24.04
@@ -34,12 +33,10 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # Tauri's standard Ubuntu prereqs (gtk/soup/webkit -dev) — we don't
-          # use webkit at runtime (CEF) but tauri-runtime-cef transitively
-          # depends on glib-rs/gtk-rs whose `*-sys` build scripts call
-          # pkg-config and need the .pc files those -dev packages provide.
-          # Plus the CEF runtime libs (nss, gbm, xss, drm…) needed at build
-          # for the linker to resolve, and AppImage tooling (zstd, fuse2).
+          # WRY s'appuie sur WebKitGTK au runtime : les paquets -dev sont donc
+          # requis par les build scripts glib/gtk/soup. Plus l'audio
+          # (alsa/pulse), la fenêtre overlay (xcb/wayland) et l'outillage
+          # AppImage (zstd, fuse2).
           sudo apt-get install -y \
             build-essential pkg-config curl wget file zstd squashfs-tools \
             libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libsoup-3.0-dev \
@@ -58,10 +55,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # tauri-runtime-cef rev a9525cf pulls in tauri-cli which requires
-          # edition 2024 (Rust ≥ 1.85). Cargo parses every workspace member
-          # of the git dep, not just the one we use, so even though we don't
-          # build the CLI ourselves we still need a recent toolchain.
+          # Le dépôt tauri épinglé (git rev) contient tauri-cli qui exige
+          # edition 2024 (Rust ≥ 1.85) : Cargo parse tous les membres du
+          # workspace de la dépendance git, donc un toolchain récent est requis.
           toolchain: 'stable'
           targets: x86_64-unknown-linux-gnu
 
@@ -95,9 +91,8 @@ jobs:
 
   # -------------------------------------------------------------------------
   # Windows NSIS installer (.exe). We invoke `tauri build --bundles nsis`
-  # directly (NSIS handles the CEF resource injection cleanly) instead of the
-  # PowerShell helper script — the helper does dev-machine setup that's
-  # unnecessary on a fresh GHA runner.
+  # directly instead of the PowerShell helper script — the helper does
+  # dev-machine setup that's unnecessary on a fresh GHA runner.
   # -------------------------------------------------------------------------
   build-windows:
     runs-on: windows-latest
@@ -128,51 +123,24 @@ jobs:
 
       # CRT/BLAS build knobs for the transcribe.cpp dep live in
       # src-tauri/.cargo/config.toml (committed), so local and CI builds agree.
-      - name: Compile Rust binary (CEF runtime)
+      - name: Compile Rust binary
         # We do `cargo build` first instead of going straight to
-        # `tauri build`, because we need access to the CEF binaries that
-        # the `cef` crate downloads during this step before we can stage
-        # them into the bundle.
+        # `tauri build`, because we need the native DLLs (ggml/transcribe)
+        # that build.rs drops next to the binary before staging them into
+        # the bundle.
         working-directory: src-tauri
-        run: cargo build --release --features cef
+        run: cargo build --release
 
-      - name: Stage CEF libs + patch tauri.conf.json
-        # The default `tauri build --bundles nsis` doesn't know about CEF —
-        # it would ship a 7 MB installer with just the binary, missing
-        # libcef.dll and the locales/ folder. We mirror what
-        # build-scripts/build-windows.ps1 does locally: copy the CEF
-        # output into src-tauri/cef-dist/, then inject a `bundle.resources`
-        # mapping into tauri.conf.json so the bundler picks them up. The
-        # original config is backed up and restored after the build.
+      - name: Stage native DLLs + patch tauri.conf.json
+        # `tauri build --bundles nsis` ne connait pas les DLL natives.
+        # On les copie dans src-tauri/native-dist/, puis on injecte un
+        # `bundle.resources` dans tauri.conf.json. La config d'origine est
+        # sauvegardee puis restauree apres le build.
         shell: pwsh
         run: |
-          $cefFiles = @(
-            "libcef.dll","chrome_elf.dll","d3dcompiler_47.dll",
-            "libEGL.dll","libGLESv2.dll","vulkan-1.dll","vk_swiftshader.dll",
-            "chrome_100_percent.pak","chrome_200_percent.pak","resources.pak",
-            "icudtl.dat","v8_context_snapshot.bin","snapshot_blob.bin","vk_swiftshader_icd.json"
-          )
-          $cefDir = Get-ChildItem -Path src-tauri/target/release/build -Recurse -Directory -Filter "cef_win*" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $cefDir) {
-            $cefDir = Get-ChildItem -Path src-tauri/target/release/build -Recurse -Directory -Filter "cef_windows*" -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if (-not $cefDir) {
-            Write-Error "CEF directory not found under src-tauri/target/release/build/"
-            exit 1
-          }
-          $cefDist = "src-tauri/cef-dist"
-          if (Test-Path $cefDist) { Remove-Item -Recurse -Force $cefDist }
-          New-Item -ItemType Directory -Force -Path $cefDist | Out-Null
-          foreach ($f in $cefFiles) {
-            $src = Join-Path $cefDir.FullName $f
-            if (Test-Path $src) { Copy-Item $src "$cefDist/" }
-          }
-          $localesDir = Join-Path $cefDir.FullName "locales"
-          if (Test-Path $localesDir) {
-            New-Item -ItemType Directory -Force -Path "$cefDist/locales" | Out-Null
-            Copy-Item "$localesDir/*" "$cefDist/locales/" -Force
-          }
-          Write-Host "CEF staged from $($cefDir.FullName)"
+          $nativeDist = "src-tauri/native-dist"
+          if (Test-Path $nativeDist) { Remove-Item -Recurse -Force $nativeDist }
+          New-Item -ItemType Directory -Force -Path $nativeDist | Out-Null
 
           # Variantes CPU de ggml + moteur transcribe. Elles sont liees
           # dynamiquement pour que ggml choisisse son noyau selon le processeur
@@ -180,12 +148,12 @@ jobs:
           # d'instructions du RUNNER (AVX-512) et planterait en SIGILL ailleurs.
           # build.rs les depose a cote du binaire, mais le bundler ne les
           # connait pas : sans cette etape l'application ne demarre pas du tout
-          # (« transcribe.dll est introuvable »). Le glob cef-dist/*.dll ci-
-          # dessous les embarque ensuite sans carte supplementaire.
+          # (« transcribe.dll est introuvable »). Le glob native-dist/*.dll
+          # ci-dessous les embarque ensuite sans carte supplementaire.
           $staged = @()
           foreach ($pattern in @("ggml*.dll", "libggml*.dll", "transcribe*.dll", "libtranscribe*.dll")) {
             Get-ChildItem -Path "src-tauri/target/release" -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
-              Copy-Item $_.FullName "$cefDist/" -Force
+              Copy-Item $_.FullName "$nativeDist/" -Force
               $staged += $_.Name
             }
           }
@@ -214,12 +182,7 @@ jobs:
           Copy-Item "src-tauri/tauri.conf.json" "src-tauri/tauri.conf.json.bak"
           $conf = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
           $conf.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
-            "cef-dist/*.dll" = "./"
-            "cef-dist/*.pak" = "./"
-            "cef-dist/*.dat" = "./"
-            "cef-dist/*.bin" = "./"
-            "cef-dist/*.json" = "./"
-            "cef-dist/locales/*" = "./locales/"
+            "native-dist/*.dll" = "./"
           } -Force
           [System.IO.File]::WriteAllText("$PWD/src-tauri/tauri.conf.json", ($conf | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
@@ -227,7 +190,7 @@ jobs:
         # `bun run tauri` uses @tauri-apps/cli (already in devDependencies)
         # so we don't have to recompile tauri-cli from source. NSIS is
         # downloaded automatically on first invocation.
-        run: bun run tauri build --bundles nsis -- --features cef
+        run: bun run tauri build --bundles nsis
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
           # Baked into the JS bundle by Vite (GIF search — Klipy).

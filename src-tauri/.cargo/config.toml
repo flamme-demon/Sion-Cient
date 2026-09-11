@@ -20,10 +20,9 @@ jobs = 4
 # inert on non-MSVC platforms.
 TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
 
-# Static MSVC CRT (/MT): the CEF wrapper objects are MT_StaticRelease; any
-# cmake-built C++ dep (transcribe.cpp) must match or link.exe fails with
-# LNK2038 RuntimeLibrary mismatch (this killed the v1.5.0-beta.1 Windows CI
-# build back when whisper-rs was the ASR backend). `+crt-static` makes the
-# cmake crate select /MT for all native deps.
+# Static MSVC CRT (/MT): les dépendances C++ natives (webrtc/libwebrtc,
+# transcribe.cpp) doivent utiliser la même CRT que Rust, sinon link.exe
+# échoue avec LNK2038 RuntimeLibrary mismatch. `+crt-static` fait sélectionner
+# /MT au crate cmake pour toutes les dépendances natives.
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-Ctarget-feature=+crt-static"]

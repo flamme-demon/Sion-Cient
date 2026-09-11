@@ -287,7 +287,7 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
       // Store current device/user ID for future checks
       if (currentDeviceId) localStorage.setItem("sion_device_id", currentDeviceId);
       if (currentUserId) localStorage.setItem("sion_user_id", currentUserId);
-      // Mirror outside the CEF profile so a Chromium-upgrade reset can't drop
+      // Mirror outside the webview profile so a profile purge can't drop
       // the device_id (which would create a NEW device on next login → churn).
       void import("./sessionPersist").then((m) => m.mirrorSessionToAppData());
       return true;
@@ -1460,7 +1460,7 @@ export const SOUNDBOARD_ALIAS_LOCAL = "soundboard";
 // the result for the lifetime of the session. Without this, callers like
 // SoundboardPanel's `Room.timeline` listener fire `/directory/room/...`
 // once per inbound timeline event — easily 1000+ requests during initial
-// scrollback in voice-heavy rooms, which saturates CEF's connection pool
+// scrollback in voice-heavy rooms, which sature le pool de connexions du webview
 // (`ERR_INSUFFICIENT_RESOURCES`). Cached by `domain` so a homeserver
 // switch invalidates correctly.
 let soundboardRoomCache: { domain: string; roomId: string | null } | null = null;

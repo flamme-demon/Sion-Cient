@@ -1,10 +1,26 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { RemoteTrack } from "livekit-client";
-import { onScreenShareChange, onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, setScreenShareAudioMuted, setScreenShareAudioVolume, getScreenShareAudioState, type ScreenShareInfo, type RemoteCursor, type RemoteCursorClick } from "../../services/livekitService";
-import { getActiveVoiceEngine } from "../../services/voiceNativeService";
+import { onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, type RemoteCursor, type RemoteCursorClick } from "../../services/cursorService";
+import { connectVoiceNativeVideoStream, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
+import { useAppStore } from "../../stores/useAppStore";
 import { useTranslation } from "react-i18next";
 import { SpeakerIcon, ScreenIcon } from "../icons";
+
+/** Partage affichable : les pixels arrivent par le WebSocket binaire natif,
+ *  il n'y a plus d'objet piste LiveKit dans la webview. */
+interface ScreenShareInfo {
+  participantIdentity: string;
+  participantName: string;
+  hasAudio: boolean;
+}
+
+/** État audio local par partageur (le moteur Rust mémorise le sien de son
+ *  côté ; ici on garde la source de vérité des icônes, y compris pour les
+ *  onglets de partages non actifs). */
+const shareAudioState = new Map<string, { muted: boolean; volume: number }>();
+function screenShareAudioState(identity: string): { muted: boolean; volume: number } {
+  return shareAudioState.get(identity) ?? { muted: false, volume: 1 };
+}
 
 /** Speaker with an X — the muted counterpart to the maison SpeakerIcon,
  *  matched in stroke/size so the toggle doesn't jump. */
@@ -34,8 +50,8 @@ function ChevronRightIcon() {
   );
 }
 
-// 60 Hz to match the overlay's redraw cadence — at 30 Hz the cursor
-// jumped every other frame, which the lerp helps but doesn't fully hide.
+// 60 Hz keeps the native overlay close to the physical pointer. The Rust
+// overlay paints each received position directly; there is no extra easing.
 const CURSOR_BROADCAST_HZ = 60;
 const CURSOR_BROADCAST_INTERVAL = Math.floor(1000 / CURSOR_BROADCAST_HZ);
 
@@ -100,13 +116,13 @@ function syncCursorLayer(
  *  it for coordinate math puts the cursor in those bars, and broadcasts
  *  coords that fall outside what the sharer's native overlay can honour.
  *  Derived from the intrinsic dimensions (`videoWidth`/`videoHeight` for
- *  <video>, `naturalWidth`/`naturalHeight` for the native <img>), which
+ *  <video>, `width`/`height` for the native canvas), which
  *  carry the stream's intrinsic dimensions. Falls back to the element rect
  *  when metadata hasn't loaded yet. */
-function getVideoContentRect(el: HTMLVideoElement | HTMLImageElement) {
+function getVideoContentRect(el: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement) {
   const elRect = el.getBoundingClientRect();
-  const vw = el instanceof HTMLVideoElement ? el.videoWidth : el.naturalWidth;
-  const vh = el instanceof HTMLVideoElement ? el.videoHeight : el.naturalHeight;
+  const vw = el instanceof HTMLVideoElement ? el.videoWidth : el instanceof HTMLImageElement ? el.naturalWidth : el.width;
+  const vh = el instanceof HTMLVideoElement ? el.videoHeight : el instanceof HTMLImageElement ? el.naturalHeight : el.height;
   if (!vw || !vh || elRect.width === 0 || elRect.height === 0) {
     return { left: elRect.left, top: elRect.top, width: elRect.width, height: elRect.height };
   }
@@ -133,59 +149,78 @@ function colorForIdentity(identity: string): string {
   return `hsl(${hue}, 75%, 55%)`;
 }
 
+async function decodeNativeJpeg(bytes: ArrayBuffer): Promise<{ source: CanvasImageSource; close: () => void }> {
+  const blob = new Blob([bytes], { type: "image/jpeg" });
+  if (typeof createImageBitmap === "function") {
+    const bitmap = await createImageBitmap(blob);
+    return { source: bitmap, close: () => bitmap.close() };
+  }
+  // WebKitGTK ancien : décodage via Image + URL objet, toujours sans base64.
+  const url = URL.createObjectURL(blob);
+  const image = new Image();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("JPEG invalide"));
+      image.src = url;
+    });
+    return { source: image, close: () => URL.revokeObjectURL(url) };
+  } catch (err) {
+    URL.revokeObjectURL(url);
+    throw err;
+  }
+}
+
 export function ScreenShareView() {
   const { t } = useTranslation();
-  // Moteur voix actif : en natif il n'y a pas de room JS — les partages
-  // viennent des participants natifs (`isScreenSharing`) et les pixels des
-  // events `voice-native-frame` (JPEG), rendus dans un <img>.
-  const isNative = getActiveVoiceEngine() === "native";
+  // Moteur unique : les partages viennent des participants natifs
+  // (`isScreenSharing`) et les pixels des paquets WebSocket locaux (JPEG),
+  // peints hors React dans un canvas.
   const nativeParticipants = useLiveKitStore((s) => s.participants);
+  const connectedVoiceChannel = useAppStore((s) => s.connectedVoiceChannel);
   const nativeShares: ScreenShareInfo[] = useMemo(() => {
-    if (!isNative) return [];
     return nativeParticipants
       .filter((p) => p.isScreenSharing)
-      .map((p) => ({
-        track: null as unknown as RemoteTrack,
-        participantIdentity: p.identity,
-        participantName: p.name,
-        // Présence fournie par le moteur natif (piste ScreenshareAudio) ;
-        // le mute passe par `voice_native_set_screenshare_audio_muted`.
-        hasAudio: p.isScreenSharingAudio ?? false,
-      }));
-  }, [isNative, nativeParticipants]);
+      .map((p) => {
+        const nativeName = p.name?.trim();
+        const participantName = nativeName && !/^@[^:]+:[^:]+(?::.+)?$/.test(nativeName)
+          ? nativeName
+          : resolveNativeDisplayName(p.identity, connectedVoiceChannel);
+        return {
+          participantIdentity: p.identity,
+          participantName,
+          // Présence fournie par le moteur natif (piste ScreenshareAudio) ;
+          // le mute passe par `voice_native_set_screenshare_audio_muted`.
+          hasAudio: p.isScreenSharingAudio ?? false,
+        };
+      });
+  }, [connectedVoiceChannel, nativeParticipants]);
   // All concurrent shares in the channel; `selectedId` is the viewer's pick.
-  const [shares, setShares] = useState<ScreenShareInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const activeShares = isNative ? nativeShares : shares;
+  const activeShares = nativeShares;
   const [clicks, setClicks] = useState<RemoteCursorClick[]>([]);
   // Content-area box (inside the video element, after object-contain) in
   // coordinates relative to `containerRef`. Used to position the cursor +
   // ripple overlays so they track the actual pixels of the shared screen,
   // not the letterbox bars. Null until the first measurement.
   const [contentBox, setContentBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const unsub = onScreenShareChange(setShares);
-    return unsub;
-  }, []);
 
   // Derive the active share from the viewer's pick, auto-falling back to the
   // first available one when their pick is gone — no effect needed.
   const activeShare = activeShares.find((s) => s.participantIdentity === selectedId) ?? activeShares[0] ?? null;
-  const activeTrack = activeShare?.track ?? null;
   const activeIdentity = activeShare?.participantIdentity ?? null;
 
-  // Cache des dernières frames natives (data-URL par expéditeur) + miroir de
+  // Cache des dernières frames natives (binaire par expéditeur) + miroir de
   // l'identité active pour le callback d'événement (abonnement unique).
-  // Mutation directe de `img.src` : pas de re-render React à 12 im/s.
-  const framesRef = useRef(new Map<string, string>());
+  // Le canvas est peint hors React : aucune data-URL/base64 ni re-render à
+  // chaque image.
+  const framesRef = useRef(new Map<string, VoiceNativeBinaryFrame>());
   const activeRef = useRef<string | null>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
-  // Mesure de latence event→pixels (diagnostic : où partent les "2 s" ?).
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const paintLatestRef = useRef<() => void>(() => {});
+  // Mesure de latence réception→pixels.
   // Tout en refs, log throttled toutes les 5 s, zéro re-render.
-  const rxRef = useRef(0);
   const latRef = useRef({ count: 0, sum: 0, start: 0, lastLog: 0 });
 
   // Miroir de l'identité active pour le callback d'événement (abonnement
@@ -193,30 +228,6 @@ export function ScreenShareView() {
   useEffect(() => {
     activeRef.current = activeIdentity;
   });
-
-  // `img.onload` → latence entre réception de l'event Tauri et pixels
-  // affichés (décodage JPEG Chromium + rendu). Rattaché à chaque changement
-  // de partage (l'élément peut être remonté).
-  const attachLatProbe = () => {
-    const img = imgRef.current;
-    if (!img) return;
-    img.onload = () => {
-      const rx = rxRef.current;
-      if (!rx) return;
-      const now = performance.now();
-      const lat = latRef.current;
-      if (lat.start === 0) lat.start = now;
-      lat.count += 1;
-      lat.sum += now - rx;
-      if (now - lat.lastLog > 5000 && lat.count > 0) {
-        console.info(
-          `[Sion][partage-natif] affichage: ${(lat.count / ((now - lat.start) / 1000)).toFixed(1)} im/s, ` +
-          `latence event→pixels ${(lat.sum / lat.count).toFixed(0)} ms (moy sur ${lat.count} frames)`,
-        );
-        latRef.current = { count: 0, sum: 0, start: now, lastLog: now };
-      }
-    };
-  };
 
   // Saturation du thread principal (diagnostic) : tâches >50 ms sur 10 s.
   // Placé avant tout return précoce : mesure en viewer comme en sharer.
@@ -254,66 +265,128 @@ export function ScreenShareView() {
   }, []);
 
   useEffect(() => {
-    if (!isNative) return;
     let cancelled = false;
-    let unsubFrame: (() => void) | null = null;
+    let closeVideo: (() => void) | null = null;
     let unsubStopped: (() => void) | null = null;
+    let drawing = false;
+    let requested = false;
+    let lastPainted: VoiceNativeBinaryFrame | null = null;
+
+    const paint = () => {
+      requested = true;
+      if (drawing) return;
+      drawing = true;
+      void (async () => {
+        while (requested && !cancelled) {
+          requested = false;
+          const sender = activeRef.current;
+          const frame = sender ? framesRef.current.get(sender) : undefined;
+          if (!frame || frame === lastPainted) continue;
+          const bytes = frame.jpeg.buffer.slice(
+            frame.jpeg.byteOffset,
+            frame.jpeg.byteOffset + frame.jpeg.byteLength,
+          ) as ArrayBuffer;
+          let decoded: Awaited<ReturnType<typeof decodeNativeJpeg>> | null = null;
+          try {
+            decoded = await decodeNativeJpeg(bytes);
+            if (!cancelled && activeRef.current === sender && canvasRef.current) {
+              const canvas = canvasRef.current;
+              // WebKitGTK composite le canvas avec un filtrage plus mou que
+              // Chromium quand il doit le réduire (partage 1440p+ affiché en
+              // 1080p). On dimensionne donc la surface au gabarit AFFICHÉ (en
+              // pixels physiques) et on fait la réduction nous-mêmes via
+              // drawImage + imageSmoothingQuality — le compositeur reste en
+              // 1:1 et le texte net.
+              const dpr = window.devicePixelRatio || 1;
+              const cssW = canvas.clientWidth || frame.width / dpr;
+              const bw = Math.max(2, Math.round(cssW * dpr));
+              const bh = Math.max(2, Math.round((bw * frame.height) / frame.width));
+              if (canvas.width !== bw || canvas.height !== bh) {
+                canvas.width = bw;
+                canvas.height = bh;
+              }
+              const ctx = canvas.getContext("2d", { alpha: false });
+              if (ctx) {
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = "high";
+                ctx.drawImage(decoded.source, 0, 0, bw, bh);
+              }
+              lastPainted = frame;
+              const now = performance.now();
+              const lat = latRef.current;
+              if (lat.start === 0) lat.start = now;
+              lat.count += 1;
+              lat.sum += now - frame.receivedAt;
+              if (now - lat.lastLog > 5000) {
+                console.info(
+                  `[Sion][partage-natif] canvas: ${(lat.count / ((now - lat.start) / 1000)).toFixed(1)} im/s, ` +
+                  `réception→pixels ${(lat.sum / lat.count).toFixed(0)} ms`,
+                );
+                latRef.current = { count: 0, sum: 0, start: now, lastLog: now };
+              }
+            }
+          } catch (err) {
+            console.warn("[Sion][partage-natif] décodage JPEG impossible:", err);
+          } finally {
+            decoded?.close();
+          }
+        }
+      })().finally(() => {
+        drawing = false;
+        if (requested && !cancelled) paint();
+      });
+    };
+    paintLatestRef.current = paint;
     import("../../services/voiceNativeService").then((native) => {
       if (cancelled) return;
-      native.onVoiceNativeFrame((f) => {
-        rxRef.current = performance.now();
-        framesRef.current.set(f.sender, `data:image/jpeg;base64,${f.jpeg_b64}`);
-        if (activeRef.current === f.sender && imgRef.current) {
-          imgRef.current.src = framesRef.current.get(f.sender) ?? "";
-        }
-      }).then((u) => { unsubFrame = u; }).catch(() => {});
       native.onVoiceNativeFrameStopped((s) => {
         framesRef.current.delete(s.sender);
-        if (activeRef.current === s.sender && imgRef.current) {
-          imgRef.current.removeAttribute("src");
+        if (activeRef.current === s.sender && canvasRef.current) {
+          canvasRef.current.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
         }
       }).then((u) => { unsubStopped = u; }).catch(() => {});
     }).catch(() => {});
-    attachLatProbe();
+    connectVoiceNativeVideoStream((frame) => {
+      framesRef.current.set(frame.sender, frame);
+      if (activeRef.current === frame.sender) paint();
+    }).then((close) => { closeVideo = close; }).catch((err) => {
+      console.warn("[Sion][partage-natif] connexion vidéo impossible:", err);
+    });
     return () => {
       cancelled = true;
-      unsubFrame?.();
+      paintLatestRef.current = () => {};
+      closeVideo?.();
       unsubStopped?.();
     };
-  }, [isNative]);
+  }, []);
 
   // Changement de partage actif : appliquer la frame en cache (ou vide en
   // attendant la prochaine, ~250 ms max).
   useEffect(() => {
-    if (!isNative || !imgRef.current) return;
-    attachLatProbe();
-    const cached = activeIdentity ? framesRef.current.get(activeIdentity) : undefined;
-    if (cached) {
-      rxRef.current = performance.now();
-      imgRef.current.src = cached;
-    } else imgRef.current.removeAttribute("src");
-  }, [isNative, activeIdentity]);
+    if (!canvasRef.current) return;
+    paintLatestRef.current();
+  }, [activeIdentity]);
 
-  // Audio control widgets, re-synced from the service when the active share
-  // changes (each sharer keeps their own mute/volume). Adjusting state during
-  // render is React's sanctioned alternative to a setState-in-effect.
+  // Plus aucun partage actif : purger les JPEG en cache (sinon ils restent
+  // jusqu'à la prochaine session de partage) et effacer le canvas.
+  useEffect(() => {
+    if (nativeShares.length > 0) return;
+    framesRef.current.clear();
+    const canvas = canvasRef.current;
+    if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+  }, [nativeShares.length]);
+
+  // Audio control widgets, re-synced from the local per-share state when the
+  // active share changes (each sharer keeps their own mute/volume). Adjusting
+  // state during render is React's sanctioned alternative to a
+  // setState-in-effect.
   const [audioCtl, setAudioCtl] = useState<{ id: string | null; muted: boolean; volume: number }>({ id: null, muted: false, volume: 1 });
   if (audioCtl.id !== activeIdentity) {
-    const st = activeIdentity ? getScreenShareAudioState(activeIdentity) : { muted: false, volume: 1 };
+    const st = activeIdentity ? screenShareAudioState(activeIdentity) : { muted: false, volume: 1 };
     setAudioCtl({ id: activeIdentity, muted: st.muted, volume: st.volume });
   }
   const audioMuted = audioCtl.muted;
   const audioVolume = audioCtl.volume;
-
-  // Attach the *track instance* (stable across re-emits) so the video doesn't
-  // re-attach/flash every time another share toggles or audio arrives.
-  useEffect(() => {
-    if (!activeTrack || !videoRef.current) return;
-    const el = activeTrack.attach(videoRef.current);
-    return () => {
-      activeTrack.detach(el);
-    };
-  }, [activeTrack]);
 
   // Subscribe to remote cursors only while a share is visible. Positions
   // synchronisées en DOM direct (pas de setState : voir `syncCursorLayer`).
@@ -360,11 +433,11 @@ export function ScreenShareView() {
   }, [activeIdentity]);
 
   // Capture local cursor and broadcast normalised coords. Throttled to
-  // CURSOR_BROADCAST_HZ so the data channel stays light. En natif, l'élément
-  // est l'<img> des frames JPEG (même géométrie object-contain).
+  // CURSOR_BROADCAST_HZ so the data channel stays light. L'élément est le
+  // canvas des frames JPEG (géométrie object-contain).
   useEffect(() => {
     if (!activeIdentity) return;
-    const media: HTMLVideoElement | HTMLImageElement | null = videoRef.current ?? imgRef.current;
+    const media = canvasRef.current;
     if (!media) return;
     const video = media;
 
@@ -472,22 +545,22 @@ export function ScreenShareView() {
       document.removeEventListener("mouseleave", onLeave);
       if (insideVideo) broadcastCursorHide(activeIdentity);
     };
-  }, [activeIdentity, isNative]);
+  }, [activeIdentity]);
 
   // Track the content-area box so the absolute-positioned overlays (cursors,
   // click ripples) sit exactly over the pixels the sharer captured, not over
-  // the letterbox bars. Re-measures on window resize, video element resize,
-  // and when the stream's intrinsic dimensions change (`loadedmetadata` +
-  // `resize` fire on HTMLMediaElement). useLayoutEffect to avoid a
-  // single-frame flash of overlays positioned against stale measurements.
+  // the letterbox bars. Le canvas natif change ses dimensions à la première
+  // frame ; les frames gardent ensuite le même ratio dans une publication.
+  // useLayoutEffect to avoid a single-frame flash of overlays positioned
+  // against stale measurements.
   useLayoutEffect(() => {
     if (!activeIdentity) { setContentBox(null); return; }
-    const media: HTMLVideoElement | HTMLImageElement | null = videoRef.current ?? imgRef.current;
+    const media = canvasRef.current;
     const container = containerRef.current;
     if (!media || !container) return;
 
     const measure = () => {
-      const m: HTMLVideoElement | HTMLImageElement | null = videoRef.current ?? imgRef.current;
+      const m = canvasRef.current;
       const c = containerRef.current;
       if (!m || !c) return;
       const rect = getVideoContentRect(m);
@@ -504,51 +577,40 @@ export function ScreenShareView() {
     const ro = new ResizeObserver(measure);
     ro.observe(media);
     ro.observe(container);
-    if (media instanceof HTMLVideoElement) {
-      media.addEventListener("loadedmetadata", measure);
-      media.addEventListener("resize", measure);
-      return () => {
-        ro.disconnect();
-        media.removeEventListener("loadedmetadata", measure);
-        media.removeEventListener("resize", measure);
-      };
-    }
-    // <img> natif : les dimensions intrinsèques arrivent avec `load`.
-    media.addEventListener("load", measure);
-    return () => {
-      ro.disconnect();
-      media.removeEventListener("load", measure);
-    };
-  }, [activeIdentity, isNative]);
+    const timer = window.setInterval(measure, 500);
+    return () => { ro.disconnect(); window.clearInterval(timer); };
+  }, [activeIdentity]);
 
   const handleToggleAudioMute = () => {
     if (!activeIdentity) return;
     const next = !audioMuted;
     setAudioCtl((c) => ({ ...c, muted: next }));
-    // Chemin natif : pas d'éléments <audio> JS — la (dés)inscription de la
-    // piste ScreenshareAudio passe par le moteur Rust. L'état local
-    // (`screenShareAudioMuted`) reste la source de vérité pour les icônes.
-    if (isNative) {
-      import("../../services/voiceNativeService").then(({ setVoiceNativeShareAudioMuted }) => {
-        setVoiceNativeShareAudioMuted(activeIdentity, next).catch(() => {
-          // Moteur injoignable : on ne ment pas à l'UI, on annule le toggle.
-          setAudioCtl((c) => ({ ...c, muted: !next }));
-        });
-      }).catch(() => {
-        setAudioCtl((c) => ({ ...c, muted: !next }));
-      });
-      return;
-    }
-    setScreenShareAudioMuted(activeIdentity, next);
+    // La (dés)inscription de la piste ScreenshareAudio passe par le moteur
+    // Rust ; l'état local reste la source de vérité des icônes.
+    setVoiceNativeShareAudioMuted(activeIdentity, next).catch(() => {
+      // Moteur injoignable : on ne ment pas à l'UI, on annule le toggle.
+      setAudioCtl((c) => ({ ...c, muted: !next }));
+    });
+    const st = screenShareAudioState(activeIdentity);
+    shareAudioState.set(activeIdentity, { ...st, muted: next });
   };
 
   const handleVolumeChange = (v: number) => {
     if (!activeIdentity) return;
     // Dragging to 0 mutes; dragging back up unmutes — keep the two in sync.
     const shouldMute = v === 0;
+    const muteChanged = shouldMute !== audioMuted;
     setAudioCtl((c) => ({ ...c, volume: v, muted: shouldMute }));
-    setScreenShareAudioVolume(activeIdentity, v);
-    setScreenShareAudioMuted(activeIdentity, shouldMute);
+    const st = screenShareAudioState(activeIdentity);
+    shareAudioState.set(activeIdentity, { ...st, volume: v, muted: shouldMute });
+    setVoiceNativeShareAudioVolume(activeIdentity, v).then(() => {
+      // La souscription LiveKit ne change qu'aux transitions 0 ↔ volume.
+      // Les mouvements intermédiaires du curseur ne pilotent que le gain.
+      if (muteChanged) return setVoiceNativeShareAudioMuted(activeIdentity, shouldMute);
+    }).catch(() => {
+      setAudioCtl((c) => ({ ...c, volume: audioVolume, muted: audioMuted }));
+      shareAudioState.set(activeIdentity, { ...st, volume: audioVolume, muted: audioMuted });
+    });
   };
 
   // Carousel navigation between concurrent shares (wraps around).
@@ -580,7 +642,7 @@ export function ScreenShareView() {
             const isActive = s.participantIdentity === activeIdentity;
             // Reflect this share's audio state: live for the active one,
             // stored for the others. Lets each tab show 🔊 vs 🔇.
-            const tabMuted = isActive ? audioMuted : getScreenShareAudioState(s.participantIdentity).muted;
+            const tabMuted = isActive ? audioMuted : screenShareAudioState(s.participantIdentity).muted;
             return (
               <button
                 key={s.participantIdentity}
@@ -609,34 +671,12 @@ export function ScreenShareView() {
         </div>
       )}
       <div ref={containerRef} style={{ position: 'relative', width: '100%', maxHeight: '50vh', display: 'flex', justifyContent: 'center' }}>
-        {isNative ? (
-          <img
-            ref={imgRef}
-            alt={activeShare.participantName}
-            className="w-full max-h-[50vh] object-contain"
-            style={{ background: 'black' }}
-            onDoubleClick={(e) => {
-              const el = e.currentTarget;
-              if (document.fullscreenElement === el) {
-                document.exitFullscreen().catch(() => { /* ignore */ });
-              } else {
-                el.requestFullscreen().catch(() => { /* ignore */ });
-              }
-            }}
-          />
-        ) : (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          // `controls` removed: the native play/pause hijacked every click
-          // on the video and the viewer's "point here" gesture kept
-          // pausing the stream. Screen shares are live, pause/seek has no
-          // meaning anyway.
-          disablePictureInPicture
+        <canvas
+          ref={canvasRef}
+          aria-label={activeShare.participantName}
           className="w-full max-h-[50vh] object-contain"
+          style={{ background: 'black' }}
         />
-        )}
         {/* Carousel chevrons — overlaid on the video edges, in addition to the
             top tab bar, for quick prev/next cycling. Only when >1 share. */}
         {activeShares.length > 1 && (
@@ -743,9 +783,6 @@ export function ScreenShareView() {
             >
               {audioMuted ? <SpeakerMutedIcon /> : <SpeakerIcon />}
             </button>
-            {/* Pas de volume par piste côté natif (pas de gain SFU) : le
-                slider reste JS-only, le mute suffit. */}
-            {!isNative && (
             <input
               type="range"
               min={0}
@@ -757,7 +794,6 @@ export function ScreenShareView() {
               className="screenshare-volume-slider"
               style={{ width: 72 }}
             />
-            )}
           </span>
         )}
         <span style={{ opacity: 0.6 }}>

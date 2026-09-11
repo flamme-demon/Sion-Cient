@@ -1,25 +1,27 @@
 import { useCallback, useRef } from "react";
-import type { BaseKeyProvider } from "livekit-client";
 import { useLiveKitStore } from "../stores/useLiveKitStore";
-import * as livekitService from "../services/livekitService";
+import { connectNativeSession, disconnectNativeSession } from "../services/nativeVoiceSession";
+import { useSettingsStore } from "../stores/useSettingsStore";
+import { setNativeCursorDisplayName } from "../services/cursorService";
+import { playJoinCue, onParticipantLeft, noteConnectionLost, resetVoiceCues } from "../services/voiceChannelSounds";
+import type { ParticipantInfo } from "../types/livekit";
+import type { VoiceNativeData, VoiceNativeE2eeState } from "../services/voiceNativeService";
 
-/** Pushes overlay en vol par expéditeur (latest-wins : on jette la position
- *  si le push précédent n'a pas fini — voir `publishNativeCursor`). */
-const overlayPushInflight = new Set<string>();
-
+/** Session vocale LiveKit native (moteur Rust). La webview ne crée plus de
+ *  `Room` : elle suit les événements `voice-native-*` et publie ses paquets
+ *  data-channel via `voice_native_publish_data`. */
 export function useLiveKit() {
   const { connected, roomName, participants } = useLiveKitStore();
-  const { connect: storeConnect, disconnect: storeDisconnect, setParticipants } = useLiveKitStore();
+  const { setParticipants, disconnect: storeDisconnect } = useLiveKitStore();
   const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingUpdate = useRef<typeof participants | null>(null);
-  const cleanupParticipantChange = useRef<(() => void) | null>(null);
-  const cleanupNative = useRef<(() => void) | null>(null);
-  const cleanupNativeData = useRef<(() => void) | null>(null);
-  const cleanupNativeE2ee = useRef<(() => void) | null>(null);
   const nativeAfkHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null);
-  /** Identité LiveKit locale en mode natif (pour cibler notre partage). */
-  const nativeIdentity = useRef<string | null>(null);
+  /** Identités déjà vues (pour re-broadcast AFK aux nouveaux arrivants). */
   const knownNativeIdentities = useRef<Set<string> | null>(null);
+  /** Dernière qualité connue par identité — un départ précédé de `lost`
+   *  déclenche le cue « timeout » plutôt que « leave ». */
+  const lastQualities = useRef<Map<string, ParticipantInfo["connectionQuality"]>>(new Map());
+  const firstSnapshot = useRef(true);
 
   const pushThrottled = useCallback((updatedParticipants: typeof participants) => {
     // Throttle store updates to max ~4 per second to avoid choking React renders
@@ -35,201 +37,173 @@ export function useLiveKit() {
     }
   }, [setParticipants]);
 
-  const connect = useCallback(async (url: string, token: string, room: string, e2eeKeyProvider?: BaseKeyProvider) => {    const lkRoom = await livekitService.connectToRoom(url, token, e2eeKeyProvider);
-    storeConnect(room);
+  const clearNativeResources = useCallback(async () => {
+    if (nativeAfkHeartbeat.current) clearInterval(nativeAfkHeartbeat.current);
+    nativeAfkHeartbeat.current = null;
+    if (throttleRef.current) clearTimeout(throttleRef.current);
+    throttleRef.current = null;
+    pendingUpdate.current = null;
+    knownNativeIdentities.current = null;
+    lastQualities.current = new Map();
+    firstSnapshot.current = true;
+    resetVoiceCues();
+    setNativeCursorDisplayName(null);
+    await import("../services/cursorOverlayService")
+      .then(({ closeCursorOverlay }) => closeCursorOverlay())
+      .catch(() => {});
+  }, []);
 
-    cleanupParticipantChange.current = livekitService.onParticipantChange((updatedParticipants) => {
-      pushThrottled(updatedParticipants);
-    });
-
-    return lkRoom;
-  }, [storeConnect, pushThrottled]);
-
-  /** Chemin natif (chantier no-CEF) : la Room vit en Rust, le store reçoit
-   *  la même forme `ParticipantInfo` via `voice-native-participants`. */
-  const connectNative = useCallback(async (url: string, token: string, room: string, displayName: string, encrypted = false) => {
-    console.info(`[Sion][voix-native] join natif ${room} (SDK Rust, pas de livekit-client)`);
+  /** Le moteur vit en Rust : le store reçoit la même forme `ParticipantInfo`
+   *  via `voice-native-participants`. */
+  const connectNative = useCallback(async (url: string, token: string, room: string, displayName: string, encrypted = false, onDisconnected: () => Promise<void> = async () => {}) => {
+    console.info(`[Sion][voix-native] join natif ${room} (moteur Rust)`);
     const native = await import("../services/voiceNativeService");
-    const status = await native.voiceNativeConnect(url, token, room, displayName, encrypted);
-    nativeIdentity.current = status.identity ?? null;
-    storeConnect(room);
+    await disconnectNativeSession();
+    setNativeCursorDisplayName(displayName);
     knownNativeIdentities.current = new Set();
-    cleanupNative.current = await native.onVoiceNativeParticipants((updatedParticipants) => {
-      // Rebroadcast AFK aux nouveaux arrivants (miroir du `rebroadcastOnJoin`
-      // JS) : un pair qui rejoint pendant notre sourdine doit l'apprendre.
+    const { useAuthStore } = await import("../stores/useAuthStore");
+    const localUserId = useAuthStore.getState().credentials?.userId;
+    const isLocalIdentity = (id: string) =>
+      !!localUserId && (id === localUserId || id.startsWith(localUserId + ":"));
+    const onParticipants = (updatedParticipants: typeof participants, isCurrent: () => boolean) => {
+      // Cues TeamSpeak join/leave/timeout : le moteur Rust ne les émet pas,
+      // on les dérive des différences de listes. La première liste (pairs
+      // déjà présents) ne déclenche rien, et notre propre identité est ignorée.
+      if (!firstSnapshot.current) {
+        for (const p of updatedParticipants) {
+          if (!isLocalIdentity(p.identity) && !lastQualities.current.has(p.identity)) playJoinCue();
+        }
+        for (const [id, quality] of lastQualities.current) {
+          if (updatedParticipants.some((p) => p.identity === id)) continue;
+          if (quality === "lost") noteConnectionLost(id, true);
+          onParticipantLeft(id);
+        }
+      }
+      for (const p of updatedParticipants) {
+        if (isLocalIdentity(p.identity)) continue;
+        const was = lastQualities.current.get(p.identity);
+        if (p.connectionQuality === "lost" && was !== "lost") noteConnectionLost(p.identity, true);
+        else if (p.connectionQuality !== "lost" && was === "lost") noteConnectionLost(p.identity, false);
+      }
+      lastQualities.current = new Map(updatedParticipants.map((p) => [p.identity, p.connectionQuality]));
+      firstSnapshot.current = false;
+      // Rebroadcast AFK aux nouveaux arrivants : un pair qui rejoint pendant
+      // notre sourdine doit l'apprendre.
       const known = knownNativeIdentities.current;
       if (known) {
         const fresh = updatedParticipants.some((p) => !known.has(p.identity));
         updatedParticipants.forEach((p) => known.add(p.identity));
         if (fresh) {
           import("../stores/useAppStore").then(({ useAppStore }) => {
+            if (!isCurrent()) return;
             if (!useAppStore.getState().isDeafened) return;
             import("../services/voiceNativeService").then((svc) => {
+              if (!isCurrent()) return;
               const payload = new TextEncoder().encode(JSON.stringify({ deafened: true }));
               svc.voiceNativePublishData("sion-afk", svc.bytesToB64(payload)).catch(() => {});
             }).catch(() => {});
           }).catch(() => {});
         }
+        // Pairs armés pour la transcription : purge des partants + rediffusion
+        // de notre intention aux nouveaux arrivants.
+        import("../services/transcriptionService").then(({ syncArmedTranscribers, rebroadcastTranscribeArm }) => {
+          if (!isCurrent()) return;
+          syncArmedTranscribers(updatedParticipants.map((p) => p.identity));
+          if (fresh) rebroadcastTranscribeArm();
+        }).catch(() => {});
       }
       // État voix Matrix (`sion_muted` / `sion_deafened` des call.member) :
       // persistant et sans course, il comble les broadcasts LiveKit manqués
       // (cf. `overlayMatrixVoiceState`). Repli brut si le store est injoignable.
       import("../stores/useMatrixStore").then(({ useMatrixStore }) => {
+        if (!isCurrent()) return;
         const voiceUsers =
           useMatrixStore.getState().channels.find((c) => c.id === room)?.voiceUsers ?? [];
         pushThrottled(native.overlayMatrixVoiceState(updatedParticipants, voiceUsers));
-      }).catch(() => pushThrottled(updatedParticipants));
-    });
+      }).catch(() => { if (isCurrent()) pushThrottled(updatedParticipants); });
+    };
     // Relais data-channel natif → handlers existants (soundboard, curseurs…).
-    // Miroir du `RoomEvent.DataReceived` branché dans `livekitService` (JS).
-    cleanupNativeData.current = await native.onVoiceNativeData((ev) => {
+    const onData = (ev: VoiceNativeData, isCurrent: () => boolean) => {
       if (!ev.topic || !ev.sender) return;
       const sender = ev.sender;
       import("../services/soundboardService").then(({ SOUNDBOARD_TOPIC, handleRemoteBroadcast }) => {
+        if (!isCurrent()) return;
         if (ev.topic !== SOUNDBOARD_TOPIC || !ev.sender) return;
         handleRemoteBroadcast(native.b64ToBytes(ev.payload_b64), ev.sender);
       }).catch(() => {});
-      import("../services/livekitService").then(({ CURSOR_TOPIC, CURSOR_CLICK_TOPIC, handleNativeCursorData }) => {
+      import("../services/cursorService").then(({ CURSOR_TOPIC, CURSOR_CLICK_TOPIC, handleNativeCursorData }) => {
+        if (!isCurrent()) return;
         if ((ev.topic !== CURSOR_TOPIC && ev.topic !== CURSOR_CLICK_TOPIC) || !sender) return;
         const name = native.resolveNativeDisplayName(sender, room);
         handleNativeCursorData(ev.topic, sender, name, native.b64ToBytes(ev.payload_b64));
       }).catch(() => {});
-      // Renvoi vers l'overlay quand ON partage en natif (miroir du forward
-      // JS conditionné au partage local) : les curseurs des viewers sont
-      // projetés sur notre écran, donc capturés dans notre partage.
-      // Coords relatives à UN partage : on ne projette que ce qui vise
-      // explicitement le nôtre (comme en JS). Latest-wins : un push encore
-      // en vol fait sauter la position (la suivante arrive dans 16 ms).
-      import("../stores/useAppStore").then(({ useAppStore }) => {
-        if (!useAppStore.getState().isScreenSharing) return;
-        const selfId = nativeIdentity.current;
-        if (!selfId) return;
-        import("../services/cursorOverlayService").then((overlay) => {
-          try {
-            const payload = JSON.parse(
-              new TextDecoder().decode(native.b64ToBytes(ev.payload_b64)),
-            ) as { x?: number; y?: number; click?: boolean; expire?: boolean; t?: string };
-            if (payload.t !== selfId) return;
-            // `||` et pas `??` : un nom vide LiveKit doit retomber sur
-            // l'identité, sinon la pastille du curseur reste vide.
-            const name = native.resolveNativeDisplayName(sender, room);
-            if (ev.topic === "sion-cursor-click" && payload.click) {
-              overlay.pushCursorClickToOverlay({
-                id: `${sender}:${Date.now()}`,
-                identity: sender,
-                name,
-                x: payload.x ?? 0,
-                y: payload.y ?? 0,
-                expiresAt: Date.now() + 800,
-              }).catch(() => {});
-            } else if (ev.topic === "sion-cursor") {
-              if (payload.expire) {
-                overlay.clearCursorFromOverlay(sender).catch(() => {});
-              } else if (
-                typeof payload.x === "number" &&
-                typeof payload.y === "number" &&
-                !overlayPushInflight.has(sender)
-              ) {
-                overlayPushInflight.add(sender);
-                overlay.pushCursorToOverlay({
-                  identity: sender,
-                  name,
-                  x: payload.x,
-                  y: payload.y,
-                  expiresAt: Date.now() + 60000,
-                }).catch(() => {}).finally(() => overlayPushInflight.delete(sender));
-              }
-            }
-          } catch { /* ignore malformed */ }
-        }).catch(() => {});
+      import("../services/transcriptionService").then(({ TRANSCRIBE_ARM_TOPIC, handleArmData }) => {
+        if (!isCurrent()) return;
+        if (ev.topic !== TRANSCRIBE_ARM_TOPIC || !sender) return;
+        handleArmData(sender, native.b64ToBytes(ev.payload_b64));
       }).catch(() => {});
-    });
+      // Rust route directement ces mêmes paquets vers l'overlay du sharer.
+      // Ce relais JS ne conserve que l'affichage local des autres viewers via
+      // `handleNativeCursorData` ci-dessus.
+    };
     // Relais état E2EE natif → console (diagnostic salon chiffré : Ok /
     // MissingKey / DecryptionFailed par participant — cf. `E2eeStateChanged`).
-    cleanupNativeE2ee.current = await native.onVoiceNativeE2eeState((ev) => {
+    const onE2ee = (ev: VoiceNativeE2eeState) => {
       console.info(`[Sion][voix-native][E2EE] état ${ev.identity} : ${ev.state}`);
+    };
+    const onLocalScreenShareFailed = async (reason: string) => {
+      console.warn(`[Sion][voix-native] partage d'écran interrompu : ${reason}`);
+      const [{ useAppStore }, overlay, service] = await Promise.all([
+        import("../stores/useAppStore"),
+        import("../services/cursorOverlayService"),
+        import("../services/voiceNativeService"),
+      ]);
+      useAppStore.setState({
+        isScreenSharing: false,
+        screenShareAudioWarning: false,
+        fileError: `Partage d'écran interrompu : ${reason}`,
+      });
+      setTimeout(() => useAppStore.setState({ fileError: null }), 5000);
+      await Promise.allSettled([
+        overlay.closeCursorOverlay(),
+        service.setVoiceNativeScreensharing(false),
+      ]);
+    };
+    const settings = useSettingsStore.getState();
+    await connectNativeSession({
+      url, token, room, displayName, encrypted,
+      devices: { inputDevice: settings.nativeAudioInputDevice, outputDevice: settings.nativeAudioOutputDevice },
+      processing: { echoCancellation: settings.echoCancellation, autoGainControl: settings.autoGainControl,
+        noiseSuppression: settings.aiNoiseSuppression, mix: settings.aiNoiseSuppressionMix },
+      audioQuality: settings.audioQuality,
+      onParticipants, onData, onE2ee, onLocalScreenShareFailed,
+      onClosed: clearNativeResources, onDisconnected,
     });
-    // Heartbeat AFK natif (miroir du heartbeat JS) : tout état manqué ou
-    // rassis chez les pairs se répare sous 30 s.
+    // Heartbeat AFK natif : tout état manqué ou rassis chez les pairs se
+    // répare sous 30 s.
     if (nativeAfkHeartbeat.current) clearInterval(nativeAfkHeartbeat.current);
     nativeAfkHeartbeat.current = setInterval(() => {
       import("../stores/useAppStore").then(({ useAppStore }) => {
         const deafened = useAppStore.getState().isDeafened;
         import("../services/voiceNativeService").then((svc) => {
-          if (svc.getActiveVoiceEngine() !== "native") return;
           console.log(`[Sion][deafen] AFK tx natif deafened=${deafened}`);
           const payload = new TextEncoder().encode(JSON.stringify({ deafened }));
           svc.voiceNativePublishData("sion-afk", svc.bytesToB64(payload)).catch(() => {});
         }).catch(() => {});
       }).catch(() => {});
     }, 30_000);
-  }, [storeConnect, pushThrottled]);
-
-  const disconnect = useCallback(async () => {
-    if (cleanupParticipantChange.current) {
-      cleanupParticipantChange.current();
-      cleanupParticipantChange.current = null;
-    }
-    if (throttleRef.current) {
-      clearTimeout(throttleRef.current);
-      throttleRef.current = null;
-    }
-    pendingUpdate.current = null;
-    await livekitService.disconnectFromRoom();
-    storeDisconnect();
-  }, [storeDisconnect]);
+  }, [clearNativeResources, pushThrottled]);
 
   const disconnectNative = useCallback(async () => {
-    if (cleanupNative.current) {
-      cleanupNative.current();
-      cleanupNative.current = null;
-    }
-    if (cleanupNativeData.current) {
-      cleanupNativeData.current();
-      cleanupNativeData.current = null;
-    }
-    if (cleanupNativeE2ee.current) {
-      cleanupNativeE2ee.current();
-      cleanupNativeE2ee.current = null;
-    }
-    if (nativeAfkHeartbeat.current) {
-      clearInterval(nativeAfkHeartbeat.current);
-      nativeAfkHeartbeat.current = null;
-    }
-    if (throttleRef.current) {
-      clearTimeout(throttleRef.current);
-      throttleRef.current = null;
-    }
-    pendingUpdate.current = null;
-    knownNativeIdentities.current = null;
-    nativeIdentity.current = null;
-    // Fermer l'overlay de curseurs (ouvert si on partageait) : sinon la
-    // fenêtre transparente survit au leave.
-    import("../services/cursorOverlayService").then(({ closeCursorOverlay }) => {
-      closeCursorOverlay().catch(() => {});
-    }).catch(() => {});
-    const native = await import("../services/voiceNativeService");
-    await native.voiceNativeDisconnect();
+    await disconnectNativeSession();
     storeDisconnect();
   }, [storeDisconnect]);
-
-  const toggleMic = useCallback(async (enabled: boolean) => {
-    await livekitService.toggleMicrophone(enabled);
-  }, []);
-
-  const toggleScreenShare = useCallback(async (enabled: boolean) => {
-    await livekitService.toggleScreenShare(enabled);
-  }, []);
 
   return {
     connected,
     roomName,
     participants,
-    connect,
-    disconnect,
     connectNative,
     disconnectNative,
-    toggleMic,
-    toggleScreenShare,
   };
 }

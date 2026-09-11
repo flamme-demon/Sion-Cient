@@ -77,7 +77,12 @@ pub fn update(
     let id_to_action: HashMap<String, String> = bindings
         .iter()
         .filter(|b| !b.combo.is_empty())
-        .map(|b| (sanitize_id(&format!("{}-{}", b.action, b.combo)), b.action.clone()))
+        .map(|b| {
+            (
+                sanitize_id(&format!("{}-{}", b.action, b.combo)),
+                b.action.clone(),
+            )
+        })
         .collect();
     let new_shortcuts: Vec<NewShortcut> = shortcuts.into_iter().map(|(_, sc)| sc).collect();
 
@@ -165,14 +170,20 @@ async fn run_session(
 /// `~/.local/share/applications` — pointing Exec at the AppImage when we run
 /// as one ($APPIMAGE), else at the current executable.
 fn ensure_host_desktop_file() {
-    let Some(dir) = dirs::data_dir().map(|d| d.join("applications")) else { return };
+    let Some(dir) = dirs::data_dir().map(|d| d.join("applications")) else {
+        return;
+    };
     let path = dir.join("com.sion.client.desktop");
     if path.exists() {
         return;
     }
     let exec = std::env::var("APPIMAGE")
         .ok()
-        .or_else(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| "sion-client".into());
     let contents = format!(
         "[Desktop Entry]\n\
@@ -195,7 +206,13 @@ fn ensure_host_desktop_file() {
 /// and soundboard actions embed Matrix event ids ("soundboard:$abc…").
 fn sanitize_id(raw: &str) -> String {
     raw.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .to_ascii_lowercase()
 }
@@ -258,28 +275,99 @@ fn x11_layout_keysym_name(keycode: u8) -> Option<String> {
 fn code_to_evdev(code: &str) -> Option<u8> {
     let v = match code {
         "Escape" => 1,
-        "Digit1" => 2, "Digit2" => 3, "Digit3" => 4, "Digit4" => 5, "Digit5" => 6,
-        "Digit6" => 7, "Digit7" => 8, "Digit8" => 9, "Digit9" => 10, "Digit0" => 11,
-        "Minus" => 12, "Equal" => 13, "Backspace" => 14, "Tab" => 15,
-        "KeyQ" => 16, "KeyW" => 17, "KeyE" => 18, "KeyR" => 19, "KeyT" => 20,
-        "KeyY" => 21, "KeyU" => 22, "KeyI" => 23, "KeyO" => 24, "KeyP" => 25,
-        "BracketLeft" => 26, "BracketRight" => 27, "Enter" => 28,
-        "KeyA" => 30, "KeyS" => 31, "KeyD" => 32, "KeyF" => 33, "KeyG" => 34,
-        "KeyH" => 35, "KeyJ" => 36, "KeyK" => 37, "KeyL" => 38,
-        "Semicolon" => 39, "Quote" => 40, "Backquote" => 41, "Backslash" => 43,
-        "KeyZ" => 44, "KeyX" => 45, "KeyC" => 46, "KeyV" => 47, "KeyB" => 48,
-        "KeyN" => 49, "KeyM" => 50, "Comma" => 51, "Period" => 52, "Slash" => 53,
-        "NumpadMultiply" => 55, "Space" => 57, "CapsLock" => 58,
-        "F1" => 59, "F2" => 60, "F3" => 61, "F4" => 62, "F5" => 63,
-        "F6" => 64, "F7" => 65, "F8" => 66, "F9" => 67, "F10" => 68,
-        "Numpad7" => 71, "Numpad8" => 72, "Numpad9" => 73, "NumpadSubtract" => 74,
-        "Numpad4" => 75, "Numpad5" => 76, "Numpad6" => 77, "NumpadAdd" => 78,
-        "Numpad1" => 79, "Numpad2" => 80, "Numpad3" => 81, "Numpad0" => 82,
-        "NumpadDecimal" => 83, "IntlBackslash" => 86, "F11" => 87, "F12" => 88,
-        "NumpadEnter" => 96, "NumpadDivide" => 98, "PrintScreen" => 99,
-        "Home" => 102, "ArrowUp" => 103, "PageUp" => 104, "ArrowLeft" => 105,
-        "ArrowRight" => 106, "End" => 107, "ArrowDown" => 108, "PageDown" => 109,
-        "Insert" => 110, "Delete" => 111, "Pause" => 119,
+        "Digit1" => 2,
+        "Digit2" => 3,
+        "Digit3" => 4,
+        "Digit4" => 5,
+        "Digit5" => 6,
+        "Digit6" => 7,
+        "Digit7" => 8,
+        "Digit8" => 9,
+        "Digit9" => 10,
+        "Digit0" => 11,
+        "Minus" => 12,
+        "Equal" => 13,
+        "Backspace" => 14,
+        "Tab" => 15,
+        "KeyQ" => 16,
+        "KeyW" => 17,
+        "KeyE" => 18,
+        "KeyR" => 19,
+        "KeyT" => 20,
+        "KeyY" => 21,
+        "KeyU" => 22,
+        "KeyI" => 23,
+        "KeyO" => 24,
+        "KeyP" => 25,
+        "BracketLeft" => 26,
+        "BracketRight" => 27,
+        "Enter" => 28,
+        "KeyA" => 30,
+        "KeyS" => 31,
+        "KeyD" => 32,
+        "KeyF" => 33,
+        "KeyG" => 34,
+        "KeyH" => 35,
+        "KeyJ" => 36,
+        "KeyK" => 37,
+        "KeyL" => 38,
+        "Semicolon" => 39,
+        "Quote" => 40,
+        "Backquote" => 41,
+        "Backslash" => 43,
+        "KeyZ" => 44,
+        "KeyX" => 45,
+        "KeyC" => 46,
+        "KeyV" => 47,
+        "KeyB" => 48,
+        "KeyN" => 49,
+        "KeyM" => 50,
+        "Comma" => 51,
+        "Period" => 52,
+        "Slash" => 53,
+        "NumpadMultiply" => 55,
+        "Space" => 57,
+        "CapsLock" => 58,
+        "F1" => 59,
+        "F2" => 60,
+        "F3" => 61,
+        "F4" => 62,
+        "F5" => 63,
+        "F6" => 64,
+        "F7" => 65,
+        "F8" => 66,
+        "F9" => 67,
+        "F10" => 68,
+        "Numpad7" => 71,
+        "Numpad8" => 72,
+        "Numpad9" => 73,
+        "NumpadSubtract" => 74,
+        "Numpad4" => 75,
+        "Numpad5" => 76,
+        "Numpad6" => 77,
+        "NumpadAdd" => 78,
+        "Numpad1" => 79,
+        "Numpad2" => 80,
+        "Numpad3" => 81,
+        "Numpad0" => 82,
+        "NumpadDecimal" => 83,
+        "IntlBackslash" => 86,
+        "F11" => 87,
+        "F12" => 88,
+        "NumpadEnter" => 96,
+        "NumpadDivide" => 98,
+        "PrintScreen" => 99,
+        "Home" => 102,
+        "ArrowUp" => 103,
+        "PageUp" => 104,
+        "ArrowLeft" => 105,
+        "ArrowRight" => 106,
+        "End" => 107,
+        "ArrowDown" => 108,
+        "PageDown" => 109,
+        "Insert" => 110,
+        "Delete" => 111,
+        "Pause" => 119,
         _ => return None,
     };
     Some(v)
@@ -288,25 +376,52 @@ fn code_to_evdev(code: &str) -> Option<u8> {
 /// US-layout keysym names, used only when the X11 layout query fails.
 fn static_keysym_name(code: &str) -> Option<String> {
     let name = match code {
-        "Space" => "space", "Enter" => "Return", "Escape" => "Escape",
-        "Tab" => "Tab", "Backspace" => "BackSpace", "Delete" => "Delete",
-        "Insert" => "Insert", "Home" => "Home", "End" => "End",
-        "PageUp" => "Prior", "PageDown" => "Next",
-        "ArrowUp" => "Up", "ArrowDown" => "Down",
-        "ArrowLeft" => "Left", "ArrowRight" => "Right",
-        "Minus" => "minus", "Equal" => "equal", "Comma" => "comma",
-        "Period" => "period", "Slash" => "slash", "Backslash" => "backslash",
-        "Semicolon" => "semicolon", "Quote" => "apostrophe",
-        "Backquote" => "grave", "BracketLeft" => "bracketleft",
-        "BracketRight" => "bracketright", "IntlBackslash" => "less",
-        "CapsLock" => "Caps_Lock", "ScrollLock" => "Scroll_Lock",
-        "Pause" => "Pause", "PrintScreen" => "Print",
-        "NumpadEnter" => "KP_Enter", "NumpadAdd" => "KP_Add",
-        "NumpadSubtract" => "KP_Subtract", "NumpadMultiply" => "KP_Multiply",
-        "NumpadDivide" => "KP_Divide", "NumpadDecimal" => "KP_Decimal",
+        "Space" => "space",
+        "Enter" => "Return",
+        "Escape" => "Escape",
+        "Tab" => "Tab",
+        "Backspace" => "BackSpace",
+        "Delete" => "Delete",
+        "Insert" => "Insert",
+        "Home" => "Home",
+        "End" => "End",
+        "PageUp" => "Prior",
+        "PageDown" => "Next",
+        "ArrowUp" => "Up",
+        "ArrowDown" => "Down",
+        "ArrowLeft" => "Left",
+        "ArrowRight" => "Right",
+        "Minus" => "minus",
+        "Equal" => "equal",
+        "Comma" => "comma",
+        "Period" => "period",
+        "Slash" => "slash",
+        "Backslash" => "backslash",
+        "Semicolon" => "semicolon",
+        "Quote" => "apostrophe",
+        "Backquote" => "grave",
+        "BracketLeft" => "bracketleft",
+        "BracketRight" => "bracketright",
+        "IntlBackslash" => "less",
+        "CapsLock" => "Caps_Lock",
+        "ScrollLock" => "Scroll_Lock",
+        "Pause" => "Pause",
+        "PrintScreen" => "Print",
+        "NumpadEnter" => "KP_Enter",
+        "NumpadAdd" => "KP_Add",
+        "NumpadSubtract" => "KP_Subtract",
+        "NumpadMultiply" => "KP_Multiply",
+        "NumpadDivide" => "KP_Divide",
+        "NumpadDecimal" => "KP_Decimal",
         s if s.len() == 4 && s.starts_with("Key") => return Some(s[3..].to_ascii_lowercase()),
         s if s.len() == 6 && s.starts_with("Digit") => return Some(s[5..].to_string()),
-        s if s.starts_with('F') && s[1..].parse::<u8>().map_or(false, |n| (1..=24).contains(&n)) => s,
+        s if s.starts_with('F')
+            && s[1..]
+                .parse::<u8>()
+                .map_or(false, |n| (1..=24).contains(&n)) =>
+        {
+            s
+        }
         s if s.len() == 7 && s.starts_with("Numpad") && s.as_bytes()[6].is_ascii_digit() => {
             return Some(format!("KP_{}", &s[6..]))
         }

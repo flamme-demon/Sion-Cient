@@ -32,9 +32,9 @@ A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/
 |-------|-----------|
 | Runtime | [Bun](https://bun.sh/) 1.3+ |
 | Frontend | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind CSS v4 |
-| Desktop / Mobile | [Tauri v2](https://tauri.app/) with CEF runtime (Chromium); Android via APK |
+| Desktop / Mobile | [Tauri v2](https://tauri.app/) with WRY (WebKitGTK/WebView2); Android via APK |
 | Matrix SDK | [matrix-js-sdk](https://github.com/element-hq/matrix-js-sdk) 41.6 |
-| Voice/Video | [livekit-client](https://github.com/livekit/client-sdk-js) 2.19 |
+| Voice/Video | LiveKit natif via le SDK Rust (`livekit` + `webrtc-sys`), hors webview |
 | State | [Zustand](https://github.com/pmndrs/zustand) 5 |
 | i18n | react-i18next 16, i18next 25 |
 
@@ -56,10 +56,10 @@ src/
     └── icons/          # SVG icon components
 src-tauri/
 ├── src/lib.rs          # Tauri commands (shortcuts, link preview, open URL, video transcoding)
-├── Cargo.toml          # Rust dependencies (tauri-cef, reqwest, scraper)
+├── Cargo.toml          # Rust dependencies (tauri, livekit, reqwest, scraper)
 └── icons/              # App icons
 build-scripts/
-├── run-cef.sh          # Launch desktop app with CEF runtime (Linux)
+├── run-native.sh       # Launch desktop app with WRY + native voice (Linux)
 ├── build-appimage.sh   # Build Linux AppImage
 ├── install-linux.sh    # Install on Linux
 ├── build-windows.ps1   # Full Windows build (installs deps, compiles, bundles)
@@ -71,7 +71,7 @@ build-scripts/
 
 - [Bun](https://bun.sh/) >= 1.3
 - [Rust](https://rustup.rs/) (stable)
-- CMake + Ninja (for CEF compilation)
+- CMake + Ninja (for native voice/transcribe compilation)
 - [ffmpeg](https://ffmpeg.org/) (for video transcoding in chat — can also be auto-downloaded in-app)
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) (optional — for URL audio/video import; auto-downloadable in-app)
 - [audio.cpp](https://github.com/0xShug0/audio.cpp) (optional — engine for generated voices; auto-downloadable in-app on Windows/Linux/macOS). Building it yourself on Linux additionally needs `spirv-headers` and `glslc` for the Vulkan backend
@@ -87,10 +87,10 @@ bun install
 # Start frontend dev server
 bun run dev
 
-# Start desktop app (Linux, CEF runtime)
-./build-scripts/run-cef.sh
+# Start desktop app (Linux, WRY + native voice)
+./build-scripts/run-native.sh
 
-# Start desktop app (Linux, WRY fallback — no WebRTC)
+# Start desktop app (Windows/macOS)
 bun run tauri dev
 ```
 
@@ -149,7 +149,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\build-scripts\build-windows.ps1
 ```
 
-The build script automatically installs missing dependencies (VS Build Tools, CMake, Ninja, Rust, Bun), compiles the application, and produces a **NSIS installer** (`.exe`) with bundled CEF libraries (the shipped Windows artifact).
+The build script automatically installs missing dependencies (VS Build Tools, CMake, Ninja, Rust, Bun), compiles the application, and produces a **NSIS installer** (`.exe`) with the native DLLs (ggml/transcribe) bundled.
 
 ### Android
 

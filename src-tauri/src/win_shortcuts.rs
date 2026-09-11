@@ -47,7 +47,9 @@ pub fn update(bindings: Vec<Binding>) {
     // Stop the previous worker; it unregisters its hotkeys on the way out.
     let prev = WORKER_THREAD_ID.swap(0, Ordering::AcqRel);
     if prev != 0 {
-        unsafe { let _ = PostThreadMessageW(prev, WM_QUIT, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = PostThreadMessageW(prev, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
     }
 
     let mut hotkeys: Vec<(i32, HOT_KEY_MODIFIERS, u32, String)> = Vec::new();
@@ -109,7 +111,9 @@ pub fn update(bindings: Vec<Binding>) {
             .compare_exchange(0, tid, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            unsafe { let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)); }
+            unsafe {
+                let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+            }
         }
     }
 }
@@ -149,13 +153,30 @@ fn code_to_vk(code: &str) -> Option<u32> {
 /// Layout-independent virtual keys.
 fn fixed_vk(code: &str) -> Option<u32> {
     let vk = match code {
-        "Escape" => 0x1B, "Tab" => 0x09, "Space" => 0x20, "Enter" => 0x0D,
-        "Backspace" => 0x08, "Delete" => 0x2E, "Insert" => 0x2D,
-        "Home" => 0x24, "End" => 0x23, "PageUp" => 0x21, "PageDown" => 0x22,
-        "ArrowLeft" => 0x25, "ArrowUp" => 0x26, "ArrowRight" => 0x27, "ArrowDown" => 0x28,
-        "CapsLock" => 0x14, "ScrollLock" => 0x91, "Pause" => 0x13, "PrintScreen" => 0x2C,
-        "NumpadMultiply" => 0x6A, "NumpadAdd" => 0x6B, "NumpadSubtract" => 0x6D,
-        "NumpadDecimal" => 0x6E, "NumpadDivide" => 0x6F,
+        "Escape" => 0x1B,
+        "Tab" => 0x09,
+        "Space" => 0x20,
+        "Enter" => 0x0D,
+        "Backspace" => 0x08,
+        "Delete" => 0x2E,
+        "Insert" => 0x2D,
+        "Home" => 0x24,
+        "End" => 0x23,
+        "PageUp" => 0x21,
+        "PageDown" => 0x22,
+        "ArrowLeft" => 0x25,
+        "ArrowUp" => 0x26,
+        "ArrowRight" => 0x27,
+        "ArrowDown" => 0x28,
+        "CapsLock" => 0x14,
+        "ScrollLock" => 0x91,
+        "Pause" => 0x13,
+        "PrintScreen" => 0x2C,
+        "NumpadMultiply" => 0x6A,
+        "NumpadAdd" => 0x6B,
+        "NumpadSubtract" => 0x6D,
+        "NumpadDecimal" => 0x6E,
+        "NumpadDivide" => 0x6F,
         // RegisterHotKey can't tell the two Enter keys apart.
         "NumpadEnter" => 0x0D,
         s if s.len() == 7 && s.starts_with("Numpad") && s.as_bytes()[6].is_ascii_digit() => {
@@ -174,17 +195,53 @@ fn fixed_vk(code: &str) -> Option<u32> {
 /// values used by portal_shortcuts.rs on Linux).
 fn code_to_scancode(code: &str) -> Option<u8> {
     let v = match code {
-        "Digit1" => 0x02, "Digit2" => 0x03, "Digit3" => 0x04, "Digit4" => 0x05,
-        "Digit5" => 0x06, "Digit6" => 0x07, "Digit7" => 0x08, "Digit8" => 0x09,
-        "Digit9" => 0x0A, "Digit0" => 0x0B, "Minus" => 0x0C, "Equal" => 0x0D,
-        "KeyQ" => 0x10, "KeyW" => 0x11, "KeyE" => 0x12, "KeyR" => 0x13, "KeyT" => 0x14,
-        "KeyY" => 0x15, "KeyU" => 0x16, "KeyI" => 0x17, "KeyO" => 0x18, "KeyP" => 0x19,
-        "BracketLeft" => 0x1A, "BracketRight" => 0x1B,
-        "KeyA" => 0x1E, "KeyS" => 0x1F, "KeyD" => 0x20, "KeyF" => 0x21, "KeyG" => 0x22,
-        "KeyH" => 0x23, "KeyJ" => 0x24, "KeyK" => 0x25, "KeyL" => 0x26,
-        "Semicolon" => 0x27, "Quote" => 0x28, "Backquote" => 0x29, "Backslash" => 0x2B,
-        "KeyZ" => 0x2C, "KeyX" => 0x2D, "KeyC" => 0x2E, "KeyV" => 0x2F, "KeyB" => 0x30,
-        "KeyN" => 0x31, "KeyM" => 0x32, "Comma" => 0x33, "Period" => 0x34, "Slash" => 0x35,
+        "Digit1" => 0x02,
+        "Digit2" => 0x03,
+        "Digit3" => 0x04,
+        "Digit4" => 0x05,
+        "Digit5" => 0x06,
+        "Digit6" => 0x07,
+        "Digit7" => 0x08,
+        "Digit8" => 0x09,
+        "Digit9" => 0x0A,
+        "Digit0" => 0x0B,
+        "Minus" => 0x0C,
+        "Equal" => 0x0D,
+        "KeyQ" => 0x10,
+        "KeyW" => 0x11,
+        "KeyE" => 0x12,
+        "KeyR" => 0x13,
+        "KeyT" => 0x14,
+        "KeyY" => 0x15,
+        "KeyU" => 0x16,
+        "KeyI" => 0x17,
+        "KeyO" => 0x18,
+        "KeyP" => 0x19,
+        "BracketLeft" => 0x1A,
+        "BracketRight" => 0x1B,
+        "KeyA" => 0x1E,
+        "KeyS" => 0x1F,
+        "KeyD" => 0x20,
+        "KeyF" => 0x21,
+        "KeyG" => 0x22,
+        "KeyH" => 0x23,
+        "KeyJ" => 0x24,
+        "KeyK" => 0x25,
+        "KeyL" => 0x26,
+        "Semicolon" => 0x27,
+        "Quote" => 0x28,
+        "Backquote" => 0x29,
+        "Backslash" => 0x2B,
+        "KeyZ" => 0x2C,
+        "KeyX" => 0x2D,
+        "KeyC" => 0x2E,
+        "KeyV" => 0x2F,
+        "KeyB" => 0x30,
+        "KeyN" => 0x31,
+        "KeyM" => 0x32,
+        "Comma" => 0x33,
+        "Period" => 0x34,
+        "Slash" => 0x35,
         "IntlBackslash" => 0x56,
         _ => return None,
     };

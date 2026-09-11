@@ -13,8 +13,8 @@ the voice-channel join/leave/timeout cues (see
 | `timeout` | a member drops (connection lost / timeout)               |
 
 e.g. `join.ogg`, `leave.ogg`, `timeout.ogg`. Keep them short (< 1 s) and
-already volume-normalized. Prefer `.ogg` (small, Chromium plays it natively in
-CEF without proprietary codecs).
+already volume-normalized. Prefer `.ogg` (small, plays natively in the
+system webview without proprietary codecs).
 
 ## Where to find CC0 / royalty-free sounds (no attribution needed)
 

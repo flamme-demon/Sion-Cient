@@ -50,7 +50,8 @@ interface TranscriptStore {
    *  Fed by `com.sion.transcript.summary_of`-tagged chat messages. */
   summaries: Record<string, Record<string, { text: string; ts: number }>>;
   /** Remote participants currently armed ("waiting for a 2nd") in OUR voice
-   *  channel — the visible invitation. Fed by livekitService. */
+   *  channel — the visible invitation. Plus alimenté depuis le retrait du
+   *  moteur JS : voir `armTranscription` (désactivé, flux PCM Rust à porter). */
   armedPeers: { identity: string; name: string }[];
   /** Whether the transcript panel is visible. */
   panelOpen: boolean;

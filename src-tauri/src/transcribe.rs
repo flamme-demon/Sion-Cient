@@ -5,16 +5,20 @@
 //! machine (the JS side publishes only the resulting text into the Matrix
 //! room, encrypted when the room is).
 //!
-//! Pipeline:
-//!   JS taps the LiveKit mic track → AudioWorklet resamples to 16 kHz mono
-//!   f32 → binary frames over a local WebSocket → [here] WebRTC VAD (earshot)
-//!   segments speech (pre-roll + hangover) → whisper.cpp (whisper-rs) runs on
-//!   each closed segment → `{"type":"segment",...}` JSON pushed back over the
-//!   same WebSocket → JS sends a `com.sion.transcript` event to the room.
+//! Pipeline (moteur natif) : le tap post-APM de `sion-native-audio` pousse le
+//! micro traité en 16 kHz mono f32 (`transcription_tap`) → [ici] VAD WebRTC
+//! (earshot) segmente la parole (pre-roll + hangover) → whisper/parakeet
+//! transcrit chaque segment fermé → `{"type":"segment",...}` JSON diffusé sur
+//! le WebSocket local → le front publie un événement Matrix
+//! `com.sion.transcript` dans le salon.
 //!
-//! Mute is enforced UPSTREAM: the JS side stops feeding audio the moment the
-//! mic is muted (and sends a `flush` control so the tail before the mute is
-//! still transcribed). Nothing muted ever reaches the model.
+//! Le WS reste aussi alimenté en PCM par le front pour `transcribeRef` (texte
+//! de référence TTS d'un fichier) : ce mode crée un segmenter par connexion,
+//! le mode natif utilise le segmenter global du tap.
+//!
+//! Mute : le tap est coupé dans le callback audio (`mic_enabled=false`) et le
+//! segment en cours est fermé au prochain poll pour ne rien perdre avant la
+//! coupure. Rien de muet n'atteint le modèle.
 //!
 //! The WS server boots once and lives for the process (same pattern as
 //! `system_audio.rs`); the engine (model in RAM) starts/stops with
@@ -25,13 +29,15 @@
 
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::mpsc::{Receiver, Sender, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use earshot::{VoiceActivityDetector, VoiceActivityProfile};
-use transcribe_cpp::{Model, RunExtension, RunOptions, SessionOptions, TimestampKind, WhisperRunOptions};
+use transcribe_cpp::{
+    Model, RunExtension, RunOptions, SessionOptions, TimestampKind, WhisperRunOptions,
+};
 use tungstenite::Message;
 
 const SAMPLE_RATE: usize = 16_000;
@@ -50,6 +56,10 @@ const MIN_SPEECH_MS: usize = 350;
 
 static WS_PORT: AtomicU16 = AtomicU16::new(0);
 static ENGINE_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Micro non muet pendant une session native (mis à jour par `voice_engine`).
+static NATIVE_MIC_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Flag d'arrêt du thread d'ingestion natif (None = pas de session native).
+static NATIVE_INGEST_STOP: Mutex<Option<std::sync::Arc<AtomicBool>>> = Mutex::new(None);
 /// Jobs (closed speech segments) from the segmenter to the whisper worker.
 static SEG_TX: Mutex<Option<SyncSender<SegJob>>> = Mutex::new(None);
 /// Outgoing JSON lines, one sender per connected WS client (broadcast).
@@ -128,7 +138,8 @@ impl Segmenter {
         if self.segment.is_empty() {
             if is_speech {
                 // Open a segment starting with the pre-roll context.
-                self.t0_ms = now_ms().saturating_sub(self.pre_roll.len() as u64 * 1000 / SAMPLE_RATE as u64);
+                self.t0_ms =
+                    now_ms().saturating_sub(self.pre_roll.len() as u64 * 1000 / SAMPLE_RATE as u64);
                 self.segment = std::mem::take(&mut self.pre_roll);
                 self.segment.extend_from_slice(frame);
                 self.silence_ms = 0;
@@ -177,7 +188,11 @@ impl Segmenter {
             return; // breath / keyboard click — not worth an inference
         }
         let t1 = now_ms();
-        let job = SegJob { samples, t0_ms: self.t0_ms, t1_ms: t1 };
+        let job = SegJob {
+            samples,
+            t0_ms: self.t0_ms,
+            t1_ms: t1,
+        };
         if let Some(tx) = SEG_TX.lock().unwrap().as_ref() {
             // Bounded queue: if whisper falls behind (undersized machine),
             // drop the oldest pressure by dropping THIS segment rather than
@@ -262,7 +277,10 @@ fn asr_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
     let threads = thread::available_parallelism()
         .map(|n| n.get().min(4))
         .unwrap_or(4) as i32;
-    let mut session = match model.session_with(&SessionOptions { n_threads: threads, ..Default::default() }) {
+    let mut session = match model.session_with(&SessionOptions {
+        n_threads: threads,
+        ..Default::default()
+    }) {
         Ok(s) => s,
         Err(e) => {
             log::error!("[Sion][transcribe] session init failed: {e}");
@@ -276,7 +294,10 @@ fn asr_worker(model_path: String, lang: String, rx: Receiver<SegJob>) {
     // knobs are whisper-family-specific — parakeet & friends are inherently
     // multilingual with their own defaults, so they get plain options.
     let is_whisper = model_path.to_lowercase().contains("whisper");
-    let mut opts = RunOptions { timestamps: TimestampKind::None, ..Default::default() };
+    let mut opts = RunOptions {
+        timestamps: TimestampKind::None,
+        ..Default::default()
+    };
     if is_whisper {
         if lang != "auto" {
             opts.language = Some(lang.clone());
@@ -414,12 +435,97 @@ fn ensure_ws_server() {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
+/// Démarre l'ingestion du tap micro natif : le post-APM de
+/// `sion-native-audio` alimente le segmenter global, dont les résultats
+/// partent sur le WS (sortie `ready`/`segment`). `mic_enabled` reflète l'état
+/// au démarrage (armement muet = tap fermé jusqu'au prochain unmute).
+#[tauri::command]
+pub fn transcribe_start_native(
+    model_path: String,
+    lang: String,
+    mic_enabled: bool,
+) -> Result<u16, String> {
+    let port = start_engine(model_path, lang)?;
+    let rx = sion_native_audio::transcription_tap::subscribe();
+    sion_native_audio::transcription_tap::enable();
+    sion_native_audio::transcription_tap::set_mic_enabled(mic_enabled);
+    NATIVE_MIC_ENABLED.store(mic_enabled, Ordering::Release);
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    *NATIVE_INGEST_STOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(stop.clone());
+    thread::Builder::new()
+        .name("sion-transcribe-native".into())
+        .spawn(move || native_ingest_worker(rx, stop))
+        .map_err(|e| format!("thread transcription: {e}"))?;
+    log::info!(
+        "[Sion][transcribe] ingestion native démarrée (micro={})",
+        mic_enabled
+    );
+    Ok(port)
+}
+
+/// État micro pour le tap natif (appelé par `voice_engine` à chaque
+/// mute/unmute/deafen). Le worker ferme le segment en cours au passage muet.
+pub fn note_native_mic_enabled(enabled: bool) {
+    // Coupe le forward immédiatement (callback audio) ET ferme le segment en
+    // cours au prochain poll du worker.
+    sion_native_audio::transcription_tap::set_mic_enabled(enabled);
+    NATIVE_MIC_ENABLED.store(enabled, Ordering::Release);
+}
+
+/// Coupe le tap et arrête le thread d'ingestion natif (idempotent).
+fn stop_native_ingest() {
+    sion_native_audio::transcription_tap::disable();
+    sion_native_audio::transcription_tap::set_mic_enabled(false);
+    NATIVE_MIC_ENABLED.store(false, Ordering::Release);
+    if let Some(stop) = NATIVE_INGEST_STOP
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        stop.store(true, Ordering::Release);
+    }
+    sion_native_audio::transcription_tap::unsubscribe();
+}
+
+/// Segmenter global du tap natif : rééchantillonné en 16 kHz par
+/// `sion-native-audio`, il ferme le segment dès que le micro est coupé pour
+/// transcrire la fin de phrase sans jamais voir l'audio muet.
+fn native_ingest_worker(rx: Receiver<Vec<f32>>, stop: std::sync::Arc<AtomicBool>) {
+    let mut segmenter = Segmenter::new();
+    let mut mic_enabled = NATIVE_MIC_ENABLED.load(Ordering::Acquire);
+    loop {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(samples) => segmenter.feed(&samples),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+        let now = NATIVE_MIC_ENABLED.load(Ordering::Acquire);
+        if mic_enabled && !now {
+            segmenter.close_segment();
+        }
+        mic_enabled = now;
+    }
+    segmenter.close_segment();
+    sion_native_audio::transcription_tap::unsubscribe();
+    log::info!("[Sion][transcribe] ingestion native arrêtée");
+}
+
 /// Start the transcription engine: boots the WS server if needed, loads the
 /// model on a worker thread (a `ready` message is pushed over the WS when
 /// loaded) and returns the WS port to stream audio to. Restarting with a
 /// different model/lang stops the previous worker first.
 #[tauri::command]
 pub fn transcribe_start(model_path: String, lang: String) -> Result<u16, String> {
+    start_engine(model_path, lang)
+}
+
+fn start_engine(model_path: String, lang: String) -> Result<u16, String> {
+    // Un seul moteur à la fois : le mode natif et le mode fichier (transcribeRef)
+    // partagent `SEG_TX`.
+    stop_native_ingest();
     if !std::path::Path::new(&model_path).exists() {
         return Err(format!("modèle introuvable: {model_path}"));
     }
@@ -446,7 +552,78 @@ pub fn transcribe_start(model_path: String, lang: String) -> Result<u16, String>
 /// later start reuses the same port.
 #[tauri::command]
 pub fn transcribe_stop() {
+    stop_native_ingest();
     ENGINE_RUNNING.store(false, Ordering::Relaxed);
     *SEG_TX.lock().unwrap() = None;
     log::info!("[Sion][transcribe] stop requested");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// E2E local : `SION_TEST_ASR_MODEL` = GGUF, `SION_TEST_ASR_PCM` = f32le
+    /// mono 48 kHz (ex. `espeak-ng` + ffmpeg). Vérifie que le tap natif →
+    /// segmenter → ASR produit un segment. Ignoré par défaut (modèle lourd).
+    #[test]
+    #[ignore = "nécessite SION_TEST_ASR_MODEL et SION_TEST_ASR_PCM"]
+    fn native_tap_end_to_end() {
+        let model = std::env::var("SION_TEST_ASR_MODEL").expect("SION_TEST_ASR_MODEL");
+        let pcm_path = std::env::var("SION_TEST_ASR_PCM").expect("SION_TEST_ASR_PCM");
+        let bytes = std::fs::read(&pcm_path).expect("lecture PCM");
+        let samples: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        assert!(samples.len() > 48_000, "PCM trop court");
+
+        let port = transcribe_start_native(model, "fr".into(), true).expect("start");
+        let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}"))
+            .expect("connexion WS");
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(60)))
+                .unwrap();
+        }
+
+        let mut ready = false;
+        while !ready {
+            match ws.read() {
+                Ok(Message::Text(t)) => ready = t.contains("\"ready\""),
+                Ok(_) => {}
+                Err(e) => panic!("attente ready: {e}"),
+            }
+        }
+        println!("[test] moteur prêt, injection de {} éch. @48 kHz", samples.len());
+
+        for frame in samples.chunks(480) {
+            if frame.len() == 480 {
+                let scaled: Vec<f32> = frame.iter().map(|s| s * 32768.0).collect();
+                sion_native_audio::transcription_tap::forward(&scaled);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Fin d'élocution : le worker ferme le segment (hangover simulé).
+        note_native_mic_enabled(false);
+
+        let mut segment: Option<String> = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        while std::time::Instant::now() < deadline && segment.is_none() {
+            match ws.read() {
+                Ok(Message::Text(t)) => {
+                    if t.contains("\"segment\"") {
+                        segment = Some(t.to_string());
+                    }
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(ref e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => panic!("lecture segment: {e}"),
+            }
+        }
+        transcribe_stop();
+        let segment = segment.expect("aucun segment transcrit");
+        println!("[test] SEGMENT: {segment}");
+    }
 }

@@ -9,9 +9,8 @@ import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitToke
 import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMemberEvent, republishCallMember } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
-import { getCurrentRoom, setReemitKeysCallback } from "../services/livekitService";
-import { selectVoiceEngine, isVoiceNativeAvailable, setActiveVoiceEngine, getActiveVoiceEngine } from "../services/voiceNativeService";
-import { RoomEvent } from "livekit-client";
+import { isVoiceNativeAvailable } from "../services/voiceNativeService";
+import { disconnectNativeSession, waitForNativeSessionCleanup } from "../services/nativeVoiceSession";
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 
@@ -24,9 +23,6 @@ let activeKeyProvider: MatrixKeyProvider | null = null;
 // session out during cleanup.
 let activeRTCRoomId: string | null = null;
 // Track E2EE reemit resources for cleanup.
-// The old "fire-every-3s-for-15s" interval has been replaced by on-demand
-// reemit driven by MissingKey errors in livekitService (see setReemitKeysCallback).
-let reemitParticipantHandler: (() => void) | null = null;
 let reemitMembershipHandler: (() => void) | null = null;
 
 // In-flight join tracking for the double-click guard. These are set ONLY when
@@ -45,33 +41,20 @@ let connectingStartedAt = 0;
 const CONNECTING_STALE_AFTER_MS = 15_000;
 
 // Best-effort cleanup on page unload (reload, close tab, OS shutdown).
-// We send an explicit `room.disconnect()` to the LiveKit SFU so the server
-// cleans up our participation server-side. Without this, the SFU only
-// notices we're gone via socket timeout (~30s) and meanwhile peers see
-// our publication as still active — which after our reconnect leaves them
-// with a stale "stuck in desired" RemoteTrackPublication (LiveKit SDK bug).
+// On demande au moteur Rust de fermer la session LiveKit pour que le SFU
+// nous nettoie côté serveur. Sans cet appel, le SFU ne constate notre départ
+// qu'au timeout du socket (~30 s) : les pairs nous voient encore publié.
 //
 // Both `pagehide` and `beforeunload` are wired:
 //  - `beforeunload` fires on Ctrl+R, tab close, window close (most cases)
 //  - `pagehide` fires on bfcache + on iOS where beforeunload is unreliable
 // Calling disconnect() on both is harmless (idempotent after first call).
 function gracefulVoiceShutdown(_reason: string) {
-  setReemitKeysCallback(null);
-  // Fire-and-forget the LiveKit disconnect — we don't have time to await
-  // before the page dies, but the WS leave message usually flushes in time.
-  import("../services/livekitService").then(({ getCurrentRoom }) => {
-    const room = getCurrentRoom();
-    if (room) {
-      try { room.disconnect(true); } catch { /* ignore */ }
-    }
-  }).catch(() => {});
-  // Chemin natif : pas de room JS — sans cet appel, le moteur Rust ne reçoit
-  // jamais le disconnect et le SFU nous garde en fantôme ~30 s (+ micro/ADM
-  // vivants jusqu'à la mort du processus).
-  import("../services/voiceNativeService").then(({ getActiveVoiceEngine, voiceNativeDisconnect }) => {
-    if (getActiveVoiceEngine() === "native") {
-      voiceNativeDisconnect().catch(() => {});
-    }
+  // Le moteur Rust ne reçoit jamais le disconnect du navigateur : sans cet
+  // appel, le SFU nous garde en fantôme ~30 s (+ micro/ADM vivants jusqu'à la
+  // mort du processus).
+  import("../services/voiceNativeService").then(({ voiceNativeDisconnect }) => {
+    voiceNativeDisconnect().catch(() => {});
   }).catch(() => {});
   if (activeRTCRoomId) {
     removeCallMemberEvent(activeRTCRoomId);
@@ -85,42 +68,26 @@ function gracefulVoiceShutdown(_reason: string) {
     activeKeyProvider.disconnect();
     activeKeyProvider = null;
   }
-  reemitParticipantHandler = null;
   reemitMembershipHandler = null;
 }
-// Skip the graceful-shutdown hooks when this module is loaded inside the
-// cursor-overlay webview — main.tsx imports App eagerly, which transitively
-// pulls useVoiceChannel into the overlay's module graph. Without this check
-// the overlay's `beforeunload` would call `gracefulVoiceShutdown` on close
-// and drop the user's voice session just because they closed the overlay.
-const __isOverlayWindow = typeof window !== "undefined"
-  && new URLSearchParams(window.location.search).get("overlay") === "cursor";
 
-if (!__isOverlayWindow) {
-  window.addEventListener("beforeunload", () => gracefulVoiceShutdown("beforeunload"));
-  window.addEventListener("pagehide", () => gracefulVoiceShutdown("pagehide"));
+// L'overlay de curseurs est une fenêtre native hors webview : ce module n'est
+// chargé que dans la fenêtre principale, les hooks de fermeture sont sûrs.
+window.addEventListener("beforeunload", () => gracefulVoiceShutdown("beforeunload"));
+window.addEventListener("pagehide", () => gracefulVoiceShutdown("pagehide"));
 
-  // Tauri-specific: when the user closes the window via the X / app updater /
-  // OS shutdown, the Rust side intercepts the close and emits this event,
-  // then waits ~1.5s before destroying the window. That gives us a deterministic
-  // window for the LiveKit leave to flush — much more reliable than browser
-  // `beforeunload` alone.
-  if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen("sion-graceful-shutdown", () => gracefulVoiceShutdown("tauri-close"));
-    }).catch(() => { /* not in Tauri */ });
-  }
+// Tauri-specific: when the user closes the window via the X / app updater /
+// OS shutdown, the Rust side intercepts the close and emits this event,
+// then waits ~1.5s before destroying the window. That gives us a deterministic
+// window for the LiveKit leave to flush — much more reliable than browser
+// `beforeunload` alone.
+if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) {
+  import("@tauri-apps/api/event").then(({ listen }) => {
+    listen("sion-graceful-shutdown", () => gracefulVoiceShutdown("tauri-close"));
+  }).catch(() => { /* not in Tauri */ });
 }
 
 async function cleanupActiveSession() {
-  // Clear the livekitService → session reemit bridge first so any in-flight
-  // backoff timer from MissingKey handling doesn't try to call into a dead
-  // session.
-  setReemitKeysCallback(null);
-  if (reemitParticipantHandler) {
-    getCurrentRoom()?.off(RoomEvent.ParticipantConnected, reemitParticipantHandler);
-    reemitParticipantHandler = null;
-  }
   if (reemitMembershipHandler && activeRTCSession) {
     activeRTCSession.off(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
     reemitMembershipHandler = null;
@@ -155,20 +122,11 @@ async function cleanupActiveSession() {
  */
 export async function cleanupVoiceOnKick() {
   await cleanupActiveSession();
-  // Moteur natif : `disconnectFromRoom` JS ne voit aucune room — sans cette
-  // branche, un kick laisse le moteur Rust (micro + session SFU) en vie.
-  if (getActiveVoiceEngine() === "native") {
-    const { voiceNativeDisconnect } = await import("../services/voiceNativeService");
-    await voiceNativeDisconnect();
-    setActiveVoiceEngine(null);
-    // L'overlay de curseurs (partage local) ne se ferme pas tout seul.
-    import("../services/cursorOverlayService").then(({ closeCursorOverlay }) => {
-      closeCursorOverlay().catch(() => {});
-    }).catch(() => {});
-  } else {
-    const { disconnectFromRoom } = await import("../services/livekitService");
-    await disconnectFromRoom();
-  }
+  await disconnectNativeSession();
+  // L'overlay de curseurs (partage local) ne se ferme pas tout seul.
+  import("../services/cursorOverlayService").then(({ closeCursorOverlay }) => {
+    closeCursorOverlay().catch(() => {});
+  }).catch(() => {});
   useAppStore.getState().disconnectVoice();
 }
 
@@ -197,6 +155,15 @@ export async function republishVoicePresence(): Promise<boolean> {
   return rooms > 0 || activeRTCSession !== null;
 }
 
+async function onNativeSessionDisconnected() {
+  try {
+    await cleanupActiveSession();
+  } finally {
+    stopVoiceService();
+    useAppStore.getState().disconnectVoice();
+  }
+}
+
 // Les joins sont sérialisés : un double-clic ou un auto-join + clic ne
 // doivent jamais ouvrir deux sessions en parallèle (micro fantôme côté
 // natif — cf. connect idempotent côté Rust, ici on évite même la course).
@@ -204,7 +171,7 @@ let joinChain: Promise<void> = Promise.resolve();
 
 export function useVoiceChannel() {
   const { joinRoom } = useMatrix();
-  const { connect, disconnect, connectNative, disconnectNative, connected, participants } = useLiveKit();
+  const { connectNative, disconnectNative, connected, participants } = useLiveKit();
   const setConnectedVoice = useAppStore((s) => s.setConnectedVoice);
   const disconnectVoice = useAppStore((s) => s.disconnectVoice);
   const credentials = useAuthStore((s) => s.credentials);
@@ -218,17 +185,13 @@ export function useVoiceChannel() {
     if (!currentChannel) return;
 
     await cleanupActiveSession();
-    if (getActiveVoiceEngine() === "native") {
-      await disconnectNative();
-    } else {
-      await disconnect();
-    }
-    setActiveVoiceEngine(null);
+    await disconnectNative();
     disconnectVoice();
-  }, [disconnect, disconnectNative, disconnectVoice]);
+  }, [disconnectNative, disconnectVoice]);
 
   const joinVoiceChannelInner = useCallback(
     async (matrixRoomId: string) => {
+      await waitForNativeSessionCleanup();
       // Déconnecter le canal vocal actif avant d'en rejoindre un autre
       const currentChannel = useAppStore.getState().connectedVoiceChannel;
       if (currentChannel) {
@@ -368,101 +331,50 @@ export function useVoiceChannel() {
 
           await joinRoom(matrixRoomId);
 
-          // Moteur voix : natif (Rust, chantier no-CEF) si demandé dans les
-          // settings, sinon JS (livekit-client, défaut stable).
-          const useNative =
-            selectVoiceEngine(
-              useSettingsStore.getState().voiceEngine,
-              isVoiceNativeAvailable(),
-            ) === "native";
-          if (useNative) {
-            const encryptedHere = client.getRoom(matrixRoomId)?.hasEncryptionStateEvent() ?? false;
-            if (encryptedHere) {
-              // Pont E2EE natif : chaque clé MatrixRTC (pairs + la nôtre)
-              // est transférée au provider Rust, qui déchiffre les frames
-              // (voix) comme livekit-client le fait côté JS.
-              if (keyProvider) {
-                const { bytesToB64, setVoiceNativeE2EEKey } =
-                  await import("../services/voiceNativeService");
-                keyProvider.setNativeForwarder((identity, keyIndex, key) => {
-                  setVoiceNativeE2EEKey(identity, keyIndex, bytesToB64(key)).catch((err) => {
-                    console.error(`[Sion][E2EE] transfert clé native ${identity}:`, err);
-                  });
+          // Moteur voix unique : Rust. Sans la feature `native-voice` compilée,
+          // aucun moteur de secours JS n'existe plus — on échoue clairement.
+          if (!(await isVoiceNativeAvailable())) {
+            throw new Error("moteur vocal natif indisponible (build sans --features native-voice)");
+          }
+          const encryptedHere = client.getRoom(matrixRoomId)?.hasEncryptionStateEvent() ?? false;
+          if (encryptedHere) {
+            // Pont E2EE natif : chaque clé MatrixRTC (pairs + la nôtre) est
+            // transférée au provider Rust, qui déchiffre les frames (voix).
+            if (keyProvider) {
+              const { bytesToB64, setVoiceNativeE2EEKey } =
+                await import("../services/voiceNativeService");
+              keyProvider.setNativeForwarder((identity, keyIndex, key) => {
+                setVoiceNativeE2EEKey(identity, keyIndex, bytesToB64(key)).catch((err) => {
+                  console.error(`[Sion][E2EE] transfert clé native ${identity}:`, err);
                 });
-                console.info("[Sion][voix-native][E2EE] pont E2EE branché (clés MatrixRTC → Rust)");
-              } else {
-                console.warn("[Sion][voix-native][E2EE] pas de keyProvider — audio distant muet en salon chiffré");
-              }
+              });
+              console.info("[Sion][voix-native][E2EE] pont E2EE branché (clés MatrixRTC → Rust)");
+            } else {
+              console.warn("[Sion][voix-native][E2EE] pas de keyProvider — audio distant muet en salon chiffré");
             }
-            setActiveVoiceEngine("native");
-            const myId = client.getUserId() ?? "";
-            const displayName =
-              credentials?.displayName
-              || client.getUser(myId)?.displayName
-              || credentials?.userId
-              || myId;
-            await connectNative(rtcResult.url, rtcResult.token, matrixRoomId, displayName, encryptedHere);
-            // Clés arrivées AVANT le connect (reemit au attach) : le
-            // forwarder n'était pas posé — on rejoue tout le connu.
-            if (encryptedHere && keyProvider) {
-              const flushed = keyProvider.flushKeysToNative();
-              console.info(`[Sion][voix-native][E2EE] ${flushed} clé(s) rejouée(s) après connect`);
-            }
-          } else {
-            console.info("[Sion] join JS (livekit-client dans la webview)");
-            setActiveVoiceEngine("js");
-            await connect(rtcResult.url, rtcResult.token, matrixRoomId, keyProvider);
+          }
+          const myId = client.getUserId() ?? "";
+          const displayName =
+            credentials?.displayName
+            || client.getUser(myId)?.displayName
+            || credentials?.userId
+            || myId;
+          await connectNative(rtcResult.url, rtcResult.token, matrixRoomId, displayName, encryptedHere, onNativeSessionDisconnected);
+          // Clés arrivées AVANT le connect (reemit au attach) : le
+          // forwarder n'était pas posé — on rejoue tout le connu.
+          if (encryptedHere && keyProvider) {
+            const flushed = keyProvider.flushKeysToNative();
+            console.info(`[Sion][voix-native][E2EE] ${flushed} clé(s) rejouée(s) après connect`);
           }
 
-          // Four complementary reemit triggers. The EncryptionManager may not
-          // have been ready when the first to-device key arrived, and the
-          // session may gain new keys as peers join or rotate — reemit
-          // re-applies/re-sends keys.
-          //   1. LiveKit participant connect  — new peer published
-          //   2. MatrixRTC membership change  — known peer rotated keys
-          //   3. On-demand from livekitService — MissingKey error observed
-          //      (exponential backoff, replaces the old 15 s × 5 fixed timer)
-          //   4. Bounded post-join burst       — see below
-          // (chemin JS uniquement : en natif il n'y a pas de Room JS sur
-          // laquelle attacher ces listeners — le pont E2EE natif arrive à
-          // l'étape suivante du chantier).
-          if (activeRTCSession && activeKeyProvider && getActiveVoiceEngine() !== "native") {
-            const lkRoom = getCurrentRoom();
+          // Reemit MatrixRTC sur changement de membres : un pair qui rejoint
+          // ou qui tourne sa clé redéclenche la distribution vers le Rust.
+          if (activeRTCSession && activeKeyProvider) {
             const rtcSession = activeRTCSession;
-            if (lkRoom) {
-              reemitParticipantHandler = () => {
-                rtcSession.reemitEncryptionKeys();
-              };
-              lkRoom.on(RoomEvent.ParticipantConnected, reemitParticipantHandler);
-
-              reemitMembershipHandler = () => {
-                rtcSession.reemitEncryptionKeys();
-              };
-              rtcSession.on(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
-
-              // Bridge for the MissingKey-driven reemit in livekitService.
-              setReemitKeysCallback(() => rtcSession.reemitEncryptionKeys());
-
-              // Bounded post-join re-emit burst (NOT the old blind 15 s × 5
-              // timer — three sends over 4 s, then done). Closes a real race:
-              // the handlers above attach only AFTER joinRoomSession()+connect(),
-              // but the *initial* MembershipsChanged (peers already present when
-              // we joined) fires DURING joinRoomSession — before #2 is wired —
-              // so our key is never pushed to already-present peers. On a cold
-              // crypto store (e.g. a CEF upgrade that wiped the cache) that
-              // initial to-device push can also be lost. Result without this:
-              // already-present peers can't decrypt us until someone talks or
-              // reloads. Sender-side only and guarded so it no-ops if we've
-              // since left the session — no feedback-loop risk (the v0.9.6
-              // model only forbids *receiver-side* leave/rejoin recovery).
-              const reemitNow = () => {
-                if (activeRTCSession !== rtcSession) return; // left/changed voice
-                try { rtcSession.reemitEncryptionKeys(); } catch { /* session ended */ }
-              };
-              for (const delay of [300, 1500, 4000]) {
-                setTimeout(reemitNow, delay);
-              }
-            }
+            reemitMembershipHandler = () => {
+              try { rtcSession.reemitEncryptionKeys(); } catch { /* session ended */ }
+            };
+            rtcSession.on(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
           }
 
           setConnectedVoice(matrixRoomId);
@@ -501,18 +413,10 @@ export function useVoiceChannel() {
       );
 
       await joinRoom(matrixRoomId);
-      if (
-        selectVoiceEngine(
-          useSettingsStore.getState().voiceEngine,
-          isVoiceNativeAvailable(),
-        ) === "native"
-      ) {
-        setActiveVoiceEngine("native");
-        await connectNative(credentials.livekitUrl, token, matrixRoomId, credentials.displayName || credentials.userId);
-      } else {
-        setActiveVoiceEngine("js");
-        await connect(credentials.livekitUrl, token, matrixRoomId);
+      if (!(await isVoiceNativeAvailable())) {
+        throw new Error("moteur vocal natif indisponible (build sans --features native-voice)");
       }
+      await connectNative(credentials.livekitUrl, token, matrixRoomId, credentials.displayName || credentials.userId, false, onNativeSessionDisconnected);
       setConnectedVoice(matrixRoomId);
       useAppStore.getState().setConnectingVoice(null);
       connectingStartedAt = 0;
@@ -527,6 +431,9 @@ export function useVoiceChannel() {
         }
       }
       } catch (err) {
+        await disconnectNativeSession().catch((cleanupError) => {
+          console.warn("[Sion] native cleanup after join failure:", cleanupError);
+        });
         // If we got as far as session.joinRoomSession() but then something
         // later (joinRoom / LiveKit connect / ...) threw, the MatrixRTC
         // membership is already published on the server. Without this
@@ -541,14 +448,13 @@ export function useVoiceChannel() {
             console.warn("[Sion] cleanupActiveSession after join failure also failed:", cleanupErr);
           }
         }
-        setActiveVoiceEngine(null);
         useAppStore.getState().setConnectingVoice(null);
         connectingStartedAt = 0;
         connectingRoomId = null;
         throw err;
       }
     },
-    [joinRoom, connect, connectNative, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],
+    [joinRoom, connectNative, setConnectedVoice, credentials, joinMuted, leaveCurrentVoiceChannel],
   );
 
   const joinVoiceChannel = useCallback((matrixRoomId: string) => {
@@ -561,15 +467,10 @@ export function useVoiceChannel() {
     async (_matrixRoomId: string) => {
       stopVoiceService();
       await cleanupActiveSession();
-      if (getActiveVoiceEngine() === "native") {
-        await disconnectNative();
-      } else {
-        await disconnect();
-      }
-      setActiveVoiceEngine(null);
+      await disconnectNative();
       disconnectVoice();
     },
-    [disconnect, disconnectNative, disconnectVoice],
+    [disconnectNative, disconnectVoice],
   );
 
   return {

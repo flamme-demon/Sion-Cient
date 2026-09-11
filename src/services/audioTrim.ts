@@ -1,7 +1,7 @@
 // Web Audio helpers for the soundboard trimmer: decode a file to an
 // AudioBuffer (for waveform + preview) and export a [start,end] slice as a
 // compressed opus clip (so a long upload becomes a small ≤20s file rather than
-// shipping the whole thing). Encoding uses MediaRecorder (CEF/Chromium has
+// shipping the whole thing). Encoding uses MediaRecorder (la webview a
 // opus), which runs in real time — fine for a one-off upload of ≤20s.
 
 let sharedCtx: AudioContext | null = null;
@@ -22,7 +22,7 @@ export async function decodeAudioFile(file: File): Promise<AudioBuffer> {
   return ctx().decodeAudioData(arr);
 }
 
-/** Pick a MediaRecorder mime type CEF/Chromium supports for opus. */
+/** Pick a MediaRecorder mime type the webview supports for opus. */
 function pickMime(): string {
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
   for (const m of candidates) {

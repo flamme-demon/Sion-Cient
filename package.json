@@ -1,7 +1,7 @@
 {
   "name": "sion-client",
   "private": true,
-  "version": "1.6.4",
+  "version": "2.0.0-alpha.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,8 +13,6 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@livekit/components-react": "^2.9.23",
-    "@sapphi-red/web-noise-suppressor": "^0.3.5",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-global-shortcut": "^2.3.2",
     "@tauri-apps/plugin-log": "^2.9.0",
@@ -27,7 +25,6 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "i18next-http-backend": "^3.0.6",
     "jose": "^6.2.3",
-    "livekit-client": "^2.20.2",
     "matrix-js-sdk": "^41.9.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

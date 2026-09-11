@@ -1,4 +1,3 @@
-import { BaseKeyProvider } from "livekit-client";
 import {
   MatrixRTCSessionEvent,
   type MatrixRTCSession,
@@ -6,21 +5,22 @@ import {
 import type { CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
 
 /**
- * Bridge between MatrixRTCSession encryption keys and LiveKit's E2EE KeyProvider.
+ * Pont entre les clés E2EE de MatrixRTCSession et le moteur LiveKit natif.
  *
- * Listens for EncryptionKeyChanged events from the MatrixRTC session and
- * imports the raw keys as CryptoKeys for LiveKit's E2EE worker.
+ * Écoute les `EncryptionKeyChanged` de la session MatrixRTC et transfère
+ * chaque clé brute au provider Rust (`voice_native_set_e2ee_key`). La classe
+ * n'hérite plus du `BaseKeyProvider` de livekit-client : la webview ne
+ * déchiffre plus aucun média.
  */
-export class MatrixKeyProvider extends BaseKeyProvider {
+export class MatrixKeyProvider {
   private session: MatrixRTCSession | null = null;
   // Telemetry: first-key-per-peer measurement lets us spot to-device latency
   // issues after the fact without interactive debugging.
   private sessionAttachedAt = 0;
   private firstKeySeen = new Set<string>();
-  // Pont E2EE natif (chantier no-CEF) : le moteur Rust ne voit pas les events
-  // MatrixRTC — on lui transfère chaque clé (paires + la nôtre, que MatrixRTC
-  // réémet pour chiffrer nos frames). Posé par useVoiceChannel quand le
-  // moteur natif est sélectionné sur salon chiffré, jamais sinon.
+  // Pont E2EE natif : le moteur Rust ne voit pas les events MatrixRTC — on
+  // lui transfère chaque clé (paires + la nôtre, que MatrixRTC réémet pour
+  // chiffrer nos frames). Posé par useVoiceChannel sur salon chiffré.
   private nativeForwarder: ((identity: string, keyIndex: number, key: Uint8Array) => void) | null = null;
   // Anneau complet par identité (comme `participantKeyRings` côté MatrixRTC,
   // rejoué en entier par `reemitEncryptionKeys`) : le déchiffrement peut
@@ -28,15 +28,6 @@ export class MatrixKeyProvider extends BaseKeyProvider {
   // seule dernière clé, `MissingKey` définitif côté natif alors que le JS
   // (historique complet) entend. Borné à 16 par pair (fenêtre ratchet 10).
   private keyRings = new Map<string, Array<{ key: Uint8Array; keyIndex: number }>>();
-
-  constructor() {
-    // Align with Element Call's config: the ratchet window lets LiveKit's
-    // decoder forward-ratchet up to 10 steps when the peer rotated their
-    // key slightly before we received the new index — absorbs natural
-    // drift without any application-level recovery. keyringSize caps how
-    // many historical keys we keep per participant.
-    super({ ratchetWindowSize: 10, keyringSize: 256 });
-  }
 
   setRTCSession(session: MatrixRTCSession): void {
     this.disconnect();
@@ -94,14 +85,6 @@ export class MatrixKeyProvider extends BaseKeyProvider {
     rtcBackendIdentity: string,
   ): Promise<void> => {
     try {
-      const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        key,
-        "HKDF",
-        false,
-        ["deriveBits", "deriveKey"],
-      );
-      this.onSetEncryptionKey(cryptoKey, rtcBackendIdentity, encryptionKeyIndex);
       // Anneau borné (16) : remplace l'index déjà vu (re-reemit), sinon
       // ajoute en queue en éjectant le plus ancien.
       let ring = this.keyRings.get(rtcBackendIdentity);

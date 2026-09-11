@@ -1,6 +1,11 @@
+[workspace]
+members = ["native-audio"]
+default-members = ["."]
+resolver = "2"
+
 [package]
 name = "sion-client"
-version = "1.6.4"
+version = "2.0.0-alpha.1"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -34,32 +39,42 @@ urlencoding = "2"
 scraper = "0.22"
 base64 = "0.22"
 dirs = "6"
+# Détection de la langue système (navigator.language est peu fiable sous WRY).
+sys-locale = "0.3"
 tauri-plugin-notification = "2.3.3"
 
-# Voix native (chantier suppression CEF) — optionnel derrière la feature
-# `native-voice` pour ne pas alourdir les builds par défaut (libwebrtc est
-# volumineux). TLS en rustls/webpki-roots comme reqwest ci-dessus (pas
-# d'OpenSSL système requis).
-livekit = { version = "0.8", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
+# Voix native — moteur LiveKit unique depuis le retrait de LiveKit JS.
+# Feature optionnelle le temps de WRY pour ne pas alourdir les builds par
+# défaut (libwebrtc est volumineux). TLS en rustls/webpki-roots comme
+# reqwest ci-dessus (pas d'OpenSSL système requis).
+sion-native-audio = { path = "native-audio", optional = true }
+webrtc-sys = { version = "=0.3.43", features = ["sion-audio"], optional = true }
+# `glib-main-loop` : indispensable au capturer PipeWire/Wayland — sans la
+# boucle GLib, le portail XDG affiche le sélecteur d'écran mais aucune frame
+# n'est jamais délivrée (erreurs temporaires en boucle au partage).
+livekit = { version = "0.8", default-features = false, features = ["tokio", "rustls-tls-webpki-roots", "glib-main-loop"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # JPEG seul (rendu partage d'écran natif) : pas de décodeurs/format lourds.
-image = { version = "0.25", optional = true, default-features = false, features = ["jpeg"] }
+
 # Encodeur JPEG SIMD pur Rust (~5× l'encodeur scalaire de `image` sur x86,
 # 4:4:4 pour du texte net) : le pont JPEG du partage d'écran y passe.
 jpeg-rusturbo = { version = "0.9", optional = true }
 
 # Desktop-only dependencies (all platforms except Android)
 [target.'cfg(not(target_os = "android"))'.dependencies]
-tauri-runtime-cef = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee", default-features = false, optional = true }
-cef = { version = "148", default-features = false, optional = true }
 tauri-plugin-global-shortcut = "2"
+# Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
+# les images dans `clipboardData.items`, contrairement à CEF/Chromium.
+arboard = { version = "3", features = ["wayland-data-control"] }
+# JPEG (partage d'écran natif) + PNG (image du presse-papiers).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # Persists window position/size/maximised/fullscreen state across launches
 # (desktop only — mobile windows are fullscreen and managed by the OS).
 tauri-plugin-window-state = "2"
 # Native file picker — used by the "Parcourir" button to select an ffmpeg.exe.
 # (tauri-plugin-dialog can't be used: it pulls tauri-plugin-fs on schemars 0.8
-# while the CEF fork uses schemars 1.0 → build conflict.)
+# while the tauri fork uses schemars 1.0 → build conflict.)
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 tungstenite = "0.24"
 cpal = "0.15"
@@ -74,9 +89,8 @@ cpal = "0.15"
 transcribe-cpp = { version = "0.1.3", features = ["dynamic-backends"] }
 earshot = "0.1"
 
-# Native cursor-overlay window: the Tauri-CEF fork doesn't propagate
-# `transparent: true` to child webviews on Linux, so we bypass webview
-# entirely and paint a transparent, click-through window ourselves.
+# Native cursor-overlay window: painted outside the webview because a
+# transparent click-through webview is fragile across runtimes.
 # - `winit` creates the window (ARGB, always-on-top, no decorations, no
 #   hittest), `with_any_thread(true)` lets us spawn the event loop off the
 #   main thread so it coexists with Tauri's own runtime.
@@ -111,11 +125,14 @@ futures-util = { version = "0.3", default-features = false }
 # KWin/Mutter honor X11 window-state hints. Already in the lockfile (transitive
 # via winit's x11 backend) — promoted to a direct dep, ~0 compile cost.
 x11rb = "0.13"
+# Lecture brute du presse-papiers Wayland (protocole wlr-data-control) : on
+# récupère le PNG/JPEG tel quel, sans décodage ni ré-encodage — indispensable
+# pour un Ctrl+V instantané à taille réelle. Déjà en arbre via arboard.
+wl-clipboard-rs = "0.9"
 # NOTE: `pipewire = "0.9"` was added here for the screen-share-audio
 # exclusion path (commit 2a) but removed because libpipewire's static
-# constructors (run before main()) conflict with CEF's GLib/Wayland init
-# order — the process segfaults inside libcef.so's `OnWebContentsAttached`
-# before any of our code runs. Future re-introduction needs lazy loading
+# constructors (run before main()) conflict with the windowing stack's
+# GLib/Wayland init order. Future re-introduction needs lazy loading
 # via `libloading` (dlopen at first capture call, not at process start)
 # or — simpler — switch the enumeration path to a `pw-cli ls Node`
 # subprocess parse, mirroring how we already use `pactl` elsewhere.
@@ -148,11 +165,10 @@ windows = { version = "0.58", features = [
 windows-core = "0.58"
 
 [features]
-default = ["cef"]
-cef = ["tauri/cef", "tauri-runtime-cef", "dep:cef"]
-# Voix LiveKit native (sans Chromium) : `cargo check --features native-voice`.
-# Hors défaut tant que le chemin JS reste la voix de production.
-native-voice = ["dep:livekit", "dep:tokio", "dep:futures-util", "dep:image", "dep:jpeg-rusturbo"]
+# Fenêtre WRY (via les features par défaut de `tauri`) + voix Rust : plus
+# aucune feature CEF. `native-voice` est désormais obligatoire pour la voix.
+default = ["native-voice"]
+native-voice = ["dep:sion-native-audio", "dep:webrtc-sys", "dep:livekit", "dep:tokio", "dep:futures-util", "dep:jpeg-rusturbo"]
 
 # serde_json is on the IPC hot path; keep it optimized even in dev builds.
 [profile.dev.package.serde_json]
@@ -175,9 +191,18 @@ opt-level = 3
 [profile.dev.package.ab_glyph]
 opt-level = 3
 
-# Patches CEF — nécessaire pour le build desktop
-# Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive le CEF
+# Patches crates-io pour le build desktop
+# Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive
+# les dépendances natives (pas de libwebrtc Android).
 [patch.crates-io]
+# Expose WebRTC capture post-processing and explicit software AEC/AGC control.
+webrtc-sys = { path = "vendor/webrtc-sys" }
+# Expose WebRTC's per-source playback gain on RtcAudioTrack.
+libwebrtc = { path = "vendor/libwebrtc" }
+# notify-rust 4.18 : `show()` bloque via zbus/tokio et panique dans le runtime
+# tokio de Tauri (notifications muettes). Le fork isole l'appel sur un thread
+# std. Voir vendor/notify-rust/SION_PATCH.md.
+notify-rust = { path = "vendor/notify-rust" }
 tauri = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
 tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
 tauri-macros = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
@@ -195,11 +220,15 @@ tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
 # for `softbuffer` in the tauri git repo → [[patch.unused]] → black overlay.)
 softbuffer = { path = "vendor-softbuffer" }
 
-# Redirect the git-sourced tauri-runtime-cef (pulled both directly AND via the
-# `tauri/cef` feature) to our vendored, patched copy — without this patch the
-# unpatched git crate would also be compiled and would be the one whose CEF
-# client/handler runs. The vendored crate's own tauri-runtime/tauri-utils deps
-# point at the same rev, so everything unifies on one instance. See
-# vendor/tauri-runtime-cef.
-[patch."https://github.com/tauri-apps/tauri"]
-tauri-runtime-cef = { path = "vendor/tauri-runtime-cef" }
+# Keep the native 10 ms audio callback optimized in development too.
+[profile.dev.package.sion-native-audio]
+opt-level = 3
+[profile.dev.package.nnnoiseless]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3
+[profile.dev.package.realfft]
+opt-level = 3
+[profile.dev.package.easyfft]
+opt-level = 3

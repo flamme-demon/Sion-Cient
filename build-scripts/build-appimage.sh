@@ -2,9 +2,8 @@
 # Sion Client — Build AppImage pour Linux
 # Usage: ./build-scripts/build-appimage.sh
 #
-# Produit un .AppImage autonome avec les libs CEF incluses.
-# Le bundler Tauri CEF ne supporte pas l'AppImage, donc on le construit
-# manuellement avec linuxdeploy.
+# Produit un .AppImage autonome (WRY utilise le WebKitGTK du système).
+# On construit l'AppDir manuellement avec linuxdeploy/appimagetool.
 
 set -e
 
@@ -55,22 +54,11 @@ rm -rf "$PROJECT_DIR/dist" \
        "$RELEASE_DIR/SionClient.AppDir" 2>/dev/null || true
 
 # --- 3. Full Tauri build (frontend + Rust) ---
-echo "[2/5] Build complet via Tauri (frontend + Rust + CEF)..."
+echo "[2/4] Build complet via Tauri (frontend + Rust + voix native)..."
 (cd "$PROJECT_DIR" && bun run tauri build 2>&1 || true)
 
-# --- 4. Find CEF libs ---
-echo "[3/5] Recherche des libs CEF..."
-CEF_SRC=$(find "$RELEASE_DIR/build" -name "cef_linux_x86_64" -type d 2>/dev/null | head -1)
-
-if [ -z "$CEF_SRC" ]; then
-    echo "ERREUR: Libs CEF non trouvees dans target/release/build/"
-    exit 1
-fi
-
-echo "  CEF trouve: $CEF_SRC"
-
-# --- 5. Download AppImage tools ---
-echo "[4/5] Verification des outils AppImage..."
+# --- 4. Download AppImage tools ---
+echo "[3/4] Verification des outils AppImage..."
 
 TOOLS_DIR="$RELEASE_DIR/appimage-tools"
 mkdir -p "$TOOLS_DIR"
@@ -93,33 +81,18 @@ fi
 
 APPIMAGETOOL="$TOOLS_DIR/appimagetool-x86_64.AppImage"
 
-# --- 6. Build AppDir manually ---
-echo "[5/5] Construction de l'AppImage..."
+# --- 5. Build AppDir manually ---
+echo "[4/4] Construction de l'AppImage..."
 
 # Clean previous AppDir
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin"
-mkdir -p "$APPDIR/usr/lib/sion-client/locales"
+mkdir -p "$APPDIR/usr/lib/sion-client"
 mkdir -p "$APPDIR/usr/share/applications"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/128x128/apps"
 
 # Copy binary
 cp "$RELEASE_DIR/$APP_NAME" "$APPDIR/usr/bin/$APP_NAME"
-
-# Copy CEF libs next to binary (CEF needs them in the same dir or LD_LIBRARY_PATH)
-CEF_FILES=(
-    libcef.so libEGL.so libGLESv2.so libvulkan.so.1 libvk_swiftshader.so
-    chrome_100_percent.pak chrome_200_percent.pak resources.pak
-    icudtl.dat v8_context_snapshot.bin vk_swiftshader_icd.json
-)
-
-count=0
-for f in "${CEF_FILES[@]}"; do
-    if [ -f "$CEF_SRC/$f" ]; then
-        cp "$CEF_SRC/$f" "$APPDIR/usr/lib/sion-client/"
-        count=$((count + 1))
-    fi
-done
 
 # Variantes CPU de ggml + transcribe (moteur ASR). Sans elles le binaire ne
 # demarre pas : il est lie dynamiquement pour que ggml choisisse son noyau selon
@@ -136,12 +109,6 @@ echo "  $ggml_count bibliotheques ggml/transcribe copiees"
 if [ "$ggml_count" -eq 0 ]; then
     echo "  ATTENTION: aucune variante ggml trouvee — la transcription ne demarrera pas"
 fi
-
-if [ -d "$CEF_SRC/locales" ]; then
-    cp "$CEF_SRC/locales/"* "$APPDIR/usr/lib/sion-client/locales/"
-fi
-
-echo "  $count fichiers CEF copies"
 
 # Copy icon
 cp "$PROJECT_DIR/src-tauri/icons/128x128.png" "$APPDIR/usr/share/icons/hicolor/128x128/apps/$APP_NAME.png"
@@ -160,7 +127,7 @@ DESKTOP
 
 cp "$APPDIR/$APP_NAME.desktop" "$APPDIR/usr/share/applications/"
 
-# Create AppRun script — sets LD_LIBRARY_PATH so CEF libs are found
+# Create AppRun script — sets LD_LIBRARY_PATH for the ggml/transcribe libs
 cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/bash
 SELF="$(readlink -f "$0")"
@@ -177,15 +144,6 @@ exec "$SELF_DIR/usr/bin/sion-client" "$@"
 APPRUN
 
 chmod +x "$APPDIR/AppRun"
-
-# Prune unused CEF locales — Chrome ships 100+ .pak locale files, ~25 MB total.
-# Sion only supports fr and en, so keep only those two and drop the rest.
-CEF_LOCALES="$APPDIR/usr/lib/sion-client/locales"
-if [ -d "$CEF_LOCALES" ]; then
-    echo "  Pruning unused CEF locales..."
-    find "$CEF_LOCALES" -maxdepth 1 -type f -name "*.pak" \
-        ! -name "en-US.pak" ! -name "fr.pak" -delete 2>/dev/null || true
-fi
 
 # Build the AppImage with zstd compression — ~20% smaller than gzip default,
 # same decompression speed (no perceptible startup cost). xz would gain more

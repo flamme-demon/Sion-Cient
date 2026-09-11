@@ -11,16 +11,16 @@
 //!   que les commandes Tauri relaieront au front ;
 //! - `publish_microphone` capture via le module audio natif de WebRTC
 //!   (`PlatformAudio`, équivalent du `getUserMedia` + `shim` actuels) ;
-//! - chaque piste audio distante est branchée sur un [`RmsSpeakingDetector`]
-//!   (mêmes seuils que `speakingDetector.ts`) pour le rond vert.
+//! - le rond vert distant suit les identités `ActiveSpeakersChanged` du SFU ;
+//!   le niveau local vient directement de la capture APM WebRTC.
 
 use std::sync::Mutex;
 
 use base64::Engine as _;
-use livekit::prelude::*;
+use livekit::e2ee::key_provider::KeyDerivationAlgorithm;
 use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
 use livekit::e2ee::{E2eeOptions, EncryptionType};
-use livekit::e2ee::key_provider::KeyDerivationAlgorithm;
+use livekit::prelude::*;
 
 /// Options du provider E2EE : fenêtre de ratchet + anneau alignés sur
 /// Element Call (`MatrixKeyProvider` JS : 10 / 256). Tolérance 10 comme le
@@ -56,14 +56,15 @@ fn shared_e2ee_store() -> KeyProvider {
         .get_or_init(|| KeyProvider::new(e2ee_key_provider_options()))
         .clone()
 }
+use livekit::options::{
+    AudioEncoding, TrackPublishOptions, VideoCodec, VideoEncoderBackend, VideoEncoding,
+};
 use livekit::track::VideoQuality;
-use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::desktop_capturer::{
     CaptureError, CaptureSource, DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
 };
 use livekit::webrtc::video_frame::native::VideoFrameBufferExt as _;
 use livekit::webrtc::video_stream::native::NativeVideoStream;
-use livekit::options::TrackPublishOptions;
 use tauri::Emitter as _;
 
 use crate::voice_native::{RmsSpeakingDetector, VoiceEngine};
@@ -74,30 +75,137 @@ use crate::voice_native::{RmsSpeakingDetector, VoiceEngine};
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceEngineEvent {
-    ParticipantJoined { identity: String, name: String },
-    ParticipantLeft { identity: String },
-    SpeakingChanged { identity: String, speaking: bool },
-    TrackMutedChanged { identity: String, muted: bool },
-    QualityChanged { identity: String, quality: String },
-    DataReceived { topic: Option<String>, payload_b64: String, sender: Option<String> },
+    ParticipantJoined {
+        identity: String,
+        name: String,
+    },
+    ParticipantLeft {
+        identity: String,
+    },
+    SpeakingChanged {
+        identity: String,
+        speaking: bool,
+    },
+    TrackMutedChanged {
+        identity: String,
+        muted: bool,
+    },
+    QualityChanged {
+        identity: String,
+        quality: String,
+    },
+    DataReceived {
+        topic: Option<String>,
+        payload_b64: String,
+        sender: Option<String>,
+    },
     /// Partage d'écran distant (présence) : le front affiche/masque la vue.
-    /// Les pixels arrivent séparément (`voice-native-frame`, JPEG).
-    VideoPresence { sender: String, sharing: bool },
+    /// Les pixels arrivent séparément par le WebSocket vidéo local (JPEG).
+    VideoPresence {
+        sender: String,
+        sharing: bool,
+    },
     /// Le partage d'écran distant publie aussi du son (piste
     /// `ScreenshareAudio`) : le front affiche le contrôle 🔊/🔇.
     /// Indépendant du mute local (voir `set_screenshare_audio_subscribed`).
-    ShareAudioPresence { sender: String, has_audio: bool },
-    RoomDisconnected { reason: String },
+    ShareAudioPresence {
+        sender: String,
+        has_audio: bool,
+    },
+    RoomDisconnected {
+        reason: String,
+    },
     RoomReconnecting,
     RoomReconnected,
     /// État E2EE d'un participant (`New/Ok/MissingKey/DecryptionFailed/…`) :
     /// le diagnostic décisif en salon chiffré (clés importées mais silence
     /// = `MissingKey` ou `DecryptionFailed` ici, pas de devinette).
-    E2eeStateChanged { identity: String, state: String },
+    E2eeStateChanged {
+        identity: String,
+        state: String,
+    },
+}
+
+/// Plafond d'énumération des périphériques ADM.
+///
+/// L'ADM WebRTC renvoie `-1` comme nombre de périphériques tant qu'il n'a pas
+/// fini d'énumérer (constaté au démarrage sous WRY : 3 devices une fois prêt,
+/// `-1` sinon). Or `PlatformAudio::recording_devices()` convertit ce `-1` en
+/// `usize` (`usize::MAX`) et construit `0..usize::MAX` : chaque `find()`/`next()`
+/// boucle alors sans fin et gèle le thread appelant (commande Tauri synchrone
+/// = thread principal). On borne donc TOUJOURS l'itération.
+const MAX_AUDIO_DEVICE_SCAN: usize = 64;
+
+/// Un périphérique ADM est « réel » dès qu'il expose un nom ou un GUID. Tant
+/// que l'énumération n'a pas eu lieu, les index invalides renvoient les deux
+/// vides.
+fn audio_device_is_real(name: &str, id: &str) -> bool {
+    !name.trim().is_empty() || !id.trim().is_empty()
+}
+
+/// Liste bornée des micros réellement exposés par l'ADM.
+pub(crate) fn list_recording_devices(audio: &PlatformAudio) -> Vec<RecordingDeviceInfo> {
+    audio
+        .recording_devices()
+        .take(MAX_AUDIO_DEVICE_SCAN)
+        .filter(|d| audio_device_is_real(&d.name, d.id.as_str()))
+        .collect()
+}
+
+/// Liste bornée des sorties réellement exposées par l'ADM.
+pub(crate) fn list_playout_devices(audio: &PlatformAudio) -> Vec<PlayoutDeviceInfo> {
+    audio
+        .playout_devices()
+        .take(MAX_AUDIO_DEVICE_SCAN)
+        .filter(|d| audio_device_is_real(&d.name, d.id.as_str()))
+        .collect()
 }
 
 /// Snapshot des périphériques vus par l'ADM (diagnostic + futurs réglages).
+/// Installe un sink de logs WebRTC → `log` (sinon WebRTC reste muet :
+/// échecs de la boucle PipeWire, états du stream, portail… invisibles).
+/// Le sink vit pour tout le processus — on le « fuit » volontairement.
+#[cfg(feature = "native-voice")]
+pub fn install_webrtc_log_sink() {
+    use std::sync::Once;
+    use webrtc_sys::webrtc::ffi::{new_log_sink, LoggingSeverity};
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let sink = new_log_sink(|message, severity| {
+            // WebRTC est extrêmement bavard (un log par ping STUN) : on ne
+            // garde que les erreurs/avertissements et les messages qui
+            // touchent la capture d'écran. Filtre sans allocation (pas de
+            // to_lowercase) : ce chemin est appelé pour CHAQUE ligne WebRTC.
+            let keep = match severity {
+                LoggingSeverity::Error | LoggingSeverity::Warning => true,
+                _ => {
+                    message.contains("PipeWire")
+                        || message.contains("pipewire")
+                        || message.contains("screencast")
+                        || message.contains("ScreenCast")
+                        || message.contains("portal")
+                        || message.contains("Portal")
+                        || message.contains("apturer")
+                        || message.contains("ayland")
+                }
+            };
+            if !keep {
+                return;
+            }
+            let msg = format!("[webrtc] {message}");
+            match severity {
+                LoggingSeverity::Error => log::error!("{msg}"),
+                LoggingSeverity::Warning => log::warn!("{msg}"),
+                _ => log::info!("{msg}"),
+            }
+        });
+        std::mem::forget(sink);
+    });
+}
+
 /// Crée un `PlatformAudio` temporaire (refcount +1 le temps de l'appel).
+/// Sondage non bloquant : la liste peut être vide si l'ADM n'a pas fini
+/// d'énumérer, l'UI la rafraîchit de toute façon.
 pub fn platform_audio_snapshot() -> Result<
     (
         Vec<crate::voice_native::NativeAudioDevice>,
@@ -107,21 +215,18 @@ pub fn platform_audio_snapshot() -> Result<
 > {
     use crate::voice_native::NativeAudioDevice;
     let audio = PlatformAudio::new().map_err(|e| format!("audio natif: {}", e))?;
-    let recording = audio
-        .recording_devices()
-        .map(|d| NativeAudioDevice {
-            id: d.id.as_str().to_string(),
-            name: d.name.clone(),
-            index: d.index,
-        })
+    let to_native = |id: &str, name: &str, index: usize| NativeAudioDevice {
+        id: id.to_string(),
+        name: name.to_string(),
+        index,
+    };
+    let recording = list_recording_devices(&audio)
+        .into_iter()
+        .map(|d| to_native(d.id.as_str(), &d.name, d.index))
         .collect();
-    let playout = audio
-        .playout_devices()
-        .map(|d| NativeAudioDevice {
-            id: d.id.as_str().to_string(),
-            name: d.name.clone(),
-            index: d.index,
-        })
+    let playout = list_playout_devices(&audio)
+        .into_iter()
+        .map(|d| to_native(d.id.as_str(), &d.name, d.index))
         .collect();
     Ok((recording, playout))
 }
@@ -179,10 +284,7 @@ fn adm_playout_states(pactl_json: &str) -> Vec<AdmuiPlayoutState> {
         };
         out.push(AdmuiPlayoutState {
             index,
-            muted: entry
-                .get("mute")
-                .and_then(|m| m.as_bool())
-                .unwrap_or(false),
+            muted: entry.get("mute").and_then(|m| m.as_bool()).unwrap_or(false),
             corked: entry
                 .get("corked")
                 .and_then(|c| c.as_bool())
@@ -192,9 +294,7 @@ fn adm_playout_states(pactl_json: &str) -> Vec<AdmuiPlayoutState> {
                 .and_then(|p| p.get("media.name"))
                 .and_then(|n| n.as_str())
                 .map(|s| s.to_string()),
-            volume_display: entry
-                .get("volume")
-                .and_then(find_volume_display),
+            volume_display: entry.get("volume").and_then(find_volume_display),
         });
     }
     out
@@ -243,7 +343,10 @@ fn ensure_playout_unmuted() {
                 .status();
             match status {
                 Ok(s) if s.success() => {
-                    log::info!("[Sion][voix-native] playout ADM démute (sink-input {})", st.index)
+                    log::info!(
+                        "[Sion][voix-native] playout ADM démute (sink-input {})",
+                        st.index
+                    )
                 }
                 _ => log::warn!(
                     "[Sion][voix-native] impossible de démuter le playout {}",
@@ -266,14 +369,12 @@ fn start_playout_watchdog(
     let deafened = std::sync::Arc::clone(deafened);
     std::thread::Builder::new()
         .name("sion-voice-playout-watchdog".into())
-        .spawn(move || {
-            loop {
-                match stop_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if !deafened.load(std::sync::atomic::Ordering::Relaxed) {
-                            ensure_playout_unmuted();
-                        }
+        .spawn(move || loop {
+            match stop_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if !deafened.load(std::sync::atomic::Ordering::Relaxed) {
+                        ensure_playout_unmuted();
                     }
                 }
             }
@@ -296,9 +397,10 @@ pub fn connection_quality_str(q: &ConnectionQuality) -> &'static str {
 ///   publication micro (`isMicrophoneEnabled == false`) et nous affichent
 ///   mutés alors que l'audio passe ;
 /// - `dtx/red: false` comme le chemin JS.
-pub fn mic_publish_options() -> TrackPublishOptions {
+pub fn mic_publish_options(max_bitrate: u64) -> TrackPublishOptions {
     TrackPublishOptions {
         source: TrackSource::Microphone,
+        audio_encoding: Some(AudioEncoding { max_bitrate }),
         dtx: false,
         red: false,
         ..Default::default()
@@ -309,15 +411,87 @@ pub fn mic_publish_options() -> TrackPublishOptions {
 /// (SANS ÇA, les pairs trient la piste en caméra et la vue ne l'affiche
 /// pas) ; le reste en défaut du SDK (simulcast VP8 — les viewers demandent
 /// la couche haute comme pour les partages JS).
-pub fn screenshare_publish_options() -> TrackPublishOptions {
+pub fn screenshare_publish_options(
+    max_bitrate: u64,
+    max_framerate: u32,
+    codec: &str,
+) -> TrackPublishOptions {
+    // Choix utilisateur (Réglages → partage). `vp9` par défaut : à débit égal
+    // c'est le plus net pour du texte/UI. `h264` peut être encodé par VAAPI
+    // (CPU quasi nul) ; `vp8` reste le repli compatible avec tout.
+    let (video_codec, video_encoder) = match codec {
+        "h264" => (VideoCodec::H264, VideoEncoderBackend::Vaapi),
+        "vp8" => (VideoCodec::VP8, VideoEncoderBackend::Auto),
+        _ => (VideoCodec::VP9, VideoEncoderBackend::Auto),
+    };
     TrackPublishOptions {
         source: TrackSource::Screenshare,
+        video_encoding: Some(VideoEncoding {
+            max_bitrate,
+            max_framerate: max_framerate as f64,
+        }),
+        video_codec,
+        video_encoder,
         ..Default::default()
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenShareConfig {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub framerate: u32,
+    pub max_bitrate: u64,
+}
+
+/// Convertit les choix du menu en limites de capture et d'encodage. Les
+/// valeurs suivent les presets LiveKit JS déjà utilisés par Sion ; les deux
+/// combinaisons 5 i/s manquantes dans le SDK JS sont interpolées.
+pub fn screenshare_config(resolution: &str, framerate: u32) -> Result<ScreenShareConfig, String> {
+    let (max_width, max_height) = match resolution {
+        "720p" => (1280, 720),
+        "1080p" => (1920, 1080),
+        "1440p" => (2560, 1440),
+        _ => return Err(format!("résolution de partage invalide: {resolution}")),
+    };
+    let max_bitrate = match (resolution, framerate) {
+        ("720p", 5) => 800_000,
+        ("720p", 15) => 1_500_000,
+        ("720p", 30) => 2_000_000,
+        ("720p", 60) => 3_500_000,
+        ("1080p", 5) => 1_200_000,
+        ("1080p", 15) => 2_500_000,
+        ("1080p", 30) => 5_000_000,
+        ("1080p", 60) => 6_000_000,
+        ("1440p", 5) => 2_000_000,
+        ("1440p", 15) => 5_000_000,
+        ("1440p", 30) => 8_000_000,
+        ("1440p", 60) => 14_000_000,
+        (_, _) => return Err(format!("cadence de partage invalide: {framerate}")),
+    };
+    Ok(ScreenShareConfig {
+        max_width,
+        max_height,
+        framerate,
+        max_bitrate,
+    })
+}
+
+fn fit_screenshare_dimensions(width: u32, height: u32, config: ScreenShareConfig) -> (u32, u32) {
+    if width <= config.max_width && height <= config.max_height {
+        return (width & !1, height & !1);
+    }
+    let by_width = config.max_width as f64 / width as f64;
+    let by_height = config.max_height as f64 / height as f64;
+    let scale = by_width.min(by_height);
+    let fitted_width = ((width as f64 * scale).floor() as u32 & !1).max(2);
+    let fitted_height = ((height as f64 * scale).floor() as u32 & !1).max(2);
+    (fitted_width, fitted_height)
+}
+
 /// Pousse une frame PCM `i16` (format du `NativeAudioStream`) dans le
 /// détecteur RMS sans allocation intermédiaire.
+#[cfg(test)]
 pub fn push_i16_frame(det: &mut RmsSpeakingDetector, samples: &[i16]) -> Option<bool> {
     if samples.is_empty() {
         return None;
@@ -332,42 +506,35 @@ pub fn push_i16_frame(det: &mut RmsSpeakingDetector, samples: &[i16]) -> Option<
     det.push_rms((sum / samples.len() as f64).sqrt() as f32)
 }
 
-/// Attache un détecteur de parole (rond vert) à une piste audio distante.
-/// À la fin du stream (unpublish), retombe à `speaking: false`.
-fn spawn_rms_task(
-    rt: &tokio::runtime::Handle,
-    tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
-    identity: String,
-    rtc_track: livekit::webrtc::audio_track::RtcAudioTrack,
-) {
-    let tx2 = tx.clone();
-    rt.spawn(async move {
-        use futures_util::StreamExt as _;
-        // 48 kHz mono : ce que l'ADM négocie par défaut ;
-        // le détecteur RMS s'en contente.
-        let mut stream = NativeAudioStream::new(rtc_track, 48000, 1);
-        let mut det = RmsSpeakingDetector::new();
-        let mut first_frame = true;
-        while let Some(frame) = stream.next().await {
-            if first_frame {
-                first_frame = false;
-                log::info!(
-                    "[Sion][voix-native] frames distantes recues {} ({} Hz, {} canaux)",
-                    identity,
-                    frame.sample_rate,
-                    frame.num_channels
-                );
-            }
-            if let Some(speaking) = push_i16_frame(&mut det, &frame.data) {
-                let _ = tx2.send(VoiceEngineEvent::SpeakingChanged {
-                    identity: identity.clone(),
-                    speaking,
-                });
-            }
-        }
-        log::info!("[Sion][voix-native] fin de piste distante {}", identity);
-        let _ = tx2.send(VoiceEngineEvent::SpeakingChanged { identity, speaking: false });
-    });
+/// Applique le gain local WebRTC à la source d'une piste distante. Le SDK
+/// Rust n'expose pas encore cette méthode, mais son handle public permet de
+/// rejoindre l'API `AudioSourceInterface::SetVolume` du pont webrtc-sys.
+fn set_remote_audio_volume(
+    track: &livekit::webrtc::audio_track::RtcAudioTrack,
+    volume: f32,
+) -> bool {
+    track.set_volume(volume as f64)
+}
+
+/// Calcule les transitions du rond vert à partir de la liste d'orateurs
+/// fournie par LiveKit. La comparaison par identité évite de lier le niveau
+/// d'une piste décodée au mauvais participant quand plusieurs pistes audio
+/// sont souscrites ou remplacées simultanément.
+fn speaking_set_changes(
+    previous: &mut std::collections::HashSet<String>,
+    next: std::collections::HashSet<String>,
+) -> Vec<(String, bool)> {
+    let mut changes: Vec<_> = previous
+        .difference(&next)
+        .map(|identity| (identity.clone(), false))
+        .chain(
+            next.difference(previous)
+                .map(|identity| (identity.clone(), true)),
+        )
+        .collect();
+    changes.sort_by(|a, b| a.0.cmp(&b.0));
+    *previous = next;
+    changes
 }
 
 /// Dimensions d'émission d'une frame vidéo : largeur plafonnée à 2560
@@ -405,10 +572,10 @@ fn rgb_to_rgba(rgb: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// RGBA32 → JPEG à qualité donnée, toujours en 4:4:4 (pas de
-/// sous-échantillonnage chroma : le texte reste net même en mouvement ;
-/// ~2× plus gros que le 4:2:0 mais IPC local et CPU SIMD encaissent).
-/// `full_chroma=false` (4:2:0) réservé aux tests comparatifs.
+/// RGBA32 → JPEG à qualité donnée. La piste LiveKit décodée est déjà en I420 :
+/// réencoder en 4:4:4 ne recrée aucun détail chromatique, mais double presque
+/// le volume. La pompe utilise donc 4:2:0 et garde la luminance du texte à sa
+/// pleine définition ; 4:4:4 reste disponible pour les tests comparatifs.
 fn encode_jpeg_rgba(
     width: u32,
     height: u32,
@@ -502,6 +669,11 @@ fn run_share_capture(
     source: CaptureSource,
     video_source: livekit::webrtc::video_source::native::NativeVideoSource,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    config: ScreenShareConfig,
+    ready_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+    capture_armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    capture_failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    app: Option<tauri::AppHandle<crate::TauriRuntime>>,
 ) {
     use livekit::webrtc::video_frame::{I420Buffer, VideoFrame, VideoRotation};
     // Stats capture (diagnostic lenteur : la source fournit-elle assez vite,
@@ -509,14 +681,42 @@ fn run_share_capture(
     let mut captured: u64 = 0;
     let mut conv_ms_total: u128 = 0;
     let mut stat_since = std::time::Instant::now();
+    let mut temp_errors: u64 = 0;
     let stop_cb = std::sync::Arc::clone(&stop);
+    let capture_armed_outer = std::sync::Arc::clone(&capture_armed);
+    let mut ready_tx = Some(ready_tx);
     capturer.start_capture(Some(source), move |result| {
         let frame = match result {
             Ok(f) => f,
-            Err(CaptureError::Temporary) => return,
+            Err(CaptureError::Temporary) => {
+                temp_errors += 1;
+                if temp_errors == 1 || temp_errors % 150 == 0 {
+                    log::info!(
+                        "[Sion][voix-native] capture écran en attente de première image ({} erreurs temporaires)",
+                        temp_errors
+                    );
+                }
+                return;
+            }
             Err(CaptureError::Permanent) => {
                 log::warn!("[Sion][voix-native] capture écran en erreur permanente — arrêt");
+                capture_failed.store(true, std::sync::atomic::Ordering::Release);
                 stop_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(
+                        "KDE/Wayland n'a fourni aucune image (sélection annulée ou source invalide)"
+                            .to_string(),
+                    ));
+                } else if capture_armed.load(std::sync::atomic::Ordering::Acquire) {
+                    if let Some(app) = app.as_ref() {
+                        let _ = app.emit(
+                            "voice-native-local-share-failed",
+                            &serde_json::json!({
+                                "reason": "La capture d'écran s'est interrompue"
+                            }),
+                        );
+                    }
+                }
                 return;
             }
         };
@@ -524,14 +724,9 @@ fn run_share_capture(
         if w < 2 || h < 2 {
             return;
         }
-        // Plafond 1920 (parité preset h1080fps15 + encodeur VP8 logiciel
-        // soulagé) ; dimensions paires exigées par I420.
-        let (cw, ch) = if w > 1920 {
-            let ch = (h.saturating_mul(1920) / w) & !1;
-            (1920, ch.max(2))
-        } else {
-            (w, h)
-        };
+        // Le menu fixe le cadre maximal ; on conserve le ratio de la source.
+        // Les dimensions paires sont exigées par I420.
+        let (cw, ch) = fit_screenshare_dimensions(w, h, config);
         let src_stride = frame.stride() as usize;
         if frame.data().len() < (h as usize - 1) * src_stride + (w as usize) * 4 {
             return;
@@ -557,6 +752,12 @@ fn run_share_capture(
         }
         let vf = VideoFrame::new(VideoRotation::VideoRotation0, i420);
         video_source.capture_frame(&vf);
+        // Le SFU ne voit la piste qu'après cette preuve qu'une vraie image a
+        // été obtenue. Cela évite la piste noire quand le portail Wayland
+        // restaure une source périmée ou que l'utilisateur annule.
+        if let Some(tx) = ready_tx.take() {
+            let _ = tx.send(Ok(()));
+        }
         captured += 1;
         conv_ms_total += t0.elapsed().as_millis();
         if stat_since.elapsed().as_secs() >= 30 {
@@ -573,7 +774,19 @@ fn run_share_capture(
     });
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         capturer.capture_frame();
-        std::thread::sleep(std::time::Duration::from_millis(66));
+        std::thread::sleep(std::time::Duration::from_secs_f64(
+            1.0 / config.framerate as f64,
+        ));
+    }
+    if !capture_armed_outer.load(std::sync::atomic::Ordering::Acquire) {
+        // Abandon avant publication (timeout de première image) : le portail
+        // peut encore dérouler ses callbacks sur son contexte GLib privé et
+        // toucher au capturer. On le « fuit » plutôt que de le détruire sous
+        // ses pieds (use-after-free).
+        std::mem::forget(capturer);
+        log::warn!(
+            "[Sion][voix-native] capture écran abandonnée avant publication — capturer conservé"
+        );
     }
     log::info!("[Sion][voix-native] thread de capture écran terminé");
 }
@@ -586,20 +799,20 @@ fn y_samples(y: &[u8]) -> Vec<u8> {
 
 /// Qualité JPEG + cadence adaptatives (contrôleur pur, testé).
 ///
-/// Ce flux JPEG ne touche jamais le réseau (IPC local vers la webview) :
-/// la cible (~4 Mo/s) ne protège que le CPU d'encodage et le décodage
-/// image de Chromium. Ordre de dégradation volontaire :
+/// Ce flux JPEG ne touche jamais le réseau externe (WebSocket local vers la webview) :
+/// la cible (~8 Mo/s) ne protège que le CPU d'encodage, le décodage image et
+/// les copies locales. Ordre de dégradation volontaire :
 /// 1. baisser la qualité (90 → 75) — le texte reste lisible ;
 /// 2. PUIS SEULEMENT baisser la cadence (10 → 5 → 2,5 im/s).
 /// L'inverse (écraser la qualité à plancher en gardant 12 im/s) donne du
 /// pixelisé permanent même sur écran fixe — observé en prod.
-const VIDEO_TARGET_BPS: u64 = 4_000_000;
+const VIDEO_TARGET_BPS: u64 = 8_000_000;
 const VIDEO_Q_MIN: u8 = 75;
 const VIDEO_Q_MAX: u8 = 90;
-/// Paliers de cadence (ms entre frames) : on ne descend que coincé au
-/// plancher qualité, on remonte dès que le budget le permet. Base 80 ms
-/// (~12 im/s) : la source LiveKit ne dépasse 15 im/s qu'en preset 30fps.
-const VIDEO_TICKS_MS: [u64; 3] = [80, 160, 320];
+/// Paliers de cadence (ms entre frames) : jusqu'à 25 im/s si la source et la
+/// machine suivent, puis 12,5 et 6,25. Un encodage encore actif fait simplement
+/// sauter le tick ; il ne peut jamais former un backlog.
+const VIDEO_TICKS_MS: [u64; 3] = [40, 80, 160];
 
 /// État du contrôleur : qualité + palier de cadence courants.
 #[derive(Debug, PartialEq, Eq)]
@@ -610,21 +823,39 @@ struct VideoBudget {
 
 fn adapt_budget(current: &VideoBudget, bytes_last_window: u64, window_secs: u64) -> VideoBudget {
     if window_secs == 0 {
-        return VideoBudget { quality: current.quality, tick_step: current.tick_step };
+        return VideoBudget {
+            quality: current.quality,
+            tick_step: current.tick_step,
+        };
     }
     let over = bytes_last_window > VIDEO_TARGET_BPS * window_secs;
     if over {
         if current.quality > VIDEO_Q_MIN {
-            VideoBudget { quality: current.quality.saturating_sub(6).max(VIDEO_Q_MIN), tick_step: current.tick_step }
+            VideoBudget {
+                quality: current.quality.saturating_sub(6).max(VIDEO_Q_MIN),
+                tick_step: current.tick_step,
+            }
         } else if current.tick_step + 1 < VIDEO_TICKS_MS.len() {
-            VideoBudget { quality: current.quality, tick_step: current.tick_step + 1 }
+            VideoBudget {
+                quality: current.quality,
+                tick_step: current.tick_step + 1,
+            }
         } else {
-            VideoBudget { quality: current.quality, tick_step: current.tick_step }
+            VideoBudget {
+                quality: current.quality,
+                tick_step: current.tick_step,
+            }
         }
     } else if current.tick_step > 0 {
-        VideoBudget { quality: current.quality, tick_step: current.tick_step - 1 }
+        VideoBudget {
+            quality: current.quality,
+            tick_step: current.tick_step - 1,
+        }
     } else {
-        VideoBudget { quality: current.quality.saturating_add(2).min(VIDEO_Q_MAX), tick_step: current.tick_step }
+        VideoBudget {
+            quality: current.quality.saturating_add(2).min(VIDEO_Q_MAX),
+            tick_step: current.tick_step,
+        }
     }
 }
 
@@ -706,13 +937,13 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Pompe vidéo : partage d'écran distant → JPEG ~10 im/s vers le front
-/// (`voice-native-frame`). Le flux décodé par libwebrtc EST fluide et net
+/// Pompe vidéo : partage d'écran distant → JPEG adaptatif par WebSocket local
+/// binaire. Le flux décodé par libwebrtc EST fluide et net
 /// (vrai codec adaptatif côté SFU) ; le pont JPEG n'en garde que l'essentiel :
-/// - tick 100 ms + file "latest" (1 frame) : aucun backlog, le réseau ou le
+/// - cadence jusqu'à 25 im/s + file "latest" (1 frame) : aucun backlog, le réseau ou le
 ///   CPU lent fait juste baisser le débit effectif ;
 /// - écran strictement fixe (échantillons Y identiques) = 0 encodage ;
-/// - qualité JPEG + cadence adaptatives (v3 : cible ~2,5 Mo/s d'IPC local,
+/// - qualité JPEG + cadence adaptatives (v4 : cible ~8 Mo/s locale,
 ///   on dégrade la qualité 90 → 75 AVANT de toucher à la cadence) ;
 /// - conversion + encodage (CPU) dans `spawn_blocking`, jamais sur le runtime.
 /// Se termine sur `stop` (unsubscribe, leave, disconnect) ou fin de piste.
@@ -794,7 +1025,7 @@ fn spawn_video_pump(
                                         if first {
                                             first = false;
                                             log::info!(
-                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{} 444, conv {}ms enc {}ms)",
+                                                "[Sion][voix-native] frames vidéo {} ({}x{} → {}x{}, {} o jpeg q{} 420, conv {}ms enc {}ms)",
                                                 sender, src_dims.0, src_dims.1, dw, dh, jpeg.len(), budget.quality, conv_ms, enc_ms
                                             );
                                         }
@@ -819,15 +1050,8 @@ fn spawn_video_pump(
                                             stat_enc_ms = 0;
                                             stat_since = tokio::time::Instant::now();
                                         }
-                                        use base64::Engine as _;
-                                        let _ = app.emit(
-                                            "voice-native-frame",
-                                            &serde_json::json!({
-                                                "sender": sender,
-                                                "width": dw,
-                                                "height": dh,
-                                                "jpeg_b64": base64::engine::general_purpose::STANDARD.encode(&jpeg),
-                                            }),
+                                        crate::native_video_transport::broadcast(
+                                            &sender, dw, dh, &jpeg,
                                         );
                                     }
                                 }
@@ -857,10 +1081,9 @@ fn spawn_video_pump(
                             if dw == 0 || (!prev.is_empty() && prev == samples) {
                                 return (samples, (sw, sh), None);
                             }
-                            // Toujours 4:4:4 (texte net même en mouvement) :
-                            // ~2× plus gros que le 4:2:0 mais IPC local et
-                            // CPU SIMD encaissent ; le contrôleur qualité /
-                            // cadence reste la soupape.
+                            // La source est déjà I420. Une seconde sortie 4:2:0
+                            // conserve sa luminance pleine résolution et évite
+                            // le surcoût trompeur d'un JPEG 4:4:4.
                             // ATTENTION : le binding inverse RGBA↔ABGR et
                             // BGRA↔ARGB (vérifié empiriquement, test
                             // `libyuv_to_argb_ordre_des_canaux`) — on demande
@@ -875,7 +1098,7 @@ fn spawn_video_pump(
                                 dh as i32,
                             );
                             let conv_ms = t0.elapsed().as_millis();
-                            let emitted = encode_jpeg_rgba(dw, dh, &rgba, q, true)
+                            let emitted = encode_jpeg_rgba(dw, dh, &rgba, q, false)
                                 .ok()
                                 .map(|jpeg| (jpeg, dw, dh, conv_ms, t0.elapsed().as_millis()));
                             (samples, (sw, sh), emitted)
@@ -885,6 +1108,7 @@ fn spawn_video_pump(
             }
         }
         log::info!("[Sion][voix-native] fin de partage {}", sender);
+        crate::native_video_transport::remove(&sender);
         let _ = app.emit(
             "voice-native-frame-stopped",
             &serde_json::json!({ "sender": sender }),
@@ -905,7 +1129,10 @@ fn start_remote_video_pump(
     rtc_track: livekit::webrtc::video_track::RtcVideoTrack,
 ) {
     let Some(app) = app else {
-        log::warn!("[Sion][voix-native] partage {} ignoré (pas de AppHandle)", sender);
+        log::warn!(
+            "[Sion][voix-native] partage {} ignoré (pas de AppHandle)",
+            sender
+        );
         return;
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -945,23 +1172,31 @@ pub struct LiveKitEngine {
     /// Garde l'ADM WebRTC vivant tant que le moteur existe (refcount).
     audio: Mutex<Option<PlatformAudio>>,
     mic_sid: Mutex<Option<TrackSid>>,
-    /// Capture cpal parallèle, analyse seule (rond vert local) : l'ADM ne
-    /// donnant pas accès à ses frames, on mesure le même défaut d'entrée.
-    /// `cpal::Stream` n'étant ni Send ni Sync, il vit dans un thread
-    /// propriétaire qui meurt quand le canal stop se ferme (disconnect).
+    audio_devices: Mutex<(String, String)>,
+    /// Débit Opus du profil choisi dans les réglages. Une modification à chaud
+    /// republie la piste micro avec cette valeur.
+    mic_max_bitrate: Mutex<u64>,
+    /// Polls scalar telemetry from the WebRTC capture post-processor for the
+    /// local speaking indicator. No parallel CPAL microphone stream.
     local_meter_stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     /// Chien de garde playout ADM (re-démute si l'ADM se remute en cours
     /// d'appel). Même cycle de vie que le meter local.
     watchdog_stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     /// Sourdine casque : les nouvelles pistes audio sont désinscrites d'office.
     deafened: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// SIDs audio déjà branchés sur un détecteur RMS (anti-doublons).
-    attached: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
     /// Désir de mute persistant : un mute demandé AVANT toute publication
     /// (F8 hors appel, join-muté précoce, moteur pas encore connecté) ne
     /// doit pas se perdre en silence — sinon store "muté" + micro live
     /// pour toute la session. Consulté à chaque publication.
     mic_muted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Piste micro publiée conservée pour mute/unmute SANS republier : un
+    /// unpublish/republish à chaque F8/F9 provoque une renégociation SDP, et
+    /// certains clients (production JS) décrochent dessus.
+    mic_track: Mutex<Option<LocalAudioTrack>>,
+    /// Passe à `true` quand la piste conservée doit être republiée au prochain
+    /// unmute (changement de périphérique ou de débit pendant le mute) : un
+    /// `unmute()` sur l'ancienne piste sortirait du silence avec l'ADM neuf.
+    mic_needs_republish: std::sync::atomic::AtomicBool,
     /// Partage d'écran local (émission) : `Some` tant que le thread de
     /// capture tourne et que la piste est publiée.
     local_share: Mutex<Option<LocalShareState>>,
@@ -969,12 +1204,15 @@ pub struct LiveKitEngine {
     /// `screenShareAudioMuted` JS) : survivre au undeafen global (qui
     /// réinscrit tout) sans réactiver leur partage.
     share_audio_muted: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Gain local du son de chaque partage, conservé pendant les
+    /// réabonnements/republications de la session.
+    share_audio_volume: std::sync::Arc<Mutex<std::collections::HashMap<String, f32>>>,
     /// Pompes vidéo (partage d'écran) : un canal stop par expéditeur.
     /// Clé = identité LiveKit (un partage actif à la fois par pair, MVP).
     video_stops:
         std::sync::Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
-    /// Poignée Tauri pour émettre les frames (`voice-native-frame`) depuis
-    /// les pompes vidéo (le canal broadcast reste réservé aux petits events).
+    /// Poignée Tauri pour émettre les changements d'état depuis les pompes
+    /// vidéo (le canal broadcast reste réservé aux petits événements).
     event_app: Mutex<Option<tauri::AppHandle<crate::TauriRuntime>>>,
     event_tx: tokio::sync::broadcast::Sender<VoiceEngineEvent>,
     /// Clés E2EE MatrixRTC (salons chiffrés) : alimenté par le front via
@@ -1018,13 +1256,17 @@ impl LiveKitEngine {
             room: Mutex::new(None),
             audio: Mutex::new(None),
             mic_sid: Mutex::new(None),
+            audio_devices: Mutex::new((String::new(), String::new())),
+            mic_max_bitrate: Mutex::new(48_000),
             local_meter_stop: Mutex::new(None),
             watchdog_stop: Mutex::new(None),
             deafened: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            attached: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             mic_muted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            mic_track: Mutex::new(None),
+            mic_needs_republish: std::sync::atomic::AtomicBool::new(false),
             local_share: Mutex::new(None),
             share_audio_muted: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            share_audio_volume: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             event_app: Mutex::new(None),
             event_tx,
@@ -1046,52 +1288,257 @@ impl LiveKitEngine {
 
     /// Nombre de pistes audio distantes branchées au détecteur RMS.
     pub fn attached_count(&self) -> usize {
-        self.attached
+        // Compatibilité du diagnostic historique : la détection distante
+        // utilise désormais les identités SFU et n'attache plus de sinks PCM.
+        0
+    }
+
+    pub fn configure_audio_devices(&self, input: String, output: String) {
+        *self.audio_devices.lock().unwrap_or_else(|e| e.into_inner()) = (input, output);
+    }
+
+    pub fn configure_audio_quality(&self, max_bitrate: u64) {
+        *self
+            .mic_max_bitrate
             .lock()
-            .map(|a| a.len())
-            .unwrap_or_default()
+            .unwrap_or_else(|e| e.into_inner()) = max_bitrate;
+    }
+
+    /// Applique un nouveau profil Opus à la session active. LiveKit ne permet
+    /// pas de modifier l'encodage d'une publication existante : une piste
+    /// fraîche est donc publiée, comme sur le chemin JS.
+    pub fn switch_audio_quality(&self, max_bitrate: u64) -> Result<(), String> {
+        self.configure_audio_quality(max_bitrate);
+        if !self.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
+            self.publish_microphone()?;
+        } else {
+            self.mic_needs_republish
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// Maintient la capture uniquement pour le vumètre des réglages quand le
+    /// micro est dépublié. Quand le micro est en ligne, son propre cycle de vie
+    /// reste prioritaire et l'arrêt du test ne coupe rien.
+    pub fn set_microphone_test_enabled(&self, enabled: bool) -> Result<(), String> {
+        let guard = self.audio.lock().map_err(|e| e.to_string())?;
+        let audio = guard.as_ref().ok_or("audio natif non démarré")?;
+        if enabled && self.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
+            audio.start_recording().map_err(|e| e.to_string())
+        } else if self.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
+            audio.stop_recording().map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Validate before stopping the ADM: the SDK otherwise silently falls back
+    /// to device 0 when a stale GUID is passed to its hot-swap methods. After an
+    /// input hot-swap, republish the device track: some desktop ADMs restart
+    /// successfully but leave the existing WebRTC track producing silence.
+    pub fn switch_audio_device(&self, kind: &str, id: &str) -> Result<(), String> {
+        let capture_sequence_before = sion_native_audio::capture_level().0;
+        let republish_microphone;
+        #[cfg(target_os = "linux")]
+        let mut input_device_name: Option<String> = None;
+        {
+            let guard = self.audio.lock().map_err(|e| e.to_string())?;
+            let audio = guard.as_ref().ok_or("audio natif non démarré")?;
+            let mut selected = self.audio_devices.lock().map_err(|e| e.to_string())?;
+            match kind {
+                "input" => {
+                    let device = list_recording_devices(audio)
+                        .into_iter()
+                        .find(|d| {
+                            if id.is_empty() {
+                                d.index == 0
+                            } else {
+                                d.id.as_str() == id
+                            }
+                        })
+                        .ok_or("microphone indisponible")?;
+                    log::info!(
+                        "[Sion][voix-native] changement micro demandé id={} index={} nom={}",
+                        id,
+                        device.index,
+                        device.name
+                    );
+                    #[cfg(target_os = "linux")]
+                    {
+                        input_device_name = Some(device.name.clone());
+                    }
+                    audio
+                        .switch_recording_device(&device.id)
+                        .map_err(|e| e.to_string())?;
+                    selected.0 = id.to_string();
+                    if self.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
+                        audio.stop_recording().map_err(|e| e.to_string())?;
+                    }
+                    // Always publish a fresh LiveKit track after the ADM
+                    // stop/init/start cycle. On Linux the PipeWire stream is
+                    // routed before this publish and once more from
+                    // `publish_microphone`, after the new SID is live.
+                    republish_microphone =
+                        !self.mic_muted.load(std::sync::atomic::Ordering::Relaxed);
+                    if !republish_microphone {
+                        self.mic_needs_republish
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                "output" => {
+                    let device = list_playout_devices(audio)
+                        .into_iter()
+                        .find(|d| {
+                            if id.is_empty() {
+                                d.index == 0
+                            } else {
+                                d.id.as_str() == id
+                            }
+                        })
+                        .ok_or("sortie audio indisponible")?;
+                    audio
+                        .switch_playout_device(&device.id)
+                        .map_err(|e| e.to_string())?;
+                    selected.1 = id.to_string();
+                    republish_microphone = false;
+                }
+                _ => return Err("type de périphérique invalide".into()),
+            }
+        }
+        if kind == "input" {
+            #[cfg(target_os = "linux")]
+            crate::route_native_microphone(if id.is_empty() {
+                None
+            } else {
+                input_device_name.as_deref()
+            })?;
+            if republish_microphone {
+                self.publish_microphone()?;
+            }
+            let identity = self
+                .room
+                .lock()
+                .map_err(|e| e.to_string())?
+                .as_ref()
+                .map(|r| r.local_participant().identity().to_string());
+            if let Some(identity) = identity {
+                if let Err(err) = self.start_local_meter(identity) {
+                    log::warn!("[Sion][voix-native] indicateur micro indisponible: {}", err);
+                }
+            }
+            let selected = id.to_string();
+            std::thread::Builder::new()
+                .name("sion-mic-switch-check".into())
+                .spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    let (sequence_after, rms) = sion_native_audio::capture_level();
+                    log::info!(
+                        "[Sion][voix-native] contrôle micro id={} trames={} rms={:.5}",
+                        selected,
+                        sequence_after.saturating_sub(capture_sequence_before),
+                        rms
+                    );
+                })
+                .map_err(|e| format!("contrôle microphone: {e}"))?;
+        }
+        Ok(())
     }
 
     /// Publie le micro via l'ADM natif. Équivalent de `createLocalAudioTrack`
     /// + `publishTrack` côté JS, sans `getUserMedia` ni shim PulseAudio :
     /// la sélection de périphérique passe par `PlatformAudio`.
     ///
-    /// Traitement audio : le pipeline RNNoise du projet (worklet JS sur la
-    /// piste micro) ne s'applique PAS ici — et `set_noise_suppression`
-    /// ci-dessous ne coupe que le traitement MATÉRIEL (no-op sur desktop,
-    /// où seul l'APM logiciel WebRTC tourne). Autrement dit, en natif c'est
-    /// l'APM logiciel WebRTC (AEC/AGC/NS, cf. log `apm effectif`) qui traite
-    /// le micro, pas RNNoise. Réglages `echoCancellation`/`autoGainControl`
-    /// des settings : non propagés (pas d'API logicielle exposée).
+    /// RNNoise runs inside the WebRTC capture APM, alongside AEC/AGC. Its software
+    /// configuration is enforced by the vendored capture-processing extension.
     pub fn publish_microphone(&self) -> Result<(), String> {
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
         let audio = PlatformAudio::new().map_err(|e| format!("audio natif: {}", e))?;
-        // Best-effort : un ADM qui refuse ce réglage ne doit pas bloquer l'appel.
-        // (Ne touche que le NS matériel — voir doc ci-dessus.)
-        let _ = audio.set_noise_suppression(false, false);
-        // Vérité terrain : quel traitement est VRAIMENT actif ?
-        log::info!(
-            "[Sion][voix-native] apm effectif aec={:?} agc={:?} ns={:?}",
-            audio.active_aec_type(),
-            audio.active_agc_type(),
-            audio.active_ns_type()
-        );
+        // Re-publishing after mute retains the active ADM routing; restarting
+        // playout here would interrupt remote audio on every unmute.
+        if self.audio.lock().map_err(|e| e.to_string())?.is_none() {
+            let mut selected = self.audio_devices.lock().map_err(|e| e.to_string())?;
+            // Force l'énumération ADM : tant que la capture n'est pas
+            // initialisée, `recording_devices()` peut rester vide (compteur
+            // -1) et tout `switch_recording_device` échoue en DeviceNotFound.
+            if let Err(e) = audio.start_recording() {
+                log::warn!("[Sion][voix-native] pré-initialisation capture ADM: {e}");
+            }
+            // Une liste encore partielle (GUID zéro) juste après
+            // l'acquisition fait aussi échouer le switch : on réessaie
+            // jusqu'à ce que l'énumération soit réellement prête, avec un
+            // plafond global.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let inputs = list_recording_devices(&audio);
+                let outputs = list_playout_devices(&audio);
+                if !inputs.is_empty() && !outputs.is_empty() {
+                    // A saved device may have been unplugged since the last
+                    // call. Resolve the fallback explicitly rather than pass a
+                    // stale GUID.
+                    let input = inputs
+                        .iter()
+                        .find(|d| d.id.as_str() == selected.0)
+                        .or_else(|| inputs.first())
+                        .cloned()
+                        .ok_or("aucun microphone disponible")?;
+                    let output = outputs
+                        .iter()
+                        .find(|d| d.id.as_str() == selected.1)
+                        .or_else(|| outputs.first())
+                        .cloned()
+                        .ok_or("aucune sortie audio disponible")?;
+                    if !selected.0.is_empty() && input.id.as_str() != selected.0 {
+                        log::warn!("[Sion][voix-native] microphone mémorisé absent, utilisation du défaut");
+                        selected.0.clear();
+                    }
+                    if !selected.1.is_empty() && output.id.as_str() != selected.1 {
+                        log::warn!("[Sion][voix-native] sortie mémorisée absente, utilisation du défaut");
+                        selected.1.clear();
+                    }
+                    let input_ready = audio.switch_recording_device(&input.id);
+                    let output_ready = input_ready
+                        .as_ref()
+                        .map_err(|e| e.to_string())
+                        .and_then(|_| audio.switch_playout_device(&output.id).map_err(|e| e.to_string()));
+                    match (input_ready, output_ready) {
+                        (Ok(()), Ok(())) => break,
+                        (Err(AudioError::DeviceNotFound), _)
+                        | (Ok(()), Err(_))
+                            if std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                        (Err(e), _) => return Err(format!("sélection micro: {e}")),
+                        (_, Err(e)) => return Err(format!("sélection sortie: {e}")),
+                    }
+                } else if std::time::Instant::now() >= deadline {
+                    return Err("périphériques audio natifs indisponibles (ADM non initialisé)".into());
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+        }
+        // Desktop software AEC/AGC/RNNoise is configured by the capture APM
+        // extension; PlatformAudio's setters only control hardware effects.
         // Diagnostic routage : quels périphériques l'ADM voit-il ?
+        // (énumération bornée : `recording_devices()` boucle si l'ADM est -1)
         log::info!(
             "[Sion][voix-native] ADM entree=[{}] sortie=[{}]",
-            audio
-                .recording_devices()
+            list_recording_devices(&audio)
+                .iter()
                 .map(|d| d.name.clone())
                 .collect::<Vec<_>>()
                 .join(" | "),
-            audio
-                .playout_devices()
+            list_playout_devices(&audio)
+                .iter()
                 .map(|d| d.name.clone())
                 .collect::<Vec<_>>()
                 .join(" | ")
         );
         let track = LocalAudioTrack::create_audio_track("microphone", audio.rtc_source());
+        let track_handle = track.clone();
         // Anti-fantôme : si une publication précédente traîne encore (unmute
         // sans unpublish préalable), on la retire d'abord — sinon deux
         // micros vivent et aucun unmute futur ne peut les taire tous les deux.
@@ -1111,37 +1558,67 @@ impl LiveKitEngine {
         }
         let publication = self
             .rt
-            .block_on(room.local_participant().publish_track(
-                LocalTrack::Audio(track),
-                mic_publish_options(),
-            ))
+            .block_on(
+                room.local_participant().publish_track(
+                    LocalTrack::Audio(track),
+                    mic_publish_options(
+                        *self
+                            .mic_max_bitrate
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()),
+                    ),
+                ),
+            )
             .map_err(|e| format!("publish mic: {}", e))?;
         let sid = publication.sid();
         log::info!("[Sion][voix-native] micro publié sid={}", sid);
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = Some(sid);
-        // Mute désiré AVANT cette publication (F8 hors appel, join muté…)
-        // : on ne laisse pas un micro live derrière un store "muté".
+        *self.mic_track.lock().unwrap_or_else(|e| e.into_inner()) = Some(track_handle.clone());
+        // Mute désiré AVANT cette publication (F8 hors appel, join muté…) :
+        // on laisse la publication en place mais muette — pas de dépublication
+        // (elle forcerait une renégociation et un republish au premier unmute).
         if self.mic_muted.load(std::sync::atomic::Ordering::Relaxed) {
-            log::info!("[Sion][voix-native] micro publié déjà muté — dépublication immédiate");
-            let stale = self
-                .mic_sid
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take();
-            if let Some(stale) = stale {
-                let _ = self
-                    .rt
-                    .block_on(room.local_participant().unpublish_track(&stale));
+            log::info!("[Sion][voix-native] micro publié déjà muté — piste muette");
+            {
+                let _rt_enter = self.rt.enter();
+                track_handle.mute();
             }
             // `audio` local, pas encore stocké dans le garde : on coupe sa
             // capture directement (sinon elle tourne pour rien).
             let _ = audio.stop_recording();
         }
+        crate::transcribe::note_native_mic_enabled(
+            !self.mic_muted.load(std::sync::atomic::Ordering::Relaxed),
+        );
         // Garder l'ADM vivant tant que la session vit : sans ce garde, le
         // refcount retombe à zéro dès la fin de cette fonction et l'ADM
         // démonte son playout quelques secondes après le join (sink-input
         // "playout absent" alors que les frames continuent = silence total).
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(audio);
+        #[cfg(target_os = "linux")]
+        {
+            let selected_input = self
+                .audio_devices
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .0
+                .clone();
+            if !selected_input.is_empty() {
+                let selected_name = self
+                    .audio
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .and_then(|audio| {
+                        list_recording_devices(audio)
+                            .into_iter()
+                            .find(|device| device.id.as_str() == selected_input)
+                            .map(|device| device.name.clone())
+                    })
+                    .ok_or("microphone natif mémorisé introuvable")?;
+                crate::route_native_microphone(Some(&selected_name))?;
+            }
+        }
         // Filet résiduel : si l'ADM s'est déjà muté tout seul, on démute.
         ensure_playout_unmuted();
         Ok(())
@@ -1155,12 +1632,29 @@ impl LiveKitEngine {
     /// En salon chiffré, un échec de chiffrement rejoue d'abord notre clé
     /// (redevient latest global) et réessaie une fois : sans ça, toute clé
     /// paire importée après la nôtre casse nos publishes suivants.
-    pub fn publish_data(&self, topic: &str, payload: Vec<u8>, reliable: bool) -> Result<(), String> {
+    pub fn publish_data(
+        &self,
+        topic: &str,
+        payload: Vec<u8>,
+        reliable: bool,
+    ) -> Result<(), String> {
         let len = payload.len();
         if topic == crate::voice_native::TOPIC_CURSOR
             || topic == crate::voice_native::TOPIC_CURSOR_CLICK
         {
             CURSOR_TX_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Diagnostic : cible réellement envoyée (doit être l'identité du
+            // partageur, sinon son overlay filtre le paquet).
+            static CURSOR_TX_LOG: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let n = CURSOR_TX_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if n < 3 || n % 300 == 0 {
+                log::info!(
+                    "[Sion][Cursor] tx {} : {}",
+                    topic,
+                    String::from_utf8_lossy(&payload)
+                );
+            }
         }
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
@@ -1182,7 +1676,11 @@ impl LiveKitEngine {
                 // identités) : une clé paire importée après la nôtre casse
                 // nos publishes. On rejoue notre clé (redevient latest) et
                 // on réessaie une fois.
-                let own = self.e2ee_own_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let own = self
+                    .e2ee_own_key
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 match own {
                     Some((id, idx, bytes)) => {
                         if self.e2ee_keys.set_key(&id.as_str().into(), idx, bytes) {
@@ -1201,7 +1699,11 @@ impl LiveKitEngine {
             Err(e) => return Err(e),
         }
         // Debug : à 60 Hz (curseur), l'info spammerait le log.
-        log::debug!("[Sion][voix-native] data publié topic={} ({} o)", topic, len);
+        log::debug!(
+            "[Sion][voix-native] data publié topic={} ({} o)",
+            topic,
+            len
+        );
         Ok(())
     }
 
@@ -1222,13 +1724,7 @@ impl LiveKitEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        start_remote_video_pump(
-            self.rt.handle(),
-            app,
-            &self.video_stops,
-            sender,
-            rtc_track,
-        );
+        start_remote_video_pump(self.rt.handle(), app, &self.video_stops, sender, rtc_track);
     }
 
     /// Stoppe la pompe vidéo d'un expéditeur (unsubscribe, leave).
@@ -1249,19 +1745,37 @@ impl LiveKitEngine {
     /// Idempotent (déjà en partage = no-op OK). `with_audio=false` :
     /// vidéo seule (les viewers voient "sans son", comme un partage JS
     /// sans la case audio).
-    pub fn start_screensharing(&self, source_id: Option<u64>, with_audio: bool) -> Result<(), String> {
+    pub fn start_screensharing(
+        &self,
+        source_id: Option<u64>,
+        with_audio: bool,
+        config: ScreenShareConfig,
+        video_codec: &str,
+    ) -> Result<bool, String> {
         // Même exigence de contexte Tokio que `set_deafened`.
         let _rt_enter = self.rt.enter();
         if self.is_screensharing() {
-            return Ok(());
+            return Ok(self
+                .local_share
+                .lock()
+                .map(|share| share.as_ref().and_then(|s| s.audio_sid.as_ref()).is_some())
+                .unwrap_or(false));
         }
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
         let mut opts = DesktopCapturerOptions::new(DesktopCaptureSourceType::Screen);
         opts.set_include_cursor(true);
-        let capturer = DesktopCapturer::new(opts)
-            .ok_or("capture d'écran indisponible (portail Wayland ?)")?;
+        let capturer =
+            DesktopCapturer::new(opts).ok_or("capture d'écran indisponible (portail Wayland ?)")?;
         let sources = capturer.get_source_list();
+        for listed in &sources {
+            log::info!(
+                "[Sion][voix-native] source écran candidate {} (\"{}\", display_id={})",
+                listed.id(),
+                listed.title(),
+                listed.display_id()
+            );
+        }
         let source = match source_id {
             Some(wanted) => sources
                 .iter()
@@ -1280,28 +1794,64 @@ impl LiveKitEngine {
         );
         // Source vidéo "screencast" (le SFU optimise texte/partage plutôt
         // que caméra) ; la résolution suit les frames capturées.
-        let video_source =
-            livekit::webrtc::video_source::native::NativeVideoSource::new(
-                livekit::webrtc::video_source::VideoResolution {
-                    width: 1920,
-                    height: 1080,
-                },
-                true,
-            );
+        let video_source = livekit::webrtc::video_source::native::NativeVideoSource::new(
+            livekit::webrtc::video_source::VideoResolution {
+                width: config.max_width,
+                height: config.max_height,
+            },
+            true,
+        );
         let track = LocalVideoTrack::create_video_track(
             "screen-share",
             livekit::webrtc::video_source::RtcVideoSource::Native(video_source.clone()),
         );
-        let publication = self
-            .rt
-            .block_on(room.local_participant().publish_track(
-                LocalTrack::Video(track),
-                screenshare_publish_options(),
-            ))
-            .map_err(|e| format!("publish partage: {}", e))?;
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let capture_armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let capture_failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Le signal de première image n'est plus attendu ici : cette attente
+        // (jusqu'à 60 s) gardait le moteur hors du holder, donc le mutex
+        // global restait pris et TOUTES les commandes vocales synchrones
+        // (publis de curseur à 60 Hz, mute…) bloquaient le thread principal —
+        // UI figée pendant la sélection d'écran. On publie immédiatement ; une
+        // panne du portail remonte ensuite via `local-share-failed`, qui
+        // dépublie. Le récepteur reste pour compat du canal.
+        let (ready_tx, _ready_rx) = std::sync::mpsc::sync_channel(1);
+        let stop_thread = std::sync::Arc::clone(&stop);
+        let armed_thread = std::sync::Arc::clone(&capture_armed);
+        let failed_thread = std::sync::Arc::clone(&capture_failed);
+        let app = self
+            .event_app
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        std::thread::Builder::new()
+            .name("sion-share-capture".into())
+            .spawn(move || {
+                run_share_capture(
+                    capturer,
+                    source,
+                    video_source,
+                    stop_thread,
+                    config,
+                    ready_tx,
+                    armed_thread,
+                    failed_thread,
+                    app,
+                );
+            })
+            .map_err(|e| format!("thread capture: {}", e))?;
+        let publication = match self.rt.block_on(room.local_participant().publish_track(
+            LocalTrack::Video(track),
+            screenshare_publish_options(config.max_bitrate, config.framerate, video_codec),
+        )) {
+            Ok(publication) => publication,
+            Err(e) => {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                return Err(format!("publish partage: {}", e));
+            }
+        };
         let sid = publication.sid();
         log::info!("[Sion][voix-native] partage local publié sid={}", sid);
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         // Son du système : seulement si demandé (case audio). Sans lui les
         // viewers voient "sans son" (détecté via l'absence de piste
         // ScreenshareAudio, comme en JS).
@@ -1317,19 +1867,20 @@ impl LiveKitEngine {
             log::info!("[Sion][voix-native] partage local sans le son (opt-out)");
             None
         };
+        let audio_published = audio_sid.is_some();
         *self.local_share.lock().unwrap_or_else(|e| e.into_inner()) = Some(LocalShareState {
             stop: std::sync::Arc::clone(&stop),
             video_sid: sid,
             audio_sid,
         });
-        let stop_thread = std::sync::Arc::clone(&stop);
-        std::thread::Builder::new()
-            .name("sion-share-capture".into())
-            .spawn(move || {
-                run_share_capture(capturer, source, video_source, stop_thread);
-            })
-            .map_err(|e| format!("thread capture: {}", e))?;
-        Ok(())
+        // À partir d'ici, une panne ultérieure déclenche l'événement front qui
+        // remet le bouton à zéro et demande la dépublication des pistes.
+        capture_armed.store(true, std::sync::atomic::Ordering::Release);
+        if capture_failed.load(std::sync::atomic::Ordering::Acquire) {
+            self.stop_screensharing()?;
+            return Err("la capture d'écran s'est interrompue pendant la publication".to_string());
+        }
+        Ok(audio_published)
     }
 
     /// Stoppe le partage d'écran local (drapeaux stop + dépublications).
@@ -1346,9 +1897,7 @@ impl LiveKitEngine {
         let Some(state) = state else {
             return Ok(());
         };
-        state
-            .stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(room) = room_guard.as_ref() {
             // Audio d'abord (miroir JS), vidéo en dernier.
@@ -1405,7 +1954,10 @@ impl LiveKitEngine {
             ))
             .map_err(|e| format!("publish son du partage: {}", e))?
             .sid();
-        log::info!("[Sion][voix-native] son du partage local publié sid={}", sid);
+        log::info!(
+            "[Sion][voix-native] son du partage local publié sid={}",
+            sid
+        );
         let stop_thread = std::sync::Arc::clone(stop);
         let rt_thread = rt.clone();
         std::thread::Builder::new()
@@ -1417,175 +1969,61 @@ impl LiveKitEngine {
         Ok(Some(sid))
     }
 
-    /// Démarre la mesure du micro local (rond vert) : l'ADM WebRTC ne donnant
-    /// pas accès à ses frames capturées, on ouvre le même défaut d'entrée
-    /// via cpal en analyse seule (parallèle à la capture ADM, sans publier).
-    /// Mêmes seuils RMS que `speakingDetector.ts`.
-    ///
-    /// `cpal::Stream` n'étant ni Send ni Sync, TOUT vit dans le thread dédié
-    /// (création, play, drop) ; fermer le canal stop (disconnect) fait sortir
-    /// le thread. Best-effort : un défaut indisponible ne fait que logger.
+    /// Read the level from the actual WebRTC capture, without opening a second
+    /// microphone. Only scalar telemetry crosses threads; no PCM crosses IPC.
     pub fn start_local_meter(&self, identity: String) -> Result<(), String> {
+        self.local_meter_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         let tx = self.event_tx.clone();
+        let muted = self.mic_muted.clone();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         std::thread::Builder::new()
             .name("sion-voice-local-meter".into())
             .spawn(move || {
-                Self::run_local_meter(&tx, &identity, &stop_rx);
+                let mut detector = RmsSpeakingDetector::new();
+                let mut sequence = sion_native_audio::capture_level().0;
+                loop {
+                    match stop_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                    let (next, level) = sion_native_audio::capture_level();
+                    let level =
+                        if next != sequence && !muted.load(std::sync::atomic::Ordering::Relaxed) {
+                            level
+                        } else {
+                            0.0
+                        };
+                    sequence = next;
+                    if let Some(speaking) = detector.push_rms(level) {
+                        let _ = tx.send(VoiceEngineEvent::SpeakingChanged {
+                            identity: identity.clone(),
+                            speaking,
+                        });
+                    }
+                }
             })
             .map_err(|e| format!("thread meter: {}", e))?;
-        *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(stop_tx);
+        *self
+            .local_meter_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(stop_tx);
         Ok(())
-    }
-
-    fn run_local_meter(
-        tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
-        identity: &str,
-        stop_rx: &std::sync::mpsc::Receiver<()>,
-    ) {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        use std::sync::Arc;
-
-        fn feed(
-            tx: &tokio::sync::broadcast::Sender<VoiceEngineEvent>,
-            det: &Arc<Mutex<RmsSpeakingDetector>>,
-            rms: f32,
-            id: &str,
-        ) {
-            let flipped = det.lock().map(|mut d| d.push_rms(rms)).unwrap_or(None);
-            if let Some(speaking) = flipped {
-                let _ = tx.send(VoiceEngineEvent::SpeakingChanged {
-                    identity: id.to_string(),
-                    speaking,
-                });
-            }
-        }
-
-        let host = cpal::default_host();
-        let Some(device) = host.default_input_device() else {
-            log::warn!("[Sion][voix-native] meter local : pas de périphérique d'entrée");
-            return;
-        };
-        let config = match device.default_input_config() {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[Sion][voix-native] meter local : config entrée: {}", e);
-                return;
-            }
-        };
-
-        let err_fn =
-            |err| log::warn!("[Sion][voix-native] meter micro local: {}", err);
-        let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => {
-                let (tx, det, id) = (
-                    tx.clone(),
-                    Arc::new(Mutex::new(RmsSpeakingDetector::new())),
-                    identity.to_string(),
-                );
-                match device.build_input_stream(
-                    &config.into(),
-                    move |data: &[f32], _| {
-                        if data.is_empty() {
-                            return;
-                        }
-                        let sum: f32 = data.iter().map(|v| v * v).sum();
-                        feed(&tx, &det, (sum / data.len() as f32).sqrt(), &id);
-                    },
-                    err_fn,
-                    None,
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("[Sion][voix-native] meter local : stream f32: {}", e);
-                        return;
-                    }
-                }
-            }
-            cpal::SampleFormat::I16 => {
-                let (tx, det, id) = (
-                    tx.clone(),
-                    Arc::new(Mutex::new(RmsSpeakingDetector::new())),
-                    identity.to_string(),
-                );
-                match device.build_input_stream(
-                    &config.into(),
-                    move |data: &[i16], _| {
-                        if data.is_empty() {
-                            return;
-                        }
-                        let sum: f64 = data
-                            .iter()
-                            .map(|v| {
-                                let n = *v as f64 / 32768.0;
-                                n * n
-                            })
-                            .sum();
-                        feed(&tx, &det, (sum / data.len() as f64).sqrt() as f32, &id);
-                    },
-                    err_fn,
-                    None,
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("[Sion][voix-native] meter local : stream i16: {}", e);
-                        return;
-                    }
-                }
-            }
-            cpal::SampleFormat::U16 => {
-                let (tx, det, id) = (
-                    tx.clone(),
-                    Arc::new(Mutex::new(RmsSpeakingDetector::new())),
-                    identity.to_string(),
-                );
-                match device.build_input_stream(
-                    &config.into(),
-                    move |data: &[u16], _| {
-                        if data.is_empty() {
-                            return;
-                        }
-                        let sum: f64 = data
-                            .iter()
-                            .map(|v| {
-                                let n = (*v as f64 - 32768.0) / 32768.0;
-                                n * n
-                            })
-                            .sum();
-                        feed(&tx, &det, (sum / data.len() as f64).sqrt() as f32, &id);
-                    },
-                    err_fn,
-                    None,
-                ) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("[Sion][voix-native] meter local : stream u16: {}", e);
-                        return;
-                    }
-                }
-            }
-            fmt => {
-                log::warn!("[Sion][voix-native] meter local : format {:?}", fmt);
-                return;
-            }
-        };
-        if let Err(e) = stream.play() {
-            log::warn!("[Sion][voix-native] meter local : play: {}", e);
-            return;
-        }
-        // Bloque jusqu'au disconnect (fermeture du canal), puis drop le
-        // stream sur ce même thread.
-        let _ = stop_rx.recv();
     }
 
     /// `true` si une publication micro est actuellement enregistrée (le
     /// store front peut mentir suite à une désync historique : le deafen
     /// consulte cette vérité terrain avant de faire confiance au store).
     pub fn is_microphone_published(&self) -> bool {
+        // Une piste conservée mais muette ne transmet rien : elle ne doit pas
+        // être vue comme "micro live" par le garde-fou deafen.
         self.mic_sid
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
+            && !self.mic_muted.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Importe une clé E2EE MatrixRTC (commande `voice_native_set_e2ee_key`,
@@ -1627,7 +2065,8 @@ impl LiveKitEngine {
             if fresh {
                 log::info!(
                     "[Sion][voix-native][E2EE] première clé de {} index={}",
-                    identity, key_index
+                    identity,
+                    key_index
                 );
             } else {
                 // Rotations : chaque index compte pour diagnostiquer un
@@ -1635,7 +2074,8 @@ impl LiveKitEngine {
                 // INFO (pas debug) : rares et décisives.
                 log::info!(
                     "[Sion][voix-native][E2EE] rotation {} index={}",
-                    identity, key_index
+                    identity,
+                    key_index
                 );
             }
             // Notre propre clé : réindexer nos cryptors d'envoi (voir doc).
@@ -1648,7 +2088,8 @@ impl LiveKitEngine {
         } else {
             log::warn!(
                 "[Sion][voix-native][E2EE] clé refusée de {} index={}",
-                identity, key_index
+                identity,
+                key_index
             );
         }
         ok
@@ -1676,7 +2117,8 @@ impl LiveKitEngine {
         if bumped > 0 {
             log::info!(
                 "[Sion][voix-native][E2EE] sender réindexé sur {} ({} cryptor(s))",
-                key_index, bumped
+                key_index,
+                bumped
             );
         }
     }
@@ -1698,33 +2140,67 @@ impl LiveKitEngine {
     pub fn set_microphone_enabled(&self, enabled: bool) -> Result<(), String> {
         self.mic_muted
             .store(!enabled, std::sync::atomic::Ordering::Relaxed);
+        // Tap de transcription natif : coupe immédiatement l'audio (le
+        // segment en cours est fermé côté transcribe.rs).
+        crate::transcribe::note_native_mic_enabled(enabled);
+        let track = self
+            .mic_track
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if enabled {
             let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(audio) = audio_guard.as_ref() {
                 let _ = audio.start_recording();
             }
             drop(audio_guard);
+            let needs_republish = self
+                .mic_needs_republish
+                .swap(false, std::sync::atomic::Ordering::Relaxed);
+            if let Some(track) = track {
+                if needs_republish {
+                    // Périphérique/débit changés pendant le mute : une
+                    // nouvelle piste est nécessaire (l'ancienne resterait
+                    // muette après le hot-swap ADM).
+                    log::info!(
+                        "[Sion][voix-native] micro réactivé — republish requis après changement"
+                    );
+                    return self.publish_microphone();
+                }
+                {
+                    // `track.mute()/unmute()` notifie la room via une tâche
+                    // tokio : sans contexte runtime, le SDK panique
+                    // ("no reactor running") et le mute n'est pas appliqué.
+                    let _rt_enter = self.rt.enter();
+                    track.unmute();
+                }
+                log::info!(
+                    "[Sion][voix-native] micro réactivé (piste conservée, sans republish)"
+                );
+                return Ok(());
+            }
+            // Aucune piste conservée (première publication ou après un
+            // changement de périphérique) : publier normalement.
             self.publish_microphone()
         } else {
-            let sid = self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()).take();
-            let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
-            match (room_guard.as_ref(), sid) {
-                (Some(room), Some(sid)) => {
-                    match self.rt.block_on(room.local_participant().unpublish_track(&sid)) {
-                        Ok(_) => log::info!("[Sion][voix-native] micro dépublié sid={}", sid),
-                        Err(e) => log::warn!(
-                            "[Sion][voix-native] dépublication micro {} refusée: {}",
-                            sid, e
-                        ),
+            match track {
+                Some(track) => {
+                    {
+                        // Même exigence de contexte Tokio que `unmute`.
+                        let _rt_enter = self.rt.enter();
+                        track.mute();
                     }
+                    log::info!("[Sion][voix-native] micro muté (piste conservée, sans dépublication)");
                 }
-                (_, None) => log::info!("[Sion][voix-native] micro déjà coupé (aucun sid)"),
-                (None, _) => log::warn!("[Sion][voix-native] micro non coupé (pas de session)"),
+                None => log::info!("[Sion][voix-native] micro déjà coupé (aucune piste)"),
             }
-            drop(room_guard);
             let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(audio) = audio_guard.as_ref() {
-                let _ = audio.stop_recording();
+                // Le vumètre des réglages et l'alerte « parler en étant
+                // muet » utilisent cette même capture sans publier de piste.
+                if !crate::voice_native::microphone_monitor_requested() {
+                    let _ = audio.stop_recording();
+                }
             }
             Ok(())
         }
@@ -1732,9 +2208,8 @@ impl LiveKitEngine {
 
     /// Sourdine casque : (dés)inscrit toutes les pistes audio distantes.
     /// Retourne le nombre de pistes touchées (0 sans session = no-op OK).
-    /// Au retour (`false`), les pistes sont réinscrites et le RMS ré-accroché
-    /// (le registre `attached` est purgé : d'éventuelles tâches orphelines
-    /// n'émettent que des booléens idempotents).
+    /// Au retour (`false`), les pistes sont réinscrites. Le rond vert distant
+    /// reste piloté par `ActiveSpeakersChanged`, indépendamment des sinks PCM.
     pub fn set_deafened(&self, deafened: bool) -> Result<usize, String> {
         // Les commandes Tauri sync tournent hors runtime Tokio, mais le SDK
         // exige un contexte (`Handle::current()` dans `set_subscribed`) —
@@ -1746,12 +2221,6 @@ impl LiveKitEngine {
         let Some(room) = room_guard.as_ref() else {
             return Ok(0);
         };
-        if !deafened {
-            self.attached
-                .lock()
-                .map(|mut a| a.clear())
-                .unwrap_or_default();
-        }
         let mut touched = 0;
         // Sons de partage coupés localement : le undeafen global ne doit pas
         // les réactiver (miroir du `screenShareAudioMuted` JS).
@@ -1760,7 +2229,8 @@ impl LiveKitEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        for participant in room.remote_participants().values() {            let identity = participant.identity().to_string();
+        for participant in room.remote_participants().values() {
+            let identity = participant.identity().to_string();
             for publication in participant.track_publications().values() {
                 if publication.kind() != TrackKind::Audio {
                     continue;
@@ -1769,33 +2239,13 @@ impl LiveKitEngine {
                 let want = !deafened && !(is_share_audio && share_muted.contains(&identity));
                 publication.set_subscribed(want);
                 touched += 1;
-                if !want {
-                    continue;
-                }
-                // Le son du partage n'est pas de la voix : pas de détecteur
-                // RMS (miroir JS : un jeu bruyant allumerait le rond vert).
-                if is_share_audio {
-                    continue;
-                }
-                if let Some(RemoteTrack::Audio(audio_track)) = publication.track() {
-                    let sid = publication.sid().to_string();
-                    let fresh = self
-                        .attached
-                        .lock()
-                        .map(|mut a| a.insert(sid))
-                        .unwrap_or(false);
-                    if fresh {
-                        spawn_rms_task(
-                            self.rt.handle(),
-                            &self.event_tx,
-                            identity.clone(),
-                            audio_track.rtc_track(),
-                        );
-                    }
-                }
             }
         }
-        log::info!("[Sion][voix-native] sourdine={} ({} piste(s) audio)", deafened, touched);
+        log::info!(
+            "[Sion][voix-native] sourdine={} ({} piste(s) audio)",
+            deafened,
+            touched
+        );
         if !deafened {
             ensure_playout_unmuted();
         }
@@ -1841,13 +2291,6 @@ impl LiveKitEngine {
                 }
                 found = true;
                 // Pas de détecteur RMS sur le son du partage (miroir JS :
-                // ce n'est pas de la voix). `attached` purgé par hygiène
-                // (doublon impossible quand l'event arrivera).
-                let sid = publication.sid().to_string();
-                self.attached
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(sid.as_str());
                 publication.set_subscribed(subscribed);
             }
         }
@@ -1855,7 +2298,11 @@ impl LiveKitEngine {
             "[Sion][voix-native] son du partage {} : {}",
             sender,
             if found {
-                if subscribed { "rétabli" } else { "coupé" }
+                if subscribed {
+                    "rétabli"
+                } else {
+                    "coupé"
+                }
             } else {
                 "aucune piste ScreenshareAudio"
             }
@@ -1863,19 +2310,57 @@ impl LiveKitEngine {
         Ok(found)
     }
 
+    pub fn set_screenshare_audio_volume(&self, sender: &str, volume: f32) -> Result<bool, String> {
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            return Err("volume du partage invalide (0 à 1 attendu)".into());
+        }
+        self.share_audio_volume
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(sender.to_string(), volume);
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(room) = room_guard.as_ref() else {
+            return Ok(false);
+        };
+        let mut found = false;
+        for participant in room.remote_participants().values() {
+            if participant.identity().as_str() != sender {
+                continue;
+            }
+            for publication in participant.track_publications().values() {
+                if publication.source() != TrackSource::ScreenshareAudio {
+                    continue;
+                }
+                if let Some(RemoteTrack::Audio(track)) = publication.track() {
+                    found = true;
+                    if !set_remote_audio_volume(&track.rtc_track(), volume) {
+                        return Err("gain du partage refusé par WebRTC".into());
+                    }
+                }
+            }
+        }
+        log::info!(
+            "[Sion][voix-native] volume du partage {} : {:.0}%{}",
+            sender,
+            volume * 100.0,
+            if found { "" } else { " (mémorisé)" }
+        );
+        Ok(found)
+    }
+
     fn spawn_event_pump(
         &self,
         mut events: tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,
+        local_identity: String,
     ) {
         let tx = self.event_tx.clone();
-        let rt_handle = self.rt.handle().clone();
-        // Partagés avec `set_deafened` (désinscription des nouvelles pistes
-        // quand on est sourdine + ré-accrochage RMS au retour).
-        let attached = self.attached.clone();
+        // Partagé avec `set_deafened` : les nouvelles pistes reçues pendant
+        // la sourdine doivent être immédiatement désinscrites.
         let deafened = self.deafened.clone();
         // Son du partage coupé localement : une (ré)inscription SFU ne doit
         // pas le réactiver toute seule (voir `set_deafened`).
         let share_audio_muted = self.share_audio_muted.clone();
+        let share_audio_volume = self.share_audio_volume.clone();
         // Pompe vidéo : handles possédés (la tâche est `'static`, pas de `&self`).
         let video_stops = self.video_stops.clone();
         let video_app = self
@@ -1885,6 +2370,7 @@ impl LiveKitEngine {
             .clone();
         let video_rt = self.rt.handle().clone();
         self.rt.spawn(async move {
+            let mut remote_speakers = std::collections::HashSet::<String>::new();
             while let Some(ev) = events.recv().await {
                 match ev {
                     RoomEvent::Connected { participants_with_tracks } => {
@@ -1960,23 +2446,6 @@ impl LiveKitEngine {
                                 if is_share_audio {
                                     continue;
                                 }
-                                if let Some(RemoteTrack::Audio(audio_track)) =
-                                    publication.track()
-                                {
-                                    let sid = publication.sid().to_string();
-                                    let fresh = attached
-                                        .lock()
-                                        .map(|mut a| a.insert(sid))
-                                        .unwrap_or(false);
-                                    if fresh {
-                                        spawn_rms_task(
-                                            &rt_handle,
-                                            &tx,
-                                            id.clone(),
-                                            audio_track.rtc_track(),
-                                        );
-                                    }
-                                }
                             }
                         }
                     }
@@ -1993,12 +2462,21 @@ impl LiveKitEngine {
                     }
                     RoomEvent::ParticipantDisconnected(p) => {
                         let id = p.identity().to_string();
-                        log::info!("[Sion][voix-native] participant parti {}", id);
+                        remote_speakers.remove(&id);
+                        log::info!(
+                            "[Sion][voix-native] participant parti {} raison={:?}",
+                            id,
+                            p.disconnect_reason()
+                        );
                         stop_remote_video_pump(&video_stops, &id);
                         share_audio_muted
                             .lock()
                             .map(|mut m| m.remove(id.as_str()))
                             .unwrap_or(false);
+                        share_audio_volume
+                            .lock()
+                            .map(|mut volumes| volumes.remove(id.as_str()))
+                            .unwrap_or(None);
                         let _ = tx.send(VoiceEngineEvent::ParticipantLeft { identity: id });
                     }
                     RoomEvent::TrackPublished { publication, participant } => {
@@ -2050,6 +2528,13 @@ impl LiveKitEngine {
                                     sender: sender.clone(),
                                     has_audio: true,
                                 });
+                                let volume = share_audio_volume
+                                    .lock()
+                                    .map(|volumes| volumes.get(sender.as_str()).copied().unwrap_or(1.0))
+                                    .unwrap_or(1.0);
+                                if !set_remote_audio_volume(&audio_track.rtc_track(), volume) {
+                                    log::warn!("[Sion][voix-native] gain du partage refusé {}", sender);
+                                }
                                 // Son du partage coupé localement : on ne le
                                 // réactive pas tout seul (voir commande).
                                 // Dans tous les cas, PAS de resync mute (le
@@ -2072,18 +2557,6 @@ impl LiveKitEngine {
                                 identity: sender.clone(),
                                 muted: publication.is_muted(),
                             });
-                            let fresh = attached
-                                .lock()
-                                .map(|mut a| a.insert(sid))
-                                .unwrap_or(false);
-                            if fresh {
-                                spawn_rms_task(
-                                    &rt_handle,
-                                    &tx,
-                                    sender,
-                                    audio_track.rtc_track(),
-                                );
-                            }
                         }
                     }
                     RoomEvent::TrackSubscribed {
@@ -2200,6 +2673,30 @@ impl LiveKitEngine {
                             muted: false,
                         });
                     }
+                    RoomEvent::ActiveSpeakersChanged { speakers } => {
+                        // Le SFU associe chaque niveau audio au SID du
+                        // participant puis le SDK le résout en identité. On
+                        // filtre notre propre identité : son rond vert reste
+                        // piloté par le niveau APM local, plus réactif.
+                        let next = speakers
+                            .into_iter()
+                            .map(|participant| participant.identity().to_string())
+                            .filter(|identity| identity != &local_identity)
+                            .collect();
+                        for (identity, speaking) in
+                            speaking_set_changes(&mut remote_speakers, next)
+                        {
+                            log::debug!(
+                                "[Sion][voix-native] parole SFU {}={}",
+                                identity,
+                                speaking
+                            );
+                            let _ = tx.send(VoiceEngineEvent::SpeakingChanged {
+                                identity,
+                                speaking,
+                            });
+                        }
+                    }
                     RoomEvent::ConnectionQualityChanged { quality, participant } => {
                         let _ = tx.send(VoiceEngineEvent::QualityChanged {
                             identity: participant.identity().to_string(),
@@ -2277,6 +2774,10 @@ impl VoiceEngine for LiveKitEngine {
         // indéchiffrables — audio distant muet. Le data-channel est chiffré
         // du même coup (`with_dc_encryption` auto), comme côté JS.
         let mut options = RoomOptions::default();
+        // Le SFU peut arrêter les couches simulcast qu'aucun participant ne
+        // demande. Cela économise l'encodage et l'upload du sharer sans changer
+        // le plafond résolution/cadence choisi dans le menu.
+        options.dynacast = true;
         if encrypted {
             options.encryption = Some(E2eeOptions {
                 encryption_type: EncryptionType::Gcm,
@@ -2301,13 +2802,13 @@ impl VoiceEngine for LiveKitEngine {
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.mic_muted
             .store(false, std::sync::atomic::Ordering::Relaxed);
-        self.attached
-            .lock()
-            .map(|mut a| a.clear())
-            .unwrap_or_default();
         self.share_audio_muted
             .lock()
             .map(|mut m| m.clear())
+            .unwrap_or_default();
+        self.share_audio_volume
+            .lock()
+            .map(|mut volumes| volumes.clear())
             .unwrap_or_default();
         // Un partage local ne survit pas au changement de room (la piste
         // meurt avec l'ancienne) : on coupe le thread, sans dépublier
@@ -2320,7 +2821,7 @@ impl VoiceEngine for LiveKitEngine {
         {
             stale.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        self.spawn_event_pump(events);
+        self.spawn_event_pump(events, identity.clone());
         *self.room.lock().unwrap_or_else(|e| e.into_inner()) = Some(room);
         // Stats curseurs indépendantes (voir `ensure_cursor_stats_thread`).
         ensure_cursor_stats_thread();
@@ -2362,11 +2863,20 @@ impl VoiceEngine for LiveKitEngine {
         // local s'arrête quand son canal stop se ferme.
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        *self.local_meter_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.mic_track.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        crate::transcribe::note_native_mic_enabled(false);
+        *self
+            .local_meter_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         *self.watchdog_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.share_audio_muted
             .lock()
             .map(|mut m| m.clear())
+            .unwrap_or_default();
+        self.share_audio_volume
+            .lock()
+            .map(|mut volumes| volumes.clear())
             .unwrap_or_default();
         self.deafened
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -2402,7 +2912,29 @@ mod tests {
         // Mute sans session : unpublish inexistant = no-op OK.
         assert!(engine.set_microphone_enabled(false).is_ok());
         // Data sans session : erreur propre, pas de panique.
-        assert!(engine.publish_data("sion-soundboard", vec![1, 2, 3], true).is_err());
+        assert!(engine
+            .publish_data("sion-soundboard", vec![1, 2, 3], true)
+            .is_err());
+    }
+
+    #[test]
+    fn screenshare_volume_is_validated_and_remembered_without_a_track() {
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        assert_eq!(engine.set_screenshare_audio_volume("peer", 0.35), Ok(false));
+        assert_eq!(
+            engine
+                .share_audio_volume
+                .lock()
+                .unwrap()
+                .get("peer")
+                .copied(),
+            Some(0.35)
+        );
+        for invalid in [f32::NAN, -0.01, 1.01] {
+            assert!(engine
+                .set_screenshare_audio_volume("peer", invalid)
+                .is_err());
+        }
     }
 
     #[test]
@@ -2456,7 +2988,12 @@ mod tests {
         let j420 = encode_jpeg_rgba(64, 64, &rgba, 80, false).expect("420");
         assert_eq!(&j444[0..2], &[0xFF, 0xD8]);
         assert_eq!(&j420[0..2], &[0xFF, 0xD8]);
-        assert!(j420.len() < j444.len(), "420={} 444={}", j420.len(), j444.len());
+        assert!(
+            j420.len() < j444.len(),
+            "420={} 444={}",
+            j420.len(),
+            j444.len()
+        );
     }
 
     /// Garde-fou du swap RGBA↔ABGR / BGRA↔ARGB du binding (écran rouge en
@@ -2552,7 +3089,16 @@ mod tests {
         let (sy, su, sv) = buf.strides();
         let (dy, du, dv) = buf.data_mut();
         livekit::webrtc::native::yuv_helper::argb_to_i420(
-            &bgra_green, 8, dy, sy, du, su, dv, sv, 2, 2,
+            &bgra_green,
+            8,
+            dy,
+            sy,
+            du,
+            su,
+            dv,
+            sv,
+            2,
+            2,
         );
         let (dy, du, dv) = buf.data();
         eprintln!("vert-via-argb: Y={:?} U={:?} V={:?}", dy, du, dv);
@@ -2564,52 +3110,124 @@ mod tests {
     #[test]
     fn screenshare_publish_options_marque_la_source() {
         // Sans source=Screenshare, les pairs trient la piste en caméra.
-        let opts = screenshare_publish_options();
+        let opts = screenshare_publish_options(2_500_000, 15, "vp8");
         assert_eq!(opts.source, TrackSource::Screenshare);
+        let encoding = opts.video_encoding.expect("encodage explicite");
+        assert_eq!(encoding.max_bitrate, 2_500_000);
+        assert_eq!(encoding.max_framerate, 15.0);
+        assert_eq!(opts.video_codec, VideoCodec::VP8);
+        // Défaut (nom inconnu) = VP9, le plus net.
+        assert_eq!(
+            screenshare_publish_options(1, 1, "autre").video_codec,
+            VideoCodec::VP9
+        );
+        // H.264 = encodeur matériel VAAPI préféré.
+        let h264 = screenshare_publish_options(1, 1, "h264");
+        assert_eq!(h264.video_codec, VideoCodec::H264);
+        assert_eq!(h264.video_encoder, VideoEncoderBackend::Vaapi);
     }
 
     #[test]
-    fn is_screenshare_video_filtre_camera_et_audio() {        use livekit::track::{TrackKind, TrackSource};
-        assert!(is_screenshare_video(TrackKind::Video, TrackSource::Screenshare));
+    fn screenshare_config_respecte_menu_et_ratio() {
+        let hd = screenshare_config("1080p", 30).unwrap();
+        assert_eq!(hd.max_width, 1920);
+        assert_eq!(hd.max_height, 1080);
+        assert_eq!(hd.max_bitrate, 5_000_000);
+        assert_eq!(fit_screenshare_dimensions(2560, 1072, hd), (1920, 804));
+
+        let qhd = screenshare_config("1440p", 60).unwrap();
+        assert_eq!(fit_screenshare_dimensions(2560, 1440, qhd), (2560, 1440));
+        assert_eq!(qhd.max_bitrate, 14_000_000);
+        assert!(screenshare_config("4k", 30).is_err());
+        assert!(screenshare_config("1080p", 24).is_err());
+    }
+
+    #[test]
+    fn is_screenshare_video_filtre_camera_et_audio() {
+        use livekit::track::{TrackKind, TrackSource};
+        assert!(is_screenshare_video(
+            TrackKind::Video,
+            TrackSource::Screenshare
+        ));
         // Caméra distante : ignorée en natif (MVP).
         assert!(!is_screenshare_video(TrackKind::Video, TrackSource::Camera));
         // Audio (micro comme partage) : jamais de la vidéo.
-        assert!(!is_screenshare_video(TrackKind::Audio, TrackSource::Microphone));
-        assert!(!is_screenshare_video(TrackKind::Audio, TrackSource::ScreenshareAudio));
+        assert!(!is_screenshare_video(
+            TrackKind::Audio,
+            TrackSource::Microphone
+        ));
+        assert!(!is_screenshare_video(
+            TrackKind::Audio,
+            TrackSource::ScreenshareAudio
+        ));
     }
 
     #[test]
     fn adapt_budget_degrade_qualite_avant_cadence() {
-        let start = VideoBudget { quality: 86, tick_step: 0 };
-        // Sous la cible (~4 Mo/s sur 2 s) : qualité remonte, cadence intacte.
+        let start = VideoBudget {
+            quality: 86,
+            tick_step: 0,
+        };
+        // Sous la cible : qualité remonte, cadence intacte.
         assert_eq!(
             adapt_budget(&start, 100_000, 2),
-            VideoBudget { quality: 88, tick_step: 0 }
+            VideoBudget {
+                quality: 88,
+                tick_step: 0
+            }
         );
         // Au-dessus : qualité baisse vite, cadence intacte.
         assert_eq!(
-            adapt_budget(&start, 9_000_000, 2),
-            VideoBudget { quality: 80, tick_step: 0 }
+            adapt_budget(&start, VIDEO_TARGET_BPS * 2 + 1, 2),
+            VideoBudget {
+                quality: 80,
+                tick_step: 0
+            }
         );
         // Coincé au plancher qualité + toujours au-dessus : cadence baisse.
-        let floor = VideoBudget { quality: VIDEO_Q_MIN, tick_step: 0 };
+        let floor = VideoBudget {
+            quality: VIDEO_Q_MIN,
+            tick_step: 0,
+        };
         assert_eq!(
-            adapt_budget(&floor, 9_000_000, 2),
-            VideoBudget { quality: VIDEO_Q_MIN, tick_step: 1 }
+            adapt_budget(&floor, VIDEO_TARGET_BPS * 2 + 1, 2),
+            VideoBudget {
+                quality: VIDEO_Q_MIN,
+                tick_step: 1
+            }
         );
         // Dernier palier : on reste (pas de panique, pas de recul).
-        let last = VideoBudget { quality: VIDEO_Q_MIN, tick_step: VIDEO_TICKS_MS.len() - 1 };
-        assert_eq!(adapt_budget(&last, 9_000_000, 2), last);
+        let last = VideoBudget {
+            quality: VIDEO_Q_MIN,
+            tick_step: VIDEO_TICKS_MS.len() - 1,
+        };
+        assert_eq!(adapt_budget(&last, VIDEO_TARGET_BPS * 2 + 1, 2), last);
         // Budget redevenu sain : cadence remonte AVANT la qualité.
-        let slow = VideoBudget { quality: VIDEO_Q_MIN, tick_step: 1 };
+        let slow = VideoBudget {
+            quality: VIDEO_Q_MIN,
+            tick_step: 1,
+        };
         assert_eq!(
             adapt_budget(&slow, 100_000, 2),
-            VideoBudget { quality: VIDEO_Q_MIN, tick_step: 0 }
+            VideoBudget {
+                quality: VIDEO_Q_MIN,
+                tick_step: 0
+            }
         );
         // Bornes qualité.
         assert_eq!(
-            adapt_budget(&VideoBudget { quality: 89, tick_step: 0 }, 0, 2),
-            VideoBudget { quality: 90, tick_step: 0 }
+            adapt_budget(
+                &VideoBudget {
+                    quality: 89,
+                    tick_step: 0
+                },
+                0,
+                2
+            ),
+            VideoBudget {
+                quality: 90,
+                tick_step: 0
+            }
         );
         // Fenêtre vide : pas de division par zéro, inchangé.
         assert_eq!(adapt_budget(&start, 0, 0), start);
@@ -2740,8 +3358,9 @@ mod tests {
     fn mic_options_advertise_microphone_source() {
         // Sans source=Microphone, les pairs JS ne trouvent pas la publication
         // (isMicrophoneEnabled) et nous affichent mutés alors que l'audio passe.
-        let opts = mic_publish_options();
+        let opts = mic_publish_options(48_000);
         assert_eq!(opts.source, TrackSource::Microphone);
+        assert_eq!(opts.audio_encoding.unwrap().max_bitrate, 48_000);
         // Parité publishDefaults JS.
         assert!(!opts.dtx);
         assert!(!opts.red);
@@ -2749,10 +3368,30 @@ mod tests {
 
     #[test]
     fn quality_str_covers_sdk_values() {
-        assert_eq!(connection_quality_str(&ConnectionQuality::Excellent), "excellent");
+        assert_eq!(
+            connection_quality_str(&ConnectionQuality::Excellent),
+            "excellent"
+        );
         assert_eq!(connection_quality_str(&ConnectionQuality::Good), "good");
         assert_eq!(connection_quality_str(&ConnectionQuality::Poor), "poor");
         assert_eq!(connection_quality_str(&ConnectionQuality::Lost), "lost");
+    }
+
+    #[test]
+    fn speaker_set_changes_conserve_les_identites_lors_d_un_swap() {
+        let mut previous = std::collections::HashSet::from(["@picsou:srv:DEV".to_string()]);
+        let next = std::collections::HashSet::from(["@narkow:srv:DEV".to_string()]);
+        assert_eq!(
+            speaking_set_changes(&mut previous, next),
+            vec![
+                ("@narkow:srv:DEV".to_string(), true),
+                ("@picsou:srv:DEV".to_string(), false),
+            ]
+        );
+        assert_eq!(
+            previous,
+            std::collections::HashSet::from(["@narkow:srv:DEV".to_string()])
+        );
     }
 
     #[test]

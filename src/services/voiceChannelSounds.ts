@@ -8,11 +8,11 @@
 // present for a given cue, a soft synthesized fallback plays so the feature
 // isn't silent.
 //
-// "Quit vs timeout" can't be read from LiveKit's ParticipantDisconnected (the
-// SDK discards the server's DisconnectReason). We infer it: a peer whose
-// ConnectionQuality fell to `lost` right before disconnecting timed out; a
-// clean leave never passes through `lost`. livekitService feeds us that signal
-// via noteConnectionLost(); onParticipantLeft() reads + clears it.
+// "Quit vs timeout" can't be read from the engine's participant-disconnected
+// event (le SDK Rust ne remonte pas la raison). On l'infère : un pair dont la
+// qualité est tombée à `lost` juste avant de disparaître a subi un timeout ;
+// un départ propre ne passe jamais par `lost`. `useLiveKit` alimente ce signal
+// via noteConnectionLost(); onParticipantLeft() lit puis efface.
 
 import { useSettingsStore, type VoiceSoundCfg } from "../stores/useSettingsStore";
 import { useAppStore } from "../stores/useAppStore";
@@ -46,7 +46,7 @@ function overrideFor(cue: Cue): VoiceSoundCfg | null {
 
 // ---- custom cue (picked file, trimmed + gain) ----------------------------
 
-// Custom files live outside the bundle; CEF can't `new Audio()` a raw file://
+// Custom files live outside the bundle; the webview can't read a raw file://
 // path, so Rust reads the bytes (read_file_b64) and we decode + cache an
 // AudioBuffer per path. Playback uses Web Audio so we can play just the
 // trimmed [start,end] region at the configured gain.
@@ -89,15 +89,34 @@ async function playCustom(cfg: VoiceSoundCfg): Promise<boolean> {
 
 // ---- bundled default file playback ---------------------------------------
 
-function playFile(url: string): boolean {
+/** Références des éléments en cours : sans ça, WebKit peut les GC avant la
+ *  fin du son (coupures intermittentes). */
+const playingFiles = new Set<HTMLAudioElement>();
+
+async function playFile(url: string): Promise<boolean> {
   try {
     const a = new Audio(url);
     a.volume = FILE_VOLUME;
-    void a.play().catch(() => {});
+    playingFiles.add(a);
+    const release = () => playingFiles.delete(a);
+    a.addEventListener("ended", release, { once: true });
+    a.addEventListener("error", release, { once: true });
+    // Filet de sécurité : si ni `ended` ni `error` n'arrive (lecture bloquée),
+    // la référence serait conservée pour toujours.
+    setTimeout(release, 15_000);
+    await a.play();
     return true;
   } catch {
     return false;
   }
+}
+
+/** Journalise l'exécution des cues côté Rust (visible dans les logs Tauri). */
+async function logCue(message: string) {
+  try {
+    const { info } = await import("@tauri-apps/plugin-log");
+    await info(`[cue] ${message}`);
+  } catch { /* plugin absent */ }
 }
 
 // ---- synthesized fallback ------------------------------------------------
@@ -113,9 +132,14 @@ function audioCtx(): AudioContext | null {
 }
 
 interface Note { freq: number; start: number; dur: number }
-function playSequence(notes: Note[], wave: OscillatorType, peak: number) {
+async function playSequence(notes: Note[], wave: OscillatorType, peak: number) {
   const ac = audioCtx();
   if (!ac) return;
+  // On attend la reprise du contexte avant de programmer : des oscillateurs
+  // planifiés sur un contexte encore suspendu peuvent être perdus.
+  if (ac.state !== "running") {
+    try { await ac.resume(); } catch { /* geste requis */ }
+  }
   const t0 = ac.currentTime + 0.02;
   for (const n of notes) {
     const osc = ac.createOscillator();
@@ -182,7 +206,18 @@ const ACTION_FEEDBACK: ReadonlySet<Cue> = new Set<Cue>(["mute", "unmute", "deafe
 
 function playDefault(cue: Cue) {
   const url = fileFor(cue);
-  if (url && playFile(url)) return;
+  if (url) {
+    // `HTMLAudioElement.play()` peut échouer (fichier absent du bundle,
+    // décodage impossible, contexte occupé) : on retombe sur le timbre
+    // synthétisé, joué par le contexte Web Audio partagé. Sans ce repli,
+    // l'échec était avalé et la sourdine/unsourdine restait muette.
+    void playFile(url).then((ok) => {
+      logCue(`${cue}: fichier ${ok ? "joué" : "refusé → repli synthé"}`);
+      if (!ok) SYNTH[cue]();
+    });
+    return;
+  }
+  logCue(`${cue}: aucun fichier, synthé`);
   SYNTH[cue]();
 }
 
@@ -195,7 +230,10 @@ function play(cue: Cue) {
   if (!ACTION_FEEDBACK.has(cue) && s.muteSoundsWhenDeafened && useAppStore.getState().isDeafened) return;
   const custom = overrideFor(cue);
   if (custom) {
-    void playCustom(custom).then((ok) => { if (!ok) playDefault(cue); }); // custom failed → fall back
+    void playCustom(custom).then((ok) => {
+      logCue(`${cue}: personnalisé ${ok ? "joué" : "échec → défaut"}`);
+      if (!ok) playDefault(cue); // custom failed → fall back
+    });
     return;
   }
   playDefault(cue);

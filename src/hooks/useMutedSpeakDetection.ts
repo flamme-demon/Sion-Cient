@@ -1,6 +1,11 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "../stores/useAppStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
+import {
+  getVoiceNativeAudioLevel,
+  startVoiceNativeMicrophoneTest,
+  stopVoiceNativeAudioTest,
+} from "../services/voiceNativeService";
 
 const ALERT_COOLDOWN_MS = 3000;
 
@@ -35,6 +40,7 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const mutedSpeakAlert = useSettingsStore((s) => s.mutedSpeakAlert);
   const micThreshold = useSettingsStore((s) => s.micThreshold);
+  const nativeAudioInputDevice = useSettingsStore((s) => s.nativeAudioInputDevice);
 
   const lastAlertRef = useRef(0);
   const onSpeakRef = useRef(onSpeakWhileMuted);
@@ -61,48 +67,37 @@ export function useMutedSpeakDetection(onSpeakWhileMuted: () => void) {
     // they don't need an alert that they're muted because they already know.
     if (!isMuted || isDeafened || !connectedVoice || !mutedSpeakAlert) return;
 
-    let audioCtx: AudioContext | null = null;
-    let stream: MediaStream | null = null;
-    let animId: number | null = null;
-
-    async function start() {
+    // Le moteur Rust dispose déjà du RMS issu de son APM. Maintenir l'ADM en
+    // capture pendant le mute permet l'alerte sans ouvrir un getUserMedia
+    // concurrente et sans republier la moindre piste LiveKit.
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let previousSequence = -1;
+    const sample = async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioCtx = new AudioContext();
-        const source = audioCtx.createMediaStreamSource(stream);
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
-        source.connect(analyser);
-
-        const dataArray = new Float32Array(analyser.fftSize);
-
-        function check() {
-          analyser.getFloatTimeDomainData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i] * dataArray[i];
-          }
-          const rms = Math.sqrt(sum / dataArray.length);
-          if (rms > micThresholdRef.current) {
-            triggerAlert();
-          }
-          animId = requestAnimationFrame(check);
+        const level = await getVoiceNativeAudioLevel();
+        if (!stopped && level.sequence !== previousSequence && level.rms > micThresholdRef.current) {
+          triggerAlert();
         }
-        check();
+        previousSequence = level.sequence;
       } catch (err) {
-        console.error("[Sion] Muted speak detection failed:", err);
+        if (!stopped) console.error("[Sion] Native muted speak detection failed:", err);
+      } finally {
+        if (!stopped) timer = setTimeout(sample, 50);
       }
-    }
-
-    start();
-
+    };
+    void startVoiceNativeMicrophoneTest(nativeAudioInputDevice, "muted-speak-alert")
+      .then(sample)
+      .catch((err) => {
+        if (!stopped) console.error("[Sion] Native muted speak capture failed:", err);
+      });
     return () => {
-      if (animId !== null) cancelAnimationFrame(animId);
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-      if (audioCtx) audioCtx.close();
+      stopped = true;
+      clearTimeout(timer);
+      void stopVoiceNativeAudioTest("muted-speak-alert");
     };
     // `micThreshold` intentionally omitted — the ref above carries live
     // updates without re-running the whole capture.
      
-  }, [isMuted, isDeafened, connectedVoice, mutedSpeakAlert, triggerAlert]);
+  }, [isMuted, isDeafened, connectedVoice, mutedSpeakAlert, nativeAudioInputDevice, triggerAlert]);
 }

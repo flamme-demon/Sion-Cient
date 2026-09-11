@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSettingsStore } from "../../stores/useSettingsStore";
+import { useSettingsStore, type ShareVideoCodec } from "../../stores/useSettingsStore";
 
 interface Props {
   onConfirm: () => void;
@@ -18,10 +18,9 @@ interface MonitorInfo {
   position: { x: number; y: number };
 }
 
-// Windows/CEF can't use the Chrome desktop source picker (it crashes), so we
-// list the monitors ourselves and capture the chosen one via
-// `chromeMediaSourceId: "screen:N:0"`. Linux uses the xdg portal picker and
-// macOS the native getDisplayMedia picker — the selector is hidden there.
+// Windows : on liste les moniteurs nous-mêmes et on transmet l'index choisi
+// au captureur natif (`screen:N:0`). Linux utilise le portail xdg et macOS le
+// picker natif — le sélecteur est masqué sur ces plateformes.
 const isWindowsTauri =
   typeof navigator !== "undefined" &&
   navigator.userAgent.includes("Windows") &&
@@ -43,16 +42,30 @@ const FRAMERATES: { value: Framerate; label: string }[] = [
 
 export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }: Props) {
   const { t } = useTranslation();
+  const qualityMode = useSettingsStore((s) => s.screenShareQualityMode);
   const resolution = useSettingsStore((s) => s.screenShareResolution);
   const framerate = useSettingsStore((s) => s.screenShareFramerate);
   const audio = useSettingsStore((s) => s.screenShareAudio);
   const cursorOverlay = useSettingsStore((s) => s.screenShareCursorOverlay);
+  const codec = useSettingsStore((s) => s.screenShareCodec);
+  const setQualityMode = useSettingsStore((s) => s.setScreenShareQualityMode);
   const setResolution = useSettingsStore((s) => s.setScreenShareResolution);
   const setFramerate = useSettingsStore((s) => s.setScreenShareFramerate);
   const setAudio = useSettingsStore((s) => s.setScreenShareAudio);
   const setCursorOverlay = useSettingsStore((s) => s.setScreenShareCursorOverlay);
+  const setCodec = useSettingsStore((s) => s.setScreenShareCodec);
   const sourceId = useSettingsStore((s) => s.screenShareSourceId) ?? "screen:0:0";
   const setSourceId = useSettingsStore((s) => s.setScreenShareSourceId);
+  const [advancedOpen, setAdvancedOpen] = useState(qualityMode === "custom");
+
+  const chooseResolution = (value: Resolution) => {
+    setResolution(value);
+    setQualityMode("custom");
+  };
+  const chooseFramerate = (value: Framerate) => {
+    setFramerate(value);
+    setQualityMode("custom");
+  };
 
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   useEffect(() => {
@@ -143,57 +156,121 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
           </div>
         )}
 
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6 }}>
-            {t("screenShare.resolution")}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          padding: '10px 12px', borderRadius: 12,
+          background: 'var(--color-surface-container-high)',
+        }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)' }}>
+              {t("screenShare.autoQuality", { defaultValue: "Qualité automatique" })}
+            </div>
+            <div style={{ fontSize: 11, lineHeight: 1.4, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
+              {t("screenShare.autoQualityDesc", { defaultValue: "Jusqu’à 1440p et 30 i/s, avec débit adaptatif." })}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {RESOLUTIONS.map((r) => (
-              <button
-                key={r.value}
-                onClick={() => setResolution(r.value)}
-                style={{
-                  flex: 1,
-                  padding: '8px 0',
-                  borderRadius: 10,
-                  border: 'none',
-                  background: resolution === r.value ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
-                  color: resolution === r.value ? 'var(--color-on-primary)' : 'var(--color-on-surface)',
-                  fontSize: 13,
-                  fontFamily: 'inherit',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >{r.label}</button>
-            ))}
-          </div>
+          <button
+            type="button"
+            aria-pressed={qualityMode === "auto"}
+            aria-label={t("screenShare.autoQuality", { defaultValue: "Qualité automatique" })}
+            onClick={() => {
+              const next = qualityMode === "auto" ? "custom" : "auto";
+              setQualityMode(next);
+              if (next === "custom") setAdvancedOpen(true);
+            }}
+            style={{
+              width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+              position: 'relative', transition: 'background 200ms', flexShrink: 0,
+              background: qualityMode === "auto" ? 'var(--color-primary)' : 'var(--color-surface-container-highest)',
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 3, left: qualityMode === "auto" ? 23 : 3,
+              width: 18, height: 18, borderRadius: '50%', transition: 'left 200ms',
+              background: qualityMode === "auto" ? 'var(--color-on-primary)' : 'var(--color-on-surface-variant)',
+            }} />
+          </button>
         </div>
 
         <div>
           <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6 }}>
-            {t("screenShare.framerate")}
+            {t("screenShare.codec", { defaultValue: "Encodage vidéo" })}
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {FRAMERATES.map((f) => (
-              <button
-                key={f.value}
-                onClick={() => setFramerate(f.value)}
-                style={{
-                  flex: 1,
-                  padding: '8px 0',
-                  borderRadius: 10,
-                  border: 'none',
-                  background: framerate === f.value ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
-                  color: framerate === f.value ? 'var(--color-on-primary)' : 'var(--color-on-surface)',
-                  fontSize: 13,
-                  fontFamily: 'inherit',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-              >{f.label}</button>
-            ))}
+          <select
+            value={codec}
+            onChange={(e) => setCodec(e.target.value as ShareVideoCodec)}
+            style={{
+              width: '100%', padding: '8px 12px', borderRadius: 12,
+              border: '2px solid var(--color-outline-variant)',
+              background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)',
+              fontSize: 12, fontFamily: 'inherit', outline: 'none', cursor: 'pointer',
+            }}
+          >
+            <option value="vp9">{t("screenShare.codecVp9", { defaultValue: "VP9 — le plus net (recommandé)" })}</option>
+            <option value="h264">{t("screenShare.codecH264", { defaultValue: "H.264 — léger, encodage matériel" })}</option>
+            <option value="vp8">{t("screenShare.codecVp8", { defaultValue: "VP8 — compatibilité maximale" })}</option>
+          </select>
+          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
+            {codec === "vp9"
+              ? t("screenShare.codecHintVp9", { defaultValue: "Texte/UI plus nets à débit égal. Un peu plus de CPU." })
+              : codec === "h264"
+                ? t("screenShare.codecHintH264", { defaultValue: "Encodé par le GPU (VAAPI) : très peu de CPU, un peu moins net." })
+                : t("screenShare.codecHintVp8", { defaultValue: "Ancien codec logiciel, lu partout, qualité inférieure." })}
           </div>
         </div>
+
+        <button
+          type="button"
+          aria-expanded={advancedOpen}
+          onClick={() => setAdvancedOpen((open) => !open)}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            width: '100%', padding: '4px 2px', border: 'none', background: 'transparent',
+            color: 'var(--color-on-surface-variant)', cursor: 'pointer',
+            fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+          }}
+        >
+          <span>{t("screenShare.advanced", { defaultValue: "Réglages avancés" })}</span>
+          <span aria-hidden="true" style={{ transform: advancedOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>⌄</span>
+        </button>
+
+        {advancedOpen && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 2px 2px' }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6 }}>
+                {t("screenShare.resolution")}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {RESOLUTIONS.map((r) => (
+                  <button key={r.value} onClick={() => chooseResolution(r.value)} style={{
+                    flex: 1, padding: '8px 0', borderRadius: 10, border: 'none',
+                    background: qualityMode === "custom" && resolution === r.value ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                    color: qualityMode === "custom" && resolution === r.value ? 'var(--color-on-primary)' : 'var(--color-on-surface)',
+                    fontSize: 13, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer',
+                  }}>{r.label}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginBottom: 6 }}>
+                {t("screenShare.framerate")}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {FRAMERATES.map((f) => (
+                  <button key={f.value} onClick={() => chooseFramerate(f.value)} style={{
+                    flex: 1, padding: '8px 0', borderRadius: 10, border: 'none',
+                    background: qualityMode === "custom" && framerate === f.value ? 'var(--color-primary)' : 'var(--color-surface-container-high)',
+                    color: qualityMode === "custom" && framerate === f.value ? 'var(--color-on-primary)' : 'var(--color-on-surface)',
+                    fontSize: 13, fontFamily: 'inherit', fontWeight: 600, cursor: 'pointer',
+                  }}>{f.label}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--color-outline)', lineHeight: 1.4 }}>
+              {t("screenShare.advancedHint", { defaultValue: "Choisir une valeur active le mode personnalisé." })}
+            </div>
+          </div>
+        )}
 
         <label style={{
           display: 'flex', alignItems: 'center', gap: 8,
@@ -235,7 +312,7 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
         </label>
 
         <div style={{ fontSize: 11, color: 'var(--color-outline)', lineHeight: 1.4 }}>
-          {t("screenShare.hint")}
+          {qualityMode === "auto" ? t("screenShare.autoHint", { defaultValue: "Automatique convient aux usages courants. Utilise 60 i/s seulement pour les contenus très animés." }) : t("screenShare.hint")}
         </div>
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>

@@ -187,11 +187,11 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     return () => { if (transcodedUrl) URL.revokeObjectURL(transcodedUrl); };
   }, [transcodedUrl]);
 
-  // Proactive transcode: on desktop CEF the bundled Chromium has no H.264, so
-  // mp4/non-WebM video never plays natively (the element shows a frozen player
-  // and fires neither `onError` nor a usable `canplay`). Rather than rely on
-  // unreliable events, transcode any non-WebM video to WebM up front. WebM
-  // (VP9/Opus) plays natively, so it's left to the <video> + `onError`.
+  // Proactive transcode: le support des codecs dépend de la webview système
+  // (WebKitGTK s'appuie sur GStreamer, WebView2 sur Chromium). Un mp4 non
+  // supporté affiche un lecteur figé sans `onError` exploitable, donc on
+  // transcode prudemment tout non-WebM en WebM. WebM (VP9/Opus) est laissé au
+  // <video> + `onError`.
   const isTauriDesktop = typeof window !== "undefined"
     && !!window.__TAURI_INTERNALS__
     && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);

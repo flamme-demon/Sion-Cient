@@ -15,18 +15,17 @@
  * into the outgoing video — so every viewer sees every other viewer's
  * pointer, which is the "real" mouse-sharing UX we want.
  *
- * Implementation: the overlay is NOT a Tauri WebviewWindow. The Tauri-CEF
- * fork (rev a9525cf) doesn't propagate `transparent: true` to CEF window
- * creation on Linux, which used to leave us with an opaque black square. We
- * now paint the overlay ourselves in Rust with winit + tiny-skia + softbuffer
+ * Implementation: the overlay is NOT a Tauri WebviewWindow. Une webview
+ * transparente click-through est fragile selon le runtime (fenêtre noire
+ * opaque sur certaines plateformes). On peint donc l'overlay en Rust avec
+ * winit + tiny-skia + softbuffer
  * — transparent ARGB surface, cursor arrows + click ripples drawn per frame,
  * click-through via `window.set_cursor_hittest(false)`. See
  * `src-tauri/src/cursor_overlay.rs`.
  *
- * Known caveat: the sharer's own viewers see a *second*, slightly-delayed
- * cursor echoed back in their video stream on top of the low-latency
- * client-side overlay they already have in `ScreenShareView`. We accept this
- * visual doubling for the MVP. A proper fix requires platform-specific
+ * Known caveat: a viewer sees their physical pointer immediately and its
+ * coloured representation later, after the sharer's capture/encode/network
+ * round trip. A proper fix requires platform-specific
  * exclude-from-capture APIs (`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`
  * on Windows; no straightforward equivalent on Linux/PipeWire).
  */
@@ -90,75 +89,4 @@ export async function closeCursorOverlay(): Promise<void> {
   } catch (err) {
     console.warn("[Sion][CursorOverlay] close failed:", err);
   }
-}
-
-export interface CursorOverlayPayload {
-  identity: string;
-  name: string;
-  x: number; // normalised [0, 1]
-  y: number; // normalised [0, 1]
-  expiresAt: number; // epoch ms, for TTL sweep inside the overlay
-}
-
-// Diagnostic counter for cursor pushes — logs first push and every 200th.
-// Lets us verify in the log that the JS→Rust path is firing when a viewer
-// hovers the share. Remove once the feature is confirmed working.
-let pushCount = 0;
-
-/** Push or update a cursor in the overlay. No-op when the overlay is closed. */
-export async function pushCursorToOverlay(data: CursorOverlayPayload): Promise<void> {
-  if (!isOpen) return;
-  pushCount++;
-  if (pushCount === 1 || pushCount % 200 === 0) {
-    console.log(`[Sion][CursorOverlay] push #${pushCount} id=${data.identity} x=${data.x.toFixed(3)} y=${data.y.toFixed(3)}`);
-  }
-  try {
-    await invoke("cursor_overlay_push", {
-      identity: data.identity,
-      name: data.name,
-      x: data.x,
-      y: data.y,
-      expiresAtMs: data.expiresAt,
-    });
-  } catch (err) {
-    console.warn("[Sion][CursorOverlay] push invoke failed:", err);
-  }
-}
-
-/** Remove a cursor immediately (peer sent expire or disconnected). */
-export async function clearCursorFromOverlay(identity: string): Promise<void> {
-  if (!isOpen) return;
-  try {
-    await invoke("cursor_overlay_clear", { identity });
-  } catch { /* overlay may be closing */ }
-}
-
-export interface CursorClickPayload {
-  id: string;
-  identity: string;
-  name: string;
-  x: number;
-  y: number;
-  expiresAt: number;
-}
-
-/** Fire a click ripple in the overlay. One-shot — the backend animates it
- *  and drops it after the TTL (no need to clear explicitly). */
-export async function pushCursorClickToOverlay(data: CursorClickPayload): Promise<void> {
-  if (!isOpen) return;
-  try {
-    await invoke("cursor_overlay_push_click", {
-      id: data.id,
-      identity: data.identity,
-      x: data.x,
-      y: data.y,
-      expiresAtMs: data.expiresAt,
-    });
-  } catch { /* overlay may be closing */ }
-}
-
-/** True when the overlay is currently open — used by livekitService to skip
- *  the per-event IPC cost if we're not sharing. */
-export function isCursorOverlayOpen(): boolean {
-  return isOpen;
 }

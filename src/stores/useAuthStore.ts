@@ -38,7 +38,7 @@ interface AuthState {
 
 function saveCredentials(credentials: AuthCredentials) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
-  // Mirror outside the CEF profile so a Chromium-upgrade localStorage reset
+  // Mirror outside the webview profile so a localStorage purge
   // doesn't force a re-login. Fire-and-forget; no-op on web.
   void mirrorSessionToAppData();
 }

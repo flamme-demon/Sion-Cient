@@ -4,7 +4,7 @@
 #   .\build-scripts\build-windows.ps1
 #
 # Ce script installe les dependances manquantes et build l'application.
-# Les libs CEF sont incluses dans les installeurs MSI/NSIS.
+# Les DLL natives (ggml/transcribe) sont incluses dans les installeurs MSI/NSIS.
 
 $ErrorActionPreference = "Stop"
 
@@ -17,7 +17,7 @@ Set-Location $ProjectDir
 $tauriDir = "$ProjectDir\src-tauri"
 $releaseDir = "$tauriDir\target\release"
 $tauriConf = "$tauriDir\tauri.conf.json"
-$cefDist = "$tauriDir\cef-dist"
+$nativeDist = "$tauriDir\native-dist"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -30,50 +30,10 @@ function Test-Command($cmd) {
     return [bool](Get-Command $cmd -ErrorAction SilentlyContinue)
 }
 
-# List of CEF files to bundle
-$cefFiles = @(
-    "libcef.dll","chrome_elf.dll","d3dcompiler_47.dll",
-    "libEGL.dll","libGLESv2.dll","vulkan-1.dll","vk_swiftshader.dll",
-    "chrome_100_percent.pak","chrome_200_percent.pak","resources.pak",
-    "icudtl.dat","v8_context_snapshot.bin","snapshot_blob.bin","vk_swiftshader_icd.json"
-)
-
-function Find-CefDir {
-    $cefDir = Get-ChildItem -Path "$releaseDir\build" -Recurse -Directory -Filter "cef_win*" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $cefDir) {
-        $cefDir = Get-ChildItem -Path "$releaseDir\build" -Recurse -Directory -Filter "cef_windows*" -ErrorAction SilentlyContinue | Select-Object -First 1
-    }
-    return $cefDir
-}
-
-function Stage-CefLibs($cefDir) {
-    # Clean previous staging
-    if (Test-Path $cefDist) { Remove-Item -Recurse -Force $cefDist }
-    New-Item -ItemType Directory -Force -Path $cefDist | Out-Null
-
-    $count = 0
-    foreach ($f in $cefFiles) {
-        $src = Join-Path $cefDir.FullName $f
-        if (Test-Path $src) {
-            Copy-Item $src "$cefDist\"
-            $count++
-        }
-    }
-
-    # Locales subdirectory
-    $localesDir = Join-Path $cefDir.FullName "locales"
-    if (Test-Path $localesDir) {
-        New-Item -ItemType Directory -Force -Path "$cefDist\locales" | Out-Null
-        Copy-Item "$localesDir\*" "$cefDist\locales\" -Force
-    }
-
-    Write-Host "  $count fichiers CEF copies dans cef-dist/" -ForegroundColor Green
-}
-
 # --- Check path length ---
 if ($ProjectDir.Length -gt 30) {
     Write-Host "  ATTENTION: Le chemin actuel est long ($($ProjectDir.Length) caracteres)." -ForegroundColor Yellow
-    Write-Host "  CEF necessite des chemins courts sur Windows." -ForegroundColor Yellow
+    Write-Host "  Les dependances natives (webrtc/ggml) peuvent echouer avec des chemins longs." -ForegroundColor Yellow
     Write-Host "  Recommande: extraire a C:\sion-build\" -ForegroundColor Yellow
     Write-Host ""
     $continue = Read-Host "  Continuer quand meme ? (o/N)"
@@ -199,7 +159,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- 8. Build Rust (compilation seule, pas de bundling) ---
-Write-Host "[8/10] Compilation Rust + CEF..." -ForegroundColor Yellow
+Write-Host "[8/10] Compilation Rust + voix native..." -ForegroundColor Yellow
 Write-Host "  Cela peut prendre plusieurs minutes a la premiere compilation..." -ForegroundColor Gray
 Write-Host ""
 
@@ -211,16 +171,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 Set-Location $ProjectDir
 
-# --- 9. Stage CEF libs for bundler ---
-Write-Host "[9/10] Staging des libs CEF pour le bundler..." -ForegroundColor Yellow
-
-$cefDir = Find-CefDir
-if ($cefDir) {
-    Stage-CefLibs $cefDir
-} else {
-    Write-Host "  ATTENTION: Libs CEF non trouvees dans target/release/build/" -ForegroundColor Yellow
-    Write-Host "  Les installeurs seront generes sans les libs CEF." -ForegroundColor Yellow
-}
+# --- 9. Prepare staging dir for native DLLs ---
+Write-Host "[9/10] Preparation du staging des DLL natives..." -ForegroundColor Yellow
+if (Test-Path $nativeDist) { Remove-Item -Recurse -Force $nativeDist }
+New-Item -ItemType Directory -Force -Path $nativeDist | Out-Null
 
 # --- 10. Bundle (MSI + NSIS) — re-utilise le cache cargo ---
 Write-Host "[10/10] Generation des installeurs (MSI + NSIS)..." -ForegroundColor Yellow
@@ -231,12 +185,12 @@ Write-Host "[10/10] Generation des installeurs (MSI + NSIS)..." -ForegroundColor
 # (AVX-512 sur les runners) et planterait en SIGILL ailleurs. build.rs les depose
 # a cote du binaire ; il faut encore les faire entrer dans l'installeur, sinon
 # l'application ne demarre pas du tout ("transcribe.dll est introuvable").
-# On les stage dans cef-dist pour que le glob cef-dist/*.dll ci-dessous les
-# embarque sans carte de ressources supplementaire.
+# On les stage dans native-dist pour que le glob native-dist/*.dll ci-dessous
+# les embarque sans carte de ressources supplementaire.
 $staged = @()
 foreach ($pattern in @("ggml*.dll", "libggml*.dll", "transcribe*.dll", "libtranscribe*.dll")) {
     Get-ChildItem -Path $releaseDir -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName "$cefDist\" -Force
+        Copy-Item $_.FullName "$nativeDist\" -Force
         $staged += $_.Name
     }
 }
@@ -258,15 +212,10 @@ if ($hasEngine -eq 0 -or $hasGgml -eq 0 -or $hasCpu -eq 0) {
 # Backup tauri.conf.json
 Copy-Item $tauriConf "$tauriConf.bak"
 
-# Inject CEF resources into tauri.conf.json for bundling
+# Inject native DLLs into tauri.conf.json for bundling
 $confJson = Get-Content $tauriConf -Raw | ConvertFrom-Json
 $confJson.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
-    "cef-dist/*.dll" = "./"
-    "cef-dist/*.pak" = "./"
-    "cef-dist/*.dat" = "./"
-    "cef-dist/*.bin" = "./"
-    "cef-dist/*.json" = "./"
-    "cef-dist/locales/*" = "./locales/"
+    "native-dist/*.dll" = "./"
 } -Force
 [System.IO.File]::WriteAllText($tauriConf, ($confJson | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
@@ -338,40 +287,31 @@ if (Test-Path $exePath) {
     Write-Host ""
     Write-Host "  Creation du dossier standalone..." -ForegroundColor Gray
 
-    if ($cefDir) {
-        $standaloneDir = "$releaseDir\sion-client-standalone"
-        if (Test-Path $standaloneDir) { Remove-Item -Recurse -Force $standaloneDir }
-        New-Item -ItemType Directory -Force -Path $standaloneDir | Out-Null
+    $standaloneDir = "$releaseDir\sion-client-standalone"
+    if (Test-Path $standaloneDir) { Remove-Item -Recurse -Force $standaloneDir }
+    New-Item -ItemType Directory -Force -Path $standaloneDir | Out-Null
 
-        Copy-Item $exePath "$standaloneDir\"
-        foreach ($f in $cefFiles) {
-            $src = Join-Path $cefDir.FullName $f
-            if (Test-Path $src) { Copy-Item $src "$standaloneDir\" }
-        }
-        $localesDir = Join-Path $cefDir.FullName "locales"
-        if (Test-Path $localesDir) {
-            Copy-Item -Recurse -Force $localesDir "$standaloneDir\locales"
-        }
-        if (Test-Path "$tauriDir\icons\icon.ico") {
-            Copy-Item "$tauriDir\icons\icon.ico" "$standaloneDir\sion-client.ico"
-        }
-
-        # Create ZIP — versioned name, dropped into build-apps/ alongside the
-        # MSI and NSIS installers for easy distribution. Same naming pattern
-        # as Tauri's bundles (product name with space, no extra suffix).
-        $version = (Get-Content "$tauriDir\Cargo.toml" | Select-String '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
-        if (-not $version) { $version = "0.0.0" }
-        $zipName = "Sion Client_${version}_x64.zip"
-        $zipPath = "$buildAppsDir\$zipName"
-        if (Test-Path $zipPath) { Remove-Item $zipPath }
-        Compress-Archive -Path "$standaloneDir\*" -DestinationPath $zipPath
-        $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
-
-        Write-Host "  Dossier standalone: $standaloneDir" -ForegroundColor Green
-        Write-Host "  Archive ZIP: $zipPath ($zipSize MB)" -ForegroundColor Green
-    } else {
-        Write-Host "  ATTENTION: Libs CEF non trouvees pour le dossier standalone." -ForegroundColor Yellow
+    Copy-Item $exePath "$standaloneDir\"
+    if (Test-Path "$nativeDist\*.dll") {
+        Copy-Item "$nativeDist\*.dll" "$standaloneDir\" -Force
     }
+    if (Test-Path "$tauriDir\icons\icon.ico") {
+        Copy-Item "$tauriDir\icons\icon.ico" "$standaloneDir\sion-client.ico"
+    }
+
+    # Create ZIP — versioned name, dropped into build-apps/ alongside the
+    # MSI and NSIS installers for easy distribution. Same naming pattern
+    # as Tauri's bundles (product name with space, no extra suffix).
+    $version = (Get-Content "$tauriDir\Cargo.toml" | Select-String '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+    if (-not $version) { $version = "0.0.0" }
+    $zipName = "Sion Client_${version}_x64.zip"
+    $zipPath = "$buildAppsDir\$zipName"
+    if (Test-Path $zipPath) { Remove-Item $zipPath }
+    Compress-Archive -Path "$standaloneDir\*" -DestinationPath $zipPath
+    $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+
+    Write-Host "  Dossier standalone: $standaloneDir" -ForegroundColor Green
+    Write-Host "  Archive ZIP: $zipPath ($zipSize MB)" -ForegroundColor Green
 } else {
     Write-Host "  ERREUR: Build echoue, binaire non trouve." -ForegroundColor Red
 }

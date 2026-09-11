@@ -8,8 +8,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useClickOutside } from "../../hooks/useClickOutside";
 import { keyEventToString, formatCombo, globalComboIssue } from "../../utils/keyCombo";
-import * as livekitService from "../../services/livekitService";
-import { getRawUserMedia } from "../../services/denoiseShim";
+import { NativeAudioSettings } from "./NativeAudioSettings";
 import { VoiceCueEditor } from "../chat/VoiceCueEditor";
 import { ExternalAudioImport } from "../chat/ExternalAudioImport";
 import { isModelDownloaded, ensureModelDownloaded, summaryAssetsStatus, ensureSummaryAssets, deleteAsrModel, deleteSummaryAssets } from "../../services/transcriptionService";
@@ -32,21 +31,11 @@ export function SettingsPanel() {
   const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   const mutedSpeakAlert = useSettingsStore((s) => s.mutedSpeakAlert);
-  const micThreshold = useSettingsStore((s) => s.micThreshold);
   const joinMuted = useSettingsStore((s) => s.joinMuted);
   const muteShortcut = useSettingsStore((s) => s.muteShortcut);
   const deafenShortcut = useSettingsStore((s) => s.deafenShortcut);
   const linkPreviews = useSettingsStore((s) => s.linkPreviews);
-  const echoCancellation = useSettingsStore((s) => s.echoCancellation);
-  const autoGainControl = useSettingsStore((s) => s.autoGainControl);
-  const aiNoiseSuppression = useSettingsStore((s) => s.aiNoiseSuppression);
-  const setAiNoiseSuppression = useSettingsStore((s) => s.setAiNoiseSuppression);
-  const aiNoiseSuppressionMix = useSettingsStore((s) => s.aiNoiseSuppressionMix);
-  const setAiNoiseSuppressionMix = useSettingsStore((s) => s.setAiNoiseSuppressionMix);
-  const audioQuality = useSettingsStore((s) => s.audioQuality);
-  const voiceEngine = useSettingsStore((s) => s.voiceEngine);
   const setMutedSpeakAlert = useSettingsStore((s) => s.setMutedSpeakAlert);
-  const setMicThreshold = useSettingsStore((s) => s.setMicThreshold);
   const setJoinMuted = useSettingsStore((s) => s.setJoinMuted);
   const setMuteShortcut = useSettingsStore((s) => s.setMuteShortcut);
   const setDeafenShortcut = useSettingsStore((s) => s.setDeafenShortcut);
@@ -106,14 +95,6 @@ export function SettingsPanel() {
       .catch(() => setLlamaVer(null));
   }, []);
   useEffect(() => { redetectLlama(); }, [redetectLlama]);
-  const setEchoCancellation = useSettingsStore((s) => s.setEchoCancellation);
-  const setAutoGainControl = useSettingsStore((s) => s.setAutoGainControl);
-  const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
-  const setVoiceEngine = useSettingsStore((s) => s.setVoiceEngine);
-  const audioInputDevice = useSettingsStore((s) => s.audioInputDevice);
-  const audioOutputDevice = useSettingsStore((s) => s.audioOutputDevice);
-  const setAudioInputDevice = useSettingsStore((s) => s.setAudioInputDevice);
-  const setAudioOutputDevice = useSettingsStore((s) => s.setAudioOutputDevice);
   const defaultChannel = useSettingsStore((s) => s.defaultChannel);
   const autoJoinVoice = useSettingsStore((s) => s.autoJoinVoice);
   const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
@@ -219,159 +200,6 @@ export function SettingsPanel() {
   const setNotificationMode = useSettingsStore((s) => s.setNotificationMode);
   const channels = useMatrixStore((s) => s.channels);
 
-  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
-  const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
-  const [defaultInputLabel, setDefaultInputLabel] = useState("");
-  const [defaultOutputLabel, setDefaultOutputLabel] = useState("");
-  const [defaultInputId, setDefaultInputId] = useState("");
-  const [defaultOutputId, setDefaultOutputId] = useState("");
-  const [micLevel, setMicLevel] = useState(0);
-  const [_micTesting, setMicTesting] = useState(false);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const micAnimRef = useRef<number>(0);
-  const micCtxRef = useRef<AudioContext | null>(null);
-
-  const stopMicTest = useCallback(() => {
-    if (micAnimRef.current) cancelAnimationFrame(micAnimRef.current);
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    micCtxRef.current?.close();
-    micStreamRef.current = null;
-    micCtxRef.current = null;
-    micAnimRef.current = 0;
-    setMicLevel(0);
-    setMicTesting(false);
-  }, []);
-
-  const startMicTest = useCallback(async () => {
-    stopMicTest();
-    try {
-      // CefAudioShim handles PulseAudio device IDs transparently in getUserMedia.
-      // `getRawUserMedia` skips the denoise wrapping so the analyser sees the
-      // real microphone track (a MediaStreamTrackGenerator doesn't reliably
-      // feed Web Audio's AnalyserNode, and wrapping would also cancel the
-      // active LiveKit denoise pump as a side-effect).
-      const constraints: MediaStreamConstraints = { audio: audioInputDevice ? { deviceId: { exact: audioInputDevice } } : true };
-      const stream = await getRawUserMedia(constraints);
-      micStreamRef.current = stream;
-      const ctx = new AudioContext();
-      micCtxRef.current = ctx;
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.5;
-      source.connect(analyser);
-      const data = new Uint8Array(analyser.frequencyBinCount);
-
-      const tick = () => {
-        analyser.getByteFrequencyData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) sum += data[i];
-        const avg = sum / data.length / 255;
-        setMicLevel(avg);
-        micAnimRef.current = requestAnimationFrame(tick);
-      };
-      setMicTesting(true);
-      tick();
-    } catch {
-      setMicTesting(false);
-    }
-  }, [audioInputDevice, stopMicTest]);
-
-  // Auto-start mic test when on audio tab
-  useEffect(() => {
-    if (activeTab === "audio") startMicTest();
-    return () => stopMicTest();
-  }, [activeTab, audioInputDevice, startMicTest, stopMicTest]);
-
-  const [speakerTesting, setSpeakerTesting] = useState(false);
-  const speakerCtxRef = useRef<AudioContext | null>(null);
-  const speakerOscRef = useRef<OscillatorNode | null>(null);
-
-  const stopSpeakerTest = useCallback(() => {
-    speakerOscRef.current?.stop();
-    speakerCtxRef.current?.close();
-    speakerOscRef.current = null;
-    speakerCtxRef.current = null;
-    setSpeakerTesting(false);
-  }, []);
-
-  const startSpeakerTest = useCallback(async () => {
-    stopSpeakerTest();
-    try {
-      const ctx = new AudioContext();
-      // Route to selected output device if supported
-      if (audioOutputDevice && 'setSinkId' in ctx) {
-        await (ctx as unknown as { setSinkId: (id: string) => Promise<void> }).setSinkId(audioOutputDevice);
-      }
-      speakerCtxRef.current = ctx;
-
-      // Play a short melody: 3 ascending tones
-      const notes = [440, 554, 659];
-      const noteLen = 0.25;
-      for (let i = 0; i < notes.length; i++) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.value = notes[i];
-        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * noteLen);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + (i + 1) * noteLen);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(ctx.currentTime + i * noteLen);
-        osc.stop(ctx.currentTime + (i + 1) * noteLen);
-      }
-      setSpeakerTesting(true);
-      setTimeout(() => {
-        stopSpeakerTest();
-      }, notes.length * noteLen * 1000 + 100);
-    } catch {
-      setSpeakerTesting(false);
-    }
-  }, [audioOutputDevice, stopSpeakerTest]);
-
-  // Cleanup speaker on unmount or tab change
-  useEffect(() => {
-    if (activeTab !== "audio") stopSpeakerTest();
-    return () => stopSpeakerTest();
-  }, [activeTab, stopSpeakerTest]);
-
-  useEffect(() => {
-    async function loadDevices() {
-      // CefAudioShim overrides enumerateDevices to return PulseAudio devices
-      // when CEF returns empty IDs. This works transparently.
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const filterMeta = (list: MediaDeviceInfo[]) =>
-        list.length > 1 ? list.filter((d) => d.deviceId !== "default") : list;
-
-      let defaultSourceId = "";
-      let defaultSinkId = "";
-
-      // Fetch default device labels from PulseAudio (desktop Tauri only —
-      // command isn't registered on Android so we'd just get a noisy reject).
-      if (window.__TAURI_INTERNALS__ && !/Android/i.test(navigator.userAgent)) {
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          const defaults = await invoke<{ source_id: string; source_label: string; sink_id: string; sink_label: string }>("get_default_audio_devices");
-          setDefaultInputLabel(defaults.source_label);
-          setDefaultOutputLabel(defaults.sink_label);
-          setDefaultInputId(defaults.source_id);
-          setDefaultOutputId(defaults.sink_id);
-          defaultSourceId = defaults.source_id;
-          defaultSinkId = defaults.sink_id;
-        } catch { /* not in Tauri */ }
-      }
-
-      // Filter out the device that matches system default (already shown as "Par défaut — ...")
-      const inputs = filterMeta(devices.filter((d) => d.kind === "audioinput"));
-      const outputs = filterMeta(devices.filter((d) => d.kind === "audiooutput"));
-      setAudioInputs(defaultSourceId ? inputs.filter((d) => d.deviceId !== defaultSourceId) : inputs);
-      setAudioOutputs(defaultSinkId ? outputs.filter((d) => d.deviceId !== defaultSinkId) : outputs);
-    }
-    loadDevices();
-    navigator.mediaDevices.addEventListener("devicechange", loadDevices);
-    return () => navigator.mediaDevices.removeEventListener("devicechange", loadDevices);
-  }, []);
-
   useEffect(() => {
     if (!recordingMute && !recordingDeafen) return;
     function handleKey(e: KeyboardEvent) {
@@ -392,7 +220,7 @@ export function SettingsPanel() {
         setRecordingMute(false); setRecordingDeafen(false);
         return;
       }
-      if (issue === "f12" || issue === "cef-fkey") {
+      if (issue === "f12" || issue === "webview-fkey") {
         setShortcutError(t("settings.shortcutReservedKey", { key: formatCombo(combo) }));
         setRecordingMute(false); setRecordingDeafen(false);
         return;
@@ -484,6 +312,7 @@ export function SettingsPanel() {
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.language")}</div>
               <select value={language || i18n.language?.slice(0, 2)} onChange={(e) => setLanguage(e.target.value)} style={selectStyle}>
+                <option value="">{t("settings.languageSystem")}</option>
                 <option value="fr">{t("settings.languageFr")}</option>
                 <option value="en">{t("settings.languageEn")}</option>
               </select>
@@ -515,55 +344,9 @@ export function SettingsPanel() {
 
         {/* === AUDIO === */}
         {activeTab === "audio" && (<>
+          <NativeAudioSettings />
           {/* Microphone */}
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-            {audioInputs.length > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioInput")}</div>
-                <select value={audioInputDevice} onChange={(e) => { setAudioInputDevice(e.target.value); livekitService.switchAudioInput(e.target.value || defaultInputId); }} style={selectStyle}>
-                  <option value="">{t("settings.defaultDevice")}{defaultInputLabel ? ` — ${defaultInputLabel}` : ""}</option>
-                  {audioInputs.map((d, i) => <option key={`${d.deviceId}-${i}`} value={d.deviceId}>{d.label || d.deviceId}</option>)}
-                </select>
-              </div>
-            )}
-
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.micThreshold")}</div>
-                <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(micThreshold * 1000)}</span>
-              </div>
-              {/* Volume meter + threshold slider combo */}
-              <div style={{ position: 'relative', height: 28, marginBottom: 4 }}>
-                {/* Background track */}
-                <div style={{
-                  position: 'absolute', top: 10, left: 0, right: 0, height: 8, borderRadius: 4,
-                  background: 'var(--color-surface-container-highest)', overflow: 'hidden',
-                }}>
-                  {/* Live mic level bar */}
-                  <div style={{
-                    height: '100%', borderRadius: 4, transition: 'width 50ms',
-                    width: `${Math.min(micLevel * 300, 100)}%`,
-                    background: micLevel * 100 > micThreshold * 1000
-                      ? 'var(--color-primary)'
-                      : 'var(--color-on-surface-variant)',
-                    opacity: micLevel * 100 > micThreshold * 1000 ? 0.8 : 0.3,
-                  }} />
-                </div>
-                {/* Threshold slider — transparent track, only thumb visible */}
-                <input type="range" min={1} max={100} value={Math.round(micThreshold * 1000)}
-                  onChange={(e) => setMicThreshold(Number(e.target.value) / 1000)}
-                  className="mic-threshold-slider"
-                  style={{
-                    position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
-                    cursor: 'pointer', zIndex: 1,
-                  }}
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>
-                <span>{t("settings.sensitive")}</span><span>{t("settings.aggressive")}</span>
-              </div>
-            </div>
-
             <div style={{ ...rowStyle, marginBottom: 14 }}>
               <div style={{ marginRight: 12 }}>
                 <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.mutedSpeakAlert")}</div>
@@ -592,101 +375,6 @@ export function SettingsPanel() {
               <button onClick={() => setScreenShareAudio(!screenShareAudio)} style={toggleStyle(screenShareAudio)}>
                 <div style={toggleDotStyle(screenShareAudio)} />
               </button>
-            </div>
-          </div>
-
-          {/* Speaker */}
-          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-            {audioOutputs.length > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioOutput")}</div>
-                <select value={audioOutputDevice} onChange={(e) => { setAudioOutputDevice(e.target.value); livekitService.switchAudioOutput(e.target.value || defaultOutputId); }} style={selectStyle}>
-                  <option value="">{t("settings.defaultDevice")}{defaultOutputLabel ? ` — ${defaultOutputLabel}` : ""}</option>
-                  {audioOutputs.map((d, i) => <option key={`${d.deviceId}-${i}`} value={d.deviceId}>{d.label || d.deviceId}</option>)}
-                </select>
-              </div>
-            )}
-
-            <div>
-              <button
-                onClick={startSpeakerTest}
-                disabled={speakerTesting}
-                style={{
-                  width: '100%', padding: '8px 12px', borderRadius: 12, border: 'none', cursor: speakerTesting ? 'default' : 'pointer',
-                  fontSize: 12, fontWeight: 500, fontFamily: 'inherit', transition: 'all 150ms',
-                  background: speakerTesting ? 'var(--color-surface-container-high)' : 'var(--color-primary-container)',
-                  color: speakerTesting ? 'var(--color-on-surface-variant)' : 'var(--color-on-primary-container)',
-                  opacity: speakerTesting ? 0.7 : 1,
-                }}
-              >
-                {speakerTesting ? t("settings.speakerTesting") : t("settings.speakerTestStart")}
-              </button>
-            </div>
-          </div>
-
-          {/* Audio processing */}
-          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
-            <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--color-on-surface)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {t("settings.audioProcessing")}
-            </div>
-            {/* Noise suppression toggle + its strength slider, grouped
-                together so the slider sits directly under its toggle. */}
-            <div style={{ ...rowStyle, marginBottom: 14 }}>
-              <div style={{ marginRight: 12 }}>
-                <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.noiseSuppression")}</div>
-                <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.noiseSuppressionDesc")}</div>
-              </div>
-              <button onClick={() => setAiNoiseSuppression(!aiNoiseSuppression)} style={toggleStyle(aiNoiseSuppression)}><div style={toggleDotStyle(aiNoiseSuppression)} /></button>
-            </div>
-            {aiNoiseSuppression && (
-              <div style={{ marginBottom: 14, paddingLeft: 12, borderLeft: '2px solid var(--color-outline-variant)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, color: 'var(--color-on-surface)' }}>{t("settings.aiNoiseSuppressionMix")}</div>
-                  <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>{Math.round(aiNoiseSuppressionMix * 100)}%</div>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  value={Math.round(aiNoiseSuppressionMix * 100)}
-                  onChange={(e) => setAiNoiseSuppressionMix(parseInt(e.target.value, 10) / 100)}
-                  style={{ width: '100%' }}
-                />
-                <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 4 }}>
-                  {t("settings.aiNoiseSuppressionMixDesc")}
-                </div>
-              </div>
-            )}
-            {[
-              { label: t("settings.echoCancellation"), desc: t("settings.echoCancellationDesc"), value: echoCancellation, toggle: () => { setEchoCancellation(!echoCancellation); livekitService.updateAudioProcessing({ echoCancellation: !echoCancellation }); } },
-              { label: t("settings.autoGainControl"), desc: t("settings.autoGainControlDesc"), value: autoGainControl, toggle: () => { setAutoGainControl(!autoGainControl); livekitService.updateAudioProcessing({ autoGainControl: !autoGainControl }); } },
-            ].map((item, i, arr) => (
-              <div key={i} style={{ ...rowStyle, marginBottom: i < arr.length - 1 ? 14 : 0 }}>
-                <div style={{ marginRight: 12 }}>
-                  <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{item.label}</div>
-                  <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{item.desc}</div>
-                </div>
-                <button onClick={item.toggle} style={toggleStyle(item.value)}><div style={toggleDotStyle(item.value)} /></button>
-              </div>
-            ))}
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.audioQuality")}</div>
-              <select value={audioQuality} onChange={(e) => { const v = e.target.value as import("../../stores/useSettingsStore").AudioQualityPreset; setAudioQuality(v); livekitService.updateAudioQuality(v); }} style={selectStyle}>
-                <option value="voice">{t("settings.audioQualityVoice")}</option>
-                <option value="voiceHD">{t("settings.audioQualityVoiceHD")}</option>
-                <option value="musicStereo">{t("settings.audioQualityMusicStereo")}</option>
-              </select>
-            </div>
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("settings.voiceEngine")}</div>
-              <select value={voiceEngine} onChange={(e) => { const v = e.target.value as import("../../stores/useSettingsStore").VoiceEngineChoice; setVoiceEngine(v); }} style={selectStyle}>
-                <option value="js">{t("settings.voiceEngineJs")}</option>
-                <option value="native">{t("settings.voiceEngineNative")}</option>
-              </select>
-              <div style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', marginTop: 4 }}>
-                {t("settings.voiceEngineDesc")}
-              </div>
             </div>
           </div>
         </>)}

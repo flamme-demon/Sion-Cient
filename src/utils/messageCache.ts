@@ -1,7 +1,7 @@
 /**
  * Lightweight IndexedDB cache for message event IDs per room.
  * Stores only event IDs + pagination token — not full message content.
- * Works on both desktop (CEF/WRY) and mobile (Android WebView).
+ * Works on both desktop (WRY) and mobile (Android WebView).
  */
 
 const DB_NAME = "sion-message-cache";

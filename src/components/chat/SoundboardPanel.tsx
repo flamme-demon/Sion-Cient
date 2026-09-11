@@ -126,7 +126,7 @@ export function SoundboardPanel() {
 
   // Refresh sound list on demand + when soundboard room timeline changes.
   // (See the long comment history: must filter on the soundboard room id and
-  // debounce, or busy-room scrollback saturates CEF's connection pool.)
+  // debounce, or busy-room scrollback sature le pool de connexions du webview.)
   useEffect(() => {
     if (!show) return;
     let cancelled = false;
@@ -643,9 +643,10 @@ export function SoundboardPanel() {
             </button>
             <input
               type="range" min={0} max={1} step={0.05} value={volume}
+              className="sion-range"
               disabled={!enabled}
               onChange={(e) => setVolume(parseFloat(e.target.value))}
-              style={{ flex: 1, opacity: enabled ? 1 : 0.4, cursor: enabled ? 'pointer' : 'not-allowed' }}
+              style={{ flex: 1, opacity: enabled ? 1 : 0.4, cursor: enabled ? 'pointer' : 'not-allowed', '--sion-range-progress': `${Math.round(volume * 100)}%` } as React.CSSProperties}
               title={t("soundboard.volume")}
             />
             <span style={{ minWidth: 30, textAlign: 'right', opacity: enabled ? 1 : 0.4 }}>{Math.round(volume * 100)}%</span>

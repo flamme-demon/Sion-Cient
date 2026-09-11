@@ -10,6 +10,7 @@ import { useSettingsStore } from "../../stores/useSettingsStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { EMOJI_DATA } from "../../utils/emojiData";
+import { readClipboardImageFile } from "../../utils/clipboardImage";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { LargeMessageModal } from "./LargeMessageModal";
 
@@ -72,6 +73,7 @@ export function ChatInput() {
   const [pickerTab, setPickerTab] = useState<"emoji" | "gif">("emoji");
   const emojiPickerRef = useRef<HTMLDivElement>(null);
   const enableGifs = useSettingsStore((s) => s.enableGifs);
+  const setEnableGifs = useSettingsStore((s) => s.setEnableGifs);
 
   // GIF state
   const [gifSearch, setGifSearch] = useState("");
@@ -321,12 +323,25 @@ export function ChatInput() {
 
   const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData.items;
+    let added = false;
     for (const item of Array.from(items)) {
       if (item.kind === "file") {
         const file = item.getAsFile();
-        if (file) addPendingFile(file);
+        if (file) {
+          addPendingFile(file);
+          added = true;
+        }
       }
     }
+    if (added) return;
+    // WebKitGTK n'expose pas les images du presse-papiers dans `items` :
+    // on lit l'image côté natif (arboard). S'il y a aussi du texte, on le
+    // laisse se coller normalement.
+    const hasText = e.clipboardData.getData("text/plain").length > 0;
+    if (!hasText) e.preventDefault();
+    void readClipboardImageFile().then((file) => {
+      if (file) addPendingFile(file);
+    });
   };
 
   const handleChange = (value: string) => {
@@ -731,6 +746,17 @@ export function ChatInput() {
                           <div style={{ fontSize: 13, color: 'var(--color-on-surface-variant)', lineHeight: 1.5 }}>
                             {t("chat.gifDisabled")}
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => setEnableGifs(true)}
+                            style={{
+                              marginTop: 14, padding: '8px 16px', borderRadius: 16, border: 'none',
+                              cursor: 'pointer', background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+                              fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                            }}
+                          >
+                            {t("chat.gifEnable")}
+                          </button>
                         </div>
                       </div>
                     ) : (<>

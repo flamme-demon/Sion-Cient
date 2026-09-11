@@ -33,7 +33,7 @@ export function keyEventToString(e: KeyboardEvent): string {
   return parts.join("+");
 }
 
-// Layout map (Chrome/CEF): translates physical codes back to the character the
+// Layout map (Chromium/WebView2): translates physical codes back to the character the
 // user's layout prints on the key ("Backquote" → "²" on AZERTY). Loaded once,
 // best-effort — display falls back to the raw code name until/unless it loads.
 let layoutMap: Pick<Map<string, string>, "get"> | null = null;
@@ -44,18 +44,18 @@ try {
     .catch(() => {});
 } catch { /* no Keyboard API */ }
 
-// F-keys CEF intercepts before the page sees them (help, find, reload, caret,
-// fullscreen, devtools) — unusable as global shortcuts on the CEF runtime.
-export const CEF_RESERVED_F_KEYS = new Set(["F1", "F3", "F5", "F7", "F11", "F12"]);
+// F-keys interceptées par la webview avant la page (aide, recherche, reload,
+// caret, plein écran, devtools) — inutilisables comme raccourcis globaux.
+export const WEBVIEW_RESERVED_F_KEYS = new Set(["F1", "F3", "F5", "F7", "F11", "F12"]);
 
-export type ComboIssue = "empty" | "f12" | "cef-fkey" | "bare";
+export type ComboIssue = "empty" | "f12" | "webview-fkey" | "bare";
 
 /**
  * Global-shortcut safety check for a combo in physical-code form. A bare
  * printable key with no modifier is grabbed system-wide by the OS/compositor
  * (portal, RegisterHotKey, X11 grab) and becomes unusable for typing
  * everywhere else — so it must be rejected. Modifier-less F-keys (F1..F11)
- * are the only exception, minus the ones CEF steals. Returns the issue code,
+ * are the only exception, minus the ones the webview intercepte. Returns the issue code,
  * or null when the combo is safe to register globally.
  */
 export function globalComboIssue(combo: string): ComboIssue | null {
@@ -66,7 +66,7 @@ export function globalComboIssue(combo: string): ComboIssue | null {
   const hasModifier = parts.length > 1 && parts.slice(0, -1).some((p) => MODIFIERS.includes(p));
   if (hasModifier) return null;
   if (/^F([1-9]|1[01])$/.test(main)) {
-    return CEF_RESERVED_F_KEYS.has(main) ? "cef-fkey" : null;
+    return WEBVIEW_RESERVED_F_KEYS.has(main) ? "webview-fkey" : null;
   }
   return "bare";
 }

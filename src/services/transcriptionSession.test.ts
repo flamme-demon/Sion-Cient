@@ -11,12 +11,6 @@ vi.mock("../stores/useAppStore", () => ({
 vi.mock("../stores/useSettingsStore", () => ({
   useSettingsStore: { getState: () => ({}), subscribe: vi.fn(() => vi.fn()) },
 }));
-vi.mock("./livekitService", () => ({
-  getLocalMicMediaStreamTrack: vi.fn(),
-  getArmedTranscribers: vi.fn(() => []),
-  onArmedTranscribersChange: vi.fn(),
-  setLocalTranscribeArmed: vi.fn(),
-}));
 vi.mock("./matrixService", () => ({
   sendTranscriptSegment: vi.fn(),
   sendTranscriptSession: vi.fn().mockResolvedValue(undefined),

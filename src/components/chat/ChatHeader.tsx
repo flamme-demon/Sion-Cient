@@ -8,9 +8,7 @@ import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { getMatrixClient } from "../../services/matrixService";
-import { getCurrentRoom } from "../../services/livekitService";
-import * as livekitService from "../../services/livekitService";
-import * as voiceNativeService from "../../services/voiceNativeService";
+import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { ScreenShareOptionsModal } from "./ScreenShareOptionsModal";
 
 function buildWavePath(amplitude: number, phase: number): string {
@@ -34,28 +32,23 @@ function VoiceWaveBar() {
   const rafRef = useRef<number>(0);
   const phaseRef = useRef(0);
   const smoothLevel = useRef(0);
+  // Le moteur Rust pousse niveaux et paroles dans le store ; le rAF lit la
+  // dernière liste sans re-render React.
+  const participantsRef = useRef(useLiveKitStore.getState().participants);
+  useEffect(() => useLiveKitStore.subscribe((s) => { participantsRef.current = s.participants; }), []);
 
   useEffect(() => {
     let running = true;
     const tick = () => {
       if (!running) return;
-      const room = getCurrentRoom();
       let level = 0;
-      if (room) {
+      for (const p of participantsRef.current) {
         // Check isSpeaking flags + audioLevel
-        const local = room.localParticipant;
-        if (local.isSpeaking) {
-          level = Math.max(level, local.audioLevel ?? 0, 0.5);
-        } else if ((local.audioLevel ?? 0) > 0.01) {
-          level = Math.max(level, local.audioLevel ?? 0);
+        if (p.isSpeaking) {
+          level = Math.max(level, p.audioLevel ?? 0, 0.5);
+        } else if ((p.audioLevel ?? 0) > 0.01) {
+          level = Math.max(level, p.audioLevel ?? 0);
         }
-        room.remoteParticipants.forEach((p) => {
-          if (p.isSpeaking) {
-            level = Math.max(level, p.audioLevel ?? 0, 0.5);
-          } else if ((p.audioLevel ?? 0) > 0.01) {
-            level = Math.max(level, p.audioLevel ?? 0);
-          }
-        });
       }
       // Smooth: fast attack, slow release
       if (level > smoothLevel.current) {
@@ -751,26 +744,12 @@ export function ChatHeader() {
           onClose={() => setShowScreenShareOptions(false)}
           onConfirm={async () => {
             setShowScreenShareOptions(false);
-            // Chemin natif : repasser par le store (qui route vers le moteur
-            // Rust avec les settings à jour) — l'appel direct au service JS
-            // ne verrait aucune room et ne ferait rien.
-            if (voiceNativeService.getActiveVoiceEngine() === "native") {
-              if (isScreenSharing) {
-                await toggleScreenShare();
-                await toggleScreenShare();
-              } else {
-                toggleScreenShare();
-              }
-              return;
-            }
+            // Repasser par le store (qui route vers le moteur Rust avec les
+            // settings à jour). Un partage actif est redémarré pour appliquer
+            // le nouveau préréglage.
             if (isScreenSharing) {
-              // Restart with the new preset so the change takes effect.
-              try {
-                await livekitService.toggleScreenShare(false);
-                await livekitService.toggleScreenShare(true);
-              } catch (err) {
-                console.error("[Sion] Failed to restart screen share:", err);
-              }
+              await toggleScreenShare();
+              await toggleScreenShare();
             } else {
               toggleScreenShare();
             }

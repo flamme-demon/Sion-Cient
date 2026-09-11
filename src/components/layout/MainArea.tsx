@@ -1,4 +1,4 @@
-import { useCallback, type DragEvent } from "react";
+import { useCallback, useEffect, type DragEvent } from "react";
 import { ChatHeader } from "../chat/ChatHeader";
 import { PinnedBar } from "../chat/PinnedBar";
 import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
@@ -11,6 +11,7 @@ import { MemberPanel } from "../chat/MemberPanel";
 import { SoundboardPanel } from "../chat/SoundboardPanel";
 import { useAppStore } from "../../stores/useAppStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { readDroppedFile } from "../../utils/droppedFile";
 import { MOBILE_VOICE_BAR_HEIGHT } from "../mobile/MobileVoiceBar";
 
 export function MainArea() {
@@ -37,6 +38,43 @@ export function MainArea() {
     for (const file of Array.from(files)) {
       addPendingFile(file);
     }
+  }, [setDraggingOver, addPendingFile]);
+
+  // Drag & drop natif Tauri : WebKitGTK ne transmet pas les fichiers déposés
+  // au DOM, seuls des chemins arrivent par cet event. Les handlers DOM
+  // ci-dessus restent utiles pour les drops de texte.
+  useEffect(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    if (!internals) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const fn = await getCurrentWebview().onDragDropEvent((event) => {
+          const payload = event.payload;
+          if (payload.type === "enter" || payload.type === "over") {
+            setDraggingOver(true);
+            return;
+          }
+          setDraggingOver(false);
+          if (payload.type !== "drop") return;
+          for (const path of payload.paths) {
+            void readDroppedFile(path).then((file) => {
+              if (file) void addPendingFile(file);
+            });
+          }
+        });
+        if (disposed) fn();
+        else unlisten = fn;
+      } catch (err) {
+        console.warn("[Sion] drag & drop natif indisponible:", err);
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [setDraggingOver, addPendingFile]);
 
   const needsVoiceBarPadding = isMobile && !!connectedVoice;

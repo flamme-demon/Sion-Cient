@@ -1,6 +1,6 @@
 // Mirrors the critical session keys (auth credentials + device/user id) from
-// localStorage to a file in the Tauri app-data dir, OUTSIDE the Chromium/CEF
-// profile. localStorage lives inside that profile and gets reset on a CEF
+// localStorage to a file in the Tauri app-data dir, OUTSIDE the webview
+// profile. localStorage peut être purgé par une mise à jour de la webview
 // major upgrade (observed 144→148: logged out + new device + recovery-key
 // re-entry) and by the "purge cache" action. Persisting these keys externally
 // lets us re-hydrate localStorage on boot so the session resumes seamlessly —
@@ -11,7 +11,7 @@
 
 // The keys whose loss forces a re-login / new device / re-verification, plus
 // the user's settings and login prefill — everything that should survive a
-// CEF/Chromium profile reset. `sion-settings` is the Zustand persist key
+// webview profile reset. `sion-settings` is the Zustand persist key
 // (useSettingsStore { name: "sion-settings" }).
 const KEYS = [
   "sion_auth_credentials",
@@ -50,7 +50,7 @@ export async function mirrorSessionToAppData(): Promise<void> {
 }
 
 /** Restore session keys from app-data into localStorage when localStorage is
- *  missing them (e.g. after a CEF upgrade wiped the profile). Never clobbers a
+ *  missing them (e.g. après qu'une mise à jour a purgé le profil). Never clobbers a
  *  value already present in localStorage. Must run BEFORE stores read auth. */
 export async function hydrateSessionFromAppData(): Promise<void> {
   if (!isTauri()) return;
@@ -67,7 +67,7 @@ export async function hydrateSessionFromAppData(): Promise<void> {
       }
     }
     if (restored > 0) {
-      console.log(`[Sion][session] restored ${restored} key(s) from app-data (CEF profile was reset)`);
+      console.log(`[Sion][session] restored ${restored} key(s) from app-data (profil webview purgé)`);
     }
   } catch {
     /* best-effort */

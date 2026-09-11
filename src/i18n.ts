@@ -29,12 +29,14 @@ i18n
       loadPath: "/locales/{{lng}}/translation.json",
     },
     detection: {
-      // Detection order: saved user preference → browser → fallback.
-      // Persist what we detect into localStorage under our own key so we
-      // don't fight the Zustand `sion-settings` store.
-      order: ["localStorage", "navigator", "htmlTag"],
-      lookupLocalStorage: "i18nextLng",
-      caches: ["localStorage"],
+      // Détection : le choix EXPLICITE de l'utilisateur (store Zustand
+      // `sion-settings`, passé en `lng` ci-dessus) gagne. Sinon on suit la
+      // langue du système. On ne met volontairement PAS en cache le résultat
+      // détecté (`i18nextLng`) : un ancien cache « en » restait collé après
+      // un changement de langue système, et le profil webview WRY est
+      // distinct du profil CEF (nouvel origin en dev).
+      order: ["navigator", "htmlTag"],
+      caches: [],
     },
   });
 

@@ -8,7 +8,6 @@ vi.mock("./matrixService", () => ({
   uploadFile: async () => "mxc://x/y",
 }));
 vi.mock("./audioContext", () => ({ getSharedAudioContext: () => null }));
-vi.mock("./livekitService", () => ({ getCurrentRoom: () => null, setPlayingSound: () => {} }));
 vi.mock("../stores/useAppStore", () => ({ useAppStore: { getState: () => ({}) } }));
 
 import { editSound, type SoundEntry } from "./soundboardService";

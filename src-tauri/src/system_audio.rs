@@ -1,7 +1,6 @@
-//! System-audio capture — screen-share-audio path that bypasses Chromium's
-//! native system-audio loopback so we can exclude Sion's own voice-chat
-//! output from the captured stream (avoids echo when the user isn't wearing
-//! headphones).
+//! System-audio capture — screen-share-audio path built outside the webview
+//! so we can exclude Sion's own output from the captured stream (avoids echo
+//! when the user isn't wearing headphones).
 //!
 //! Linux path (`linux_impl`): creates a hidden virtual sink
 //! (`media.class=Audio/Sink/Internal`), links every non-Sion sink-input
@@ -9,23 +8,22 @@
 //! own output stays linked only to the user's real Speaker, so it reaches
 //! the hardware (the sharer still hears the call) but never enters the
 //! capture stream. Same pattern as the OBS `pipewire-audio-capture`
-//! plugin's "capture all except" mode. Falls back to the default sink's
-//! monitor (echo-prone) if the virtual sink can't be created — keeps the
-//! feature working on hosts where pactl/pipewire-pulse is unavailable.
+//! plugin's "capture all except" mode. If exclusion cannot be established,
+//! audio sharing is refused: capturing Sion itself would echo the call.
 //!
 //! Windows path (`windows_impl`): WASAPI loopback with
 //! `AUDCLNT_PROCESSLOOPBACK_EXCLUDE` (Windows 10 build 20348+ / Windows 11).
-//! Falls back to a plain loopback (echo-prone) on older builds, with a
-//! console log only — no user-facing warning per product decision.
+//! Older builds refuse audio sharing rather than capture Sion itself.
 //!
-//! macOS keeps the Chromium `systemAudio: "include"` path — its tap is
-//! session-scoped and doesn't exhibit the WASAPI-loopback echo problem.
+//! macOS n'est pas implémenté dans le moteur natif (l'ancien chemin
+//! `getDisplayMedia({ systemAudio })` de Chromium a disparu avec la
+//! suppression du moteur JS) : `system_audio_start` y renvoie une erreur et
+//! le partage se fait sans son.
 //!
-//! Both platforms stream the same PCM frame format (float32le stereo 48 kHz,
-//! 20 ms frames) over a local WebSocket. The JS side (`systemAudioService.ts`)
-//! is platform-agnostic: it receives frames and injects them into a
-//! MediaStreamTrackGenerator, then LiveKit publishes the track as
-//! ScreenShareAudio alongside the video share.
+//! Les deux plateformes produisent le même PCM (float32le mono 48 kHz,
+//! trames de 20 ms) et le diffusent à un unique abonné interne via
+//! `system_audio_subscribe` : `voice_engine::run_share_audio_pump` draine le
+//! canal et alimente la `NativeAudioSource` de la piste `ScreenshareAudio`.
 
 // ============================================================================
 // Cross-platform public commands. Each dispatches to the appropriate
@@ -33,8 +31,7 @@
 // JS side knows to treat as "no capture available".
 // ============================================================================
 
-#[tauri::command]
-pub fn system_audio_start(sink_monitor: Option<String>) -> Result<u16, String> {
+pub fn system_audio_start(sink_monitor: Option<String>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         log::info!("[Sion][sysaudio] system_audio_start on linux");
@@ -53,7 +50,6 @@ pub fn system_audio_start(sink_monitor: Option<String>) -> Result<u16, String> {
     }
 }
 
-#[tauri::command]
 pub fn system_audio_stop() {
     #[cfg(target_os = "linux")]
     {
@@ -64,38 +60,6 @@ pub fn system_audio_stop() {
     {
         log::info!("[Sion][sysaudio] system_audio_stop on windows");
         windows_impl::stop();
-    }
-}
-
-#[tauri::command]
-pub fn system_audio_ws_port() -> u16 {
-    #[cfg(target_os = "linux")]
-    {
-        linux_impl::ws_port()
-    }
-    #[cfg(target_os = "windows")]
-    {
-        windows_impl::ws_port()
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    {
-        0
-    }
-}
-
-#[tauri::command]
-pub fn system_audio_list_sinks() -> Vec<(String, String)> {
-    #[cfg(target_os = "linux")]
-    {
-        linux_impl::list_sinks()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        // Windows/macOS: the concept of "which sink monitor to capture" has
-        // no user-surfaced choice today — Windows captures the default
-        // render endpoint, macOS doesn't use this module. An empty list
-        // makes the JS side hide the picker.
-        Vec::new()
     }
 }
 
@@ -128,9 +92,9 @@ pub fn system_audio_subscribe() -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
 const SAMPLE_RATE: u32 = 48000;
 // MONO: the system-audio track must match the (mono) mic so both negotiate the
 // same Opus payload. A STEREO system-audio track collided with the mono mic on
-// opus pt 111 (sprop-stereo:1 vs none) on CEF/Chromium 148 → BUNDLE codec
-// collision (INVALID_PARAMETER) → peers heard nothing. parec downmixes the
-// stereo sink monitor to mono for us.
+// opus pt 111 (sprop-stereo:1 vs none) avec l'ancien chemin Chromium →
+// BUNDLE codec collision (INVALID_PARAMETER) → peers heard nothing. parec
+// downmixes the stereo sink monitor to mono for us.
 #[allow(dead_code)]
 const CHANNELS: u32 = 1;
 /// 20 ms @ 48 kHz mono f32 = 960 samples × 4 bytes × 1 ch = 3840 bytes.
@@ -150,21 +114,23 @@ mod linux_impl {
     use super::{CHANNELS, FRAME_BYTES, SAMPLE_RATE};
     use std::collections::HashSet;
     use std::io::Read;
-    use std::net::TcpListener;
     use std::process::{Child, Command, Stdio};
-    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
-    use tungstenite::Message;
 
-    /// Binary name used to identify Sion's own audio streams when filtering
-    /// sink-inputs out of the capture. All CEF child processes (browser,
-    /// renderer, GPU, utility/audio service) inherit the launcher's argv[0]
-    /// via `/proc/self/exe`, so a single binary-name match catches every
-    /// audio-emitting process — including the one service that actually owns
-    /// the `sink-input` (`--type=utility --utility-sub-type=audio.mojom.AudioService`).
-    const SION_BINARY_NAME: &str = "sion-client";
+    /// Binary names used to identify Sion's own audio streams when filtering
+    /// sink-inputs out of the capture. La fenêtre vit désormais dans WebKitGTK
+    /// (WRY) : l'audio de la webview sort sous `WebKitWebProcess`, pas sous
+    /// `sion-client`, et doit lui aussi être exclu de la capture (sons de
+    /// connexion, soundboard, médias joués dans le chat).
+    const SION_BINARY_NAMES: &[&str] = &[
+        "sion-client",
+        "WebKitWebProcess",
+        "WebKitNetworkProcess",
+        "WebKitGPUProcess",
+    ];
 
     /// Name of the hidden virtual sink we create for screen-share capture.
     /// `Audio/Sink/Internal` keeps it out of pavucontrol/KDE mixer so the
@@ -185,7 +151,14 @@ mod linux_impl {
         object_id: u32,
     }
 
-    static PORT: AtomicU16 = AtomicU16::new(0);
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct PipewirePort {
+        id: u32,
+        node_id: u32,
+        name: String,
+        direction: String,
+    }
+
     static CAPTURE_RUNNING: AtomicBool = AtomicBool::new(false);
 
     /// Module ID returned by `pactl load-module`. Held so `stop()` can
@@ -203,79 +176,16 @@ mod linux_impl {
 
     static LINK_WATCHER_RUNNING: AtomicBool = AtomicBool::new(false);
 
-    struct Senders(Vec<std::sync::mpsc::Sender<Vec<u8>>>);
+    struct PcmSenders(Vec<std::sync::mpsc::Sender<Vec<u8>>>);
 
-    static WS_SENDERS: std::sync::LazyLock<Mutex<Senders>> =
-        std::sync::LazyLock::new(|| Mutex::new(Senders(Vec::new())));
+    static PCM_SENDERS: std::sync::LazyLock<Mutex<PcmSenders>> =
+        std::sync::LazyLock::new(|| Mutex::new(PcmSenders(Vec::new())));
 
     // The live `parec` child. Held in an Arc<Mutex<…>> so the capture thread
     // can pull it to drop (kill) the process when we stop, without requiring
     // the main thread to do the cleanup synchronously.
     static CURRENT_CHILD: std::sync::LazyLock<Mutex<Option<Arc<Mutex<Option<Child>>>>>> =
         std::sync::LazyLock::new(|| Mutex::new(None));
-
-    // Volume to restore when the capture stops. Some desktop audio tools (or
-    // KDE's own mixer) leave the sink-monitor source attenuated — e.g. at 8 %
-    // / -66 dB — which makes parec faithfully record a signal that's already
-    // been silenced by the server. We detect that, bump to 100 % for the
-    // duration of the share, and put the original level back on stop so the
-    // user doesn't notice anything on subsequent app audio.
-    static VOLUME_RESTORE: std::sync::LazyLock<Mutex<Option<(String, u32)>>> =
-        std::sync::LazyLock::new(|| Mutex::new(None));
-
-    fn get_source_volume_pct(name: &str) -> Option<u32> {
-        let out = Command::new("pactl")
-            .args(["get-source-volume", name])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&out.stdout);
-        // "Volume: front-left: 65536 / 100% / 0.00 dB, front-right: ..."
-        // Find the first "%" and grab the integer directly to its left.
-        let pct_idx = s.find('%')?;
-        let prefix = &s[..pct_idx];
-        // Scan backwards for a contiguous run of ASCII digits.
-        let digit_end = prefix
-            .rfind(|c: char| c.is_ascii_digit())
-            .map(|i| i + 1)?;
-        let digit_start = prefix[..digit_end]
-            .rfind(|c: char| !c.is_ascii_digit())
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        prefix[digit_start..digit_end].parse::<u32>().ok()
-    }
-
-    fn set_source_volume_pct(name: &str, pct: u32) -> bool {
-        Command::new("pactl")
-            .args(["set-source-volume", name, &format!("{pct}%")])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
-    fn boost_monitor_volume(device: &str) {
-        let Some(pct) = get_source_volume_pct(device) else {
-            return;
-        };
-        if pct >= 100 {
-            return;
-        }
-        log::info!(
-            "[Sion][sysaudio] monitor '{device}' at {pct}% — boosting to 100% for capture"
-        );
-        if set_source_volume_pct(device, 100) {
-            *VOLUME_RESTORE.lock().unwrap() = Some((device.to_string(), pct));
-        }
-    }
-
-    fn restore_monitor_volume() {
-        if let Some((name, pct)) = VOLUME_RESTORE.lock().unwrap().take() {
-            log::info!("[Sion][sysaudio] restoring monitor '{name}' to {pct}%");
-            set_source_volume_pct(&name, pct);
-        }
-    }
 
     /// Parse `pactl list sink-inputs` text. We only need two fields per
     /// input: `application.process.binary` (to identify Sion) and
@@ -305,7 +215,11 @@ mod linux_impl {
             // can collide (Firefox has one node per tab); we key the link
             // and dedup off object.id, which is unique server-side.
             if let (Some(b), Some(n), Some(id)) = (bin.take(), node.take(), oid.take()) {
-                acc.push(ParsedSinkInput { binary: b, node_name: n, object_id: id });
+                acc.push(ParsedSinkInput {
+                    binary: b,
+                    node_name: n,
+                    object_id: id,
+                });
             } else {
                 bin.take();
                 node.take();
@@ -343,7 +257,10 @@ mod linux_impl {
         // Find module ids whose first arg contains our sink name. `pactl
         // list short modules` prints `id\tname\targs…`. We grep ourselves
         // rather than shelling out to grep.
-        let Ok(out) = Command::new("pactl").args(["list", "short", "modules"]).output() else {
+        let Ok(out) = Command::new("pactl")
+            .args(["list", "short", "modules"])
+            .output()
+        else {
             return;
         };
         let text = String::from_utf8_lossy(&out.stdout);
@@ -397,7 +314,9 @@ mod linux_impl {
         let id_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
         match id_str.parse::<u32>() {
             Ok(id) => {
-                log::info!("[Sion][sysaudio] created virtual sink module #{id} ({VIRTUAL_SINK_NAME})");
+                log::info!(
+                    "[Sion][sysaudio] created virtual sink module #{id} ({VIRTUAL_SINK_NAME})"
+                );
                 Some(id)
             }
             Err(_) => {
@@ -445,13 +364,79 @@ mod linux_impl {
         let mut result = Vec::new();
         for line in String::from_utf8_lossy(&out).lines() {
             let line = line.trim_start();
-            let Some((id_str, name)) = line.split_once(' ') else { continue };
-            let Ok(id) = id_str.trim().parse::<u32>() else { continue };
+            let Some((id_str, name)) = line.split_once(' ') else {
+                continue;
+            };
+            let Ok(id) = id_str.trim().parse::<u32>() else {
+                continue;
+            };
             let name = name.trim();
             let Some(pos) = name.rfind(':') else { continue };
             result.push((id, name[..pos].to_string(), name[pos + 1..].to_string()));
         }
         result
+    }
+
+    /// `pw-cli ls Port` expose le `node.id` réel de chaque port. Ce nombre
+    /// correspond à `object.id` dans les propriétés du sink-input PulseAudio.
+    /// Contrairement à `node.name`, il reste unique quand plusieurs applis
+    /// s'appellent toutes « Chromium » ou « Firefox ».
+    fn parse_pw_cli_ports(text: &str) -> Vec<PipewirePort> {
+        #[derive(Default)]
+        struct Pending {
+            id: Option<u32>,
+            node_id: Option<u32>,
+            name: Option<String>,
+            direction: Option<String>,
+        }
+
+        fn quoted_value(line: &str, key: &str) -> Option<String> {
+            let value = line.trim().strip_prefix(key)?.trim();
+            Some(value.trim_matches('"').to_owned())
+        }
+
+        fn flush(pending: &mut Pending, result: &mut Vec<PipewirePort>) {
+            if let (Some(id), Some(node_id), Some(name), Some(direction)) = (
+                pending.id.take(),
+                pending.node_id.take(),
+                pending.name.take(),
+                pending.direction.take(),
+            ) {
+                result.push(PipewirePort {
+                    id,
+                    node_id,
+                    name,
+                    direction,
+                });
+            }
+            *pending = Pending::default();
+        }
+
+        let mut result = Vec::new();
+        let mut pending = Pending::default();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("id ") {
+                flush(&mut pending, &mut result);
+                pending.id = rest.split(',').next().and_then(|id| id.trim().parse().ok());
+            } else if let Some(value) = quoted_value(trimmed, "node.id =") {
+                pending.node_id = value.parse().ok();
+            } else if let Some(value) = quoted_value(trimmed, "port.name =") {
+                pending.name = Some(value);
+            } else if let Some(value) = quoted_value(trimmed, "port.direction =") {
+                pending.direction = Some(value);
+            }
+        }
+        flush(&mut pending, &mut result);
+        result
+    }
+
+    fn list_pipewire_ports() -> Vec<PipewirePort> {
+        let out = match Command::new("pw-cli").args(["ls", "Port"]).output() {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => return Vec::new(),
+        };
+        parse_pw_cli_ports(&String::from_utf8_lossy(&out))
     }
 
     /// The virtual sink's playback_FL/FR input port ids (parec captures its
@@ -474,18 +459,16 @@ mod linux_impl {
     /// Re-scan sink-inputs each tick and link EVERY non-Sion stream's output
     /// ports into the virtual sink, by port id (so every tab of every app is
     /// captured — see `pw_link_ids`). Sink-inputs are identified via pactl
-    /// (which gives the process binary), so Sion is excluded reliably and
-    /// device monitors / capture devices are never linked. NOTE: Sion's
-    /// node.name is "Chromium" (CEF); if a *real* Chromium browser is also
-    /// running, its node.name collides and it would be excluded too — known
-    /// limitation, acceptable for now.
+    /// (qui donne le binaire et `object.id`), puis les ports sont sélectionnés
+    /// par le même `node.id` dans PipeWire. Le nom du nœud n'entre jamais dans
+    /// la décision : un navigateur nommé « Chromium » ne peut donc ni faire
+    /// exclure un autre flux, ni entraîner accidentellement celui de Sion.
     fn refresh_sink_input_links() {
         let inputs = list_pa_sink_inputs();
         let mut already_seen = LINKED_NODES.lock().unwrap();
-        // node.names of the non-Sion sink-inputs we want to capture.
-        let mut want: HashSet<String> = HashSet::new();
+        let mut wanted_node_ids: HashSet<u32> = HashSet::new();
         for input in &inputs {
-            if input.binary == SION_BINARY_NAME {
+            if SION_BINARY_NAMES.contains(&input.binary.as_str()) {
                 continue;
             }
             if !already_seen.contains(&input.object_id) {
@@ -495,27 +478,63 @@ mod linux_impl {
                 );
                 already_seen.insert(input.object_id);
             }
-            want.insert(input.node_name.clone());
+            wanted_node_ids.insert(input.object_id);
         }
         let live: HashSet<u32> = inputs.iter().map(|i| i.object_id).collect();
         already_seen.retain(|id| live.contains(id));
         drop(already_seen);
 
-        if want.is_empty() {
+        if wanted_node_ids.is_empty() {
             return;
         }
         let Some((pb_fl, pb_fr)) = virtual_sink_playback_ports() else {
             return;
         };
-        for (id, node, port) in list_ports("-o") {
-            if !want.contains(&node) {
+        for port in list_pipewire_ports() {
+            if port.direction != "out" || !wanted_node_ids.contains(&port.node_id) {
                 continue;
             }
-            if port.ends_with("FR") {
-                pw_link_ids(id, pb_fr);
-            } else if port.ends_with("FL") || port == "output_MONO" {
-                pw_link_ids(id, pb_fl);
+            if port.name.ends_with("FR") {
+                pw_link_ids(port.id, pb_fr);
+            } else if port.name.ends_with("FL") || port.name == "output_MONO" {
+                pw_link_ids(port.id, pb_fl);
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn pw_cli_ports_conserve_node_id_unique() {
+            let text = r#"
+                id 524, type PipeWire:Interface:Port/3
+                    node.id = "228"
+                    port.name = "output_FL"
+                    port.direction = "out"
+                id 355, type PipeWire:Interface:Port/3
+                    node.id = "424"
+                    port.name = "output_FL"
+                    port.direction = "out"
+            "#;
+            assert_eq!(
+                parse_pw_cli_ports(text),
+                vec![
+                    PipewirePort {
+                        id: 524,
+                        node_id: 228,
+                        name: "output_FL".into(),
+                        direction: "out".into(),
+                    },
+                    PipewirePort {
+                        id: 355,
+                        node_id: 424,
+                        name: "output_FL".into(),
+                        direction: "out".into(),
+                    },
+                ]
+            );
         }
     }
 
@@ -535,138 +554,70 @@ mod linux_impl {
         });
     }
 
-    /// Boot the local WebSocket server. Called once — subsequent calls are
-    /// no-ops. The server stays up for the process lifetime; audio flow is
-    /// gated by `CAPTURE_RUNNING` so the port can be returned immediately on
-    /// every `start` without re-binding.
-    fn ensure_ws_server() {
-        if PORT.load(Ordering::Relaxed) != 0 {
-            return;
-        }
-        let listener = match TcpListener::bind("127.0.0.1:0") {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("[Sion][sysaudio] WS bind failed: {e}");
-                return;
-            }
-        };
-        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-        PORT.store(port, Ordering::Relaxed);
-        log::info!("[Sion][sysaudio] WS server on 127.0.0.1:{port}");
-
-        thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                // Binary frames can be large; leaving Nagle on would coalesce
-                // audio frames and balloon end-to-end latency. Disable it so
-                // each WS frame flushes immediately.
-                let _ = stream.set_nodelay(true);
-                let Ok(mut ws) = tungstenite::accept(stream) else {
-                    continue;
-                };
-
-                let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-                WS_SENDERS.lock().unwrap().0.push(tx);
-                log::info!("[Sion][sysaudio] WS client connected");
-
-                thread::spawn(move || {
-                    // Short read timeout so we can check the channel for
-                    // outgoing frames frequently — same trick as the shortcut
-                    // WS.
-                    let _ = ws
-                        .get_ref()
-                        .set_read_timeout(Some(Duration::from_millis(20)));
-                    loop {
-                        // Drain anything queued for this client.
-                        while let Ok(frame) = rx.try_recv() {
-                            if ws.send(Message::Binary(frame.into())).is_err() {
-                                return;
-                            }
-                        }
-                        match ws.read() {
-                            Ok(Message::Ping(data)) => {
-                                let _ = ws.send(Message::Pong(data));
-                            }
-                            Ok(Message::Close(_)) => return,
-                            Err(tungstenite::Error::Io(ref e))
-                                if e.kind() == std::io::ErrorKind::WouldBlock
-                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-                            Err(_) => return,
-                            _ => {}
-                        }
-                    }
-                });
-            }
-        });
-    }
-
     fn broadcast(buf: &[u8]) {
-        let mut senders = WS_SENDERS.lock().unwrap();
+        let mut senders = PCM_SENDERS.lock().unwrap();
         senders.0.retain(|tx| tx.send(buf.to_vec()).is_ok());
     }
 
-    /// Abonne un consommateur Rust interne aux frames PCM (même flux que les
-    /// clients WS) : le partage d'écran natif y publie sa piste
-    /// `ScreenshareAudio` sans passer par le navigateur. Format : voir
+    /// Abonne un consommateur Rust interne aux frames PCM : le partage
+    /// d'écran natif y publie sa piste `ScreenshareAudio` sans passer par le
+    /// navigateur. Format : voir
     /// SAMPLE_RATE/CHANNELS/FRAME_BYTES (f32 48 kHz mono, 20 ms).
     /// Le Receiver DOIT être drainé en continu (`broadcast` éjecte les
     /// retardataires — canal std non borné sinon).
     pub fn subscribe_frames() -> std::sync::mpsc::Receiver<Vec<u8>> {
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-        WS_SENDERS.lock().unwrap().0.push(tx);
+        PCM_SENDERS.lock().unwrap().0.push(tx);
         rx
     }
 
-    pub fn start(sink_monitor: Option<String>) -> Result<u16, String> {
-        ensure_ws_server();
+    pub fn start(_sink_monitor: Option<String>) -> Result<(), String> {
 
         // Stop any previous capture before starting a new one. Must happen
         // BEFORE we mark the new capture as running, otherwise the old thread
         // would keep reading stdout of a killed process and spam EOF errors.
         stop_internal();
 
-        // Try to set up the exclude-Sion path: hidden virtual sink + per-app
-        // pw-link. If anything in this chain fails (no pw-link binary,
-        // module-null-sink unavailable on a host without pipewire-pulse,
-        // etc.) we silently fall back to capturing the default sink monitor,
-        // which still works but lets Sion's own output echo back.
-        let virtual_sink_ok = match create_virtual_sink() {
-            Some(id) => {
-                *VIRTUAL_SINK_MODULE_ID.lock().unwrap() = Some(id);
-                refresh_sink_input_links();
-                spawn_link_watcher();
-                true
-            }
-            None => false,
-        };
+        // L'exclusion de Sion est obligatoire. Un repli vers le moniteur de
+        // sortie global republierait les voix reçues et créerait un écho chez
+        // tous les participants. Le front sait continuer en vidéo seule et
+        // afficher l'avertissement « sans son ».
+        let module_id = create_virtual_sink().ok_or_else(|| {
+            "capture audio sans écho indisponible (sortie virtuelle PipeWire/PulseAudio impossible)"
+                .to_string()
+        })?;
+        *VIRTUAL_SINK_MODULE_ID.lock().unwrap() = Some(module_id);
 
-        // Resolve target source. When the virtual sink is up, we always
-        // capture *its* monitor — Sion is excluded by construction. When it
-        // failed (or the caller forced a specific monitor via the picker),
-        // honour the requested device, falling back to the default sink's
-        // monitor as a last resort.
-        let device = if virtual_sink_ok {
-            format!("{VIRTUAL_SINK_NAME}.monitor")
-        } else {
-            match sink_monitor {
-                Some(s) if !s.is_empty() => s,
-                _ => default_sink_monitor().ok_or_else(|| {
-                    "no default sink (pactl get-default-sink failed)".to_string()
-                })?,
+        // PipeWire publie les ports quelques millisecondes après pactl. Sans
+        // `node.id`, on ne peut pas garantir le filtrage par application : on
+        // préfère annoncer « sans son » plutôt que prétendre avoir partagé un
+        // flux silencieux ou revenir à un routage ambigu par nom.
+        let routing_ready = (0..20).any(|_| {
+            let ready =
+                virtual_sink_playback_ports().is_some() && !list_pipewire_ports().is_empty();
+            if !ready {
+                thread::sleep(Duration::from_millis(50));
             }
-        };
-        log::info!(
-            "[Sion][sysaudio] capture starting on '{device}' via parec (virtual_sink={})",
-            virtual_sink_ok
-        );
+            ready
+        });
+        if !routing_ready {
+            destroy_virtual_sink();
+            return Err(
+                "capture audio sans écho indisponible (ports PipeWire non identifiables)"
+                    .to_string(),
+            );
+        }
+        refresh_sink_input_links();
+        spawn_link_watcher();
+        let device = format!("{VIRTUAL_SINK_NAME}.monitor");
+        log::info!("[Sion][sysaudio] capture starting on '{device}' via parec (Sion exclu)");
 
         // Bump the monitor source to 100% if it's attenuated. See the doc on
         // VOLUME_RESTORE: sometimes it ships at 8%/-66 dB and everything
         // downstream sees noise floor no matter what parec does. Skip when
         // capturing our own virtual sink — we created it at default volume
         // and nothing else can have touched it.
-        if !virtual_sink_ok {
-            boost_monitor_volume(&device);
-        }
+        // Notre sink vient d'être créé à son volume nominal.
 
         // `--latency-msec=20` hints the Pulse/PipeWire daemon to deliver
         // 20 ms buffers, matching FRAME_BYTES. `--raw` outputs headerless
@@ -737,7 +688,7 @@ mod linux_impl {
                 }
                 match reader.read_exact(&mut frame) {
                     Ok(()) => {
-                        if WS_SENDERS.lock().unwrap().0.is_empty() {
+                        if PCM_SENDERS.lock().unwrap().0.is_empty() {
                             // No listeners — drop the frame rather than
                             // backing up the channels.
                             continue;
@@ -764,7 +715,7 @@ mod linux_impl {
             log::info!("[Sion][sysaudio] capture thread exited");
         });
 
-        Ok(PORT.load(Ordering::Relaxed))
+        Ok(())
     }
 
     fn stop_internal() {
@@ -789,9 +740,6 @@ mod linux_impl {
         // Tear down the virtual sink — this single unload-module call
         // drops the sink and every link we attached to it in one step.
         destroy_virtual_sink();
-        // Put the monitor volume back where the user had it (only set
-        // when we fell back to capturing the default sink).
-        restore_monitor_volume();
     }
 
     pub fn stop() {
@@ -799,104 +747,41 @@ mod linux_impl {
         stop_internal();
     }
 
-    pub fn ws_port() -> u16 {
-        PORT.load(Ordering::Relaxed)
-    }
-
-    /// Return every available sink's monitor source name + human label so the
-    /// JS side can populate a "which output to share" picker. The default
-    /// sink's label gets a "(par défaut)" suffix.
-    pub fn list_sinks() -> Vec<(String, String)> {
-        let mut result = Vec::new();
-        let default = default_sink_name();
-        let output = match Command::new("pactl")
-            .args(["-f", "json", "list", "sinks"])
-            .output()
-        {
-            Ok(o) => o,
-            Err(_) => return result,
-        };
-        let json = String::from_utf8_lossy(&output.stdout);
-        // Minimal parse — same style as the existing
-        // list_audio_devices_pulseaudio helper in lib.rs: scan for "name"
-        // and "description" per top-level object.
-        for entry in json.split("\"index\":").skip(1) {
-            let name = extract_json_field(entry, "\"name\":\"");
-            let desc = extract_json_field(entry, "\"description\":\"");
-            let Some(name) = name else { continue };
-            let desc = desc.unwrap_or_else(|| name.clone());
-            let monitor = format!("{name}.monitor");
-            let label = if default.as_deref() == Some(name.as_str()) {
-                format!("{desc} (par défaut)")
-            } else {
-                desc
-            };
-            result.push((monitor, label));
-        }
-        result
-    }
-
-    fn extract_json_field(s: &str, key: &str) -> Option<String> {
-        let i = s.find(key)?;
-        let rest = &s[i + key.len()..];
-        let end = rest.find('"')?;
-        Some(rest[..end].to_string())
-    }
-
-    fn default_sink_name() -> Option<String> {
-        let out = Command::new("pactl")
-            .arg("get-default-sink")
-            .output()
-            .ok()?;
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
-    }
-
-    fn default_sink_monitor() -> Option<String> {
-        default_sink_name().map(|s| format!("{s}.monitor"))
-    }
 }
 
 // ============================================================================
 // Windows implementation — WASAPI process-loopback with target-process-tree
 // exclusion (AUDCLNT_PROCESSLOOPBACK_EXCLUDE_TARGET_PROCESS_TREE). Captures
 // every other application's render output to the default endpoint while
-// leaving Sion (and all its CEF child processes, which share the parent
+// leaving Sion (and its WebView2 child processes, which share the parent
 // PID's tree) out of the mix — same end result as the Linux virtual sink
 // path, but using the native API stack instead of a graph trick.
 //
 // Requires Windows 10 build 20348 (Server 2022) or Windows 11 — the
 // PROCESS_LOOPBACK activation type was introduced in that build. On older
-// systems we report an error and the JS side falls back to Chromium's
-// native screen-share audio (which captures everything, including Sion).
+// systems the capture fails and the share is published without audio
+// (no webview fallback anymore).
 // ============================================================================
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::{CHANNELS, FRAME_BYTES, SAMPLE_RATE};
     use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
-    use tungstenite::Message;
 
     use windows::core::{implement, Interface, Result as WResult, HSTRING, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
     use windows::Win32::Media::Audio::{
         eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
-        IActivateAudioInterfaceCompletionHandler,
-        IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
-        AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-        AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
-        AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-        PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
-        WAVEFORMATEXTENSIBLE_0,
+        IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
+        IAudioCaptureClient, IAudioClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS,
+        AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+        AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+        WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
     };
     // WAVE_FORMAT_EXTENSIBLE moved out of Win32::Media::Audio in windows-rs 0.58
     // and KSAUDIO_SPEAKER_STEREO is no longer generated — define it locally as
@@ -925,72 +810,21 @@ mod windows_impl {
     /// activation type. Earlier builds reject the activation with E_NOTIMPL.
     const MIN_BUILD_FOR_PROCESS_LOOPBACK: u32 = 20348;
 
-    static PORT: AtomicU16 = AtomicU16::new(0);
     static CAPTURE_RUNNING: AtomicBool = AtomicBool::new(false);
 
-    struct Senders(Vec<std::sync::mpsc::Sender<Vec<u8>>>);
-    static WS_SENDERS: std::sync::LazyLock<Mutex<Senders>> =
-        std::sync::LazyLock::new(|| Mutex::new(Senders(Vec::new())));
-
-    fn ensure_ws_server() {
-        if PORT.load(Ordering::Relaxed) != 0 {
-            return;
-        }
-        let listener = match TcpListener::bind("127.0.0.1:0") {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("[Sion][sysaudio] WS bind failed: {e}");
-                return;
-            }
-        };
-        let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-        PORT.store(port, Ordering::Relaxed);
-        log::info!("[Sion][sysaudio] WS server on 127.0.0.1:{port}");
-
-        thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let _ = stream.set_nodelay(true);
-                let Ok(mut ws) = tungstenite::accept(stream) else { continue };
-                let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-                WS_SENDERS.lock().unwrap().0.push(tx);
-                log::info!("[Sion][sysaudio] WS client connected");
-
-                thread::spawn(move || {
-                    let _ = ws
-                        .get_ref()
-                        .set_read_timeout(Some(Duration::from_millis(20)));
-                    loop {
-                        while let Ok(frame) = rx.try_recv() {
-                            if ws.send(Message::Binary(frame.into())).is_err() {
-                                return;
-                            }
-                        }
-                        match ws.read() {
-                            Ok(Message::Ping(d)) => {
-                                let _ = ws.send(Message::Pong(d));
-                            }
-                            Ok(Message::Close(_)) => return,
-                            Err(tungstenite::Error::Io(ref e))
-                                if e.kind() == std::io::ErrorKind::WouldBlock
-                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-                            Err(_) => return,
-                            _ => {}
-                        }
-                    }
-                });
-            }
-        });
-    }
+    struct PcmSenders(Vec<std::sync::mpsc::Sender<Vec<u8>>>);
+    static PCM_SENDERS: std::sync::LazyLock<Mutex<PcmSenders>> =
+        std::sync::LazyLock::new(|| Mutex::new(PcmSenders(Vec::new())));
 
     fn broadcast(buf: &[u8]) {
-        let mut senders = WS_SENDERS.lock().unwrap();
+        let mut senders = PCM_SENDERS.lock().unwrap();
         senders.0.retain(|tx| tx.send(buf.to_vec()).is_ok());
     }
 
     /// Abonne un consommateur Rust interne (voir `linux_impl::subscribe_frames`).
     pub fn subscribe_frames() -> std::sync::mpsc::Receiver<Vec<u8>> {
         let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-        WS_SENDERS.lock().unwrap().0.push(tx);
+        PCM_SENDERS.lock().unwrap().0.push(tx);
         rx
     }
 
@@ -1005,11 +839,10 @@ mod windows_impl {
                 ..Default::default()
             };
             #[allow(non_snake_case)]
-            type RtlGetVersionFn =
-                unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
-            let ntdll = windows::Win32::System::LibraryLoader::GetModuleHandleW(
-                windows::core::w!("ntdll.dll"),
-            );
+            type RtlGetVersionFn = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
+            let ntdll = windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::w!(
+                "ntdll.dll"
+            ));
             let Ok(handle) = ntdll else { return false };
             let proc = windows::Win32::System::LibraryLoader::GetProcAddress(
                 handle,
@@ -1078,14 +911,13 @@ mod windows_impl {
         let _com_guard = ComGuard;
 
         // Activation params: target the *current* PID and exclude its whole
-        // process tree (CEF children inherit the launcher PID as parent).
+        // process tree (les sous-process WebView2 partagent ce parent).
         let mut activation = AUDIOCLIENT_ACTIVATION_PARAMS {
             ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
             Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
                 ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
                     TargetProcessId: GetCurrentProcessId(),
-                    ProcessLoopbackMode:
-                        PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+                    ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
                 },
             },
         };
@@ -1109,8 +941,7 @@ mod windows_impl {
             &mut activation as *mut _ as *mut u8;
 
         let event_done = CreateEventW(None, false, false, None)?;
-        let result_slot: Arc<Mutex<Option<WResult<IAudioClient>>>> =
-            Arc::new(Mutex::new(None));
+        let result_slot: Arc<Mutex<Option<WResult<IAudioClient>>>> = Arc::new(Mutex::new(None));
         let handler = CompletionHandler {
             event: event_done,
             result: result_slot.clone(),
@@ -1138,16 +969,15 @@ mod windows_impl {
         // is no heap allocation to release.
         std::mem::forget(prop);
 
-        let audio_client: IAudioClient = result_slot
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_UNEXPECTED))??;
+        let audio_client: IAudioClient =
+            result_slot.lock().unwrap().take().ok_or_else(|| {
+                windows::core::Error::from(windows::Win32::Foundation::E_UNEXPECTED)
+            })??;
 
         // Build a WAVEFORMATEXTENSIBLE for f32 mono (CHANNELS=1) at our sample
         // rate. The audio engine remixes the endpoint to this requested format.
         // Mono matches the mic so Opus doesn't hit the pt-111 stereo/mono
-        // BUNDLE collision on CEF 148 (same reason as the Linux path).
+        // BUNDLE collision héritée de Chromium (même raison que le chemin Linux).
         let mut format = WAVEFORMATEXTENSIBLE {
             Format: WAVEFORMATEX {
                 wFormatTag: WAVE_FORMAT_EXTENSIBLE as u16,
@@ -1231,7 +1061,7 @@ mod windows_impl {
 
                 while staging.len() >= FRAME_BYTES {
                     let frame: Vec<u8> = staging.drain(..FRAME_BYTES).collect();
-                    if !WS_SENDERS.lock().unwrap().0.is_empty() {
+                    if !PCM_SENDERS.lock().unwrap().0.is_empty() {
                         broadcast(&frame);
                     }
                 }
@@ -1251,8 +1081,7 @@ mod windows_impl {
         }
     }
 
-    pub fn start() -> Result<u16, String> {
-        ensure_ws_server();
+    pub fn start() -> Result<(), String> {
         if !supports_process_loopback() {
             return Err(format!(
                 "WASAPI process-loopback requires Windows build {} or newer (Server 2022 / Windows 11). Older Windows: ask the user to uncheck \"share audio\" — Sion's voice will otherwise echo back through the screen-share track.",
@@ -1263,7 +1092,7 @@ mod windows_impl {
         stop_internal();
         CAPTURE_RUNNING.store(true, Ordering::Release);
         thread::spawn(|| unsafe { capture_thread() });
-        Ok(PORT.load(Ordering::Relaxed))
+        Ok(())
     }
 
     fn stop_internal() {
@@ -1279,7 +1108,4 @@ mod windows_impl {
         stop_internal();
     }
 
-    pub fn ws_port() -> u16 {
-        PORT.load(Ordering::Relaxed)
-    }
 }

@@ -1,9 +1,8 @@
 #!/bin/bash
-# Lancement dev avec voix native (chantier suppression CEF).
-# - Fenêtre : CEF par défaut (comme run-cef.sh) — la voix ne passe plus par
-#   Chromium, mais l'UI reste identique pour isoler les variables.
-# - Bascule voix : Réglages → Voix → "Moteur voix" → "Natif Rust".
-# - Salon non-chiffré d'abord : le pont E2EE natif arrive à l'étape suivante.
+# Lancement dev : fenêtre WRY (WebKitGTK) + voix Rust, seul moteur vocal.
+# - La webview n'embarque aucun LiveKit JS ; `native-voice` est une feature
+#   par défaut.
+# - Salon chiffré couvert par le pont E2EE MatrixRTC → Rust.
 #
 # Usage: ./build-scripts/run-native.sh [-- <args cargo>]
 set -e
@@ -11,32 +10,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-cd "$PROJECT_DIR/src-tauri"
-
-# Libs CEF pour la fenêtre (identique à run-cef.sh)
-if [ ! -f "target/debug/libcef.so" ]; then
-    echo "⚠️  Bibliothèques CEF non trouvées. Copie en cours..."
-    CEF_DIR=$(find target/debug/build -name "cef_linux_x86_64" -type d | head -1)
-    if [ -z "$CEF_DIR" ]; then
-        echo "❌ Impossible de trouver les binaires CEF. Lancez 'cargo build' d'abord."
-        exit 1
-    fi
-    cp -n "$CEF_DIR/libcef.so" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/libEGL.so" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/libGLESv2.so" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/libvulkan.so.1" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/libvk_swiftshader.so" target/debug/ 2>/dev/null || true
-    cp -rn "$CEF_DIR/locales" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/chrome_100_percent.pak" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/chrome_200_percent.pak" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/resources.pak" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/icudtl.dat" target/debug/ 2>/dev/null || true
-    cp -n "$CEF_DIR/v8_context_snapshot.bin" target/debug/ 2>/dev/null || true
-    echo "✅ Bibliothèques CEF copiées"
-fi
+cd "$PROJECT_DIR"
 
 # Serveur Vite en arrière-plan
-cd "$PROJECT_DIR"
 bun run dev &
 VITE_PID=$!
 
@@ -52,8 +28,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Application avec CEF (fenêtre) + voix native (feature).
+# Application avec la fenêtre WRY + voix native (feature par défaut).
 # RUST_BACKTRACE=1 : la panique tokio "Cannot start a runtime from within a
 # runtime" tue l'app sans stack sinon — intraçable (crash du 08/09 18h51).
 cd "$PROJECT_DIR/src-tauri"
-RUST_BACKTRACE=1 cargo run -j4 --features native-voice "$@"
+RUST_BACKTRACE=1 cargo run -j4 "$@"

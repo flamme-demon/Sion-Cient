@@ -5,28 +5,15 @@ import "highlight.js/styles/github-dark.css";
 import "./index.css";
 import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
-import { installCefAudioShim } from "./services/cefAudioShim";
-import { installDenoiseShim } from "./services/denoiseShim";
-import { installAudioDeviceWatcher } from "./services/audioDeviceWatcher";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 import { attachConsole } from "@tauri-apps/plugin-log";
 
-// Route Rust `log::*` records (e.g. the [Sion-cef] media-access diagnostic)
-// into the webview console — the only way to see them on the shipped Windows
-// build (no terminal). Pairs with the Rust logger's Webview target. No-op
-// outside Tauri.
+// Route Rust `log::*` records into the webview console — the only way to see
+// them on the shipped Windows build (no terminal). Pairs with the Rust
+// logger's Webview target. No-op outside Tauri.
 attachConsole().catch(() => {});
 
-// Override enumerateDevices/getUserMedia in CEF so WebRTC sees real devices.
-// Denoise shim wraps getUserMedia *after* cefAudioShim so both chains compose.
-installCefAudioShim().catch(() => {}).finally(() => {
-  installDenoiseShim();
-  // Après les shims : la surveillance réacquiert le micro via la chaîne
-  // getUserMedia complète, donc elle doit être posée une fois celle-ci en place.
-  installAudioDeviceWatcher();
-});
-
-// Intercept all clicks on external links to open in default browser (Tauri/CEF)
+// Intercept all clicks on external links to open in default browser (Tauri)
 document.addEventListener("click", (e) => {
   // If a more specific handler has already cancelled the default action
   // (e.g. mention pills opening the user context menu), don't try to open
@@ -55,7 +42,7 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// Block browser/CEF default keyboard shortcuts that open dialogs we don't
+// Block webview default keyboard shortcuts that open dialogs we don't
 // want (Ctrl+S "Save page", Ctrl+P "Print", Ctrl+O "Open file", Ctrl+U "View
 // source"). Keep Ctrl+R (reload) and Ctrl+F (find) alive — users genuinely
 // expect those to work, and the real cause of spurious reloads was Vite
@@ -71,8 +58,23 @@ window.addEventListener("keydown", (e) => {
 
 // Re-hydrate the session from app-data BEFORE rendering, so the auth store's
 // restoreSession() (run from an App effect) sees the credentials/device_id even
-// if a CEF/Chromium upgrade reset localStorage. No-op (instant) on web.
+// si une mise à jour de la webview purge localStorage. No-op (instant) on web.
 hydrateSessionFromAppData().finally(() => {
+  // Langue : tant que l'utilisateur n'a pas choisi explicitement (store
+  // `language` vide = « Système »), on lit la locale OS côté Rust. Sous
+  // WRY/WebKitGTK, `navigator.language` peut annoncer en-US sur un système
+  // français ; la locale OS fait donc foi pour la détection automatique.
+  import("./stores/useSettingsStore").then(({ useSettingsStore }) => {
+    if (useSettingsStore.getState().language) return;
+    import("@tauri-apps/api/core").then(({ invoke }) =>
+      invoke<string>("system_locale").then((loc) => {
+        const lng = loc.slice(0, 2).toLowerCase();
+        if (lng === "fr" || lng === "en") {
+          import("i18next").then((i) => i.default.changeLanguage(lng)).catch(() => {});
+        }
+      }).catch(() => {}),
+    ).catch(() => {});
+  }).catch(() => {});
   // Keep the settings snapshot in app-data fresh as the user changes them.
   startSettingsMirror();
   createRoot(document.getElementById("root")!).render(

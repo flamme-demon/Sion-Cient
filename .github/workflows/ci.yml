@@ -2,8 +2,8 @@ name: CI
 
 # Non-regression gate: runs on every push/PR to main. The JS job is the fast
 # path (~2 min): typecheck + vitest unit tests. The Rust job compiles the
-# crate in debug (CEF deps make it heavy — cargo cache keeps re-runs fast)
-# and runs the unit tests (summarize run_bounded guards, …).
+# crate in debug (webrtc-based voice makes it heavy — cargo cache keeps
+# re-runs fast) and runs the unit tests.
 
 on:
   push:
@@ -43,21 +43,16 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install system dependencies
-        # Same prereqs as the release build — tauri-runtime-cef's *-sys build
-        # scripts need the gtk/glib/soup .pc files even for a debug testbuild.
+        # WRY (WebKitGTK) + audio native + fenêtre overlay (winit X11/Wayland).
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config curl wget file zstd squashfs-tools \
             libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libsoup-3.0-dev \
-            libayatana-appindicator3-dev librsvg2-dev libxdo-dev libglib2.0-dev \
+            librsvg2-dev libglib2.0-dev \
             libasound2-dev libudev-dev libpulse-dev libxcb1-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev libwayland-dev \
-            libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
-            libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 \
-            libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
-            libgtk-3-0t64 libfuse2t64
+            libxkbcommon-dev libwayland-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:

@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { ConnectionQuality, RoomEvent } from "livekit-client";
-import { getCurrentRoom, muteRemoteParticipant } from "../../services/livekitService";
+import type { ConnectionQuality } from "../../types/livekit";
+import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAdminStore } from "../../stores/useAdminStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { checkUserSuspended, suspendUser } from "../../services/adminService";
@@ -15,114 +15,44 @@ interface UserContextMenuProps {
   onClose: () => void;
 }
 
-function getColor(ms: number) {
-  if (ms < 50) return "var(--color-green)";
-  if (ms < 150) return "var(--color-yellow)";
-  return "var(--color-error)";
-}
-
 function qualityColor(q: ConnectionQuality) {
-  if (q === ConnectionQuality.Excellent) return "var(--color-green)";
-  if (q === ConnectionQuality.Good) return "var(--color-yellow)";
+  if (q === "excellent") return "var(--color-green)";
+  if (q === "good") return "var(--color-yellow)";
   return "var(--color-error)";
 }
 
 function qualityLabel(q: ConnectionQuality) {
-  if (q === ConnectionQuality.Excellent) return "Excellent";
-  if (q === ConnectionQuality.Good) return "Good";
-  if (q === ConnectionQuality.Poor) return "Poor";
-  if (q === ConnectionQuality.Lost) return "Lost";
+  if (q === "excellent") return "Excellent";
+  if (q === "good") return "Good";
+  if (q === "poor") return "Poor";
+  if (q === "lost") return "Lost";
   return "Unknown";
 }
 
+/** Qualité de connexion LiveKit du participant, alimentée par le moteur Rust
+ *  (`ParticipantInfo.connectionQuality`). Le RTT local n'est plus exposé par
+ *  la webview : seul le niveau de qualité reste affiché. */
 function LatencySparkline({ participantIdentity }: { participantIdentity: string }) {
   const { t } = useTranslation();
-  const room = getCurrentRoom();
-  const isLocal = room?.localParticipant.identity === participantIdentity;
+  const quality = useLiveKitStore(
+    (s) => s.participants.find((p) => p.identity === participantIdentity)?.connectionQuality,
+  );
 
-  const [samples, setSamples] = useState<number[]>([]);
-  const samplesRef = useRef<number[]>([]);
-  const [quality, setQuality] = useState<ConnectionQuality | null>(null);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const currentRoom = getCurrentRoom();
-      if (!currentRoom) return;
-
-      if (isLocal) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const engine = (currentRoom as any)?.engine;
-        const rtt = engine?.client?.rtt ?? engine?.rtt ?? null;
-        if (rtt != null) {
-          samplesRef.current = [...samplesRef.current.slice(-29), rtt];
-          setSamples([...samplesRef.current]);
-        }
-      } else {
-        const participant = currentRoom.remoteParticipants.get(participantIdentity);
-        if (participant) {
-          setQuality(participant.connectionQuality);
-        }
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [participantIdentity, isLocal]);
-
-  if (!isLocal) {
-    if (quality === null) {
-      return (
-        <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--color-outline)" }}>
-          {t("contextMenu.noLatencyData")}
-        </div>
-      );
-    }
-    return (
-      <div style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{
-          width: 8, height: 8, borderRadius: "50%",
-          background: qualityColor(quality),
-        }} />
-        <span style={{ fontSize: 12, fontWeight: 600, color: qualityColor(quality) }}>
-          {qualityLabel(quality)}
-        </span>
-      </div>
-    );
-  }
-
-  const current = samples.length > 0 ? samples[samples.length - 1] : null;
-
-  if (current === null) {
+  if (!quality) {
     return (
       <div style={{ padding: "8px 14px", fontSize: 12, color: "var(--color-outline)" }}>
         {t("contextMenu.noLatencyData")}
       </div>
     );
   }
-
-  const max = Math.max(...samples, 1);
-  const width = 140;
-  const height = 32;
-  const points = samples
-    .map((v, i) => {
-      const x = (i / 29) * width;
-      const y = height - (v / max) * (height - 4);
-      return `${x},${y}`;
-    })
-    .join(" ");
-
   return (
-    <div style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-      <svg width={width} height={height} style={{ flexShrink: 0 }}>
-        <polyline
-          points={points}
-          fill="none"
-          stroke={getColor(current)}
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-      </svg>
-      <span style={{ fontSize: 12, fontWeight: 600, color: getColor(current), fontVariantNumeric: "tabular-nums" }}>
-        {Math.round(current)} ms
+    <div style={{ padding: "8px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{
+        width: 8, height: 8, borderRadius: "50%",
+        background: qualityColor(quality),
+      }} />
+      <span style={{ fontSize: 12, fontWeight: 600, color: qualityColor(quality) }}>
+        {qualityLabel(quality)}
       </span>
     </div>
   );
@@ -148,43 +78,16 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
   const [showKickModal, setShowKickModal] = useState(false);
   const [kickReason, setKickReason] = useState("");
 
-  // Persist mute state across context menu re-opens
-  const [isMuted, setIsMuted] = useState(() => {
-    const room = getCurrentRoom();
-    if (!room) return false;
-    const participant = room.remoteParticipants.get(rawUserId);
-    if (!participant) return false;
-    for (const pub of participant.audioTrackPublications.values()) {
-      if (pub.track && !pub.track.mediaStreamTrack.enabled) return true;
-    }
-    return false;
-  });
-
   // Extract Matrix userId from LiveKit identity (@user:server:deviceId → @user:server)
   const matrixUserId = rawUserId.match(/^(@[^:]+:[^:]+)/)?.[1] || rawUserId;
 
-  // Whether the target is CURRENTLY in the voice room. Kept reactive so the
-  // Kick/Mute options vanish the moment they leave (e.g. another moderator
-  // already kicked them) — otherwise the menu would keep offering to kick a
-  // user who's no longer there.
-  const [targetInVoice, setTargetInVoice] = useState(false);
-  useEffect(() => {
-    const room = getCurrentRoom();
-    if (!room) { setTargetInVoice(false); return; }
-    const matches = (id: string) => id === matrixUserId || id.startsWith(matrixUserId + ":");
-    const check = () => {
-      const present = Array.from(room.remoteParticipants.values()).some((p) => matches(p.identity))
-        || matches(room.localParticipant.identity);
-      setTargetInVoice(present);
-    };
-    check();
-    room.on(RoomEvent.ParticipantConnected, check);
-    room.on(RoomEvent.ParticipantDisconnected, check);
-    return () => {
-      room.off(RoomEvent.ParticipantConnected, check);
-      room.off(RoomEvent.ParticipantDisconnected, check);
-    };
-  }, [matrixUserId]);
+  // Whether the target is CURRENTLY in the voice room. Réactif (liste des
+  // participants du moteur Rust) : les options Kick disparaissent dès qu'il
+  // part, sans offrir de kicker un utilisateur absent.
+  const participants = useLiveKitStore((s) => s.participants);
+  const targetInVoice = participants.some(
+    (p) => p.identity === matrixUserId || p.identity.startsWith(matrixUserId + ":"),
+  );
 
   // If the kick modal is open and the target leaves (someone else kicked them
   // first), dismiss it — there's no one left to kick.
@@ -277,12 +180,6 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     } finally {
       setActionLoading(false);
     }
-  };
-
-  const handleMuteToggle = () => {
-    const newMuted = !isMuted;
-    muteRemoteParticipant(rawUserId, newMuted);
-    setIsMuted(newMuted);
   };
 
   const handleSetRole = async (role: RoleType) => {
@@ -476,13 +373,6 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
           onClose();
         }} style={itemStyle}>
           👉 Poke
-        </button>
-      )}
-
-      {/* Mute (local, works for everyone in vocal) */}
-      {!isMyself && targetInVoice && (
-        <button onClick={handleMuteToggle} style={itemStyle}>
-          {isMuted ? t("contextMenu.unmute") : t("contextMenu.mute")}
         </button>
       )}
 
