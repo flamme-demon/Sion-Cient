@@ -23,6 +23,8 @@ import { HotkeyCaptureModal } from "./HotkeyCaptureModal";
 import { formatCombo } from "../../utils/keyCombo";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { loadHotkeys, onHotkeysChange, pruneHotkeys, resyncHotkeys } from "../../services/soundboardHotkeys";
+import { useLayoutStore } from "../../stores/useLayoutStore";
+import { useDockZone } from "../layout/dockZoneContext";
 
 // Build a nested tree from "Films/Kamelott" paths so the pill navigation can
 // list top-level categories and drill into sub-categories.
@@ -335,6 +337,106 @@ export function SoundboardPanel() {
     >{label}</button>
   );
 
+  // ── Châssis compact quand le panneau vit dans la zone basse ─────────────
+  // Le bandeau est large et court : tous les contrôles tiennent sur UNE ligne
+  // (titre, onglets, recherche, volume) pour que la hauteur restante aille
+  // aux sons, pas au châssis. En colonne droite, la mise en page d'origine
+  // reste telle quelle.
+  const dockZone = useDockZone();
+  const compact = dockZone === "bottom";
+
+  const tabDefs = [
+    { key: "sounds" as const, label: t("soundboard.tabSounds"), show: true },
+    { key: "voices" as const, label: t("tts.tab"), show: canUpload },
+    { key: "members" as const, label: `${t("soundboard.tabMembers")} · ${members.length}`, show: canManageMembers },
+  ].filter((x) => x.show);
+
+  const searchBox = (inHeader: boolean) => (
+    <div style={{
+      position: 'relative', display: 'flex', alignItems: 'center', minWidth: 0,
+      flex: inHeader ? '0 1 220px' : 1,
+    }}>
+      <span style={{ position: 'absolute', left: inHeader ? 10 : 12, color: 'var(--color-on-surface-variant)', display: 'flex', pointerEvents: 'none' }}>
+        <svg width={inHeader ? 13 : 15} height={inHeader ? 13 : 15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+      </span>
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t("soundboard.searchPlaceholder")}
+        style={{
+          width: '100%', minWidth: 0, boxSizing: 'border-box',
+          padding: inHeader ? '4px 10px 4px 28px' : '9px 12px 9px 34px',
+          borderRadius: inHeader ? 999 : 12,
+          border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-container)',
+          color: 'var(--color-on-surface)', fontSize: inHeader ? 12 : 13, fontFamily: 'inherit', outline: 'none',
+        }}
+      />
+    </div>
+  );
+
+  const volumeControl = (inHeader: boolean) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 0, color: 'var(--color-on-surface-variant)' }}>
+      <button
+        type="button"
+        onClick={() => setEnabled(!enabled)}
+        title={enabled ? t("soundboard.disableSb") : t("soundboard.enableSb")}
+        style={{ flexShrink: 0, border: 'none', background: 'transparent', cursor: 'pointer', padding: 4, borderRadius: 8, display: 'flex', color: enabled ? 'var(--color-on-surface)' : 'var(--color-error)' }}
+      >
+        {enabled ? (
+          <svg width={inHeader ? 15 : 18} height={inHeader ? 15 : 18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+          </svg>
+        ) : (
+          <svg width={inHeader ? 15 : 18} height={inHeader ? 15 : 18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            <line x1="23" y1="9" x2="17" y2="15" />
+            <line x1="17" y1="9" x2="23" y2="15" />
+          </svg>
+        )}
+      </button>
+      <input
+        type="range" min={0} max={1} step={0.05} value={volume}
+        className="sion-range"
+        disabled={!enabled}
+        onChange={(e) => setVolume(parseFloat(e.target.value))}
+        style={{
+          width: inHeader ? 90 : undefined,
+          flex: inHeader ? '0 0 auto' : 1,
+          opacity: enabled ? 1 : 0.4,
+          cursor: enabled ? 'pointer' : 'not-allowed',
+          '--sion-range-progress': `${Math.round(volume * 100)}%`,
+        } as React.CSSProperties}
+        title={t("soundboard.volume")}
+      />
+      <span style={{ minWidth: inHeader ? 26 : 30, textAlign: 'right', fontSize: inHeader ? 10 : 11, opacity: enabled ? 1 : 0.4 }}>{Math.round(volume * 100)}%</span>
+    </div>
+  );
+
+  const uploadButton = (small: boolean) => (
+    <button
+      onClick={() => setShowUpload(true)}
+      title={t("soundboard.upload")}
+      style={{
+        width: small ? 28 : 38, height: small ? 28 : 38, flexShrink: 0,
+        borderRadius: small ? 999 : 12, border: 'none',
+        background: 'var(--color-primary)', color: 'var(--color-on-primary)', cursor: 'pointer',
+        fontSize: small ? 17 : 20, fontWeight: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+      }}
+    >+</button>
+  );
+
+  const closeButton = (size: number) => (
+    <button
+      onClick={() => useLayoutStore.getState().closeDockPanel("soundboard")}
+      title={t("soundboard.close")}
+      style={{ flexShrink: 0, border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: size, padding: 2, lineHeight: 1 }}
+    >×</button>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       <style>{`
@@ -345,48 +447,75 @@ export function SoundboardPanel() {
         .sb-pills::-webkit-scrollbar { height: 0; width: 0; }
       `}</style>
 
-      {/* Header */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '14px 16px 10px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t("soundboard.title")}</span>
-          <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', flexShrink: 0 }}>{t("soundboard.soundCount", { count: playable.length })}</span>
+      {compact ? (
+        /* Bandeau : tout tient sur une ligne — la hauteur restante va aux sons. */
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+          padding: '5px 10px', borderBottom: '1px solid var(--color-outline-variant)',
+        }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--color-on-surface)', flexShrink: 0 }}>{t("soundboard.title")}</span>
+          <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', flexShrink: 0 }}>{t("soundboard.soundCount", { count: playable.length })}</span>
+          {roomId && tabDefs.length > 1 && (
+            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+              {tabDefs.map((x) => (
+                <button
+                  key={x.key}
+                  onClick={() => setTab(x.key)}
+                  style={{
+                    padding: '2px 9px', borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit',
+                    fontSize: 11.5, fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap',
+                    border: tab === x.key ? '1px solid var(--color-primary)' : '1px solid var(--color-outline-variant)',
+                    background: tab === x.key ? 'var(--color-secondary-container)' : 'transparent',
+                    color: tab === x.key ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)',
+                  }}
+                >{x.label}</button>
+              ))}
+            </div>
+          )}
+          <div style={{ flex: 1 }} />
+          {roomId && tab === "sounds" && searchBox(true)}
+          {roomId && tab === "sounds" && canUpload && uploadButton(true)}
+          {roomId && tab === "sounds" && volumeControl(true)}
+          {closeButton(18)}
         </div>
-        <button
-          onClick={close}
-          title={t("soundboard.close")}
-          style={{ flexShrink: 0, border: 'none', background: 'transparent', color: 'var(--color-on-surface-variant)', cursor: 'pointer', fontSize: 20, padding: 2, lineHeight: 1 }}
-        >×</button>
-      </div>
+      ) : (
+        <>
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '14px 16px 10px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+              <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t("soundboard.title")}</span>
+              <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', flexShrink: 0 }}>{t("soundboard.soundCount", { count: playable.length })}</span>
+            </div>
+            {closeButton(20)}
+          </div>
+
+          {/* Tabs — défilement horizontal (masqué) pour ne jamais rogner quand le
+              panneau est étroit. */}
+          {roomId && (canUpload || canManageMembers) && (
+            <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)', overflowX: 'auto' }}>
+              {tabDefs.map((x) => (
+                <button
+                  key={x.key}
+                  onClick={() => setTab(x.key)}
+                  style={{
+                    padding: '8px 0', border: 'none', background: 'transparent', cursor: 'pointer',
+                    fontSize: 13, fontWeight: 600, fontFamily: 'inherit', flexShrink: 0, whiteSpace: 'nowrap',
+                    borderBottom: tab === x.key ? '2px solid var(--color-primary)' : '2px solid transparent',
+                    color: tab === x.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
+                  }}
+                >{x.label}</button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
 
       {!roomId && (
         <div style={{ padding: 20, fontSize: 12, color: 'var(--color-outline)', textAlign: 'center' }}>
           {t("soundboard.notCreated")}
-        </div>
-      )}
-
-      {/* Tabs — défilement horizontal (masqué) pour ne jamais rogner quand le
-          panneau est étroit. */}
-      {roomId && (canUpload || canManageMembers) && (
-        <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 18, padding: '0 16px', borderBottom: '1px solid var(--color-outline-variant)', overflowX: 'auto' }}>
-          {([
-            { key: "sounds" as const, label: t("soundboard.tabSounds"), show: true },
-            { key: "voices" as const, label: t("tts.tab"), show: canUpload },
-            { key: "members" as const, label: `${t("soundboard.tabMembers")} · ${members.length}`, show: canManageMembers },
-          ]).filter((x) => x.show).map((x) => (
-            <button
-              key={x.key}
-              onClick={() => setTab(x.key)}
-              style={{
-                padding: '8px 0', border: 'none', background: 'transparent', cursor: 'pointer',
-                fontSize: 13, fontWeight: 600, fontFamily: 'inherit', flexShrink: 0, whiteSpace: 'nowrap',
-                borderBottom: tab === x.key ? '2px solid var(--color-primary)' : '2px solid transparent',
-                color: tab === x.key ? 'var(--color-on-surface)' : 'var(--color-on-surface-variant)',
-              }}
-            >{x.label}</button>
-          ))}
         </div>
       )}
 
@@ -439,43 +568,17 @@ export function SoundboardPanel() {
 
       {roomId && tab === "sounds" && (
         <>
-          {/* Search + add — le conteneur de l'input doit pouvoir se comprimer
-              (minWidth 0), sinon la ligne déborde et rogne le bouton « + »
-              quand le panneau est étroit. */}
-          <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div style={{ flex: 1, minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center' }}>
-              <span style={{ position: 'absolute', left: 12, color: 'var(--color-on-surface-variant)', display: 'flex', pointerEvents: 'none' }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-              </span>
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t("soundboard.searchPlaceholder")}
-                style={{
-                  flex: 1, minWidth: 0, padding: '9px 12px 9px 34px', borderRadius: 12,
-                  border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-container)',
-                  color: 'var(--color-on-surface)', fontSize: 13, fontFamily: 'inherit', outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
+          {/* Search + add — en zone basse, la recherche et le « + » vivent dans
+              la ligne d'en-tête (châssis compact). */}
+          {!compact && (
+            <div style={{ padding: '12px 16px 8px', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {searchBox(false)}
+              {canUpload && uploadButton(false)}
             </div>
-            {canUpload && (
-              <button
-                onClick={() => setShowUpload(true)}
-                title={t("soundboard.upload")}
-                style={{
-                  width: 38, height: 38, flexShrink: 0, borderRadius: 12, border: 'none',
-                  background: 'var(--color-primary)', color: 'var(--color-on-primary)', cursor: 'pointer',
-                  fontSize: 20, fontWeight: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-                }}
-              >+</button>
-            )}
-          </div>
+          )}
 
           {/* Quick-filter + top-level category pills */}
-          <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 8, padding: '4px 16px 8px', overflowX: 'auto' }}>
+          <div className="sb-pills" onWheel={onPillWheel} style={{ display: 'flex', gap: 8, padding: compact ? '2px 10px 6px' : '4px 16px 8px', overflowX: 'auto' }}>
             {pill("fav", <>⭐ {t("soundboard.favorites")}</>, filterMode === "favorites", () => { setFilterMode("favorites"); setSelectedCat(null); })}
             {pill("top", <>🔥 {t("soundboard.top")}</>, filterMode === "top", () => { setFilterMode("top"); setSelectedCat(null); })}
             {pill("all", t("soundboard.allCategories"), filterMode === "all" && selectedCat === null, () => { setFilterMode("all"); setSelectedCat(null); })}
@@ -518,17 +621,88 @@ export function SoundboardPanel() {
           )}
 
           {/* Sound cards */}
-          <div style={{ flex: 1, overflow: 'auto', padding: '4px 16px 12px' }}>
+          <div style={{ flex: 1, overflow: 'auto', padding: compact ? '2px 10px 8px' : '4px 16px 12px' }}>
             {filtered.length === 0 ? (
-              <div style={{ padding: 24, fontSize: 12, color: 'var(--color-outline)', textAlign: 'center' }}>
+              <div style={{ padding: compact ? 12 : 24, fontSize: 12, color: 'var(--color-outline)', textAlign: 'center' }}>
                 {filterMode === "favorites" ? t("soundboard.noFavorites") : filterMode === "top" ? t("soundboard.noTop") : t("soundboard.empty")}
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: compact ? 'repeat(auto-fill, minmax(230px, 1fr))' : 'repeat(auto-fill, minmax(150px, 1fr))',
+                gap: compact ? 6 : 10,
+                alignContent: 'start',
+              }}>
                 {filtered.map((s) => {
                   const hotkey = hotkeys[s.eventId] || null;
                   const isFav = favoritesSet.has(s.eventId);
                   const subtitle = s.category.replace(/\//g, " · ");
+                  // Zone basse : carte en pastille (une ligne) — la hauteur est
+                  // comptée, chaque son doit tenir dans une rangée de ~30 px.
+                  if (compact) {
+                    return (
+                      <div
+                        key={s.eventId}
+                        className="sound-card"
+                        onClick={() => handlePlay(s)}
+                        onContextMenu={(ev) => { ev.preventDefault(); setHotkeyTarget(s); }}
+                        title={!enabled ? t("soundboard.disabledHint") : `${s.label} — ${s.category}${s.ttsModel ? `\n${t("tts.generatedWith", { model: TTS_MODEL_LABELS[s.ttsModel] || s.ttsModel })}` : ""}\n${t("soundboard.rightClickAssign")}${hotkey ? `\n${t("soundboard.currentHotkey", { combo: formatCombo(hotkey) })}` : ""}`}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '5px 8px', borderRadius: 10,
+                          border: '1px solid var(--color-outline-variant)',
+                          background: 'var(--color-surface-container)',
+                          cursor: 'pointer', opacity: enabled ? 1 : 0.4, pointerEvents: enabled ? 'auto' : 'none',
+                          transition: 'background 120ms, border-color 120ms',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; e.currentTarget.style.borderColor = 'var(--color-primary)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--color-surface-container)'; e.currentTarget.style.borderColor = 'var(--color-outline-variant)'; }}
+                      >
+                        <span style={{
+                          width: 22, height: 22, flexShrink: 0, borderRadius: 6,
+                          background: 'var(--color-surface-container-highest)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13,
+                        }}>{s.emoji || '🔊'}</span>
+                        <span style={{
+                          flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>{s.label}</span>
+                        {hotkey && (
+                          <span style={{
+                            flexShrink: 0, background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+                            fontSize: 9, padding: '1px 5px', borderRadius: 5, fontWeight: 700, letterSpacing: '0.02em', pointerEvents: 'none',
+                          }}>{formatCombo(hotkey)}</span>
+                        )}
+                        {s.ttsModel && (
+                          <span style={{
+                            flexShrink: 0, fontSize: 9, fontWeight: 700, letterSpacing: 0.4, padding: '1px 5px',
+                            borderRadius: 999, background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+                          }}>{t("tts.badge")}</span>
+                        )}
+                        {canUpload && (
+                          <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDelete(s); }}
+                              title={t("soundboard.deleteHint")}
+                              className="sound-delete-btn"
+                              style={{ width: 20, height: 20, borderRadius: 10, border: 'none', background: 'var(--color-error-container)', color: 'var(--color-error)', fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'none', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}
+                            >×</button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setEditTarget(s); }}
+                              title={t("soundboard.editHint")}
+                              className="sound-edit-btn"
+                              style={{ width: 20, height: 20, borderRadius: 10, border: 'none', background: 'var(--color-secondary-container)', color: 'var(--color-on-secondary-container)', fontSize: 10, cursor: 'pointer', display: 'none', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}
+                            >✎</button>
+                          </span>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleFavorite(s.eventId); }}
+                          title={isFav ? t("soundboard.unfavorite") : t("soundboard.favorite")}
+                          style={{ flexShrink: 0, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: 2, color: isFav ? 'var(--color-orange)' : 'var(--color-outline)', opacity: isFav ? 1 : 0.5 }}
+                        >{isFav ? '★' : '☆'}</button>
+                      </div>
+                    );
+                  }
                   return (
                     <div
                       key={s.eventId}
@@ -613,45 +787,16 @@ export function SoundboardPanel() {
             )}
           </div>
 
-          {/* Footer: enable + volume */}
-          <div style={{
-            padding: '8px 16px', borderTop: '1px solid var(--color-outline-variant)',
-            display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--color-on-surface-variant)',
-          }}>
-            <button
-              type="button"
-              onClick={() => setEnabled(!enabled)}
-              title={enabled ? t("soundboard.disableSb") : t("soundboard.enableSb")}
-              style={{
-                flexShrink: 0, border: 'none', background: 'transparent', cursor: 'pointer',
-                padding: 4, borderRadius: 8, display: 'flex',
-                color: enabled ? 'var(--color-on-surface)' : 'var(--color-error)',
-              }}
-            >
-              {enabled ? (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <line x1="23" y1="9" x2="17" y2="15" />
-                  <line x1="17" y1="9" x2="23" y2="15" />
-                </svg>
-              )}
-            </button>
-            <input
-              type="range" min={0} max={1} step={0.05} value={volume}
-              className="sion-range"
-              disabled={!enabled}
-              onChange={(e) => setVolume(parseFloat(e.target.value))}
-              style={{ flex: 1, opacity: enabled ? 1 : 0.4, cursor: enabled ? 'pointer' : 'not-allowed', '--sion-range-progress': `${Math.round(volume * 100)}%` } as React.CSSProperties}
-              title={t("soundboard.volume")}
-            />
-            <span style={{ minWidth: 30, textAlign: 'right', opacity: enabled ? 1 : 0.4 }}>{Math.round(volume * 100)}%</span>
-          </div>
+          {/* Footer: enable + volume — en zone basse, le volume vit déjà dans
+              la ligne d'en-tête (châssis compact). */}
+          {!compact && (
+            <div style={{
+              padding: '8px 16px', borderTop: '1px solid var(--color-outline-variant)',
+              display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--color-on-surface-variant)',
+            }}>
+              {volumeControl(false)}
+            </div>
+          )}
         </>
       )}
 

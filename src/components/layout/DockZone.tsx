@@ -14,6 +14,7 @@ import {
   type DockZoneId,
 } from "../../stores/useLayoutStore";
 import { ResizeHandle } from "./ResizeHandle";
+import { DockZoneContext } from "./dockZoneContext";
 import { MemberPanel } from "../chat/MemberPanel";
 import { SoundboardPanel } from "../chat/SoundboardPanel";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
@@ -292,7 +293,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
         <aside data-dock-zone="right" style={{ ...shellStyle, width: zoneState.size, borderLeft: '1px solid var(--color-outline-variant)' }}>
           {bar}
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <PanelBody />
+            <DockZoneContext.Provider value={zone}><PanelBody /></DockZoneContext.Provider>
           </div>
         </aside>
       </div>
@@ -305,7 +306,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
       <section data-dock-zone="bottom" style={{ ...shellStyle, height: zoneState.size, borderTop: '1px solid var(--color-outline-variant)' }}>
         {bar}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <PanelBody />
+          <DockZoneContext.Provider value={zone}><PanelBody /></DockZoneContext.Provider>
         </div>
       </section>
     </div>
