@@ -97,26 +97,31 @@ export function Sidebar() {
 
   const compact = sidebarMode === "rail";
   const width = compact ? SIDEBAR_RAIL_WIDTH : sidebarWidth;
-  // Menu à droite : la poignée de resize passe sur son bord GAUCHE (le bord
-  // qui touche le contenu), et le sens de tirage s'inverse.
+  // Menu à droite : la poignée passe sur son bord GAUCHE (le bord intérieur,
+  // côté contenu) et le sens de tirage s'inverse. Sinon elle reste entre le
+  // menu et le chat — jamais sur le bord de la fenêtre.
   const onRight = sidebarSide === "right";
+
+  const handle = (
+    <ResizeHandle
+      side={onRight ? "left" : "right"}
+      value={width}
+      // Depuis le rail, le drag démarre ancré juste sous le seuil de
+      // déploiement : le premier pixel vers la droite redéploie la sidebar.
+      startValue={compact ? SIDEBAR_RAIL_SNAP_OUT - 1 : sidebarWidth}
+      min={SIDEBAR_RAIL_WIDTH}
+      max={SIDEBAR_MAX_WIDTH}
+      onChange={setSidebarWidth}
+      onReset={resetSidebar}
+      label={t("layout.resizeSidebar", {
+        defaultValue: "Redimensionner le menu — double-clic pour la taille par défaut, Ctrl+B pour replier",
+      })}
+    />
+  );
 
   return (
     <div style={{ display: 'flex', height: '100%', flexShrink: 0 }}>
-      <ResizeHandle
-        side={onRight ? "left" : "right"}
-        value={width}
-        // Depuis le rail, le drag démarre ancré juste sous le seuil de
-        // déploiement : le premier pixel vers la droite redéploie la sidebar.
-        startValue={compact ? SIDEBAR_RAIL_SNAP_OUT - 1 : sidebarWidth}
-        min={SIDEBAR_RAIL_WIDTH}
-        max={SIDEBAR_MAX_WIDTH}
-        onChange={setSidebarWidth}
-        onReset={resetSidebar}
-        label={t("layout.resizeSidebar", {
-          defaultValue: "Redimensionner le menu — double-clic pour la taille par défaut, Ctrl+B pour replier",
-        })}
-      />
+      {onRight && handle}
       <div style={{
         width,
         minWidth: width,
@@ -134,6 +139,7 @@ export function Sidebar() {
         <ChannelList compact={compact} />
         <UserControls compact={compact} />
       </div>
+      {!onRight && handle}
     </div>
   );
 }
