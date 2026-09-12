@@ -2027,8 +2027,8 @@ pub fn voice_native_set_screenshare_audio_volume(
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeShareAudioState {
-    muted: bool,
-    volume: f32,
+    pub muted: bool,
+    pub volume: f32,
 }
 
 /// État local du son d'un partage (mute + volume). Le front s'en sert pour se

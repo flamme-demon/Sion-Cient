@@ -231,7 +231,7 @@
     "monitorHint": "Le partage d'une fenêtre unique n'est pas disponible sur Windows — choisis un écran entier.",
     "start": "Démarrer le partage",
     "apply": "Appliquer",
-    "nativePip": "PIP natif — fenêtre au-dessus des autres applications (glisser pour déplacer, clic droit pour fermer)"
+    "nativePip": "PIP natif — fenêtre au-dessus des autres applications. Glisser pour déplacer ; boutons en haut à droite : 🏠 revenir sur Sion, 🔊 couper le son du partage ; clic droit pour fermer."
   },
   "soundboard": {
     "title": "Soundboard",

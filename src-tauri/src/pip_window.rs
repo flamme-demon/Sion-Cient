@@ -81,6 +81,52 @@ struct PipHandle {
 
 static HANDLE: OnceLock<PipHandle> = OnceLock::new();
 static OPEN: AtomicBool = AtomicBool::new(false);
+/// Handle Tauri de l'application, posé au démarrage (`set_app_handle`) : il
+/// sert aux actions des boutons du PIP — revenir sur Sion, couper le son du
+/// partage — sans repasser par le front.
+static APP: OnceLock<tauri::AppHandle<crate::TauriRuntime>> = OnceLock::new();
+
+/// Posé par `lib.rs` (setup). Sans lui les boutons restent inertes (la
+/// fenêtre, elle, s'affiche quand même).
+pub fn set_app_handle(app: tauri::AppHandle<crate::TauriRuntime>) {
+    let _ = APP.set(app);
+}
+
+/// Boutons dessinés dans le coin haut-droit (24 px, 4 px d'écart, marge 8).
+const BTN: u32 = 24;
+const BTN_GAP: u32 = 4;
+const BTN_MARGIN: u32 = 8;
+
+/// Coins haut-gauche des deux boutons (retour, son) pour une surface donnée.
+fn button_rects(w: u32, _h: u32) -> ((u32, u32), (u32, u32)) {
+    let mute_x = w.saturating_sub(BTN_MARGIN + BTN);
+    let back_x = mute_x.saturating_sub(BTN_GAP + BTN);
+    ((back_x, BTN_MARGIN), (mute_x, BTN_MARGIN))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PipButton {
+    BackToApp,
+    ToggleShareAudio,
+}
+
+/// Bouton sous le curseur (position en pixels physiques, comme la fenêtre).
+fn hit_button(pos: (f64, f64), w: u32, h: u32) -> Option<PipButton> {
+    let (back, mute) = button_rects(w, h);
+    let inside = |(x, y): (u32, u32)| {
+        pos.0 >= x as f64
+            && pos.0 < (x + BTN) as f64
+            && pos.1 >= y as f64
+            && pos.1 < (y + BTN) as f64
+    };
+    if inside(back) {
+        Some(PipButton::BackToApp)
+    } else if inside(mute) {
+        Some(PipButton::ToggleShareAudio)
+    } else {
+        None
+    }
+}
 
 /// La fenêtre PIP native est-elle ouverte ? (lue par le front pour l'état
 /// des boutons — l'ouverture est pilotée par `pip_native_open`.)
@@ -309,6 +355,11 @@ struct PipApp {
     pending_redraw_at: Option<Instant>,
     /// Nombre de frames peintes (diagnostic).
     painted_count: u64,
+    /// Dernière position du curseur (pixels physiques) — cible du clic.
+    cursor: (f64, f64),
+    /// Son du partage coupé ? (état local, initialisé depuis le moteur à
+    /// l'ouverture, basculé par le bouton 🔊/🔇).
+    muted: bool,
 }
 
 impl PipApp {
@@ -320,6 +371,56 @@ impl PipApp {
             last_paint: Instant::now() - MIN_DECODE_INTERVAL,
             pending_redraw_at: None,
             painted_count: 0,
+            cursor: (0.0, 0.0),
+            muted: false,
+        }
+    }
+
+    /// Revient sur la fenêtre principale (dé-minimise, montre, focus).
+    fn focus_main_window(&self) {
+        let Some(app) = APP.get() else {
+            return;
+        };
+        use tauri::Manager;
+        match app.get_webview_window("main") {
+            Some(win) => {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+                log::info!("[Sion][PIP] retour sur la fenêtre principale");
+            }
+            None => log::warn!("[Sion][PIP] fenêtre principale introuvable"),
+        }
+    }
+
+    /// Bascule le son du partage affiché (même chemin que le bouton 🔊 de la
+    /// vue : le moteur reste l'unique propriétaire de l'état).
+    fn toggle_share_audio(&mut self) {
+        let Some(app) = APP.get() else {
+            return;
+        };
+        let sender = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.sender.clone()
+        };
+        let Some(sender) = sender else { return };
+        let wanted = !self.muted;
+        match crate::voice_native::voice_native_set_screenshare_audio_muted(
+            app.clone(),
+            sender,
+            wanted,
+        ) {
+            Ok(_) => {
+                self.muted = wanted;
+                log::info!(
+                    "[Sion][PIP] son du partage {}",
+                    if wanted { "coupé" } else { "rétabli" }
+                );
+            }
+            Err(err) => log::warn!("[Sion][PIP] bascule du son refusée: {err}"),
+        }
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 
@@ -402,6 +503,9 @@ impl PipApp {
             return;
         };
         blit_fit(&mut buffer, size.width, size.height, &img);
+        // Boutons par-dessus l'image : maison = revenir sur Sion,
+        // haut-parleur = son du partage.
+        draw_controls(&mut buffer, size.width, size.height, self.muted);
         let _ = buffer.present();
 
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -467,6 +571,25 @@ impl ApplicationHandler<UserEvent> for PipApp {
                     self.surface = Some(surface);
                 }
                 if let Some(window) = self.window.as_ref() {
+                    // État initial du bouton 🔊 : le moteur reste l'unique
+                    // propriétaire du mute (sans moteur : « actif »).
+                    if let Some(app) = APP.get() {
+                        let sender = {
+                            let state =
+                                self.state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.sender.clone()
+                        };
+                        if let Some(sender) = sender {
+                            if let Ok(st) =
+                                crate::voice_native::voice_native_get_screenshare_audio_state(
+                                    app.clone(),
+                                    sender,
+                                )
+                            {
+                                self.muted = st.muted;
+                            }
+                        }
+                    }
                     window.set_visible(true);
                     window.request_redraw();
                 }
@@ -510,9 +633,27 @@ impl ApplicationHandler<UserEvent> for PipApp {
                 close();
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+            }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                // Boutons dessinés (haut-droite) : le clic agit — maison =
+                // revenir sur Sion, haut-parleur = son du partage. Ailleurs,
+                // fenêtre sans décoration → on déplace en glissant.
+                if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
+                    match hit_button(self.cursor, size.width, size.height) {
+                        Some(PipButton::BackToApp) => {
+                            self.focus_main_window();
+                            return;
+                        }
+                        Some(PipButton::ToggleShareAudio) => {
+                            self.toggle_share_audio();
+                            return;
+                        }
+                        None => {}
+                    }
+                }
                 if let Some(window) = self.window.as_ref() {
-                    // Fenêtre sans décoration : on déplace en glissant.
                     if let Err(err) = window.drag_window() {
                         log::debug!("[Sion][PIP] drag_window indisponible: {err:?}");
                     }
@@ -551,9 +692,143 @@ impl ApplicationHandler<UserEvent> for PipApp {
     }
 }
 
+// ── Boutons dessinés (retour à Sion, son du partage) ───────────────────────
+//
+// La fenêtre n'embarque pas de fonte : les affordances sont dessinées en
+// rectangles (fond assombri + glyphes blancs). Même géométrie que
+// `hit_button` — une seule source de vérité pour le dessin et le clic.
+
+fn put(buf: &mut [u32], w: u32, h: u32, x: u32, y: u32, color: u32) {
+    if x < w && y < h {
+        buf[(y * w + x) as usize] = color;
+    }
+}
+
+fn darken(buf: &mut [u32], w: u32, h: u32, x: u32, y: u32) {
+    if x < w && y < h {
+        let i = (y * w + x) as usize;
+        buf[i] = (buf[i] >> 1) & 0x007F7F7F;
+    }
+}
+
+fn draw_button(
+    buf: &mut [u32],
+    w: u32,
+    h: u32,
+    (bx, by): (u32, u32),
+    glyph: impl Fn(&mut [u32], u32, u32, u32, u32),
+) {
+    for y in by..by + BTN {
+        for x in bx..bx + BTN {
+            darken(buf, w, h, x, y);
+        }
+    }
+    let border = 0x00D0D0D0;
+    for x in bx..bx + BTN {
+        put(buf, w, h, x, by, border);
+        put(buf, w, h, x, by + BTN - 1, border);
+    }
+    for y in by..by + BTN {
+        put(buf, w, h, bx, y, border);
+        put(buf, w, h, bx + BTN - 1, y, border);
+    }
+    glyph(buf, w, h, bx, by);
+}
+
+/// Maison — revenir sur Sion (le bouton gauche).
+fn house_glyph(buf: &mut [u32], w: u32, h: u32, bx: u32, by: u32) {
+    let white = 0x00FFFFFF;
+    for i in 0..6u32 {
+        for x in (11 - i)..=(12 + i) {
+            put(buf, w, h, bx + x, by + 5 + i, white);
+        }
+    }
+    for y in 10..19u32 {
+        for x in 7..17u32 {
+            put(buf, w, h, bx + x, by + y, white);
+        }
+    }
+    // Porte : réassombrie (le fond du bouton réapparaît).
+    for y in 13..19u32 {
+        for x in 10..14u32 {
+            darken(buf, w, h, bx + x, by + y);
+        }
+    }
+}
+
+/// Haut-parleur — son du partage (barre oblique quand il est coupé).
+fn speaker_glyph(buf: &mut [u32], w: u32, h: u32, bx: u32, by: u32, muted: bool) {
+    let white = 0x00FFFFFF;
+    for y in 9..15u32 {
+        for x in 6..10u32 {
+            put(buf, w, h, bx + x, by + y, white);
+        }
+    }
+    for i in 0..5u32 {
+        for y in (9 - i)..(15 + i) {
+            put(buf, w, h, bx + 10 + i, by + y, white);
+        }
+    }
+    if muted {
+        for i in 0..15u32 {
+            put(buf, w, h, bx + 5 + i, by + 4 + i, white);
+            put(buf, w, h, bx + 5 + i, by + 5 + i, white);
+        }
+    } else {
+        for y in 9..15u32 {
+            put(buf, w, h, bx + 16, by + y, white);
+        }
+        for y in 7..17u32 {
+            put(buf, w, h, bx + 18, by + y, white);
+        }
+    }
+}
+
+/// Peint les deux boutons par-dessus l'image déjà blittée.
+fn draw_controls(buf: &mut [u32], w: u32, h: u32, muted: bool) {
+    let (back, mute) = button_rects(w, h);
+    draw_button(buf, w, h, back, house_glyph);
+    draw_button(buf, w, h, mute, |b, ww, hh, x, y| {
+        speaker_glyph(b, ww, hh, x, y, muted)
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Géométrie des boutons : le dessin et le clic doivent tomber sur les
+    /// mêmes zones (source de vérité unique).
+    #[test]
+    fn boutons_du_pip_dans_le_coin() {
+        let (back, mute) = button_rects(480, 270);
+        assert_eq!(mute, (480 - BTN_MARGIN - BTN, BTN_MARGIN));
+        assert_eq!(back, (mute.0 - BTN_GAP - BTN, BTN_MARGIN));
+        // Centres des boutons → la bonne action ; le milieu de l'image → rien.
+        let center = |(x, y): (u32, u32)| (x as f64 + BTN as f64 / 2.0, y as f64 + BTN as f64 / 2.0);
+        assert_eq!(hit_button(center(back), 480, 270), Some(PipButton::BackToApp));
+        assert_eq!(hit_button(center(mute), 480, 270), Some(PipButton::ToggleShareAudio));
+        assert_eq!(hit_button((240.0, 135.0), 480, 270), None);
+        // Hors zone (coin opposé) → aucun bouton.
+        assert_eq!(hit_button((5.0, 5.0), 480, 270), None);
+    }
+
+    /// Test fenêtré (opt-in) : vérifie que l'event loop winit se construit
+    /// réellement dans son thread — c'est le point de panne silencieux du
+    /// PIP natif (échec = `open` renvoie false, aucune fenêtre). Lancer avec
+    /// `SION_PIP_WINDOW_TEST=1` : une fenêtre PIP apparaît ~1,5 s.
+    #[test]
+    fn fenetre_native_souvre_et_se_ferme() {
+        if std::env::var("SION_PIP_WINDOW_TEST").is_err() {
+            eprintln!("ignoré (fenêtré) : SION_PIP_WINDOW_TEST=1 pour l'exécuter");
+            return;
+        }
+        assert!(open("@test:sion"), "open() a échoué — event loop winit en thread ?");
+        assert!(is_open(), "la fenêtre devrait être marquée ouverte");
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        close();
+        assert!(!is_open(), "la fenêtre devrait être fermée");
+    }
 
     #[test]
     fn blit_ajuste_en_conservant_le_ratio() {

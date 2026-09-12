@@ -2847,6 +2847,11 @@ pub fn run() {
             #[cfg(feature = "native-voice")]
             crate::voice_engine::install_webrtc_log_sink();
 
+            // Actions des boutons du PIP natif (retour sur Sion, son du
+            // partage) : la fenêtre vit sur un fil winit hors de l'arbre
+            // Tauri — elle a besoin de ce handle pour agir.
+            pip_window::set_app_handle(app.handle().clone());
+
             // WebSocket server for global shortcuts (évite l'IPC Tauri, dont
             // les événements peuvent être différés quand la fenêtre n'a pas
             // le focus selon le runtime webview).

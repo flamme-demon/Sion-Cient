@@ -234,7 +234,7 @@
     "monitorHint": "Single-window sharing isn't available on Windows — pick a whole screen.",
     "start": "Start sharing",
     "apply": "Apply",
-    "nativePip": "Native PIP — window above other applications (drag to move, right-click to close)"
+    "nativePip": "Native PIP — window above other applications. Drag to move; top-right buttons: 🏠 back to Sion, 🔊 mute the share audio; right-click to close."
   },
   "soundboard": {
     "title": "Soundboard",
