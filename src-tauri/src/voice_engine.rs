@@ -2391,6 +2391,12 @@ impl LiveKitEngine {
         let video_rt = self.rt.handle().clone();
         self.rt.spawn(async move {
             let mut remote_speakers = std::collections::HashSet::<String>::new();
+            // Liveness de la pompe (diagnostic 2026-09-12, bug de re-partage) :
+            // la boucle ci-dessous peut se terminer SANS bruit (stream fermé
+            // après une renégociation ratée) — plus aucun événement salle
+            // n'est alors traité : souscriptions muettes, partages fantômes,
+            // indicateurs figés. On trace l'entrée et la sortie.
+            log::info!("[Sion][voix-native] pompe d'événements salle démarrée");
             while let Some(ev) = events.recv().await {
                 match ev {
                     RoomEvent::Connected { participants_with_tracks } => {
@@ -2508,6 +2514,15 @@ impl LiveKitEngine {
                             publication.source(),
                             publication.is_muted()
                         );
+                        // Robustesse re-partage (2026-09-12) : après un arrêt
+                        // puis relance du partage en pleine session, le
+                        // ré-abonnement automatique du SDK n'est pas garanti —
+                        // observé : plus aucune image reçue, aucun événement
+                        // de souscription. On force l'abonnement des pistes de
+                        // partage dès leur publication (idempotent).
+                        if is_screenshare_video(publication.kind(), publication.source()) {
+                            publication.set_subscribed(true);
+                        }
                     }
                     RoomEvent::TrackUnpublished { publication, participant } => {
                         log::info!(
@@ -2777,6 +2792,10 @@ impl LiveKitEngine {
                     _ => {}
                 }
             }
+            log::warn!(
+                "[Sion][voix-native] pompe d'événements salle TERMINÉE — la salle ne sera plus \
+                 mise à jour (souscriptions, partages, mutes) jusqu'à reconnexion"
+            );
         });
     }
 }
