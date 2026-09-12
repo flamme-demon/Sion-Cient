@@ -54,7 +54,7 @@ export async function pickPanelBackground(scope: BackgroundScope): Promise<boole
  * texte ne dépend jamais de l'image. Si le moteur ne connaît pas `color-mix`,
  * la déclaration est ignorée — pas d'image, pas de casse.
  */
-export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties | undefined {
+export function usePanelBackgroundUrl(scope: BackgroundScope): string | null {
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const path = cfg?.path ?? null;
   // Le cache est lu au rendu (Map module, pas d'état React) ; la résolution
@@ -71,8 +71,17 @@ export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties |
     return () => { alive = false; };
   }, [path]);
 
-  const url = path ? urlCache.get(path) ?? (resolved?.path === path ? resolved.url : null) : null;
+  if (!path) return null;
+  return urlCache.get(path) ?? (resolved?.path === path ? resolved.url : null);
+}
+
+export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties | undefined {
+  const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
+  const url = usePanelBackgroundUrl(scope);
   if (!cfg || !url) return undefined;
+  // Mode « flou » : l'image vit dans une couche dédiée floutée
+  // (`PanelBackgroundLayer`) — le conteneur ne porte rien.
+  if (cfg.mode === "blur") return undefined;
   const veil = `color-mix(in srgb, var(--color-surface-container-low) ${Math.round((1 - cfg.opacity) * 100)}%, transparent)`;
   return {
     backgroundImage: `linear-gradient(${veil}, ${veil}), url(${url})`,

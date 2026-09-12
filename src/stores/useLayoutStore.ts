@@ -154,10 +154,13 @@ const clampWidth = (w: number) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_M
 export type BackgroundScope = "chat" | "channels" | DockPanelId;
 
 /** Fond d'image d'un panneau : chemin local + opacité. L'image est posée SOUS
- *  le fond du thème, donc le contraste du texte ne dépend pas du fond. */
+ *  le fond du thème, donc le contraste du texte ne dépend pas du fond.
+ *  `mode` : `veil` (voile de surface sur l'image, par défaut) ou `blur`
+ *  (image pleine dans un calque flouté — la lisibilité vient du flou). */
 export interface PanelBackgroundCfg {
   path: string;
   opacity: number;
+  mode?: "veil" | "blur";
 }
 
 interface LayoutState {

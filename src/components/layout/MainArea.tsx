@@ -8,7 +8,7 @@ import { DropZone } from "../chat/DropZone";
 import { DockZone } from "./DockZone";
 import { FloatingPanels } from "./FloatingPanels";
 import { MiniPlayerCard } from "../chat/MiniPlayerCard";
-import { BackgroundControls } from "./PanelBackground";
+import { BackgroundControls, PanelBackgroundLayer } from "./PanelBackground";
 import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import { useAppStore } from "../../stores/useAppStore";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
@@ -113,6 +113,8 @@ export function MainArea() {
       <div className="flex-1 flex min-h-0 min-w-0">
         <div className="flex-1 flex flex-col min-w-0 relative" style={chatBg}>
           <BackgroundControls scope="chat" />
+          {/* Mode « flou » : l'image vit dans ce calque, sous le contenu. */}
+          <PanelBackgroundLayer scope="chat" />
           <ChatHeader />
           <PinnedBar />
           <TranscriptInviteBanner />

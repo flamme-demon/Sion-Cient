@@ -113,6 +113,98 @@ const BTN: u32 = 24;
 const BTN_GAP: u32 = 4;
 const BTN_MARGIN: u32 = 8;
 
+// ── Persistance de la vignette (position + taille, entre sessions) ─────────
+//
+// Les états en mémoire ne survivent pas à un redémarrage : on écrit un petit
+// JSON dans le dossier de données de l'app. Les coordonnées sont `Option`
+// pour qu'un fichier absent ou partiel ne se confonde pas avec « 0,0 ».
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct PipSaved {
+    x: Option<i32>,
+    y: Option<i32>,
+    large: bool,
+}
+
+#[cfg(not(target_os = "android"))]
+fn saved_path() -> Option<std::path::PathBuf> {
+    let app = APP.get()?;
+    use tauri::Manager;
+    Some(app.path().app_data_dir().ok()?.join("pip-state.json"))
+}
+
+fn load_saved() -> PipSaved {
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(path) = saved_path() {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(saved) = serde_json::from_str::<PipSaved>(&text) {
+                    return saved;
+                }
+            }
+        }
+    }
+    PipSaved::default()
+}
+
+fn save_saved(pos: Option<(i32, i32)>, large: bool) {
+    #[cfg(not(target_os = "android"))]
+    {
+        let Some(path) = saved_path() else {
+            return;
+        };
+        let mut current = load_saved();
+        if let Some((x, y)) = pos {
+            current.x = Some(x);
+            current.y = Some(y);
+        }
+        current.large = large;
+        if let Ok(text) = serde_json::to_string(&current) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = (pos, large);
+    }
+}
+
+/// Colle la position au coin le plus proche du moniteur si elle en est à
+/// moins de 48 px : une position restaurée retrouve son coin exact. Le glissé
+/// en cours de geste reste géré par le compositeur (KWin) — pas de bagarre.
+fn snap_pos_to_corner(
+    pos: (i32, i32),
+    size: (u32, u32),
+    event_loop: &ActiveEventLoop,
+) -> (i32, i32) {
+    const CORNER_NEAR: i32 = 48;
+    let Some(mon) = event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next())
+    else {
+        return pos;
+    };
+    let ms = mon.size();
+    let mp = mon.position();
+    let right = mp.x + ms.width as i32 - size.0 as i32;
+    let bottom = mp.y + ms.height as i32 - size.1 as i32;
+    let near_x = if (pos.0 - mp.x).abs() <= CORNER_NEAR {
+        mp.x
+    } else if (pos.0 - right).abs() <= CORNER_NEAR {
+        right
+    } else {
+        pos.0
+    };
+    let near_y = if (pos.1 - mp.y).abs() <= CORNER_NEAR {
+        mp.y
+    } else if (pos.1 - bottom).abs() <= CORNER_NEAR {
+        bottom
+    } else {
+        pos.1
+    };
+    (near_x, near_y)
+}
+
 /// Coins haut-gauche des deux boutons (retour, son) pour une surface donnée.
 fn button_rects(w: u32, _h: u32) -> ((u32, u32), (u32, u32)) {
     let mute_x = w.saturating_sub(BTN_MARGIN + BTN);
@@ -162,7 +254,12 @@ fn get_or_start_handle() -> Option<&'static PipHandle> {
         return Some(h);
     }
 
-    let state = Arc::new(Mutex::new(PipState::default()));
+    let saved = load_saved();
+    let state = Arc::new(Mutex::new(PipState {
+        last_pos: saved.x.zip(saved.y),
+        large: saved.large,
+        ..PipState::default()
+    }));
     let thread_alive = Arc::new(AtomicBool::new(true));
     let (proxy_tx, proxy_rx) = std::sync::mpsc::channel::<Option<EventLoopProxy<UserEvent>>>();
 
@@ -485,6 +582,8 @@ struct PipApp {
     /// Son du partage coupé ? (état local, initialisé depuis le moteur à
     /// l'ouverture, basculé par le bouton 🔊/🔇).
     muted: bool,
+    /// Horodatage du dernier clic (détection du double-clic → agrandir).
+    last_click: Instant,
 }
 
 impl PipApp {
@@ -498,7 +597,47 @@ impl PipApp {
             painted_count: 0,
             cursor: (0.0, 0.0),
             muted: false,
+            last_click: Instant::now() - Duration::from_secs(1),
         }
+    }
+
+    /// Double-clic sur l'image : agrandit / réduit la vignette. La taille est
+    /// mémorisée avec la position (fichier d'état) ; si la vignette était
+    /// collée au coin bas-droit, elle y reste après le changement de taille.
+    fn toggle_large(&mut self) {
+        let large = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.large = !state.large;
+            state.large
+        };
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        let (w, h) = if large {
+            (LARGE_W, LARGE_H)
+        } else {
+            (DEFAULT_W, DEFAULT_H)
+        };
+        let _ = window.request_inner_size(PhysicalSize::new(w, h));
+        if let Ok(pos) = window.outer_position() {
+            if let Some(mon) = window.current_monitor() {
+                let ms = mon.size();
+                let mp = mon.position();
+                let old_right = mp.x + ms.width as i32 - DEFAULT_W as i32;
+                let old_bottom = mp.y + ms.height as i32 - DEFAULT_H as i32;
+                let new_right = mp.x + ms.width as i32 - w as i32;
+                let new_bottom = mp.y + ms.height as i32 - h as i32;
+                const NEAR: i32 = 48;
+                let sx = if (pos.x - old_right).abs() <= NEAR { new_right } else { pos.x };
+                let sy = if (pos.y - old_bottom).abs() <= NEAR { new_bottom } else { pos.y };
+                if sx != pos.x || sy != pos.y {
+                    let _ = window.set_outer_position(PhysicalPosition::new(sx, sy));
+                }
+            }
+        }
+        let pos = window.outer_position().ok().map(|p| (p.x, p.y));
+        save_saved(pos, large);
+        window.request_redraw();
     }
 
     /// Revient sur la fenêtre principale (dé-minimise, montre, focus) et la
@@ -575,7 +714,7 @@ impl PipApp {
 
         // Position : dernière position mémorisée, sinon bas-droite du moniteur
         // principal (convention des lecteurs PIP du système).
-        let pos = pos_default.unwrap_or_else(|| {
+        let raw_pos = pos_default.unwrap_or_else(|| {
             let mon = event_loop
                 .primary_monitor()
                 .or_else(|| event_loop.available_monitors().next());
@@ -591,6 +730,8 @@ impl PipApp {
                 None => (100, 100),
             }
         });
+        // Coin d'ancrage : une position restaurée proche d'un coin s'y colle.
+        let pos = snap_pos_to_corner(raw_pos, (w, h), event_loop);
 
         let attrs = WindowAttributes::default()
             .with_title("Sion — PIP partage")
@@ -665,8 +806,14 @@ impl PipApp {
     fn hide(&mut self) {
         if let Some(window) = self.window.as_ref() {
             if let Ok(pos) = window.outer_position() {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                state.last_pos = Some((pos.x, pos.y));
+                let (large, pos) = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.last_pos = Some((pos.x, pos.y));
+                    (state.large, (pos.x, pos.y))
+                };
+                // Persistée sur disque : la vignette retrouve sa place et sa
+                // taille au prochain lancement de l'app.
+                save_saved(Some(pos), large);
             }
             window.set_visible(false);
         }
@@ -778,7 +925,19 @@ impl ApplicationHandler<UserEvent> for PipApp {
                             self.toggle_share_audio();
                             return;
                         }
-                        None => {}
+                        None => {
+                            // Double-clic sur l'image : agrandir / réduire
+                            // (comme les lecteurs PIP du système).
+                            let now = Instant::now();
+                            if now.duration_since(self.last_click)
+                                < Duration::from_millis(400)
+                            {
+                                self.last_click = now - Duration::from_secs(1);
+                                self.toggle_large();
+                                return;
+                            }
+                            self.last_click = now;
+                        }
                     }
                 }
                 if let Some(window) = self.window.as_ref() {

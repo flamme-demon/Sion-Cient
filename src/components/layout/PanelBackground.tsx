@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useLayoutStore, type BackgroundScope } from "../../stores/useLayoutStore";
-import { pickPanelBackground } from "../../services/panelBackground";
+import { pickPanelBackground, usePanelBackgroundUrl } from "../../services/panelBackground";
 
 /**
  * Contrôle d'édition d'un fond d'image : choisir / remplacer, régler
@@ -40,6 +40,24 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
       </button>
       {hasImage && (
         <>
+          <button
+            type="button"
+            onClick={() => {
+              const next = cfg.mode === "blur" ? "veil" : "blur";
+              setPanelBackground(scope, { ...cfg, mode: next });
+            }}
+            title={t("layout.bgMode", { defaultValue: "Voile de lisibilité / fond flouté (image pleine)" })}
+            aria-label={t("layout.bgMode", { defaultValue: "Voile de lisibilité / fond flouté (image pleine)" })}
+            style={{
+              border: '1px solid var(--color-outline-variant)', background: 'transparent',
+              cursor: 'pointer', padding: '1px 8px', borderRadius: 999,
+              color: 'var(--color-on-surface-variant)', fontSize: 11.5, lineHeight: 1.3,
+            }}
+          >
+            {cfg.mode === "blur"
+              ? t("layout.bgModeBlur", { defaultValue: "Flou" })
+              : t("layout.bgModeVeil", { defaultValue: "Voile" })}
+          </button>
           <input
             type="range" min={0.05} max={1} step={0.05} value={cfg.opacity}
             onChange={(e) => {
@@ -64,5 +82,37 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Couche d'image floutée (mode « flou ») : l'image est peinte dans un calque
+ * flouté SOUS le contenu — on ne peut pas flouter un `background-image` posé
+ * sur le conteneur, d'où cette couche dédiée. À monter en **premier enfant**
+ * d'un conteneur `position: relative` : le contenu, peint après dans le DOM,
+ * passe naturellement au-dessus.
+ */
+export function PanelBackgroundLayer({ scope }: { scope: BackgroundScope }) {
+  const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
+  const url = usePanelBackgroundUrl(scope);
+  if (!cfg || !url || cfg.mode !== "blur") return null;
+  const veil = `color-mix(in srgb, var(--color-surface-container-low) ${Math.round((1 - cfg.opacity) * 100)}%, transparent)`;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        // Déborde du conteneur : les bords adoucis par le flou restent hors
+        // champ (sinon on voit une bande claire sur les bords).
+        inset: -32,
+        zIndex: 0,
+        pointerEvents: 'none',
+        backgroundImage: `linear-gradient(${veil}, ${veil}), url(${url})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+        filter: 'blur(16px)',
+      }}
+    />
   );
 }

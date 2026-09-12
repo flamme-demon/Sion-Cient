@@ -65,6 +65,14 @@ export function useKeyboardShortcuts() {
       if (e.shiftKey && e.code === "KeyP") {
         e.preventDefault();
         useLayoutStore.getState().toggleShareDock();
+        return;
+      }
+      if (e.shiftKey && e.code === "KeyL") {
+        // Mode Réorganiser (éditeur de layout) : même bascule que le menu
+        // « Dispositions → Réorganiser la disposition », sans y passer.
+        e.preventDefault();
+        const layout = useLayoutStore.getState();
+        layout.setLayoutEditing(!layout.layoutEditing);
       }
     }
     window.addEventListener("keydown", handleLayoutKeyDown);

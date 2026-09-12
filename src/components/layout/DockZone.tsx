@@ -19,7 +19,7 @@ import {
 } from "../../stores/useLayoutStore";
 import { ResizeHandle } from "./ResizeHandle";
 import { DockZoneContext } from "./dockZoneContext";
-import { BackgroundControls } from "./PanelBackground";
+import { BackgroundControls, PanelBackgroundLayer } from "./PanelBackground";
 import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import { VoiceStatusPanel } from "../chat/VoiceStatusPanel";
 
@@ -384,6 +384,8 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
             }}
           >
             <BackgroundControls scope={p} />
+            {/* Mode « flou » : l'image vit dans ce calque, sous le contenu. */}
+            <PanelBackgroundLayer scope={p} />
             {layoutEditing && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,

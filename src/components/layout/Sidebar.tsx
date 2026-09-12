@@ -9,7 +9,7 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import { useAppStore } from "../../stores/useAppStore";
 import { MOBILE_VOICE_BAR_HEIGHT } from "../mobile/MobileVoiceBar";
 import { ResizeHandle } from "./ResizeHandle";
-import { BackgroundControls } from "./PanelBackground";
+import { BackgroundControls, PanelBackgroundLayer } from "./PanelBackground";
 import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import {
   useLayoutStore,
@@ -148,6 +148,8 @@ export function Sidebar() {
       }}>
         {/* Édition : fond du menu (choisir / opacité / retirer). */}
         <BackgroundControls scope="channels" />
+        {/* Mode « flou » : l'image vit dans ce calque, sous le contenu. */}
+        <PanelBackgroundLayer scope="channels" />
         {/* Édition : le menu entier se saisit (le contenu ne réagit plus) et se
             dépose sur le bord opposé — gauche ↔ droite. */}
         {layoutEditing && (
