@@ -1992,9 +1992,13 @@ pub fn voice_native_set_screenshare_audio_muted(
 ) -> Result<bool, String> {
     #[cfg(feature = "native-voice")]
     {
-        return with_engine(&app, "son du partage natif", |e| {
+        let res = with_engine(&app, "son du partage natif", |e| {
             e.set_screenshare_audio_subscribed(&sender, !muted)
         });
+        if res.is_ok() {
+            emit_share_audio_state(&app, &sender);
+        }
+        return res;
     }
     #[allow(unreachable_code)]
     {
@@ -2013,9 +2017,13 @@ pub fn voice_native_set_screenshare_audio_volume(
 ) -> Result<bool, String> {
     #[cfg(feature = "native-voice")]
     {
-        return with_engine(&app, "volume du partage natif", |engine| {
+        let res = with_engine(&app, "volume du partage natif", |engine| {
             engine.set_screenshare_audio_volume(&sender, volume)
         });
+        if res.is_ok() {
+            emit_share_audio_state(&app, &sender);
+        }
+        return res;
     }
     #[allow(unreachable_code)]
     {
@@ -2029,6 +2037,43 @@ pub fn voice_native_set_screenshare_audio_volume(
 pub struct NativeShareAudioState {
     pub muted: bool,
     pub volume: f32,
+}
+
+/// Émis à chaque changement du son d'un partage (mute **ou** volume) :
+/// la vue et le PIP natif sont deux fenêtres sur le même état moteur —
+/// sans cet événement, un mute fait dans le PIP laissait la vue « actif »
+/// (constaté le 2026-09-12).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeShareAudioEvent {
+    pub sender: String,
+    pub muted: bool,
+    pub volume: f32,
+}
+
+/// Publie l'état du son d'un partage vers le front (silencieux si le moteur
+/// n'est pas là : l'appelant est déjà dans un chemin qui a réussi ou pas).
+fn emit_share_audio_state(app: &tauri::AppHandle<TauriRuntime>, sender: &str) {
+    #[cfg(feature = "native-voice")]
+    {
+        if let Ok(st) = with_engine(app, "état du son du partage", |e| {
+            let (muted, volume) = e.screenshare_audio_state(sender);
+            Ok(NativeShareAudioState { muted, volume })
+        }) {
+            let _ = app.emit(
+                "voice-native-share-audio",
+                NativeShareAudioEvent {
+                    sender: sender.to_string(),
+                    muted: st.muted,
+                    volume: st.volume,
+                },
+            );
+        }
+    }
+    #[cfg(not(feature = "native-voice"))]
+    {
+        let _ = (app, sender);
+    }
 }
 
 /// État local du son d'un partage (mute + volume). Le front s'en sert pour se

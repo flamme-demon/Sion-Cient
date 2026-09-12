@@ -234,8 +234,18 @@ pub fn open(sender: &str) -> bool {
     }
     OPEN.store(true, Ordering::Release);
     let _ = handle.proxy.send_event(UserEvent::Show);
+    emit_pip_state(true);
     log::info!("[Sion][PIP] fenêtre native ouverte pour {sender}");
     true
+}
+
+/// État du PIP vers le front : la fenêtre peut se fermer elle-même (bouton
+/// maison, clic droit, Échap) — le bouton de la vue doit suivre.
+fn emit_pip_state(open: bool) {
+    if let Some(app) = APP.get() {
+        use tauri::Emitter;
+        let _ = app.emit("voice-native-pip", serde_json::json!({ "open": open }));
+    }
 }
 
 /// Ferme la fenêtre (le thread reste vivant pour une réouverture rapide).
@@ -251,6 +261,7 @@ pub fn close() {
     }
     OPEN.store(false, Ordering::Release);
     let _ = handle.proxy.send_event(UserEvent::Hide);
+    emit_pip_state(false);
 }
 
 /// Une image de partage vient d'arriver (appelée par le transport binaire).
@@ -643,7 +654,10 @@ impl ApplicationHandler<UserEvent> for PipApp {
                 if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
                     match hit_button(self.cursor, size.width, size.height) {
                         Some(PipButton::BackToApp) => {
+                            // Comme le PIP de Firefox : on rend la main à
+                            // l'application et la vignette se referme.
                             self.focus_main_window();
+                            close();
                             return;
                         }
                         Some(PipButton::ToggleShareAudio) => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, type RemoteCursor, type RemoteCursorClick } from "../../services/cursorService";
-import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
+import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, onVoiceNativeShareAudio, onVoiceNativePip, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useLayoutStore, SHARE_VIEW_MIN_VH, SHARE_VIEW_MAX_VH, SHARE_FLOATING_MIN_W, SHARE_FLOATING_MIN_H } from "../../stores/useLayoutStore";
@@ -1323,6 +1323,46 @@ export function ScreenShareView() {
       });
     }
   });
+
+  // Le son du partage (mute/volume) peut être changé depuis le PIP natif :
+  // la vue suit le moteur — sinon les deux affichages divergent (un mute
+  // dans le PIP laissait la vue « actif », constaté le 2026-09-12).
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void onVoiceNativeShareAudio((ev) => {
+      if (!alive) return;
+      shareAudioState.set(ev.sender, { muted: ev.muted, volume: ev.volume });
+      if (activeRef.current === ev.sender) {
+        setAudioCtl({ id: ev.sender, muted: ev.muted, volume: ev.volume });
+      }
+      setAudioSeedTick((n) => n + 1);
+    }).then((fn) => {
+      if (alive) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // Le PIP natif peut se fermer tout seul (bouton maison, clic droit,
+  // Échap) : l'état du bouton de la vue suit.
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void onVoiceNativePip((ev) => {
+      if (alive) setNativePipOpen(ev.open);
+    }).then((fn) => {
+      if (alive) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
 
   /** Plein écran depuis le bouton de la barre d'onglets (même logique que le
    *  double-clic sur la vidéo). */

@@ -322,6 +322,41 @@ export async function onVoiceNativeLocalShareFailed(
 /** `{ sender }` — fin de partage (unsubscribe, leave, fin de piste). */
 export const VOICE_NATIVE_FRAME_STOPPED_EVENT = "voice-native-frame-stopped";
 
+/** Son du partage (mute/volume) changé côté moteur — la vue et le PIP natif
+ *  sont deux fenêtres sur le même état : sans cet événement, un mute fait
+ *  dans le PIP laissait la vue « actif » (constaté le 2026-09-12). */
+export const VOICE_NATIVE_SHARE_AUDIO_EVENT = "voice-native-share-audio";
+
+export interface VoiceNativeShareAudio {
+  sender: string;
+  muted: boolean;
+  volume: number;
+}
+
+export async function onVoiceNativeShareAudio(
+  cb: (ev: VoiceNativeShareAudio) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeShareAudio>(VOICE_NATIVE_SHARE_AUDIO_EVENT, (e) =>
+    cb(e.payload),
+  );
+}
+
+/** État du PIP natif : la fenêtre peut se fermer elle-même (bouton maison,
+ *  clic droit, Échap) — l'état du bouton de la vue doit suivre. */
+export const VOICE_NATIVE_PIP_EVENT = "voice-native-pip";
+
+export interface VoiceNativePipState {
+  open: boolean;
+}
+
+export async function onVoiceNativePip(
+  cb: (ev: VoiceNativePipState) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativePipState>(VOICE_NATIVE_PIP_EVENT, (e) => cb(e.payload));
+}
+
 export interface VoiceNativeFrameStopped {
   sender: string;
 }
