@@ -1416,7 +1416,14 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // (open admin menu, run commands) generate messages we don't want to ping on.
       // The message is still added to the store below, just no notification.
       const isAdminRoomNotif = room.roomId === findAdminRoom();
-      if (senderId !== currentUserId && !isAdminRoomNotif) {
+      // Le bot d'administration est une MACHINE : ses messages sont des
+      // réponses de commande (`!admin users list-users`…), jamais des messages
+      // à notifier. On filtre aussi sur l'expéditeur, pas seulement sur la
+      // salle — deux salles peuvent contenir le bot (la salle admin ET un DM
+      // avec lui), et la détection de salle ne désigne qu'une des deux, d'où
+      // la notification « Found 10 local user account(s) » au démarrage.
+      const isAdminBot = senderId === `@conduit:${client.getDomain()}`;
+      if (senderId !== currentUserId && !isAdminRoomNotif && !isAdminBot) {
         const isPoke = msgtype === "m.poke";
         const isDM = !!room.getDMInviter?.() || (() => {
           try {

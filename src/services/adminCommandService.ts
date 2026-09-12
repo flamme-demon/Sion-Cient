@@ -23,8 +23,11 @@ export function findAdminRoom(): string | null {
 
     let score = 0;
 
-    // Priority 1: exact bot member match
-    if (hasBot) score += 10;
+    // Priority 1: bot present. Un DM avec le bot (2 membres) est un PIÈGE :
+    // il contient le bot lui aussi et ferait jeu égal avec la vraie salle
+    // admin — d'où un score moindre, pour que la salle où le bot répond aux
+    // commandes gagne.
+    if (hasBot) score += members.length > 2 ? 12 : 6;
     // Priority 2: admin room name
     if (name.includes("admin") && (name.includes("conduit") || name.includes("continuwuity"))) score += 8;
     // Priority 3: admin alias
