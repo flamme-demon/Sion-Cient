@@ -248,6 +248,81 @@ fn emit_pip_state(open: bool) {
     }
 }
 
+/// Relève la fenêtre principale côté X11 : `_NET_ACTIVE_WINDOW` en provenance
+/// « pager » (source = 2) — la méthode que le compositeur honore même sans
+/// focus — puis un relevé direct dans la pile. Retourne faux si l'app tourne
+/// en Wayland natif (opt-out `SION_KEEP_WAYLAND`) ou fenêtre introuvable.
+#[cfg(target_os = "linux")]
+fn x11_activate_main_window(title_hint: &str) -> bool {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        ClientMessageEvent, ConfigureWindowAux, ConnectionExt, EventMask, StackMode,
+    };
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        return false;
+    };
+    let root = conn.setup().roots[screen_num].root;
+
+    let net_wm_name = conn
+        .intern_atom(false, b"_NET_WM_NAME")
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| r.atom)
+        .unwrap_or(0);
+    let utf8 = conn
+        .intern_atom(false, b"UTF8_STRING")
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| r.atom)
+        .unwrap_or(0);
+    if net_wm_name == 0 || utf8 == 0 {
+        return false;
+    }
+
+    // Parcours de l'arbre : la fenêtre principale est la seule de l'app dont
+    // le titre contient « Sion Client » (la vignette PIP a le sien).
+    let mut target = None;
+    let mut stack = vec![root];
+    while let Some(win) = stack.pop() {
+        if let Ok(prop) = conn.get_property(false, win, net_wm_name, utf8, 0, 256) {
+            if let Ok(reply) = prop.reply() {
+                let name = String::from_utf8_lossy(&reply.value);
+                if name.contains(title_hint) {
+                    target = Some(win);
+                    break;
+                }
+            }
+        }
+        if let Ok(cookie) = conn.query_tree(win) {
+            if let Ok(tree) = cookie.reply() {
+                stack.extend(tree.children);
+            }
+        }
+    }
+
+    let Some(win) = target else {
+        return false;
+    };
+    if let Ok(cookie) = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW") {
+        if let Ok(reply) = cookie.reply() {
+            let event = ClientMessageEvent::new(32, win, reply.atom, [2, 0, 0, 0, 0]);
+            let _ = conn.send_event(
+                false,
+                root,
+                EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                event,
+            );
+        }
+    }
+    let _ = conn.configure_window(
+        win,
+        &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+    );
+    let _ = conn.flush();
+    true
+}
+
 /// Ferme la fenêtre (le thread reste vivant pour une réouverture rapide).
 pub fn close() {
     let Some(handle) = HANDLE.get() else {
@@ -387,7 +462,10 @@ impl PipApp {
         }
     }
 
-    /// Revient sur la fenêtre principale (dé-minimise, montre, focus).
+    /// Revient sur la fenêtre principale (dé-minimise, montre, focus) et la
+    /// relève côté X11 — sous Wayland natif la relève inter-processus est
+    /// refusée par le compositeur (simple clignotement de l'entrée), d'où le
+    /// backend X11 forcé au démarrage (`main.rs`).
     fn focus_main_window(&self) {
         let Some(app) = APP.get() else {
             return;
@@ -398,6 +476,12 @@ impl PipApp {
                 let _ = win.unminimize();
                 let _ = win.show();
                 let _ = win.set_focus();
+                #[cfg(target_os = "linux")]
+                {
+                    let x11_ok = x11_activate_main_window("Sion Client");
+                    log::info!("[Sion][PIP] retour sur la fenêtre principale (relève X11={x11_ok})");
+                }
+                #[cfg(not(target_os = "linux"))]
                 log::info!("[Sion][PIP] retour sur la fenêtre principale");
             }
             None => log::warn!("[Sion][PIP] fenêtre principale introuvable"),
