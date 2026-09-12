@@ -20,6 +20,15 @@ jobs = 4
 # inert on non-MSVC platforms.
 TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
 
+# Codecs matériels NVIDIA (NVENC/NVDEC) : le crate webrtc-sys compile son
+# implémentation NVIDIA quand `cuda.h` est présent — le toolkit CUDA (paquet
+# `cuda` sur Arch, /opt/cuda) ne sert qu'à la COMPILATION. Rien n'est livré
+# aux utilisateurs : `libcuda` et `libnvcuvid` sont dlopen'ées depuis le
+# pilote du GPU au runtime, donc aucun prérequis côté joueur. Absent → chemin
+# logiciel, aucun échec de build porté au commit. AMD/Intel : VAAPI (déjà
+# actif, non concerné).
+CUDA_HOME = "/opt/cuda"
+
 # Static MSVC CRT (/MT): les dépendances C++ natives (webrtc/libwebrtc,
 # transcribe.cpp) doivent utiliser la même CRT que Rust, sinon link.exe
 # échoue avec LNK2038 RuntimeLibrary mismatch. `+crt-static` fait sélectionner
