@@ -32,7 +32,7 @@ export function installMemoryDiagnostics(): void {
 
   // 2. Échantillon périodique.
   setInterval(() => {
-    void import("../stores/useMatrixStore").then(({ useMatrixStore }) => {
+    void import("../stores/useMatrixStore").then(async ({ useMatrixStore }) => {
       const messages = useMatrixStore.getState().messages;
       let total = 0;
       let rooms = 0;
@@ -52,7 +52,26 @@ export function installMemoryDiagnostics(): void {
         canvases.reduce((sum, c) => sum + c.width * c.height * 4, 0) / (1024 * 1024),
       );
       const nodes = document.getElementsByTagName("*").length;
-      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs créés=${created} révoqués=${revoked} vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes}`;
+      // Écouteurs du client Matrix : ce projet a DÉJÀ eu une fuite de ce type
+      // (les handlers empilés à chaque reconnexion — 6,7 Go après 31 h).
+      // Un compteur qui monte ici = même classe de bug, autre chemin.
+      let listeners = "?";
+      let sdkRooms = "?";
+      try {
+        const { getMatrixClient } = await import("./matrixService");
+        const client = getMatrixClient() as unknown as {
+          getRooms?: () => unknown[];
+          listenerCount?: (ev: string) => number;
+        } | null;
+        if (client) {
+          sdkRooms = String(client.getRooms?.().length ?? "?");
+          if (typeof client.listenerCount === "function") {
+            const events = ["Room.timeline", "RoomState.events", "RoomMember.membership", "sync", "Event.decrypted", "Room"];
+            listeners = events.map((ev) => `${ev}:${client.listenerCount!(ev)}`).join(" ");
+          }
+        }
+      } catch { /* client pas prêt */ }
+      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · sdk(salons=${sdkRooms}) ${listeners}`;
       console.info(line);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(line))
