@@ -54,7 +54,12 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
             type="button"
             onClick={() => setPanelBackground(scope, null)}
             title={t("layout.bgRemove", { defaultValue: "Retirer le fond" })}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 2, color: 'var(--color-on-surface-variant)', fontSize: 12, lineHeight: 1 }}
+            aria-label={t("layout.bgRemove", { defaultValue: "Retirer le fond" })}
+            style={{
+              border: '1px solid var(--color-outline-variant)', background: 'transparent',
+              cursor: 'pointer', padding: '1px 6px', borderRadius: 999,
+              color: 'var(--color-on-surface-variant)', fontSize: 12, lineHeight: 1.2,
+            }}
           >✕</button>
         </>
       )}
