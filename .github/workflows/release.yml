@@ -47,8 +47,13 @@ jobs:
             libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
             libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 \
             libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
-            libgtk-3-0t64 libfuse2t64 \
-            nvidia-cuda-toolkit
+            libgtk-3-0t64 libfuse2t64
+
+      # Codecs NVIDIA (NVENC/NVDEC) pour l'AppImage : le crate webrtc-sys
+      # compile son implémentation NVIDIA quand cuda.h est présent. Tolérant :
+      # si le paquet est indisponible, on construit sans (chemin logiciel).
+      - name: Install CUDA headers (optional, NVENC)
+        run: sudo apt-get install -y --no-install-recommends nvidia-cuda-toolkit || echo "CUDA indisponible — build sans NVENC"
 
       - uses: oven-sh/setup-bun@v2
         with:
