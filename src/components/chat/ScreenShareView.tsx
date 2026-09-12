@@ -812,6 +812,10 @@ export function ScreenShareView() {
   // Si le main thread est saturé (décodage JPEG plein écran + React +
   // curseurs), TOUT y est saccadé des deux côtés.
   useEffect(() => {
+    // Diagnostic de saturation — DEV uniquement : en production, un
+    // PerformanceObserver + un intervalle de 10 s qui ne servent à rien sont
+    // du bruit (et un timer de plus).
+    if (!import.meta.env.DEV) return;
     let count = 0;
     let total = 0;
     let max = 0;

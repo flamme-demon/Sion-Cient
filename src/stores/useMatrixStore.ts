@@ -597,7 +597,9 @@ export function extractMessagesFromEvents(events: any[], room: any, client: any)
     }
   }
 
-  return msgs;
+  // Plafond par salon : on garde les plus récents, l'ancien restant
+  // rechargeable par scrollback si l'utilisateur remonte.
+  return msgs.length > MAX_MESSAGES_PER_ROOM ? msgs.slice(-MAX_MESSAGES_PER_ROOM) : msgs;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -606,6 +608,11 @@ function extractMessagesFromRoom(room: any): ChatMessage[] {
   const timeline = room.getLiveTimeline().getEvents();
   return extractMessagesFromEvents(timeline, room, client);
 }
+
+/** Plafond de messages gardés en mémoire par salon. Au-delà, on jette les
+ *  plus anciens : l'historique reste accessible (le scrollback recharge par
+ *  petits crans), mais le tas JS du webview, lui, ne redescend jamais. */
+const MAX_MESSAGES_PER_ROOM = 500;
 
 // Events `initSync` attaches handlers for. Without an explicit purge before
 // re-attaching, every disconnect→connect cycle stacks fresh closures onto the
@@ -1530,7 +1537,9 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         return {
           messages: {
             ...s.messages,
-            [room.roomId]: [...existing, finalMsg],
+            // Plafond par salon (cf. MAX_MESSAGES_PER_ROOM) : le webview ne
+            // rend jamais la mémoire des tableaux qui ne font que grandir.
+            [room.roomId]: [...existing, finalMsg].slice(-MAX_MESSAGES_PER_ROOM),
           },
         };
       });
@@ -1981,8 +1990,12 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       for (let i = 0; i < MAX_ITERATIONS; i++) {
         if (countMessages() >= target) break;
         const before = room.getLiveTimeline().getEvents().length;
+        // Page volontairement COURTE (30 événements ≈ un écran) : l'historique
+        // se charge par petits crans en remontant, au lieu de tirer 200
+        // événements d'un coup (mémoire + latence). La boucle ci-dessus
+        // continue de paginer tant qu'il manque des messages.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (client as any).scrollback(room, 200);
+        await (client as any).scrollback(room, 30);
         const afterScroll = room.getLiveTimeline().getEvents().length;
         // No new events → we're at the start of history.
         if (afterScroll === before) break;
