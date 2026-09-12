@@ -9,6 +9,8 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import { useAppStore } from "../../stores/useAppStore";
 import { MOBILE_VOICE_BAR_HEIGHT } from "../mobile/MobileVoiceBar";
 import { ResizeHandle } from "./ResizeHandle";
+import { BackgroundControls } from "./PanelBackground";
+import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import {
   useLayoutStore,
   SIDEBAR_RAIL_WIDTH,
@@ -73,6 +75,9 @@ export function Sidebar() {
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const setSidebarWidth = useLayoutStore((s) => s.setSidebarWidth);
   const resetSidebar = useLayoutStore((s) => s.resetSidebar);
+  // Fond d'image du menu latéral (portée « channels ») — même mécanisme que
+  // la zone de chat et les blocs de la dock.
+  const channelsBg = usePanelBackgroundStyle("channels");
 
   // Mobile : comportement d'origine (pleine largeur, pas de layout desktop).
   if (isMobile) {
@@ -134,10 +139,15 @@ export function Sidebar() {
         flexDirection: 'column',
         height: '100%',
         position: 'relative',
+        // Fond d'image éventuel du menu (posé SOUS le contenu, voile color-mix
+        // calculé depuis l'opacité — même mécanisme que le chat et les blocs).
+        ...(channelsBg ?? {}),
         // Pendant un drag vers le bas, le contenu (noms de salons) est rogné
         // plutôt que de déborder sur le chat.
         overflow: 'hidden',
       }}>
+        {/* Édition : fond du menu (choisir / opacité / retirer). */}
+        <BackgroundControls scope="channels" />
         {/* Édition : le menu entier se saisit (le contenu ne réagit plus) et se
             dépose sur le bord opposé — gauche ↔ droite. */}
         {layoutEditing && (
