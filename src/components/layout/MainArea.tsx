@@ -1,4 +1,4 @@
-import { useCallback, lazy, Suspense, useEffect, type DragEvent } from "react";
+import { useCallback, lazy, Suspense, useEffect, useState, type DragEvent } from "react";
 import { ChatHeader } from "../chat/ChatHeader";
 import { PinnedBar } from "../chat/PinnedBar";
 import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
@@ -29,8 +29,16 @@ export function MainArea() {
   const addPendingFile = useAppStore((s) => s.addPendingFile);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const isMobile = useIsMobile();
-  // Portail du chunk paresseux : un participant diffuse → on monte la vue.
+  // Portail du chunk paresseux, **collant** : on monte la vue dès qu'un
+  // partage est vu et on la garde montée (son early-return gère l'absence de
+  // partage, comme avant le chargement paresseux). Sans ce latch, un
+  // re-partage qui ferait clignoter le drapeau dans le store démonterait la
+  // vue et l'image/disposition serait perdue.
   const hasActiveShare = useLiveKitStore((s) => s.participants.some((p) => p.isScreenSharing));
+  const [shareViewMounted, setShareViewMounted] = useState(hasActiveShare);
+  useEffect(() => {
+    if (hasActiveShare) setShareViewMounted(true);
+  }, [hasActiveShare]);
   // Fond d'image du chat (optionnel) — voir « Réorganiser » pour le choisir.
   const chatBg = usePanelBackgroundStyle("chat");
 
@@ -108,7 +116,7 @@ export function MainArea() {
           <ChatHeader />
           <PinnedBar />
           <TranscriptInviteBanner />
-          {hasActiveShare && (
+          {shareViewMounted && (
             <Suspense fallback={null}>
               <ScreenShareView />
             </Suspense>
