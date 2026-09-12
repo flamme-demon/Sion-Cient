@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { lazy, Suspense, useMemo, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -9,10 +9,19 @@ import {
   type DockPanelId,
 } from "../../stores/useLayoutStore";
 import { ResizeHandle } from "./ResizeHandle";
-import { MemberPanel } from "../chat/MemberPanel";
-import { SoundboardPanel } from "../chat/SoundboardPanel";
-import { TranscriptPanel } from "../chat/TranscriptPanel";
 import { VoiceStatusPanel } from "../chat/VoiceStatusPanel";
+
+// Mêmes blocs paresseux que la dock (perf mémoire, 2026-09-12) : une carte
+// flottante ne charge son contenu qu'au premier affichage.
+const MemberPanel = lazy(() =>
+  import("../chat/MemberPanel").then((m) => ({ default: m.MemberPanel })),
+);
+const SoundboardPanel = lazy(() =>
+  import("../chat/SoundboardPanel").then((m) => ({ default: m.SoundboardPanel })),
+);
+const TranscriptPanel = lazy(() =>
+  import("../chat/TranscriptPanel").then((m) => ({ default: m.TranscriptPanel })),
+);
 
 /**
  * Panneaux détachés en cartes flottantes (roadmap §1.6, étape 3) — même
@@ -31,7 +40,7 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   voice: "layout.voicePanelTitle",
 };
 
-const PANEL_BODIES: Record<DockPanelId, () => ReactNode> = {
+const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
   members: MemberPanel,
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
@@ -147,7 +156,9 @@ function FloatingPanelCard({ panel }: { panel: DockPanelId }) {
         >×</button>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <PanelBody />
+        <Suspense fallback={null}>
+          <PanelBody />
+        </Suspense>
       </div>
       <ResizeHandle
         side="right"

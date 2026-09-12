@@ -1,9 +1,14 @@
-import { useRef, useState } from "react";
+import { useRef, useState, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { PaperclipIcon, FileIcon, PollIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { PollCreateModal } from "./PollCreateModal";
-import { ExternalVideoImport } from "./ExternalVideoImport";
+
+// Import de vidéo externe (yt-dlp & co) hors du chunk de démarrage (perf
+// mémoire, 2026-09-12) : il n'est ouvert que par le menu trombone.
+const ExternalVideoImport = lazy(() =>
+  import("./ExternalVideoImport").then((m) => ({ default: m.ExternalVideoImport })),
+);
 
 export function AttachButton() {
   const { t } = useTranslation();
@@ -75,10 +80,12 @@ export function AttachButton() {
 
       {showPoll && activeChannel && <PollCreateModal roomId={activeChannel} onClose={() => setShowPoll(false)} />}
       {showVideoImport && (
-        <ExternalVideoImport
-          onClose={() => setShowVideoImport(false)}
-          onImported={(file) => { addPendingFile(file); setShowVideoImport(false); }}
-        />
+        <Suspense fallback={null}>
+          <ExternalVideoImport
+            onClose={() => setShowVideoImport(false)}
+            onImported={(file) => { addPendingFile(file); setShowVideoImport(false); }}
+          />
+        </Suspense>
       )}
     </div>
   );
