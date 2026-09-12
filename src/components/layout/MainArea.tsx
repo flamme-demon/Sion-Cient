@@ -1,7 +1,8 @@
-import { useCallback, lazy, Suspense, useEffect, type DragEvent } from "react";
+import { useCallback, useEffect, type DragEvent } from "react";
 import { ChatHeader } from "../chat/ChatHeader";
 import { PinnedBar } from "../chat/PinnedBar";
 import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
+import { ScreenShareView } from "../chat/ScreenShareView";
 import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
 import { DropZone } from "../chat/DropZone";
@@ -11,26 +12,15 @@ import { MiniPlayerCard } from "../chat/MiniPlayerCard";
 import { BackgroundControls } from "./PanelBackground";
 import { usePanelBackgroundStyle } from "../../services/panelBackground";
 import { useAppStore } from "../../stores/useAppStore";
-import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { readDroppedFile } from "../../utils/droppedFile";
 import { MOBILE_VOICE_BAR_HEIGHT } from "../mobile/MobileVoiceBar";
-
-// La vue de partage d'écran (1700+ lignes, tout le pipeline curseurs/flux
-// natif) ne rejoint le bundle qu'au premier partage actif (perf mémoire,
-// 2026-09-12). Sans partage elle rendait `null` de toute façon ; le portail
-// `hasActiveShare` reproduit exactement cette condition d'affichage.
-const ScreenShareView = lazy(() =>
-  import("../chat/ScreenShareView").then((m) => ({ default: m.ScreenShareView })),
-);
 
 export function MainArea() {
   const setDraggingOver = useAppStore((s) => s.setDraggingOver);
   const addPendingFile = useAppStore((s) => s.addPendingFile);
   const connectedVoice = useAppStore((s) => s.connectedVoiceChannel);
   const isMobile = useIsMobile();
-  // Portail du chunk paresseux : un participant diffuse → on monte la vue.
-  const hasActiveShare = useLiveKitStore((s) => s.participants.some((p) => p.isScreenSharing));
   // Fond d'image du chat (optionnel) — voir « Réorganiser » pour le choisir.
   const chatBg = usePanelBackgroundStyle("chat");
 
@@ -108,11 +98,7 @@ export function MainArea() {
           <ChatHeader />
           <PinnedBar />
           <TranscriptInviteBanner />
-          {hasActiveShare && (
-            <Suspense fallback={null}>
-              <ScreenShareView />
-            </Suspense>
-          )}
+          <ScreenShareView />
           <MessageList />
           <ChatInput />
           <DropZone />

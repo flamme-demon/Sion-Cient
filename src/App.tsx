@@ -1,29 +1,15 @@
-import { Suspense, lazy, useEffect, useState, useCallback, useRef } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { Sidebar } from "./components/layout/Sidebar";
 import { MainArea } from "./components/layout/MainArea";
-
-// Écrans lourds hors du chunk de démarrage (perf mémoire, 2026-09-12) : le
-// chat n'en a pas besoin pour peindre ; chacun rejoint son propre chunk au
-// premier affichage (Les Suspense existants couvrent déjà ces rendus).
-const AdminPanel = lazy(() =>
-  import("./components/layout/AdminPanel").then((m) => ({ default: m.AdminPanel })),
-);
-const SettingsPanel = lazy(() =>
-  import("./components/layout/SettingsPanel").then((m) => ({ default: m.SettingsPanel })),
-);
-const LoginPage = lazy(() =>
-  import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })),
-);
-const RecoveryKeyModal = lazy(() =>
-  import("./components/RecoveryKeyModal").then((m) => ({ default: m.RecoveryKeyModal })),
-);
-const UserContextMenu = lazy(() =>
-  import("./components/sidebar/UserContextMenu").then((m) => ({ default: m.UserContextMenu })),
-);
+import { AdminPanel } from "./components/layout/AdminPanel";
+import { SettingsPanel } from "./components/layout/SettingsPanel";
 import { MobileVoiceBar } from "./components/mobile/MobileVoiceBar";
+import { LoginPage } from "./pages/LoginPage";
+import { RecoveryKeyModal } from "./components/RecoveryKeyModal";
 import { ConnectionStatusBanner } from "./components/ConnectionStatusBanner";
 import { UpdateBanner } from "./components/layout/UpdateBanner";
 import { DownloadToast } from "./components/layout/DownloadToast";
+import { UserContextMenu } from "./components/sidebar/UserContextMenu";
 import { useAppStore } from "./stores/useAppStore";
 import { useAuthStore } from "./stores/useAuthStore";
 import { useMatrixStore } from "./stores/useMatrixStore";
@@ -384,11 +370,9 @@ export default function App() {
         {(!isMobile || mobileView === "sidebar") && sidebarSide === "right" && <Sidebar />}
 
         {/* Panels: overlay on mobile, side panel on desktop */}
-        {/* Chaque overlay paresseux a SON Suspense (fallback null) : sans ça,
-            le chargement du chunk ferait clignoter tout l'écran. */}
-        {showAdmin && <Suspense fallback={null}><AdminPanel /></Suspense>}
-        {showSettings && <Suspense fallback={null}><SettingsPanel /></Suspense>}
-        <Suspense fallback={null}><RecoveryKeyModal /></Suspense>
+        {showAdmin && <AdminPanel />}
+        {showSettings && <SettingsPanel />}
+        <RecoveryKeyModal />
         <ConnectionStatusBanner />
         {layoutEditing && (
           <div style={{
@@ -414,15 +398,13 @@ export default function App() {
         <UpdateBanner />
         <DownloadToast />
         {userContextMenu && (
-          <Suspense fallback={null}>
-            <UserContextMenu
-              userId={userContextMenu.userId}
-              userName={userContextMenu.userName}
-              x={userContextMenu.x}
-              y={userContextMenu.y}
-              onClose={closeUserContextMenu}
-            />
-          </Suspense>
+          <UserContextMenu
+            userId={userContextMenu.userId}
+            userName={userContextMenu.userName}
+            x={userContextMenu.x}
+            y={userContextMenu.y}
+            onClose={closeUserContextMenu}
+          />
         )}
 
         {/* Mobile voice bar with PTT */}

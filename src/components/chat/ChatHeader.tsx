@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, lazy, Suspense } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ScreenIcon, PencilIcon, HashIcon, ArrowLeftIcon, UserAddIcon, UsersIcon } from "../icons";
 import { ChannelIcon } from "../sidebar/ChannelIcon";
@@ -9,13 +9,8 @@ import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
 import { getMatrixClient } from "../../services/matrixService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
+import { ScreenShareOptionsModal } from "./ScreenShareOptionsModal";
 import { LayoutPresetsMenu } from "../layout/LayoutPresetsMenu";
-
-// Modal lourde (options de partage) hors du chunk de démarrage (perf
-// mémoire, 2026-09-12) : elle n'apparaît qu'au clic sur « Partager ».
-const ScreenShareOptionsModal = lazy(() =>
-  import("./ScreenShareOptionsModal").then((m) => ({ default: m.ScreenShareOptionsModal })),
-);
 import { useLayoutStore } from "../../stores/useLayoutStore";
 
 function buildWavePath(amplitude: number, phase: number): string {
@@ -752,8 +747,7 @@ export function ChatHeader() {
       )}
 
       {showScreenShareOptions && (
-        <Suspense fallback={null}>
-          <ScreenShareOptionsModal
+        <ScreenShareOptionsModal
           editing={isScreenSharing}
           onClose={() => setShowScreenShareOptions(false)}
           onConfirm={async () => {
@@ -768,8 +762,7 @@ export function ChatHeader() {
               toggleScreenShare();
             }
           }}
-          />
-        </Suspense>
+        />
       )}
     </>
   );

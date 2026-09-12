@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -21,22 +21,10 @@ import { ResizeHandle } from "./ResizeHandle";
 import { DockZoneContext } from "./dockZoneContext";
 import { BackgroundControls } from "./PanelBackground";
 import { usePanelBackgroundStyle } from "../../services/panelBackground";
+import { MemberPanel } from "../chat/MemberPanel";
+import { SoundboardPanel } from "../chat/SoundboardPanel";
+import { TranscriptPanel } from "../chat/TranscriptPanel";
 import { VoiceStatusPanel } from "../chat/VoiceStatusPanel";
-
-// Blocs lourds chargés à la demande (perf mémoire, 2026-09-12) : le soundboard
-// embarquait dans le chunk de démarrage tout son sous-graphe (panneau vocal,
-// modal d'upload, trimballeur, hotkeys) alors qu'il n'est peint que si le
-// bloc est docké ET le salon soundboard présent. Idem membres et
-// transcription. Le chunk de boot ne garde que la coquille de la dock.
-const MemberPanel = lazy(() =>
-  import("../chat/MemberPanel").then((m) => ({ default: m.MemberPanel })),
-);
-const SoundboardPanel = lazy(() =>
-  import("../chat/SoundboardPanel").then((m) => ({ default: m.SoundboardPanel })),
-);
-const TranscriptPanel = lazy(() =>
-  import("../chat/TranscriptPanel").then((m) => ({ default: m.TranscriptPanel })),
-);
 
 /**
  * Une zone de la dock (roadmap §1.6) : à droite en colonne, en haut ou en bas
@@ -59,7 +47,7 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   voice: "layout.voicePanelTitle",
 };
 
-const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
+const PANEL_BODIES: Record<DockPanelId, () => ReactNode> = {
   members: MemberPanel,
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
@@ -405,14 +393,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
               </div>
             )}
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-              <DockZoneContext.Provider value={zone}>
-                {/* Les blocs sont paresseux : le premier rendu peut suspendre
-                    le temps de charger leur chunk (invisible : quasi
-                    instantané en local). */}
-                <Suspense fallback={null}>
-                  <Body />
-                </Suspense>
-              </DockZoneContext.Provider>
+              <DockZoneContext.Provider value={zone}><Body /></DockZoneContext.Provider>
               {/* Édition : le bloc se saisit N'IMPORTE OÙ (le contenu ne réagit
                   plus aux clics), on le dépose dans une zone. */}
               {layoutEditing && (
