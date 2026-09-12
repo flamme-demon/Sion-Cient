@@ -125,9 +125,10 @@ export function setVoiceNativeScreensharing(
     withAudio?: boolean;
     resolution?: "720p" | "1080p" | "1440p";
     framerate?: 5 | 15 | 30 | 60;
-    /** Codec d'encodage de la piste publiée : `vp9` (défaut, le plus net),
-     *  `h264` (VAAPI, CPU quasi nul) ou `vp8` (compatibilité). */
-    videoCodec?: "vp9" | "h264" | "vp8";
+    /** Codec d'encodage de la piste publiée : `auto` est résolu AVANT l'appel
+     *  (choix inter-clients) ; `av1`/`h264` = VAAPI (CPU quasi nul),
+     *  `vp9`/`vp8` = logiciel. */
+    videoCodec?: "av1" | "vp9" | "h264" | "vp8";
   } = {},
 ): Promise<NativeScreenShareResult> {
   return tauriInvoke<NativeScreenShareResult>("voice_native_set_screensharing", {
@@ -136,7 +137,7 @@ export function setVoiceNativeScreensharing(
     withAudio: options.withAudio ?? true,
     resolution: options.resolution ?? "1080p",
     framerate: options.framerate ?? 15,
-    videoCodec: options.videoCodec ?? "vp9",
+    videoCodec: options.videoCodec ?? "h264",
   });
 }
 

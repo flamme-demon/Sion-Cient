@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettingsStore, type ShareVideoCodec } from "../../stores/useSettingsStore";
+import { useLiveKitStore } from "../../stores/useLiveKitStore";
+import { pickBestShareCodec, useMediaCapsStore } from "../../stores/useMediaCapsStore";
 
 interface Props {
   onConfirm: () => void;
@@ -48,6 +50,17 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
   const audio = useSettingsStore((s) => s.screenShareAudio);
   const cursorOverlay = useSettingsStore((s) => s.screenShareCursorOverlay);
   const codec = useSettingsStore((s) => s.screenShareCodec);
+  // Choix automatique : ce que « auto » publierait avec les participants
+  // présents (matériel d'abord, tout le monde doit décoder) — affiché pour
+  // que l'utilisateur sache ce qu'il obtient sans deviner.
+  const liveParticipants = useLiveKitStore((s) => s.participants);
+  const capsSelf = useMediaCapsStore((s) => s.self);
+  const capsPeers = useMediaCapsStore((s) => s.peers);
+  const autoPick = pickBestShareCodec(
+    capsSelf,
+    capsPeers,
+    liveParticipants.map((p) => p.identity),
+  );
   const setQualityMode = useSettingsStore((s) => s.setScreenShareQualityMode);
   const setResolution = useSettingsStore((s) => s.setScreenShareResolution);
   const setFramerate = useSettingsStore((s) => s.setScreenShareFramerate);
@@ -57,6 +70,11 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
   const sourceId = useSettingsStore((s) => s.screenShareSourceId) ?? "screen:0:0";
   const setSourceId = useSettingsStore((s) => s.setScreenShareSourceId);
   const [advancedOpen, setAdvancedOpen] = useState(qualityMode === "custom");
+  // Sonde matérielle locale (affichage du choix « auto ») : une fois par
+  // session, le résultat est en cache dans le store.
+  useEffect(() => {
+    void useMediaCapsStore.getState().refreshAndPublish();
+  }, []);
 
   const chooseResolution = (value: Resolution) => {
     setResolution(value);
@@ -206,16 +224,26 @@ export function ScreenShareOptionsModal({ onConfirm, onClose, editing = false }:
               fontSize: 12, fontFamily: 'inherit', outline: 'none', cursor: 'pointer',
             }}
           >
-            <option value="vp9">{t("screenShare.codecVp9", { defaultValue: "VP9 — le plus net (recommandé)" })}</option>
-            <option value="h264">{t("screenShare.codecH264", { defaultValue: "H.264 — léger, encodage matériel" })}</option>
-            <option value="vp8">{t("screenShare.codecVp8", { defaultValue: "VP8 — compatibilité maximale" })}</option>
+            <option value="auto">{t("screenShare.codecAuto", { defaultValue: "Automatique — le meilleur pour tous (matériel d'abord)" })}</option>
+            <option value="av1">{t("screenShare.codecAv1", { defaultValue: "AV1 — matériel, le plus efficace" })}</option>
+            <option value="h264">{t("screenShare.codecH264", { defaultValue: "H.264 — matériel, décodé partout" })}</option>
+            <option value="vp9">{t("screenShare.codecVp9", { defaultValue: "VP9 — logiciel (plus de CPU)" })}</option>
+            <option value="vp8">{t("screenShare.codecVp8", { defaultValue: "VP8 — logiciel, compatibilité maximale" })}</option>
           </select>
           <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, lineHeight: 1.4 }}>
-            {codec === "vp9"
-              ? t("screenShare.codecHintVp9", { defaultValue: "Texte/UI plus nets à débit égal. Un peu plus de CPU." })
-              : codec === "h264"
-                ? t("screenShare.codecHintH264", { defaultValue: "Encodé par le GPU (VAAPI) : très peu de CPU, un peu moins net." })
-                : t("screenShare.codecHintVp8", { defaultValue: "Ancien codec logiciel, lu partout, qualité inférieure." })}
+            {codec === "auto"
+              ? t("screenShare.codecHintAuto", {
+                  defaultValue:
+                    "Auto → {{pick}} : le meilleur codec que tout le monde décode, encodage matériel d'abord.",
+                  pick: autoPick.toUpperCase(),
+                })
+              : codec === "av1"
+                ? t("screenShare.codecHintAv1", { defaultValue: "Encodage matériel, le plus efficace au débit. À réserver aux salles tout-matériel." })
+                : codec === "h264"
+                  ? t("screenShare.codecHintH264", { defaultValue: "Encodé par le GPU (VAAPI) : très peu de CPU, décodé partout." })
+                  : codec === "vp9"
+                    ? t("screenShare.codecHintVp9", { defaultValue: "Encodage logiciel : plus de CPU chez toi. Préfère Auto si ta machine a un encodeur matériel." })
+                    : t("screenShare.codecHintVp8", { defaultValue: "Ancien codec logiciel, lu partout, qualité inférieure." })}
           </div>
         </div>
 

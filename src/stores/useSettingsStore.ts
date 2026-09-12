@@ -4,8 +4,9 @@ import { persist } from "zustand/middleware";
 export type ChannelSortMode = "created" | "name" | "activity";
 export type SidebarView = "channels" | "dm";
 export type AudioQualityPreset = "voice" | "voiceHD" | "musicStereo";
-/** Codec de la piste de partage d'écran (cf. `screenshare_publish_options`). */
-export type ShareVideoCodec = "vp9" | "h264" | "vp8";
+/** Codec de la piste de partage d'écran (`screenshare_publish_options`).
+ *  `auto` = meilleur codec décodable par tous, matériel d'abord. */
+export type ShareVideoCodec = "auto" | "av1" | "vp9" | "h264" | "vp8";
 export type NotificationMode = "all" | "mentions" | "minimal";
 
 // join/leave/timeout are gated by the `voiceChannelSounds` toggle; poke/kick/
@@ -110,9 +111,10 @@ interface SettingsState {
   screenShareQualityMode: "auto" | "custom";
   screenShareResolution: "720p" | "1080p" | "1440p";
   screenShareFramerate: 5 | 15 | 30 | 60;
-  /** Codec de la piste de partage publiée : `vp9` (défaut, le plus net pour
-   *  le texte), `h264` (encodage matériel VAAPI, CPU quasi nul) ou `vp8`
-   *  (compatibilité maximale, logiciel). */
+  /** Codec de la piste de partage publiée. `auto` (défaut) prend le meilleur
+   *  codec décodable par tous les participants présents, **le matériel
+   *  d'abord** ; sinon `av1`/`h264` = encodage matériel VAAPI (CPU quasi nul),
+   *  `vp9`/`vp8` = logiciel (plus de CPU, compatibilité maximale pour vp8). */
   screenShareCodec: ShareVideoCodec;
   /** Windows only: which desktop source to capture (e.g. "screen:0:0").
    *  Le sélecteur natif Windows est utilisé directement,
@@ -225,7 +227,7 @@ export const useSettingsStore = create<SettingsState>()(
       screenShareQualityMode: "auto" as const,
       screenShareResolution: "1080p" as const,
       screenShareFramerate: 15 as const,
-      screenShareCodec: "vp9" as const,
+      screenShareCodec: "auto" as const,
       screenShareSourceId: null,
       transcribeModel: "parakeet-v3",
       transcribeLang: "auto",

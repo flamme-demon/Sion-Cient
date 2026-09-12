@@ -2072,6 +2072,69 @@ pub fn voice_native_video_port() -> u16 {
     0
 }
 
+/// Capacités codecs de la machine : encodage/décodage matériel (VA-API) et
+/// logiciel, par codec. Sert au choix automatique du codec de partage entre
+/// clients (`sion-media-caps`) — **le matériel d'abord** : un codec n'est
+/// « viable » que si tout le monde le décode, et on le préfère si tout le
+/// monde le décode en matériel.
+///
+/// Linux : lecture de `vainfo` (un `VAEntrypointEncSlice` = encodage
+/// matériel, `VAEntrypointVLD` = décodage). La libwebrtc fournit par ailleurs
+/// vp8/vp9 (libvpx) et h264 (openh264) en logiciel — valeurs de base,
+/// écrasées par le matériel quand il existe. Ailleurs (Windows/macOS) : la
+/// sonde reste à brancher, on n'annonce que le logiciel (prudent).
+#[tauri::command]
+pub fn voice_media_caps() -> serde_json::Value {
+    use std::collections::BTreeMap;
+
+    let mut enc: BTreeMap<String, &'static str> = BTreeMap::new();
+    let mut dec: BTreeMap<String, &'static str> = BTreeMap::new();
+    for codec in ["vp8", "vp9", "h264"] {
+        enc.insert(codec.into(), "sw");
+        dec.insert(codec.into(), "sw");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(out) = std::process::Command::new("vainfo").output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let mut parts = line.split(':');
+                let profile = parts.next().unwrap_or("").trim();
+                let entry = parts
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches("VAEntrypoint");
+                let codec = if profile.starts_with("VAProfileH264") {
+                    "h264"
+                } else if profile.starts_with("VAProfileHEVC") {
+                    "hevc"
+                } else if profile.starts_with("VAProfileAV1") {
+                    "av1"
+                } else if profile.starts_with("VAProfileVP9") {
+                    "vp9"
+                } else if profile.starts_with("VAProfileVP8") {
+                    "vp8"
+                } else {
+                    continue;
+                };
+                match entry {
+                    "EncSlice" | "EncSliceLP" => {
+                        enc.insert(codec.into(), "hw");
+                    }
+                    "VLD" => {
+                        dec.insert(codec.into(), "hw");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    serde_json::json!({ "v": 1, "enc": enc, "dec": dec })
+}
+
 /// Démarre / arrête le partage de NOTRE écran en mode natif (miroir de
 /// `toggleScreenShare` JS). `source_id` = écran/fenêtre choisi (None =
 /// premier écran). `with_audio` = case "partager le son" (None = true) :

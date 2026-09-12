@@ -142,6 +142,12 @@ export function useLiveKit() {
         if (ev.topic !== TRANSCRIBE_ARM_TOPIC || !sender) return;
         handleArmData(sender, native.b64ToBytes(ev.payload_b64));
       }).catch(() => {});
+      // Capacités média des autres clients (choix du codec de partage) —
+      // matériel d'abord. Le store ignore les sujets autres que le sien.
+      import("../stores/useMediaCapsStore").then(({ useMediaCapsStore }) => {
+        if (!isCurrent()) return;
+        useMediaCapsStore.getState().ingest(ev.topic, ev.payload_b64, sender);
+      }).catch(() => {});
       // Rust route directement ces mêmes paquets vers l'overlay du sharer.
       // Ce relais JS ne conserve que l'affichage local des autres viewers via
       // `handleNativeCursorData` ci-dessus.

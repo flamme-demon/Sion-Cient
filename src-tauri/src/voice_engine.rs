@@ -421,6 +421,7 @@ pub fn screenshare_publish_options(
     // (CPU quasi nul) ; `vp8` reste le repli compatible avec tout.
     let (video_codec, video_encoder) = match codec {
         "h264" => (VideoCodec::H264, VideoEncoderBackend::Vaapi),
+        "av1" => (VideoCodec::AV1, VideoEncoderBackend::Vaapi),
         "vp8" => (VideoCodec::VP8, VideoEncoderBackend::Auto),
         _ => (VideoCodec::VP9, VideoEncoderBackend::Auto),
     };
@@ -3164,6 +3165,11 @@ mod tests {
         let h264 = screenshare_publish_options(1, 1, "h264");
         assert_eq!(h264.video_codec, VideoCodec::H264);
         assert_eq!(h264.video_encoder, VideoEncoderBackend::Vaapi);
+        // AV1 = matériel aussi (VAAPI) : même chemin que H.264, meilleure
+        // efficacité quand tout le monde le décode en matériel.
+        let av1 = screenshare_publish_options(1, 1, "av1");
+        assert_eq!(av1.video_codec, VideoCodec::AV1);
+        assert_eq!(av1.video_encoder, VideoEncoderBackend::Vaapi);
     }
 
     #[test]

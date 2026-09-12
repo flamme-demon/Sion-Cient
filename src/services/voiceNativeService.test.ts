@@ -296,7 +296,8 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
       withAudio: true,
       resolution: "1080p",
       framerate: 15,
-      videoCodec: "vp9",
+      // Défaut = h264 (encodage matériel) : `auto` est résolu par l'appelant.
+      videoCodec: "h264",
     });
     await setVoiceNativeScreensharing(false, {
       sourceId: 42,

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import * as voiceNativeService from "../services/voiceNativeService";
 import * as matrixService from "../services/matrixService";
+import { resolveShareVideoCodec } from "./useMediaCapsStore";
 import { playMuteCue, playUnmuteCue, playDeafenCue, playUndeafenCue } from "../services/voiceChannelSounds";
 
 // Timestamp at which the app session started. Used as a cutoff for unread
@@ -237,7 +238,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           // 1440p/30 ; congestion WebRTC et simulcast adaptent ensuite le débit.
           resolution: autoQuality ? "1440p" : settings.screenShareResolution,
           framerate: autoQuality ? 30 : settings.screenShareFramerate,
-          videoCodec: settings.screenShareCodec,
+          videoCodec: resolveShareVideoCodec(settings.screenShareCodec),
         });
       audioPublished = result.audioPublished;
     } catch (err) {

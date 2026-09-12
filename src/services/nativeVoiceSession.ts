@@ -43,6 +43,9 @@ export async function disconnectNativeSession(unexpected = false): Promise<void>
   session.closed = true;
   for (const unlisten of session.unlisten.splice(0)) unlisten();
   useLiveKitStore.getState().disconnect();
+  void import("../stores/useMediaCapsStore").then(({ useMediaCapsStore }) => {
+    useMediaCapsStore.getState().clear();
+  }).catch(() => {});
   session.closing = (async () => {
     // Stop timers and overlays immediately, including while connect is pending.
     try {
@@ -119,6 +122,11 @@ export async function connectNativeSession(options: SessionOptions): Promise<nat
       throw new Error("Connexion vocale interrompue");
     }
     useLiveKitStore.getState().connect(options.room);
+    // Capacités média : sonde ma machine et les annonce aux autres (choix du
+    // codec de partage, matériel d'abord). Silencieux en cas d'échec.
+    void import("../stores/useMediaCapsStore").then(({ useMediaCapsStore }) => {
+      void useMediaCapsStore.getState().refreshAndPublish();
+    }).catch(() => {});
     const state = (latestStatus as native.VoiceNativeStatus | null)?.state ?? status.state;
     if (state === "reconnecting") useLiveKitStore.getState().setConnectionState(state);
     ready = true;
