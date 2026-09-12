@@ -52,6 +52,15 @@ export function installMemoryDiagnostics(): void {
         canvases.reduce((sum, c) => sum + c.width * c.height * 4, 0) / (1024 * 1024),
       );
       const nodes = document.getElementsByTagName("*").length;
+      // Participants vocaux : l'app reçoit des mises à jour plusieurs fois par
+      // seconde quand on est en vocal — un suspect de premier plan pour une
+      // croissance continue sans messages.
+      let voice = "?";
+      try {
+        const { useLiveKitStore } = await import("../stores/useLiveKitStore");
+        const p = useLiveKitStore.getState().participants;
+        voice = `${p.length} (parlent=${p.filter((x) => x.isSpeaking).length})`;
+      } catch { /* store pas prêt */ }
       // Écouteurs du client Matrix : ce projet a DÉJÀ eu une fuite de ce type
       // (les handlers empilés à chaque reconnexion — 6,7 Go après 31 h).
       // Un compteur qui monte ici = même classe de bug, autre chemin.
@@ -71,7 +80,7 @@ export function installMemoryDiagnostics(): void {
           }
         }
       } catch { /* client pas prêt */ }
-      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · sdk(salons=${sdkRooms}) ${listeners}`;
+      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · voix=${voice} · sdk(salons=${sdkRooms}) ${listeners}`;
       console.info(line);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(line))

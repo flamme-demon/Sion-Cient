@@ -331,11 +331,22 @@ function probeDuration(file: File): Promise<number> {
 
 // ---- Playback ----
 
-const blobCache = new Map<string, string>(); // mxc -> blob URL
+const blobCache = new Map<string, string>(); // mxc -> blob URL (LRU borné)
+
+/** Plafond du cache de sons. Chaque entrée retient les OCTETS du fichier
+ *  (pas seulement une URL) : une soundboard de 200 sons écoutés finissait par
+ *  garder des centaines de mégaoctets pour rien. Au-delà, on révoque l'entrée
+ *  la plus ancienne — un son rejoué se re-télécharge, coût négligeable. */
+const BLOB_CACHE_MAX = 24;
 
 async function resolveBlobUrl(mxcUrl: string): Promise<string> {
   const cached = blobCache.get(mxcUrl);
-  if (cached) return cached;
+  if (cached) {
+    // Coup de jeune LRU : l'entrée redevient la plus récente.
+    blobCache.delete(mxcUrl);
+    blobCache.set(mxcUrl, cached);
+    return cached;
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const httpUrl = client.mxcUrlToHttp(mxcUrl, undefined, undefined, undefined, true, true, true);
@@ -350,6 +361,14 @@ async function resolveBlobUrl(mxcUrl: string): Promise<string> {
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);
   blobCache.set(mxcUrl, blobUrl);
+  // Éviction LRU : la plus ancienne sort, son URL est révoquée.
+  while (blobCache.size > BLOB_CACHE_MAX) {
+    const oldest = blobCache.keys().next().value;
+    if (oldest === undefined || oldest === mxcUrl) break;
+    const old = blobCache.get(oldest);
+    blobCache.delete(oldest);
+    if (old) URL.revokeObjectURL(old);
+  }
   return blobUrl;
 }
 

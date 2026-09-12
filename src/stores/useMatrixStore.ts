@@ -614,6 +614,13 @@ function extractMessagesFromRoom(room: any): ChatMessage[] {
  *  petits crans), mais le tas JS du webview, lui, ne redescend jamais. */
 const MAX_MESSAGES_PER_ROOM = 500;
 
+/** Plafond d'historique CHARGÉ par salon. Chaque remontée fait grossir deux
+ *  choses qu'on ne peut pas libérer : la timeline du SDK (qui garde tous les
+ *  événements paginés) et le tas du WASM de crypto (déchiffrement des vieux
+ *  messages). Mesuré : une seule remontée ≈ +350 Mo. Au-delà de ce plafond on
+ *  arrête de paginer — 300 messages couvrent l'usage courant. */
+const MAX_HISTORY_PER_ROOM = 300;
+
 // Events `initSync` attaches handlers for. Without an explicit purge before
 // re-attaching, every disconnect→connect cycle stacks fresh closures onto the
 // same client (handlers capture rooms/events → memory grows linearly with
@@ -1944,6 +1951,14 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     if (!client) return;
     const room = client.getRoom(roomId);
     if (!room) return;
+
+    // Plafond d'historique chargé (cf. MAX_HISTORY_PER_ROOM) : au-delà, on
+    // arrête de paginer — chaque cran fait grossir la timeline du SDK et le
+    // tas du WASM de crypto, que ni l'un ni l'autre ne redescend.
+    if ((get().messages[roomId] || []).length >= MAX_HISTORY_PER_ROOM) {
+      set((s) => ({ roomHasMore: { ...s.roomHasMore, [roomId]: false } }));
+      return;
+    }
 
     // Send read receipt when opening a room
     matrixService.markRoomAsRead(roomId);
