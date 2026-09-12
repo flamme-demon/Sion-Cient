@@ -118,6 +118,11 @@ export function MessageList() {
   // the scroll container's default (top) on reload.
   const prevChannelRef = useRef<string | null>(null);
   const prevMessagesLenRef = useRef(0);
+  /** Dernier message de la liste au rendu précédent : c'est LUI qui distingue
+   *  un ajout en bas (nouveau message) d'un ajout en HAUT (historique chargé
+   *  en remontant) — les deux font grandir le tableau, mais seul le premier
+   *  justifie de coller au bas. */
+  const prevLastIdRef = useRef<string | null>(null);
   const suppressScrollLoadRef = useRef(false);
   const channelJustChangedRef = useRef(false);
 
@@ -343,6 +348,13 @@ export function MessageList() {
     const prevLen = prevMessagesLenRef.current;
     const currLen = messages.length;
     prevMessagesLenRef.current = currLen;
+    // Ajout en HAUT (historique paginé) : le dernier message ne change pas.
+    // Dans ce cas on ne colle JAMAIS au bas — c'est le bug « je remonte, ça me
+    // renvoie en bas » (les deux cas font grandir le tableau).
+    const lastId = currLen > 0 ? String(messages[currLen - 1].id ?? "") : null;
+    const prevLastId = prevLastIdRef.current;
+    prevLastIdRef.current = lastId;
+    const isPrepend = prevLen > 0 && currLen > prevLen && !!lastId && lastId === prevLastId;
 
     // Own-message fast-path: always scroll to bottom when the user just
     // sent something, even if we're still in the channel-just-changed
@@ -385,7 +397,7 @@ export function MessageList() {
     // (Own-message fast-path handled above, before channelJustChanged early-return.)
 
     const newCount = currLen - prevLen;
-    if (!isAtBottomRef.current && prevLen > 0) {
+    if ((!isAtBottomRef.current || isPrepend) && prevLen > 0) {
       suppressScrollLoadRef.current = true;
       requestAnimationFrame(() => {
         const children = el.children;
@@ -399,7 +411,8 @@ export function MessageList() {
       return;
     }
 
-    if (isAtBottomRef.current) {
+    // Jamais de collage en bas pour un ajout en HAUT (historique paginé).
+    if (isAtBottomRef.current && !isPrepend) {
       scrollToBottom();
       markAsRead();
     }

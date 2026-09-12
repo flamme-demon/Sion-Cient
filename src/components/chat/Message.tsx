@@ -324,6 +324,25 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         </span>
         <button
           type="button"
+          onClick={async () => {
+            if (!attachment.url) return;
+            const savedPath = await downloadFileToDownloads(attachment.url, attachment.name);
+            if (savedPath) {
+              useAppStore.getState().markAsDownloaded(attachment.url);
+              useAppStore.getState().showDownloadNotification(attachment.name, savedPath);
+            }
+          }}
+          title={t("chat.download", { defaultValue: "Télécharger la vidéo" })}
+          style={{
+            flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+            border: '1px solid var(--color-outline-variant)', background: 'transparent',
+            color: 'var(--color-on-surface-variant)', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+          }}
+        >
+          {t("chat.download", { defaultValue: "Télécharger" })}
+        </button>
+        <button
+          type="button"
           onClick={() => {
             const el = videoElRef.current;
             const at = el?.currentTime ?? 0;
