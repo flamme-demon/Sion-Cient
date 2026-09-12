@@ -2851,6 +2851,9 @@ pub fn run() {
             // partage) : la fenêtre vit sur un fil winit hors de l'arbre
             // Tauri — elle a besoin de ce handle pour agir.
             pip_window::set_app_handle(app.handle().clone());
+            // Préchauffe la boucle winit du PIP : le premier clic ne paie
+            // plus sa construction.
+            pip_window::prewarm();
 
             // WebSocket server for global shortcuts (évite l'IPC Tauri, dont
             // les événements peuvent être différés quand la fenêtre n'a pas

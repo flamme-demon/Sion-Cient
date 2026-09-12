@@ -55,7 +55,8 @@ struct PipState {
     /// Partage affiché (identité de l'expéditeur). `None` = fenêtre fermée.
     sender: Option<String>,
     /// Dernière image reçue pour ce partage (gardée : une source en pause
-    /// laisse l'écran rempli au lieu de noircir).
+    /// laisse l'écran rempli au lieu de noircir, et une réouverture repart de
+    /// la dernière image au lieu d'un écran noir).
     frame: Option<PipFrame>,
     /// Dernière génération peinte par la boucle d'événements.
     painted: u64,
@@ -63,6 +64,10 @@ struct PipState {
     last_pos: Option<(i32, i32)>,
     /// Grande taille (double-clic) — mémorisée aussi.
     large: bool,
+    /// Son du partage coupé ? Renseigné par `pip_native_open` (hors du fil de
+    /// l'event loop : interroger le moteur depuis ce fil retardait l'affichage
+    /// — le moteur peut être tenu par le décodage vidéo).
+    share_audio_muted: bool,
 }
 
 #[derive(Debug)]
@@ -90,6 +95,17 @@ static APP: OnceLock<tauri::AppHandle<crate::TauriRuntime>> = OnceLock::new();
 /// fenêtre, elle, s'affiche quand même).
 pub fn set_app_handle(app: tauri::AppHandle<crate::TauriRuntime>) {
     let _ = APP.set(app);
+}
+
+/// Préchauffe la boucle du PIP en arrière-plan : démarrée au lancement de
+/// l'app, elle ne se paie plus au premier clic sur « PIP natif » (constaté :
+/// « c'est long »).
+pub fn prewarm() {
+    let _ = thread::Builder::new()
+        .name("sion-native-pip-prewarm".into())
+        .spawn(|| {
+            let _ = get_or_start_handle();
+        });
 }
 
 /// Boutons dessinés dans le coin haut-droit (24 px, 4 px d'écart, marge 8).
@@ -344,9 +360,10 @@ pub fn on_frame(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
     let Some(handle) = HANDLE.get() else {
         return;
     };
-    if !OPEN.load(Ordering::Acquire) {
-        return;
-    }
+    // La dernière image est gardée même fenêtre fermée : la réouverture du
+    // PIP repart de l'image courante au lieu d'un écran noir en attendant la
+    // prochaine frame (et `paint` ne décode que si une nouvelle génération
+    // est arrivée).
     {
         let mut state = handle.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.sender.as_deref() != Some(sender) {
@@ -380,9 +397,31 @@ pub fn on_share_removed(sender: &str) {
 // ── Commandes Tauri ─────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn pip_native_open(sender: String) -> Result<(), String> {
+pub fn pip_native_open(
+    app: tauri::AppHandle<crate::TauriRuntime>,
+    sender: String,
+) -> Result<(), String> {
     if sender.is_empty() {
         return Err("identité du partage manquante".into());
+    }
+    // État du son lu ICI, pas dans la boucle d'événements : l'interrogation du
+    // moteur peut attendre son verrou (décodage vidéo) et retardait
+    // l'affichage de la fenêtre (constaté : « c'est long »).
+    #[cfg(feature = "native-voice")]
+    let muted = crate::voice_native::voice_native_get_screenshare_audio_state(
+        app.clone(),
+        sender.clone(),
+    )
+    .map(|st| st.muted)
+    .unwrap_or(false);
+    #[cfg(not(feature = "native-voice"))]
+    let muted = {
+        let _ = &app;
+        false
+    };
+    if let Some(handle) = get_or_start_handle() {
+        let mut state = handle.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.share_audio_muted = muted;
     }
     if open(&sender) {
         Ok(())
@@ -489,7 +528,9 @@ impl PipApp {
     }
 
     /// Bascule le son du partage affiché (même chemin que le bouton 🔊 de la
-    /// vue : le moteur reste l'unique propriétaire de l'état).
+    /// vue : le moteur reste l'unique propriétaire de l'état). Réponse
+    /// visuelle immédiate, appel moteur en tâche de fond — la boucle
+    /// d'événements ne doit jamais attendre le moteur (décodage vidéo).
     fn toggle_share_audio(&mut self) {
         let Some(app) = APP.get() else {
             return;
@@ -500,23 +541,24 @@ impl PipApp {
         };
         let Some(sender) = sender else { return };
         let wanted = !self.muted;
-        match crate::voice_native::voice_native_set_screenshare_audio_muted(
-            app.clone(),
-            sender,
-            wanted,
-        ) {
-            Ok(_) => {
-                self.muted = wanted;
-                log::info!(
-                    "[Sion][PIP] son du partage {}",
-                    if wanted { "coupé" } else { "rétabli" }
-                );
-            }
-            Err(err) => log::warn!("[Sion][PIP] bascule du son refusée: {err}"),
-        }
+        self.muted = wanted;
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
+        let app = app.clone();
+        let _ = thread::Builder::new()
+            .name("sion-pip-audio-toggle".into())
+            .spawn(move || {
+                match crate::voice_native::voice_native_set_screenshare_audio_muted(
+                    app, sender, wanted,
+                ) {
+                    Ok(_) => log::info!(
+                        "[Sion][PIP] son du partage {}",
+                        if wanted { "coupé" } else { "rétabli" }
+                    ),
+                    Err(err) => log::warn!("[Sion][PIP] bascule du son refusée: {err}"),
+                }
+            });
     }
 
     fn build_window(&self, event_loop: &ActiveEventLoop) -> Option<Arc<Window>> {
@@ -666,25 +708,13 @@ impl ApplicationHandler<UserEvent> for PipApp {
                     self.surface = Some(surface);
                 }
                 if let Some(window) = self.window.as_ref() {
-                    // État initial du bouton 🔊 : le moteur reste l'unique
-                    // propriétaire du mute (sans moteur : « actif »).
-                    if let Some(app) = APP.get() {
-                        let sender = {
-                            let state =
-                                self.state.lock().unwrap_or_else(|e| e.into_inner());
-                            state.sender.clone()
-                        };
-                        if let Some(sender) = sender {
-                            if let Ok(st) =
-                                crate::voice_native::voice_native_get_screenshare_audio_state(
-                                    app.clone(),
-                                    sender,
-                                )
-                            {
-                                self.muted = st.muted;
-                            }
-                        }
-                    }
+                    // État du bouton 🔊 : renseigné par `pip_native_open` —
+                    // aucun appel moteur sur ce fil (il attendait le verrou du
+                    // moteur et retardait l'affichage de la fenêtre).
+                    self.muted = {
+                        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                        state.share_audio_muted
+                    };
                     window.set_visible(true);
                     window.request_redraw();
                 }
