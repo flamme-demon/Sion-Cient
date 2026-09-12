@@ -6363,6 +6363,7 @@ dependencies = [
  "transcribe-cpp",
  "tungstenite 0.24.0",
  "urlencoding",
+ "webkit2gtk",
  "webrtc-sys",
  "windows 0.58.0",
  "windows-core 0.58.0",

@@ -2809,6 +2809,37 @@ pub fn run() {
                     .build(),
             )?;
 
+            // ── Réglages WebKit du web process (perf mémoire, 2026-09-12) ──
+            // Mesuré : la release est plate (691 → 694 Mo sur 28 min) mais son
+            // plancher est ~690 Mo, tout côté web process. WebKit y entretient
+            // des caches dont l'app n'a aucun usage : tout son contenu vient du
+            // réseau (Matrix) et de l'IPC natif, jamais du cache disque, et le
+            // page cache garde en mémoire la page précédente à chaque
+            // rechargement (mesuré en dev : +100-200 Mo par reload, jamais
+            // rendus). Modèle de cache « document viewer » = l'équivalent d'un
+            // navigateur sans cache pour une app qui ne navigue pas.
+            #[cfg(target_os = "linux")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.with_webview(|webview| {
+                        use webkit2gtk::{
+                            CacheModel, SettingsExt, WebContextExt, WebViewExt,
+                        };
+                        let view = webview.inner();
+                        if let Some(context) = view.context() {
+                            context.set_cache_model(CacheModel::DocumentViewer);
+                        }
+                        if let Some(settings) = view.settings() {
+                            settings.set_enable_page_cache(false);
+                        }
+                        log::info!(
+                            "[Sion][webkit] caches bridés (document viewer, page cache off)"
+                        );
+                    });
+                }
+            }
+
             // Sans sink, WebRTC n'émet aucun log (échecs PipeWire/portail
             // indiscernables d'une absence de frame).
             #[cfg(feature = "native-voice")]

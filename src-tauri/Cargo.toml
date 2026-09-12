@@ -134,8 +134,12 @@ wl-clipboard-rs = "0.9"
 # constructors (run before main()) conflict with the windowing stack's
 # GLib/Wayland init order. Future re-introduction needs lazy loading
 # via `libloading` (dlopen at first capture call, not at process start)
-# or — simpler — switch the enumeration path to a `pw-cli ls Node`
-# subprocess parse, mirroring how we already use `pactl` elsewhere.
+# or — simpler — switch the enumeration path to a `pw-cli ls Node` subprocess
+# parse, mirroring how we already use `pactl` elsewhere.
+# Réglages WebKit du web process (mémoire) : le crate est déjà en arbre via
+# wry — on le promeut en dépendance directe pour régler le modèle de cache et
+# désactiver le page cache depuis `lib.rs`.
+webkit2gtk = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
