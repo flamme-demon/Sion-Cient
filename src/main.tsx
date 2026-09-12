@@ -8,6 +8,7 @@ import { openExternalUrl } from "./utils/openExternal";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 import { attachConsole } from "@tauri-apps/plugin-log";
 import { installThemeSync } from "./services/themeService";
+import { installMemoryDiagnostics } from "./services/memoryDiagnostics";
 
 // Route Rust `log::*` records into the webview console — the only way to see
 // them on the shipped Windows build (no terminal). Pairs with the Rust
@@ -17,6 +18,10 @@ attachConsole().catch(() => {});
 // Thème : appliqué avant le premier rendu (aucun flash du thème par défaut),
 // puis à chaque changement depuis les réglages.
 installThemeSync();
+
+// DIAGNOSTIC DEV : compteurs mémoire (messages retenus, blobs vivants) dans la
+// console/le log — pour expliquer la courbe RSS du processus WebKit.
+installMemoryDiagnostics();
 
 // Intercept all clicks on external links to open in default browser (Tauri)
 document.addEventListener("click", (e) => {
