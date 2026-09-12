@@ -61,16 +61,23 @@ fi
 
 # Create release
 echo "Creation de la release GitHub..."
-gh release create "$TAG" \
-    --title "Sion Client $TAG" \
-    --notes "## Sion Client $TAG
+# Notes : fichier dédié s'il existe (notes rédigées), sinon le gabarit.
+NOTES_FILE="$PROJECT_DIR/docs/release-notes-$VERSION.md"
+if [ -f "$NOTES_FILE" ]; then
+    NOTES_ARGS=(--notes-file "$NOTES_FILE")
+else
+    NOTES_ARGS=(--notes "## Sion Client $TAG
 
 ### Téléchargement
 - **Linux**: AppImage (portable, double-cliquer pour lancer)
 - **Windows**: Installeur NSIS ou MSI
 
 ### Nouveautés
-Voir les commits depuis la dernière release pour le détail des changements." \
+Voir les commits depuis la dernière release pour le détail des changements.")
+fi
+gh release create "$TAG" \
+    --title "Sion Client $TAG" \
+    "${NOTES_ARGS[@]}" \
     $DRAFT_FLAG \
     "$BUILD_DIR"/*
 
