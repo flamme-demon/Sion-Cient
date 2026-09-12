@@ -2562,12 +2562,12 @@ mod tests {
 
     #[test]
     fn participant_mirror_serializes_like_ts() {
-        let mut p = NativeParticipant::new("@flamme:sionchat.fr:XYZ", "flamme");
+        let mut p = NativeParticipant::new("@flamme:example.org:XYZ", "flamme");
         p.is_speaking = true;
         p.connection_quality = NativeConnectionQuality::Excellent;
         p.playing_sound_emoji = Some("🥁".into());
         let raw = encode_json(&p).unwrap();
-        assert!(raw.contains(r#""identity":"@flamme:sionchat.fr:XYZ""#));
+        assert!(raw.contains(r#""identity":"@flamme:example.org:XYZ""#));
         assert!(raw.contains(r#""isSpeaking":true"#));
         assert!(raw.contains(r#""connectionQuality":"excellent""#));
         // camelCase imposé par le front : serde rename_all.
@@ -2785,16 +2785,16 @@ mod tests {
             assert_eq!(
                 super::cursor_display_name(
                     Some("Picsou"),
-                    Some("@picsou:sionchat.fr:device"),
-                    "@picsou:sionchat.fr:device",
+                    Some("@picsou:example.org:device"),
+                    "@picsou:example.org:device",
                 ),
                 "Picsou"
             );
             assert_eq!(
                 super::cursor_display_name(
                     None,
-                    Some("@picsou:sionchat.fr:device"),
-                    "@picsou:sionchat.fr:device",
+                    Some("@picsou:example.org:device"),
+                    "@picsou:example.org:device",
                 ),
                 "picsou"
             );

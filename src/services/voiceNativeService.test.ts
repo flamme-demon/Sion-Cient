@@ -335,7 +335,7 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
   });
 
   it("matrixUserIdOf coupe le suffixe device LiveKit", () => {
-    expect(matrixUserIdOf("@narkow:sionchat.fr:DEVICE2")).toBe("@narkow:sionchat.fr");
+    expect(matrixUserIdOf("@narkow:example.org:DEVICE2")).toBe("@narkow:example.org");
     expect(matrixUserIdOf("@a:b")).toBe("@a:b");
     expect(matrixUserIdOf("local")).toBe("local");
   });
@@ -351,17 +351,17 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
       audioLevel: 0,
       connectionQuality: "unknown" as const,
     });
-    const participants = [mk("@picsou:sionchat.fr:DEVICE1"), mk("@narkow:sionchat.fr:DEVICE2")];
+    const participants = [mk("@picsou:example.org:DEVICE1"), mk("@narkow:example.org:DEVICE2")];
     // Picsou : Matrix dit sourdine, LiveKit ne sait pas → badge AFK.
     const merged = overlayMatrixVoiceState(participants, [
-      { id: "@picsou:sionchat.fr", muted: false, deafened: true },
+      { id: "@picsou:example.org", muted: false, deafened: true },
     ]);
     expect(merged[0].isDeafened).toBe(true);
     expect(merged[0].isMuted).toBe(false);
     // Narkow : absent de Matrix → inchangé (même référence).
     expect(merged[1]).toBe(participants[1]);
     // Autres champs préservés.
-    expect(merged[0].identity).toBe("@picsou:sionchat.fr:DEVICE1");
+    expect(merged[0].identity).toBe("@picsou:example.org:DEVICE1");
   });
 
   it("overlayMatrixVoiceState ne ment jamais vers false et rend la réf si inchangé", () => {
@@ -385,29 +385,29 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
 
   it("resolveNativeDisplayName préfère le pseudo Matrix au localpart", () => {
     // Sans client : repli localpart, jamais l'identité longue.
-    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("narkow");
+    expect(resolveNativeDisplayName("@narkow:example.org:xyz", "!room")).toBe("narkow");
     expect(resolveNativeDisplayName("local", "!room")).toBe("local");
     // Membre de la room : son pseudo.
     getMatrixClientMock.mockReturnValue({
       getRoom: () => ({ getMember: () => ({ name: "Narkow le Magnifique" }) }),
       getUser: () => null,
     });
-    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow le Magnifique");
+    expect(resolveNativeDisplayName("@narkow:example.org:xyz", "!room")).toBe("Narkow le Magnifique");
     // Le nom de membre peut être son MXID brut : il ne doit pas masquer le
     // vrai pseudo du profil global.
     getMatrixClientMock.mockReturnValue({
-      getRoom: () => ({ getMember: () => ({ name: "@narkow:sionchat.fr" }) }),
+      getRoom: () => ({ getMember: () => ({ name: "@narkow:example.org" }) }),
       getUser: () => ({ displayName: "Narkow" }),
     });
-    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow");
+    expect(resolveNativeDisplayName("@narkow:example.org:xyz", "!room")).toBe("Narkow");
     // Pas de membre, displayname global : repli global.
     getMatrixClientMock.mockReturnValue({
       getRoom: () => null,
       getUser: () => ({ displayName: "Narkow" }),
     });
-    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("Narkow");
+    expect(resolveNativeDisplayName("@narkow:example.org:xyz", "!room")).toBe("Narkow");
     // Rien nulle part : localpart.
     getMatrixClientMock.mockReturnValue({ getRoom: () => null, getUser: () => null });
-    expect(resolveNativeDisplayName("@narkow:sionchat.fr:xyz", "!room")).toBe("narkow");
+    expect(resolveNativeDisplayName("@narkow:example.org:xyz", "!room")).toBe("narkow");
   });
 });

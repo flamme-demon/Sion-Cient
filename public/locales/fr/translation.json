@@ -14,6 +14,15 @@
     "alreadySaved": "Déjà téléchargé"
   },
   "layout": {
+    "bgOpacity": "Opacité du fond",
+    "bgPick": "Choisir une image de fond",
+    "bgRemove": "Retirer le fond",
+    "bgReplace": "Remplacer l'image de fond",
+    "editSidebarHint": "Glisser le menu vers le bord opposé",
+    "zoneBottom": "Bas",
+    "zoneRight": "Droite",
+    "zoneTop": "Haut",
+    "zoneMenu": "Menu",
     "resizeSidebar": "Redimensionner le menu — double-clic pour la taille par défaut, Ctrl+B pour replier",
     "expandSidebar": "Agrandir le menu (Ctrl+B)",
     "resizeRightPanel": "Redimensionner le panneau — double-clic pour la taille par défaut",
@@ -104,6 +113,11 @@
     "sound": "Son"
   },
   "chat": {
+    "download": "Télécharger la vidéo",
+    "newMessages_one": "{{count}} nouveau message",
+    "newMessages_other": "{{count}} nouveaux messages",
+    "unreadCount_one": "{{count}} non lu",
+    "unreadCount_other": "{{count}} non lus",
     "newMessages_one": "Nouveau message",
     "newMessages_other": "Nouveaux messages",
     "unreadCount_one": "{{count}} nouveau message",
@@ -142,6 +156,8 @@
     "miniPlayerResize": "Redimensionner le mini-lecteur — double-clic pour la taille par défaut"
   },
   "poll": {
+    "totalVotes_one": "{{count}} votant",
+    "totalVotes_other": "{{count}} votants",
     "menuItem": "Sondage",
     "create": "Créer un sondage",
     "questionPlaceholder": "Posez une question",
@@ -201,6 +217,16 @@
     "close": "Fermer"
   },
   "screenShare": {
+    "audioVolume": "Volume du partage",
+    "dockBack": "Remettre en ligne (Ctrl+Maj+P)",
+    "floatResize": "Redimensionner la carte flottante — double-clic pour la taille par défaut",
+    "floatView": "Détacher en carte flottante (Ctrl+Maj+P)",
+    "fullscreen": "Plein écran",
+    "mosaic": "Mode mosaïque",
+    "muteAudio": "Couper le son du partage",
+    "nextShare": "Écran suivant",
+    "prevShare": "Écran précédent",
+    "unmuteAudio": "Réactiver le son du partage",
     "title": "Options de partage d'écran",
     "sharedBy": "{{name}} partage son écran",
     "resolution": "Résolution",
@@ -237,6 +263,8 @@
     "nativePip": "PIP natif — fenêtre au-dessus des autres applications. Glisser pour déplacer ; boutons en haut à droite : 🏠 revenir sur Sion, 🔊 couper le son du partage ; clic droit pour fermer."
   },
   "soundboard": {
+    "soundCount_one": "{{count}} son",
+    "soundCount_other": "{{count}} sons",
     "title": "Soundboard",
     "close": "Fermer",
     "notCreated": "La soundboard n'a pas encore été activée par l'admin.",
@@ -629,6 +657,8 @@
     }
   },
   "transcript": {
+    "micCount": "{{count}} micros actifs",
+    "segmentCount": "{{count}} segments",
     "title": "Transcription",
     "pill": "Transcription",
     "togglePanel": "Transcription de la réunion",

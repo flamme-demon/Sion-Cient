@@ -50,7 +50,7 @@ describe("serverClock", () => {
       "fetch",
       vi.fn().mockResolvedValue(serverAt("Wed, 29 Jul 2026 14:00:00 GMT")),
     );
-    expect(await clock.probeServerClock("https://sionchat.fr")).toBe(0);
+    expect(await clock.probeServerClock("https://example.org")).toBe(0);
     expect(clock.getClockSkewMs()).toBe(0);
   });
 
@@ -69,7 +69,7 @@ describe("serverClock", () => {
       vi.fn().mockResolvedValue(serverAt(new Date(trueUtc).toUTCString())),
     );
 
-    await clock.probeServerClock("https://sionchat.fr");
+    await clock.probeServerClock("https://example.org");
     expect(clock.getClockSkewMs()).toBeGreaterThan(9.5 * 3600_000);
 
     // Une appartenance écrite par le serveur il y a 2 min doit rester valide.
@@ -79,7 +79,7 @@ describe("serverClock", () => {
 
   it("garde l'écart connu quand le serveur est injoignable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
-    expect(await clock.probeServerClock("https://sionchat.fr")).toBeNull();
+    expect(await clock.probeServerClock("https://example.org")).toBeNull();
     expect(clock.getClockSkewMs()).toBe(0);
   });
 
@@ -88,7 +88,7 @@ describe("serverClock", () => {
       "fetch",
       vi.fn().mockResolvedValue(serverAt("pas une date")),
     );
-    expect(await clock.probeServerClock("https://sionchat.fr")).toBeNull();
+    expect(await clock.probeServerClock("https://example.org")).toBeNull();
     expect(clock.getClockSkewMs()).toBe(0);
   });
 });

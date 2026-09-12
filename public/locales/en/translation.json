@@ -14,6 +14,15 @@
     "alreadySaved": "Already downloaded"
   },
   "layout": {
+    "bgOpacity": "Background opacity",
+    "bgPick": "Choose a background image",
+    "bgRemove": "Remove background",
+    "bgReplace": "Replace the background image",
+    "editSidebarHint": "Drag the menu to the opposite edge",
+    "zoneBottom": "Bottom",
+    "zoneRight": "Right",
+    "zoneTop": "Top",
+    "zoneMenu": "Menu",
     "resizeSidebar": "Resize the menu — double-click for the default width, Ctrl+B to collapse",
     "expandSidebar": "Expand menu (Ctrl+B)",
     "resizeRightPanel": "Resize the panel — double-click for the default width",
@@ -107,6 +116,11 @@
     "sound": "Sound"
   },
   "chat": {
+    "download": "Download video",
+    "newMessages_one": "{{count}} new message",
+    "newMessages_other": "{{count}} new messages",
+    "unreadCount_one": "{{count}} unread",
+    "unreadCount_other": "{{count}} unread",
     "newMessages_one": "New message",
     "newMessages_other": "New messages",
     "unreadCount_one": "{{count}} new message",
@@ -145,6 +159,8 @@
     "miniPlayerResize": "Resize the mini-player — double-click for the default size"
   },
   "poll": {
+    "totalVotes_one": "{{count}} voter",
+    "totalVotes_other": "{{count}} voters",
     "menuItem": "Poll",
     "create": "Create a poll",
     "questionPlaceholder": "Ask a question",
@@ -204,6 +220,16 @@
     "close": "Close"
   },
   "screenShare": {
+    "audioVolume": "Share audio volume",
+    "dockBack": "Back inline (Ctrl+Shift+P)",
+    "floatResize": "Resize the floating card — double-click for the default size",
+    "floatView": "Detach as a floating card (Ctrl+Shift+P)",
+    "fullscreen": "Fullscreen",
+    "mosaic": "Mosaic mode",
+    "muteAudio": "Mute the share audio",
+    "nextShare": "Next screen",
+    "prevShare": "Previous screen",
+    "unmuteAudio": "Unmute the share audio",
     "title": "Screen share options",
     "sharedBy": "{{name}} is sharing their screen",
     "resolution": "Resolution",
@@ -240,6 +266,8 @@
     "nativePip": "Native PIP — window above other applications. Drag to move; top-right buttons: 🏠 back to Sion, 🔊 mute the share audio; right-click to close."
   },
   "soundboard": {
+    "soundCount_one": "{{count}} sound",
+    "soundCount_other": "{{count}} sounds",
     "title": "Soundboard",
     "close": "Close",
     "notCreated": "The soundboard has not been set up by an admin yet.",
@@ -632,6 +660,8 @@
     }
   },
   "transcript": {
+    "micCount": "{{count}} active mics",
+    "segmentCount": "{{count}} segments",
     "title": "Transcript",
     "pill": "Transcript",
     "togglePanel": "Meeting transcript",

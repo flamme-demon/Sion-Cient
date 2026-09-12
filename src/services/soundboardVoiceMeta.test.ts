@@ -4,7 +4,7 @@ const sendMessage = vi.fn().mockResolvedValue({ event_id: "$new" });
 
 vi.mock("./matrixService", () => ({
   getMatrixClient: () => ({ sendMessage }),
-  findSoundboardRoom: async () => "!sb:sionchat.fr",
+  findSoundboardRoom: async () => "!sb:example.org",
   uploadFile: async () => "mxc://x/y",
 }));
 vi.mock("./audioContext", () => ({ getSharedAudioContext: () => null }));
@@ -14,7 +14,7 @@ import { editSound, type SoundEntry } from "./soundboardService";
 
 const voice: SoundEntry = {
   eventId: "$orig",
-  mxcUrl: "mxc://sionchat.fr/burgonde",
+  mxcUrl: "mxc://example.org/burgonde",
   label: "Burgonde",
   category: "Voix",
   emoji: "🗣️",
@@ -22,11 +22,11 @@ const voice: SoundEntry = {
   mimetype: "audio/wav",
   size: 1234,
   duration: 9000,
-  senderId: "@flamme:sionchat.fr",
+  senderId: "@flamme:example.org",
   timestamp: 1,
   gain: 1.0,
   refText: "Sa va saigné",
-  avatarUrl: "mxc://sionchat.fr/portrait",
+  avatarUrl: "mxc://example.org/portrait",
   kind: "voice",
   ttsModel: "higgs-v3",
 };

@@ -47,7 +47,8 @@ jobs:
             libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
             libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 \
             libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
-            libgtk-3-0t64 libfuse2t64
+            libgtk-3-0t64 libfuse2t64 \
+            nvidia-cuda-toolkit
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -96,6 +97,11 @@ jobs:
           # webrtc-sys vendored : libc++ hermétique → clang >= 21.
           CC: clang-21
           CXX: clang++-21
+          # Codecs NVIDIA (NVENC/NVDEC) : le crate compile son implémentation
+          # NVIDIA quand cuda.h existe (paquet nvidia-cuda-toolkit → headers
+          # dans /usr/include). Rien n'est embarqué dans l'AppImage : libcuda
+          # et libnvcuvid sont dlopen'ées depuis le pilote chez l'utilisateur.
+          CUDA_HOME: /usr
 
       - name: Upload AppImage as artifact
         uses: actions/upload-artifact@v7
@@ -263,11 +269,18 @@ jobs:
           # update banner (updateService.ts) never offers a beta to everyone.
           PRERELEASE=""
           case "$TAG" in *-*) PRERELEASE="--prerelease" ;; esac
-          # Auto-generate notes from commit history since previous tag.
-          # `gh release create --generate-notes` does this server-side.
+          # Notes rédigées si le dépôt en fournit pour ce tag
+          # (docs/release-notes-<version>.md), sinon notes auto depuis les
+          # commits (`gh release create --generate-notes`).
+          NOTES_FILE="docs/release-notes-${TAG#v}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          else
+            NOTES_ARGS=(--generate-notes)
+          fi
           gh release create "$TAG" \
             --title "Sion Client $TAG" \
-            --generate-notes \
+            "${NOTES_ARGS[@]}" \
             $PRERELEASE \
             ./artifacts/*.AppImage \
             ./artifacts/*.exe
