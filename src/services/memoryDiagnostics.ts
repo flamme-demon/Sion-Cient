@@ -16,6 +16,39 @@
 export function installMemoryDiagnostics(): void {
   if (!import.meta.env.DEV) return;
 
+  // wasm-bindgen (Rust) ne passe PAS par `new WebAssembly.Memory` : le module
+  // déclare sa mémoire EN INTERNE. Il faut donc lire la mémoire dans les
+  // exports de l'instance, en interceptant `instantiate` / `instantiateStreaming`.
+  const wasmMemories: WebAssembly.Memory[] = [];
+  const collectMemories = (result: unknown) => {
+    const instance = (result as { instance?: WebAssembly.Instance })?.instance ?? (result as WebAssembly.Instance);
+    const mem = (instance?.exports as Record<string, unknown> | undefined)?.memory;
+    if (mem instanceof WebAssembly.Memory) wasmMemories.push(mem);
+  };
+  const originalInstantiate = WebAssembly.instantiate.bind(WebAssembly) as unknown as (
+    source: unknown,
+    imports?: unknown,
+  ) => Promise<{ instance: WebAssembly.Instance }> | { instance: WebAssembly.Instance };
+  const originalStreaming = WebAssembly.instantiateStreaming?.bind(WebAssembly) as unknown as
+    | ((source: unknown, imports?: unknown) => Promise<{ instance: WebAssembly.Instance }>)
+    | undefined;
+  WebAssembly.instantiate = ((source: unknown, imports?: unknown) => {
+    const result = originalInstantiate(source, imports);
+    if (result instanceof Promise) return result.then((r) => { collectMemories(r); return r; });
+    collectMemories(result);
+    return result;
+  }) as unknown as typeof WebAssembly.instantiate;
+  if (originalStreaming) {
+    WebAssembly.instantiateStreaming = ((source: unknown, imports?: unknown) => {
+      return originalStreaming(source, imports).then((r) => {
+        collectMemories(r);
+        return r;
+      });
+    }) as unknown as typeof WebAssembly.instantiateStreaming;
+  }
+  const wasmTotalMb = () =>
+    Math.round(wasmMemories.reduce((sum, m) => sum + m.buffer.byteLength, 0) / (1024 * 1024));
+
   // 1. Compteurs d'object URLs.
   let created = 0;
   let revoked = 0;
@@ -80,7 +113,7 @@ export function installMemoryDiagnostics(): void {
           }
         }
       } catch { /* client pas prêt */ }
-      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · voix=${voice} · sdk(salons=${sdkRooms}) ${listeners}`;
+      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
       console.info(line);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(line))
