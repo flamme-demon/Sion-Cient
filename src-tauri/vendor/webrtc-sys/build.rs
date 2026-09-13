@@ -197,14 +197,16 @@ fn main() {
                 let cuda_include_dir = cuda_home.join("include");
                 if cuda_include_dir.join("cuda.h").exists() {
                     // Conflits winsock (C2011 sockaddr/fd_set/timeval… vus en
-                    // CI le 13/09) : le code NVIDIA inclut windows.h, les
-                    // en-têtes WebRTC incluent winsock2.h — « lean and mean »
-                    // empêche windows.h de tirer l'ancien winsock.h, et
-                    // _WINSOCKAPI_ bloque ce dernier même s'il est tiré par
-                    // un autre chemin (c'est sa garde historique).
+                    // CI le 13/09) : windows.h tire l'ancien winsock.h que
+                    // winsock2.h redéfinit ensuite. Le bon remède n'est pas de
+                    // bloquer l'ancien (_WINSOCKAPI_ cassait le journaliseur
+                    // NvCodec, qui a besoin des types socket) mais de forcer
+                    // winsock2.h en PREMIER dans chaque unité — il pose alors
+                    // lui-même la garde et l'ancien est ignoré. Le « lean and
+                    // mean » évite en plus que windows.h le tire.
                     builder.define("WIN32_LEAN_AND_MEAN", None);
                     builder.define("NOMINMAX", None);
-                    builder.define("_WINSOCKAPI_", None);
+                    builder.flag("/FIwinsock2.h");
                     // Définitions du prébuilt WebRTC telles que compilées, et
                     // trace dans le journal : sans WEBRTC_WIN, rtc_base ne
                     // définit même pas PlatformThreadId (C2065).
