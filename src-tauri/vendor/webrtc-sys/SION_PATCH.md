@@ -18,6 +18,13 @@ The original sources and notices are retained. Sion modifications:
   `FreeLibrary` sous `_WIN32`, DLL du pilote (`nvEncodeAPI64.dll`,
   `nvcuvid.dll`, dans System32) au lieu des noms POSIX. Même schéma que
   `cuda_context.cpp`, déjà cross-plateforme.
+- `src/nvidia/nvcuvid_windows.cpp` (nouveau, Windows) : les 13 fonctions
+  NVDEC appelées par les décodeurs (`cuvidCreateDecoder`, `cuvidMapVideoFrame64`,
+  `cuvidParseVideoData`…) fournies comme redirections dynamiques vers
+  `nvcuvid.dll`. Même raison que les shims ELF côté Linux : NVIDIA ne
+  publie pas de bibliothèque d'import pour cette API du pilote. Sans pilote,
+  chaque appel rend `CUDA_ERROR_NOT_INITIALIZED` — pas de crash, repli
+  décodage logiciel.
 - `build.rs`, `src/lib.rs`: compile/export the extension only with that feature.
 - `src/peer_connection_factory.cpp`: install the capture APM builder behind
   `SION_NATIVE_AUDIO`; upstream behavior is preserved without the feature.

@@ -247,6 +247,10 @@ fn main() {
                         .file("src/nvidia/nvidia_decoder_factory.cpp")
                         .file("src/nvidia/nvidia_encoder_factory.cpp")
                         .file("src/nvidia/cuda_context.cpp")
+                        // Windows : liaisons NVDEC dynamiques (nvcuvid.dll est
+                        // une API du pilote, sans bibliothèque d'import —
+                        // l'équivalent des shims ELF du chemin Linux).
+                        .file("src/nvidia/nvcuvid_windows.cpp")
                         .flag("-DUSE_NVIDIA_VIDEO_CODEC=1");
                     println!(
                         "cargo:warning=NVENC/NVDEC: sources NVIDIA compilées pour Windows (CUDA_HOME={})",
