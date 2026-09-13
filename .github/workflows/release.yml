@@ -195,13 +195,27 @@ jobs:
         working-directory: src-tauri
         shell: pwsh
         run: |
-          # L'installateur CUDA pose CUDA_PATH côté machine ; le build.rs de
-          # webrtc-sys lit CUDA_HOME (défaut Unix /usr/local/cuda, inexistant
-          # ici). On le renseigne pour cette étape — un runner sans toolkit
-          # retombe simplement sur le chemin logiciel.
-          $cuda = [Environment]::GetEnvironmentVariable("CUDA_PATH", "Machine")
-          if ($cuda) { $env:CUDA_HOME = $cuda; Write-Host "CUDA_HOME=$env:CUDA_HOME" }
-          else { Write-Host "CUDA_PATH absent — build sans NVENC" }
+          # Le build.rs de webrtc-sys cherche précisément
+          # `<CUDA_HOME>\include\cuda.h`. Plutôt que de supposer où CUDA 13
+          # range ses en-têtes (trois builds Windows sont sortis sans NVENC
+          # pour cette raison), on CHERCHE cuda.h et on dérive CUDA_HOME du
+          # fichier réellement trouvé.
+          $root = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+          $hit = $null
+          if (Test-Path $root) {
+            $hit = Get-ChildItem $root -Recurse -Filter cuda.h -ErrorAction SilentlyContinue |
+              Sort-Object FullName | Select-Object -First 1
+          }
+          if ($hit) {
+            # Parent du dossier qui contient cuda.h → `<CUDA_HOME>\include\cuda.h` vrai.
+            $env:CUDA_HOME = $hit.Directory.Parent.FullName
+            Write-Host "cuda.h trouvé : $($hit.FullName)"
+            Write-Host "CUDA_HOME dérivé : $env:CUDA_HOME"
+          } else {
+            Write-Host "cuda.h INTROUVABLE sous $root — l'arborescence :"
+            if (Test-Path $root) { Get-ChildItem $root -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 40 FullName }
+            Write-Host "→ build sans NVENC"
+          }
           cargo build --release
 
       # Preuve embarquée, comme pour l'AppImage : sans ce contrôle, un runner
