@@ -40,9 +40,10 @@ jobs:
           # WRY s'appuie sur WebKitGTK au runtime : les paquets -dev sont donc
           # requis par les build scripts glib/gtk/soup. Plus l'audio
           # (alsa/pulse), la fenêtre overlay (xcb/wayland) et l'outillage
-          # AppImage (zstd, fuse2).
+          # AppImage (zstd, fuse2). binutils = `strings`, utilisé par l'étape
+          # de vérification NVENC.
           sudo apt-get install -y \
-            build-essential pkg-config curl wget file zstd squashfs-tools \
+            build-essential pkg-config curl wget file zstd squashfs-tools binutils \
             libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev libglib2.0-dev \
             libasound2-dev libudev-dev libpulse-dev libxcb1-dev \
@@ -111,6 +112,26 @@ jobs:
           # dans /usr/include). Rien n'est embarqué dans l'AppImage : libcuda
           # et libnvcuvid sont dlopen'ées depuis le pilote chez l'utilisateur.
           CUDA_HOME: /usr
+
+      # Preuve embarquée, à chaque release : le code NVENC/NVDEC (LiveKit
+      # vendored) doit être compilé dans le binaire. L'installation CUDA est
+      # volontairement tolérante — sans ce contrôle, un runner sans toolkit
+      # produirait une release silencieusement en logiciel. Calibration
+      # mesurée : 0 marqueur sans CUDA, ~51 avec.
+      - name: Verify NVIDIA codecs in the AppImage
+        run: |
+          APPIMAGE=$(ls dist-appimage/*.AppImage | head -1)
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract >/dev/null
+          BIN=squashfs-root/usr/bin/sion-client
+          COUNT=$(strings -a "$BIN" | grep -ciE "NvEncoderCuda|nvEncodeAPI|libnvidia-encode|NvDecoder" || true)
+          echo "marqueurs NVIDIA dans le binaire : $COUNT (attendu ≥ 5)"
+          if [ "$COUNT" -lt 5 ]; then
+            echo "::error::NVENC/NVDEC absents du binaire — build sans CUDA (toolkit manquant au runner) ?"
+            exit 1
+          fi
+          strings -a "$BIN" | grep -iE "NvEncoderCuda|libnvidia-encode" | sort -u | head -3
+          echo "✓ codecs matériels NVIDIA compilés dans l'AppImage"
 
       - name: Upload AppImage as artifact
         uses: actions/upload-artifact@v7
