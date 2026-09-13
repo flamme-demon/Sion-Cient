@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useLayoutStore, type BackgroundScope } from "../../stores/useLayoutStore";
-import { pickPanelBackground, usePanelBackgroundUrl } from "../../services/panelBackground";
+import { pickPanelBackground, usePanelBackgroundUrl, bgAnchorCss } from "../../services/panelBackground";
 
 /**
  * Contrôle d'édition d'un fond d'image : choisir / remplacer, régler
@@ -68,6 +68,29 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
             title={t("layout.bgOpacity", { defaultValue: "Opacité du fond" })}
             style={{ width: 64, accentColor: 'var(--color-primary)' }}
           />
+          {/* Ancrage : « cover » recadre l'image — choisir la zone conservée
+              (une photo portrait dans un panneau large : garder le haut). */}
+          <div
+            role="group"
+            aria-label={t("layout.bgAnchor", { defaultValue: "Zone de l'image conservée quand elle est recadrée" })}
+            title={t("layout.bgAnchor", { defaultValue: "Zone de l'image conservée quand elle est recadrée" })}
+            style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 11px)', gap: 2 }}
+          >
+            {(["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"] as const).map((a) => (
+              <button
+                key={a}
+                type="button"
+                aria-label={a}
+                aria-pressed={(cfg.anchor ?? "mc") === a}
+                onClick={() => setPanelBackground(scope, { ...cfg, anchor: a })}
+                style={{
+                  width: 11, height: 11, padding: 0, borderRadius: 3, cursor: 'pointer',
+                  border: '1px solid var(--color-outline-variant)',
+                  background: (cfg.anchor ?? "mc") === a ? 'var(--color-primary)' : 'transparent',
+                }}
+              />
+            ))}
+          </div>
           <button
             type="button"
             onClick={() => setPanelBackground(scope, null)}
@@ -109,7 +132,7 @@ export function PanelBackgroundLayer({ scope }: { scope: BackgroundScope }) {
         pointerEvents: 'none',
         backgroundImage: `linear-gradient(${veil}, ${veil}), url(${url})`,
         backgroundSize: 'cover',
-        backgroundPosition: 'center',
+        backgroundPosition: bgAnchorCss(cfg.anchor),
         backgroundRepeat: 'no-repeat',
         filter: 'blur(16px)',
       }}

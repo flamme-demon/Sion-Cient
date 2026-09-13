@@ -55,6 +55,7 @@
     "hangUp": "Hang up",
     "editLayout": "Rearrange the layout",
     "bgMode": "Readability veil / blurred background (full image)",
+    "bgAnchor": "Part of the image kept when it is cropped",
     "bgModeVeil": "Veil",
     "bgModeBlur": "Blur",
     "editLayoutHint": "Drag the blocks into the grid (top / right / bottom)",

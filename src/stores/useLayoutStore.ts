@@ -156,11 +156,16 @@ export type BackgroundScope = "chat" | "channels" | DockPanelId;
 /** Fond d'image d'un panneau : chemin local + opacité. L'image est posée SOUS
  *  le fond du thème, donc le contraste du texte ne dépend pas du fond.
  *  `mode` : `veil` (voile de surface sur l'image, par défaut) ou `blur`
- *  (image pleine dans un calque flouté — la lisibilité vient du flou). */
+ *  (image pleine dans un calque flouté — la lisibilité vient du flou).
+ *  `anchor` : zone de l'image conservée quand elle est recadrée (image plus
+ *  grande que le panneau, `cover`) — `mc` (centre) par défaut. */
+export type BgAnchor = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
+
 export interface PanelBackgroundCfg {
   path: string;
   opacity: number;
   mode?: "veil" | "blur";
+  anchor?: BgAnchor;
 }
 
 interface LayoutState {

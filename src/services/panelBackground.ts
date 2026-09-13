@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { useLayoutStore, type BackgroundScope } from "../stores/useLayoutStore";
+import { useLayoutStore, type BackgroundScope, type BgAnchor } from "../stores/useLayoutStore";
 
 /**
  * Fonds d'image des panneaux (menu, chat, blocs de la dock) — logique, sans
@@ -75,6 +75,19 @@ export function usePanelBackgroundUrl(scope: BackgroundScope): string | null {
   return urlCache.get(path) ?? (resolved?.path === path ? resolved.url : null);
 }
 
+/** Ancrage → valeur CSS `background-position` (défaut : centre). C'est ce qui
+ *  décide de la zone conservée quand `cover` recadre l'image (une photo
+ *  portrait dans un panneau large : `tc` garde la tête). */
+const ANCHOR_CSS: Record<BgAnchor, string> = {
+  tl: "left top", tc: "center top", tr: "right top",
+  ml: "left center", mc: "center center", mr: "right center",
+  bl: "left bottom", bc: "center bottom", br: "right bottom",
+};
+
+export function bgAnchorCss(anchor?: BgAnchor): string {
+  return ANCHOR_CSS[anchor ?? "mc"] ?? "center center";
+}
+
 export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties | undefined {
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const url = usePanelBackgroundUrl(scope);
@@ -86,7 +99,7 @@ export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties |
   return {
     backgroundImage: `linear-gradient(${veil}, ${veil}), url(${url})`,
     backgroundSize: 'cover',
-    backgroundPosition: 'center',
+    backgroundPosition: bgAnchorCss(cfg.anchor),
     backgroundRepeat: 'no-repeat',
   };
 }

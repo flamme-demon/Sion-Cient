@@ -55,6 +55,7 @@
     "hangUp": "Raccrocher",
     "editLayout": "Réorganiser la disposition",
     "bgMode": "Voile de lisibilité / fond flouté (image pleine)",
+    "bgAnchor": "Zone de l'image conservée quand elle est recadrée",
     "bgModeVeil": "Voile",
     "bgModeBlur": "Flou",
     "editLayoutHint": "Glissez les blocs dans la grille (haut / droite / bas)",
