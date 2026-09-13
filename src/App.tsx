@@ -20,6 +20,48 @@ const RecoveryKeyModal = lazy(() =>
 const UserContextMenu = lazy(() =>
   import("./components/sidebar/UserContextMenu").then((m) => ({ default: m.UserContextMenu })),
 );
+
+/**
+ * Préchauffage des écrans paresseux : sans ça, le premier clic sur
+ * « Réglages » (ou Admin / les options de partage) payait le chargement ET la
+ * transformation du chunk — très visible en dev, où Vite transforme les
+ * modules à la volée. On les charge pendant un temps mort après le démarrage :
+ * premier clic instantané, boot toujours léger (aucun de ces modules n'est
+ * évalué tant qu'on ne les ouvre pas — le préchargement ne fait que les tirer
+ * en tâche de fond).
+ */
+function preloadHeavyScreens() {
+  const load = () => {
+    void import("./components/layout/SettingsPanel");
+    void import("./components/layout/AdminPanel");
+    void import("./components/chat/ScreenShareOptionsModal");
+  };
+  const w = window as typeof window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  };
+  if (w.requestIdleCallback) w.requestIdleCallback(load, { timeout: 5000 });
+  else window.setTimeout(load, 3000);
+}
+
+/** Indicateur d'ouverture d'un écran paresseux : discret, centré, sans faire
+ *  clignoter le reste (le fallback local ne remplace que l'overlay). */
+function LazyScreenFallback() {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 400,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'color-mix(in srgb, var(--color-surface) 55%, transparent)',
+    }}>
+      <div style={{
+        width: 28, height: 28, borderRadius: '50%',
+        border: '3px solid var(--color-outline-variant)',
+        borderTopColor: 'var(--color-primary)',
+        animation: 'sion-lazy-spin 0.9s linear infinite',
+      }} />
+      <style>{'@keyframes sion-lazy-spin { to { transform: rotate(360deg); } }'}</style>
+    </div>
+  );
+}
 import { MobileVoiceBar } from "./components/mobile/MobileVoiceBar";
 import { ConnectionStatusBanner } from "./components/ConnectionStatusBanner";
 import { UpdateBanner } from "./components/layout/UpdateBanner";
@@ -57,6 +99,13 @@ export default function App() {
   const isSuspended = useAuthStore((s) => s.isSuspended);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const initSync = useMatrixStore((s) => s.initSync);
+  // Préchauffe les écrans paresseux pendant un temps mort (après le premier
+  // rendu) : le premier clic sur « Réglages » n'attend plus son chunk.
+  // Seulement une fois connecté — rien à précharger sur l'écran de connexion.
+  useEffect(() => {
+    if (!credentials) return;
+    preloadHeavyScreens();
+  }, [credentials]);
   const connectionStatus = useMatrixStore((s) => s.connectionStatus);
   const fetchAdminData = useAdminStore((s) => s.fetchAdminData);
   const adminInitialized = useAdminStore((s) => s.initialized);
@@ -386,8 +435,8 @@ export default function App() {
         {/* Panels: overlay on mobile, side panel on desktop */}
         {/* Chaque overlay paresseux a SON Suspense (fallback null) : sans ça,
             le chargement du chunk ferait clignoter tout l'écran. */}
-        {showAdmin && <Suspense fallback={null}><AdminPanel /></Suspense>}
-        {showSettings && <Suspense fallback={null}><SettingsPanel /></Suspense>}
+        {showAdmin && <Suspense fallback={<LazyScreenFallback />}><AdminPanel /></Suspense>}
+        {showSettings && <Suspense fallback={<LazyScreenFallback />}><SettingsPanel /></Suspense>}
         <Suspense fallback={null}><RecoveryKeyModal /></Suspense>
         <ConnectionStatusBanner />
         {layoutEditing && (
