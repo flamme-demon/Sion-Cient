@@ -3,7 +3,14 @@
 #include <modules/video_coding/codecs/h264/include/h264.h>
 
 #include <cstdlib>
+#if defined(_WIN32)
+// Sion (2026-09-13) : portage Windows — dlfcn n'existe pas, on passe par
+// l'API Win32 (LoadLibrary/GetProcAddress), comme cuda_context.cpp le fait
+// déjà pour le pilote.
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <memory>
 #include <mutex>
 
@@ -34,19 +41,33 @@ void LogNvdecDisabledByEnv() {
 
 constexpr char kSdpKeyNameCodecImpl[] = "implementation_name";
 constexpr char kCodecName[] = "NvCodec";
+#if defined(_WIN32)
+// nvcuvid.dll est installée dans System32 par le pilote NVIDIA — le nom POSIX
+// ci-dessous n'existe pas sous Windows.
+constexpr char kNvdecRuntimeLibrary[] = "nvcuvid.dll";
+#else
 constexpr char kNvdecRuntimeLibrary[] = "libnvcuvid.so.1";
+#endif
 
 namespace {
 
 bool IsNvdecRuntimeAvailable() {
+#if defined(_WIN32)
+  void* hModule = reinterpret_cast<void*>(LoadLibraryA(kNvdecRuntimeLibrary));
+#else
   void* hModule = dlopen(kNvdecRuntimeLibrary, RTLD_LAZY | RTLD_LOCAL);
+#endif
   if (!hModule) {
     RTC_LOG(LS_WARNING) << "NVDEC runtime library (" << kNvdecRuntimeLibrary
                         << ") not found, hardware decoding unavailable.";
     return false;
   }
 
+#if defined(_WIN32)
+  FreeLibrary(reinterpret_cast<HMODULE>(hModule));
+#else
   dlclose(hModule);
+#endif
   return true;
 }
 

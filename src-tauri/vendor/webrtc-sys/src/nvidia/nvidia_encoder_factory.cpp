@@ -16,7 +16,13 @@
 #include "nvEncodeAPI.h"
 #include "rtc_base/logging.h"
 
+#if defined(_WIN32)
+// Sion (2026-09-13) : portage Windows — dlfcn n'existe pas, on passe par
+// l'API Win32 (LoadLibrary/GetProcAddress).
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 namespace webrtc {
 
@@ -125,19 +131,34 @@ NvencProbeResult ProbeNvencSupport() {
   // CUDA being available does NOT imply NVENC is present. Compute-only GPUs
   // (H100, A100, etc.) have full CUDA support but no encode hardware.
   // Probe the NVENC library and try to open a session to be sure.
+#if defined(_WIN32)
+  // La DLL NVENC du pilote, installée dans System32 (nvcuda.dll est chargée à
+  // part, via cuda.lib).
+  void* hModule = reinterpret_cast<void*>(LoadLibraryA("nvEncodeAPI64.dll"));
+#else
   void* hModule = dlopen("libnvidia-encode.so.1", RTLD_LAZY);
+#endif
   if (!hModule) {
     RTC_LOG(LS_WARNING) << "NVENC library (libnvidia-encode.so.1) not found, "
                            "hardware encoding unavailable.";
     return result;
   }
 
+#if defined(_WIN32)
+  auto NvEncodeAPIGetMaxSupportedVersion =
+      (NVENCSTATUS(NVENCAPI*)(uint32_t*))GetProcAddress(
+          reinterpret_cast<HMODULE>(hModule), "NvEncodeAPIGetMaxSupportedVersion");
+  auto NvEncodeAPICreateInstance =
+      (NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*))GetProcAddress(
+          reinterpret_cast<HMODULE>(hModule), "NvEncodeAPICreateInstance");
+#else
   auto NvEncodeAPIGetMaxSupportedVersion =
       (NVENCSTATUS(NVENCAPI*)(uint32_t*))dlsym(
           hModule, "NvEncodeAPIGetMaxSupportedVersion");
   auto NvEncodeAPICreateInstance =
       (NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*))dlsym(
           hModule, "NvEncodeAPICreateInstance");
+#endif
 
   NV_ENCODE_API_FUNCTION_LIST fnList = {NV_ENCODE_API_FUNCTION_LIST_VER};
   CUcontext cuCtx = nullptr;
@@ -218,7 +239,11 @@ NvencProbeResult ProbeNvencSupport() {
   if (cuCtx) {
     cuCtxDestroy(cuCtx);
   }
+#if defined(_WIN32)
+  FreeLibrary(reinterpret_cast<HMODULE>(hModule));
+#else
   dlclose(hModule);
+#endif
 
   return result;
 }

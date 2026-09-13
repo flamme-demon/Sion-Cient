@@ -9,6 +9,15 @@ The original sources and notices are retained. Sion modifications:
   compilés sans NVENC et l'app ressort silencieusement sans codecs NVIDIA
   (vécu en CI Windows le 2026-09-13 : la variable arrivait, le cache était
   périmé). À conserver tant que le chemin NVIDIA est compilé conditionnellement.
+- `build.rs` : bloc NVIDIA **porté dans la branche `windows`** (il n'existait
+  que côté Linux) + macros du prébuilt (`webrtc_defines()`, sinon
+  `PlatformThreadId` non défini) + `WIN32_LEAN_AND_MEAN`/`NOMINMAX` (conflits
+  winsock) + `cuda.lib` au lieu des shims ELF.
+- `src/nvidia/nvidia_{encoder,decoder}_factory.cpp` : portage Windows du
+  chargement — `dlfcn.h` n'existe pas, `LoadLibraryA`/`GetProcAddress`/
+  `FreeLibrary` sous `_WIN32`, DLL du pilote (`nvEncodeAPI64.dll`,
+  `nvcuvid.dll`, dans System32) au lieu des noms POSIX. Même schéma que
+  `cuda_context.cpp`, déjà cross-plateforme.
 - `build.rs`, `src/lib.rs`: compile/export the extension only with that feature.
 - `src/peer_connection_factory.cpp`: install the capture APM builder behind
   `SION_NATIVE_AUDIO`; upstream behavior is preserved without the feature.
