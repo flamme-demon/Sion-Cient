@@ -27,6 +27,11 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=LK_DEBUG_WEBRTC");
     println!("cargo:rerun-if-env-changed=LK_CUSTOM_WEBRTC");
+    // Sion (2026-09-13) : sans cette ligne, un CUDA_HOME nouvellement défini ne
+    // relance PAS ce script — cargo réutilise les objets C++ compilés sans
+    // NVENC et le binaire ressort sans codecs NVIDIA (vécu en CI Windows : la
+    // variable arrivait bien, la compilation était un cache périmé).
+    println!("cargo:rerun-if-env-changed=CUDA_HOME");
 
     let mut rust_files = vec![
         "src/peer_connection.rs",

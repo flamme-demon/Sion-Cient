@@ -4,6 +4,11 @@ Based on the published `webrtc-sys` **0.3.43** crate, used by LiveKit 0.8.4.
 The original sources and notices are retained. Sion modifications:
 
 - `Cargo.toml`: optional `sion-audio` feature and local processor dependency.
+- `build.rs`: `cargo:rerun-if-env-changed=CUDA_HOME` — sans cette ligne, définir
+  CUDA_HOME après coup ne relance pas le script : cargo réutilise les objets C++
+  compilés sans NVENC et l'app ressort silencieusement sans codecs NVIDIA
+  (vécu en CI Windows le 2026-09-13 : la variable arrivait, le cache était
+  périmé). À conserver tant que le chemin NVIDIA est compilé conditionnellement.
 - `build.rs`, `src/lib.rs`: compile/export the extension only with that feature.
 - `src/peer_connection_factory.cpp`: install the capture APM builder behind
   `SION_NATIVE_AUDIO`; upstream behavior is preserved without the feature.
