@@ -196,16 +196,30 @@ fn main() {
                 });
                 let cuda_include_dir = cuda_home.join("include");
                 if cuda_include_dir.join("cuda.h").exists() {
-                    // Les en-têtes WebRTC exigent les macros du premier build
-                    // (WEBRTC_WIN, NDEBUG, définitions libc++…) telles qu'elles
-                    // figurent dans le webrtc.ninja du binaire précompilé — le
-                    // crate ne les applique qu'à sa branche macOS, et les
-                    // sources NVIDIA incluent les vrais en-têtes
-                    // (rtc_base/logging.h). Sans elles : C2143/C2065
-                    // « PlatformThreadId : undeclared identifier » (CI du
-                    // 2026-09-13).
-                    for (key, value) in webrtc_sys_build::webrtc_defines() {
+                    // Conflits winsock (C2011 sockaddr/fd_set/timeval… vus en
+                    // CI le 13/09) : le code NVIDIA inclut windows.h, les
+                    // en-têtes WebRTC incluent winsock2.h — « lean and mean »
+                    // empêche windows.h de tirer l'ancien winsock.h.
+                    builder.define("WIN32_LEAN_AND_MEAN", None);
+                    builder.define("NOMINMAX", None);
+                    // Définitions du prébuilt WebRTC telles que compilées, et
+                    // trace dans le journal : sans WEBRTC_WIN, rtc_base ne
+                    // définit même pas PlatformThreadId (C2065).
+                    let defines = webrtc_sys_build::webrtc_defines();
+                    let has_win = defines.iter().any(|(k, _)| k == "WEBRTC_WIN");
+                    println!(
+                        "cargo:warning=webrtc_defines: {} entrées, WEBRTC_WIN présent={}",
+                        defines.len(),
+                        has_win
+                    );
+                    for (key, value) in &defines {
                         builder.define(key.as_str(), value.as_deref());
+                    }
+                    if !has_win {
+                        // Repli : le ninja du prébuilt ne liste pas la
+                        // plateforme — on la pose explicitement (c'est ce que
+                        // le binaire WebRTC a été construit avec).
+                        builder.define("WEBRTC_WIN", None);
                     }
                     println!(
                         "cargo:rustc-link-search=native={}",
