@@ -174,6 +174,17 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      # Codecs NVIDIA (NVENC/NVDEC) : même logique que Linux — le crate
+      # webrtc-sys compile son implémentation NVIDIA quand cuda.h est présent.
+      # Tolérant à l'installation ; c'est l'étape de vérification sur le
+      # binaire compilé qui fait foi.
+      - name: Install CUDA toolkit (optional, NVENC)
+        shell: pwsh
+        run: |
+          choco install cuda --no-progress -y
+          $cuda = [Environment]::GetEnvironmentVariable("CUDA_PATH", "Machine")
+          Write-Host "CUDA_PATH (machine) = $cuda"
+
       # CRT/BLAS build knobs for the transcribe.cpp dep live in
       # src-tauri/.cargo/config.toml (committed), so local and CI builds agree.
       - name: Compile Rust binary
@@ -182,7 +193,32 @@ jobs:
         # that build.rs drops next to the binary before staging them into
         # the bundle.
         working-directory: src-tauri
-        run: cargo build --release
+        shell: pwsh
+        run: |
+          # L'installateur CUDA pose CUDA_PATH côté machine ; le build.rs de
+          # webrtc-sys lit CUDA_HOME (défaut Unix /usr/local/cuda, inexistant
+          # ici). On le renseigne pour cette étape — un runner sans toolkit
+          # retombe simplement sur le chemin logiciel.
+          $cuda = [Environment]::GetEnvironmentVariable("CUDA_PATH", "Machine")
+          if ($cuda) { $env:CUDA_HOME = $cuda; Write-Host "CUDA_HOME=$env:CUDA_HOME" }
+          else { Write-Host "CUDA_PATH absent — build sans NVENC" }
+          cargo build --release
+
+      # Preuve embarquée, comme pour l'AppImage : sans ce contrôle, un runner
+      # sans toolkit produirait un installeur silencieusement en logiciel.
+      - name: Verify NVIDIA codecs in the binary
+        shell: pwsh
+        run: |
+          $bin = "src-tauri/target/release/sion-client.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($bin)
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $count = ([regex]::Matches($text, "NvEncoderCuda|nvEncodeAPI|libnvidia-encode|NvDecoder")).Count
+          Write-Host "marqueurs NVIDIA dans le binaire : $count (attendu >= 5)"
+          if ($count -lt 5) {
+            Write-Error "NVENC/NVDEC absents du binaire Windows — build sans CUDA (toolkit manquant au runner) ?"
+            exit 1
+          }
+          Write-Host "OK codecs matériels NVIDIA compilés dans le binaire Windows"
 
       - name: Stage native DLLs + patch tauri.conf.json
         # `tauri build --bundles nsis` ne connait pas les DLL natives.
@@ -316,4 +352,10 @@ jobs:
             "${NOTES_ARGS[@]}" \
             $PRERELEASE \
             ./artifacts/*.AppImage \
-            ./artifacts/*.exe
+            ./artifacts/*.exe 2>/dev/null || {
+            # Tag déjà publié (re-run après correctif CI) : on remplace les
+            # artefacts au lieu d'échouer — la release garde son tag et ses
+            # notes, les binaires sont mis à jour.
+            echo "Release $TAG déjà existante — remplacement des artefacts."
+            gh release upload "$TAG" ./artifacts/*.AppImage ./artifacts/*.exe --clobber
+          }
