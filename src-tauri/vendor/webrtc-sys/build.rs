@@ -196,6 +196,17 @@ fn main() {
                 });
                 let cuda_include_dir = cuda_home.join("include");
                 if cuda_include_dir.join("cuda.h").exists() {
+                    // Les en-têtes WebRTC exigent les macros du premier build
+                    // (WEBRTC_WIN, NDEBUG, définitions libc++…) telles qu'elles
+                    // figurent dans le webrtc.ninja du binaire précompilé — le
+                    // crate ne les applique qu'à sa branche macOS, et les
+                    // sources NVIDIA incluent les vrais en-têtes
+                    // (rtc_base/logging.h). Sans elles : C2143/C2065
+                    // « PlatformThreadId : undeclared identifier » (CI du
+                    // 2026-09-13).
+                    for (key, value) in webrtc_sys_build::webrtc_defines() {
+                        builder.define(key.as_str(), value.as_deref());
+                    }
                     println!(
                         "cargo:rustc-link-search=native={}",
                         cuda_home.join("lib").join("x64").display()
