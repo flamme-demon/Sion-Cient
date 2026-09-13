@@ -199,9 +199,12 @@ fn main() {
                     // Conflits winsock (C2011 sockaddr/fd_set/timeval… vus en
                     // CI le 13/09) : le code NVIDIA inclut windows.h, les
                     // en-têtes WebRTC incluent winsock2.h — « lean and mean »
-                    // empêche windows.h de tirer l'ancien winsock.h.
+                    // empêche windows.h de tirer l'ancien winsock.h, et
+                    // _WINSOCKAPI_ bloque ce dernier même s'il est tiré par
+                    // un autre chemin (c'est sa garde historique).
                     builder.define("WIN32_LEAN_AND_MEAN", None);
                     builder.define("NOMINMAX", None);
+                    builder.define("_WINSOCKAPI_", None);
                     // Définitions du prébuilt WebRTC telles que compilées, et
                     // trace dans le journal : sans WEBRTC_WIN, rtc_base ne
                     // définit même pas PlatformThreadId (C2065).
