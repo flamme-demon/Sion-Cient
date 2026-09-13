@@ -180,6 +180,54 @@ fn main() {
                 //.flag("/wd4819")
                 //.flag("/wd4068")
                 .flag("/EHsc");
+
+            // ── Sion (2026-09-13) : codecs matériels NVIDIA sur Windows ────
+            // Le bloc équivalent de la branche Linux n'est jamais exécuté ici
+            // (les trois builds CI sortaient sans NVENC malgré un toolkit
+            // CUDA valide et cuda.h trouvé — vérifié dans le journal). Les
+            // sources NvCodec du crate sont natives Windows ; le chargement
+            // des DLL d'encodage/décodage (nvEncodeAPI, nvcuvid) est fait
+            // dans le code, celui du pilote (nvcuda.dll) passe par cuda.lib,
+            // la bibliothèque d'import livrée avec le toolkit.
+            if target_arch == "x86_64" {
+                let cuda_home = PathBuf::from(match env::var("CUDA_HOME") {
+                    Ok(p) => p,
+                    Err(_) => "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA".to_owned(),
+                });
+                let cuda_include_dir = cuda_home.join("include");
+                if cuda_include_dir.join("cuda.h").exists() {
+                    println!(
+                        "cargo:rustc-link-search=native={}",
+                        cuda_home.join("lib").join("x64").display()
+                    );
+                    println!("cargo:rustc-link-lib=dylib=cuda");
+                    builder
+                        .include(cuda_include_dir)
+                        .include("src/nvidia/NvCodec/include")
+                        .include("src/nvidia/NvCodec/NvCodec")
+                        .flag("/wd4996") // équivalent MSVC de -Wno-deprecated-declarations
+                        .file("src/nvidia/NvCodec/NvCodec/NvDecoder/NvDecoder.cpp")
+                        .file("src/nvidia/NvCodec/NvCodec/NvEncoder/NvEncoder.cpp")
+                        .file("src/nvidia/NvCodec/NvCodec/NvEncoder/NvEncoderCuda.cpp")
+                        .file("src/nvidia/h264_encoder_impl.cpp")
+                        .file("src/nvidia/h265_encoder_impl.cpp")
+                        .file("src/nvidia/av1_encoder_impl.cpp")
+                        .file("src/nvidia/h264_decoder_impl.cpp")
+                        .file("src/nvidia/h265_decoder_impl.cpp")
+                        .file("src/nvidia/nvidia_decoder_factory.cpp")
+                        .file("src/nvidia/nvidia_encoder_factory.cpp")
+                        .file("src/nvidia/cuda_context.cpp")
+                        .flag("-DUSE_NVIDIA_VIDEO_CODEC=1");
+                    println!(
+                        "cargo:warning=NVENC/NVDEC: sources NVIDIA compilées pour Windows (CUDA_HOME={})",
+                        cuda_home.display()
+                    );
+                } else {
+                    println!(
+                        "cargo:warning=cuda.h not found under CUDA_HOME; building without hardware accelerated video codec support for NVidia GPUs"
+                    );
+                }
+            }
         }
         "linux" => {
             println!("cargo:rustc-link-lib=dylib=rt");
