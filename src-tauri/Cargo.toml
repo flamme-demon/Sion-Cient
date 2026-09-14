@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "sion-client"
-version = "2.0.0-alpha.2"
+version = "2.0.0-alpha.3"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -124,7 +124,12 @@ futures-util = { version = "0.3", default-features = false }
 # EWMH `_NET_WM_STATE_STICKY` ClientMessage. The overlay runs on XWayland, so
 # KWin/Mutter honor X11 window-state hints. Already in the lockfile (transitive
 # via winit's x11 backend) — promoted to a direct dep, ~0 compile cost.
-x11rb = "0.13"
+# x11rb avec SHM (blit sans copie), SHAPE (clic traversant) et RANDR
+# (géométrie du moniteur principal) — hôte X11 de l'overlay curseurs.
+# rustix : création du segment partagé (même crate que softbuffer, déjà dans
+# l'arbre).
+x11rb = { version = "0.13", features = ["shm", "shape", "randr"] }
+rustix = { version = "0.38", features = ["shm", "mm", "fs"] }
 # Lecture brute du presse-papiers Wayland (protocole wlr-data-control) : on
 # récupère le PNG/JPEG tel quel, sans décodage ni ré-encodage — indispensable
 # pour un Ctrl+V instantané à taille réelle. Déjà en arbre via arboard.
@@ -139,7 +144,10 @@ wl-clipboard-rs = "0.9"
 # Réglages WebKit du web process (mémoire) : le crate est déjà en arbre via
 # wry — on le promeut en dépendance directe pour régler le modèle de cache et
 # désactiver le page cache depuis `lib.rs`.
-webkit2gtk = "2"
+# `v2_20` : signal `web-process-terminated` (repli « page blanche NVIDIA »,
+# cf. `gpu_fallback.rs`) — le WebKitGTK système est très au-dessus depuis
+# longtemps.
+webkit2gtk = { version = "2", features = ["v2_20"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

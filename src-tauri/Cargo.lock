@@ -6326,7 +6326,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "sion-client"
-version = "2.0.0-alpha.2"
+version = "2.0.0-alpha.3"
 dependencies = [
  "ab_glyph",
  "arboard",
@@ -6346,6 +6346,7 @@ dependencies = [
  "rdev",
  "reqwest 0.12.28",
  "rfd",
+ "rustix 0.38.44",
  "scraper",
  "serde",
  "serde_json",
