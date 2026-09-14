@@ -25,23 +25,9 @@ const UserContextMenu = lazy(() =>
  * Préchauffage des écrans paresseux : sans ça, le premier clic sur
  * « Réglages » (ou Admin / les options de partage) payait le chargement ET la
  * transformation du chunk — très visible en dev, où Vite transforme les
- * modules à la volée. On les charge pendant un temps mort après le démarrage :
- * premier clic instantané, boot toujours léger (aucun de ces modules n'est
- * évalué tant qu'on ne les ouvre pas — le préchargement ne fait que les tirer
- * en tâche de fond).
+ * modules à la volée. Voir `services/lazyScreens` (déclenché aussi au survol
+ * du bouton).
  */
-function preloadHeavyScreens() {
-  const load = () => {
-    void import("./components/layout/SettingsPanel");
-    void import("./components/layout/AdminPanel");
-    void import("./components/chat/ScreenShareOptionsModal");
-  };
-  const w = window as typeof window & {
-    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-  };
-  if (w.requestIdleCallback) w.requestIdleCallback(load, { timeout: 5000 });
-  else window.setTimeout(load, 3000);
-}
 
 /** Indicateur d'ouverture d'un écran paresseux : discret, centré, sans faire
  *  clignoter le reste (le fallback local ne remplace que l'overlay). */
@@ -75,6 +61,7 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useMutedSpeakDetection } from "./hooks/useMutedSpeakDetection";
 import { useVoiceChannel } from "./hooks/useVoiceChannel";
 import { shouldAutoJoinVoice } from "./services/voiceNativeService";
+import { preloadHeavyScreens } from "./services/lazyScreens";
 import { useSettingsStore } from "./stores/useSettingsStore";
 import { useLayoutStore } from "./stores/useLayoutStore";
 import { useIsMobile } from "./hooks/useIsMobile";
@@ -99,12 +86,12 @@ export default function App() {
   const isSuspended = useAuthStore((s) => s.isSuspended);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const initSync = useMatrixStore((s) => s.initSync);
-  // Préchauffe les écrans paresseux pendant un temps mort (après le premier
-  // rendu) : le premier clic sur « Réglages » n'attend plus son chunk.
+  // Préchauffe les écrans paresseux peu après la connexion (le survol du
+  // bouton Réglages les prend encore plus tôt — cf. services/lazyScreens).
   // Seulement une fois connecté — rien à précharger sur l'écran de connexion.
   useEffect(() => {
     if (!credentials) return;
-    preloadHeavyScreens();
+    preloadHeavyScreens(300);
   }, [credentials]);
   const connectionStatus = useMatrixStore((s) => s.connectionStatus);
   const fetchAdminData = useAdminStore((s) => s.fetchAdminData);

@@ -9,6 +9,7 @@ import { useAuthStore } from "../../stores/useAuthStore";
 import { useVoiceChannel, republishVoicePresence } from "../../hooks/useVoiceChannel";
 import { useTranscriptStore } from "../../stores/useTranscriptStore";
 import { useLayoutStore } from "../../stores/useLayoutStore";
+import { preloadHeavyScreens } from "../../services/lazyScreens";
 
 /** "CC" captions glyph for the transcript toggle — drawn inline (the icons
  *  module has no captions icon) and tinted green while OUR engine runs. */
@@ -356,7 +357,14 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
               </button>
             </>
           )}
-          <button onClick={toggleSettings} data-panel-toggle style={iconBtnStyle(showSettings, 'accent')} title={t("settings.title")}>
+          <button
+            onClick={toggleSettings}
+            onPointerEnter={() => preloadHeavyScreens(0)}
+            onPointerDown={() => preloadHeavyScreens(0)}
+            data-panel-toggle
+            style={iconBtnStyle(showSettings, 'accent')}
+            title={t("settings.title")}
+          >
             <SettingsIcon />
           </button>
         </div>
@@ -381,7 +389,14 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
               </button>
             </>
           )}
-          <button onClick={toggleSettings} data-panel-toggle style={iconBtnStyle(showSettings, 'accent')} title={t("settings.title")}>
+          <button
+            onClick={toggleSettings}
+            onPointerEnter={() => preloadHeavyScreens(0)}
+            onPointerDown={() => preloadHeavyScreens(0)}
+            data-panel-toggle
+            style={iconBtnStyle(showSettings, 'accent')}
+            title={t("settings.title")}
+          >
             <SettingsIcon />
           </button>
         </div>

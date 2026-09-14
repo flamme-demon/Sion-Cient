@@ -9,6 +9,7 @@ import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useLayoutStore } from "../../stores/useLayoutStore";
+import { preloadHeavyScreens } from "../../services/lazyScreens";
 
 export function ServerHeader({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
@@ -224,6 +225,7 @@ export function ServerHeader({ compact = false }: { compact?: boolean }) {
                 {/* Settings */}
                 <button
                   onClick={() => { setShowProfileMenu(false); toggleSettings(); }}
+                  onPointerEnter={() => preloadHeavyScreens(0)}
                   style={{
                     width: '100%', display: 'flex', alignItems: 'center', gap: 10,
                     padding: '10px 12px', borderRadius: 12, cursor: 'pointer',

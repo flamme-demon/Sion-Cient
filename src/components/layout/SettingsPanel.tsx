@@ -100,7 +100,14 @@ export function SettingsPanel() {
       .then((p) => setFfmpegDetected(p ?? null))
       .catch(() => setFfmpegDetected(null));
   }, []);
-  useEffect(() => { redetectFfmpeg(); }, [ffmpegPath, redetectFfmpeg]);
+  // Détections de l'onglet « Avancé » seulement : les lancer à l'ouverture du
+  // panneau faisait payer au premier clic six chaînes d'inspection (ffmpeg,
+  // yt-dlp, moteur TTS, llama, modèles ASR, assets de résumé) dont deux
+  // interrogeaient GitHub — pour des libellés que l'utilisateur ne voyait pas.
+  useEffect(() => {
+    if (activeTab !== "advanced") return;
+    redetectFfmpeg();
+  }, [activeTab, ffmpegPath, redetectFfmpeg]);
   const ytdlpPath = useSettingsStore((s) => s.ytdlpPath);
   const setYtdlpPath = useSettingsStore((s) => s.setYtdlpPath);
   const [ytdlpDetected, setYtdlpDetected] = useState<string | null | undefined>(undefined);
@@ -118,7 +125,10 @@ export function SettingsPanel() {
       .then((raw) => setYtdlpVer(JSON.parse(raw)))
       .catch(() => setYtdlpVer(null));
   }, []);
-  useEffect(() => { redetectYtdlp(); }, [ytdlpPath, redetectYtdlp]);
+  useEffect(() => {
+    if (activeTab !== "advanced") return;
+    redetectYtdlp();
+  }, [activeTab, ytdlpPath, redetectYtdlp]);
   // Voix générées (audio.cpp) : chemin du moteur + état des modèles.
   const ttsEnginePath = useSettingsStore((s) => s.ttsEnginePath);
   const setTtsEnginePath = useSettingsStore((s) => s.setTtsEnginePath);
@@ -130,7 +140,10 @@ export function SettingsPanel() {
     detectTtsEngine().then((p) => setTtsEngineDetected(p)).catch(() => setTtsEngineDetected(null));
     listTtsModels().then(setTtsModels).catch(() => setTtsModels([]));
   }, []);
-  useEffect(() => { refreshTts(); }, [ttsEnginePath, refreshTts]);
+  useEffect(() => {
+    if (activeTab !== "advanced") return;
+    refreshTts();
+  }, [activeTab, ttsEnginePath, refreshTts]);
   // llama.cpp (IA de résumé) : { current, latest, vulkan } — null pendant le
   // chargement ou hors Tauri.
   const [llamaVer, setLlamaVer] = useState<{ current: string | null; latest: string | null; vulkan: boolean } | null>(null);
@@ -142,7 +155,10 @@ export function SettingsPanel() {
       .then((raw) => setLlamaVer(JSON.parse(raw)))
       .catch(() => setLlamaVer(null));
   }, []);
-  useEffect(() => { redetectLlama(); }, [redetectLlama]);
+  useEffect(() => {
+    if (activeTab !== "advanced") return;
+    redetectLlama();
+  }, [activeTab, redetectLlama]);
   const defaultChannel = useSettingsStore((s) => s.defaultChannel);
   const autoJoinVoice = useSettingsStore((s) => s.autoJoinVoice);
   const setDefaultChannel = useSettingsStore((s) => s.setDefaultChannel);
