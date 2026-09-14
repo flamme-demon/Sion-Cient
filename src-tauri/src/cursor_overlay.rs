@@ -68,28 +68,25 @@ enum UserEvent {
     Shutdown,
 }
 
-/// Enveloppe d'envoi vers le fil qui héberge la fenêtre. L'hôte Linux est un
-/// simple canal mpsc (pas de winit) ; l'hôte Windows garde l'`EventLoopProxy`
-/// (seul type `Send` d'une EventLoop qui, elle, ne l'est pas).
-enum HostSender {
-    #[cfg(target_os = "linux")]
-    Channel(std::sync::mpsc::Sender<UserEvent>),
-    #[cfg(not(target_os = "linux"))]
-    Winit(EventLoopProxy<UserEvent>),
+/// Envoi vers le fil qui héberge la fenêtre. Chaque hôte fournit SA fonction
+/// d'envoi : le tronc commun ne connaît donc plus **aucun** type de plateforme
+/// (ni `mpsc::Sender`, ni `winit::EventLoopProxy`). C'est ce qui avait cassé le
+/// build Windows du 14/09 : le variant winit y référençait un type dont
+/// l'import était parti avec l'hôte, et un build Linux ne compile jamais ce
+/// variant.
+struct HostSender {
+    send: Box<dyn Fn(UserEvent) + Send + Sync>,
 }
 
 impl HostSender {
-    fn send(&self, event: UserEvent) {
-        match self {
-            #[cfg(target_os = "linux")]
-            HostSender::Channel(tx) => {
-                let _ = tx.send(event);
-            }
-            #[cfg(not(target_os = "linux"))]
-            HostSender::Winit(proxy) => {
-                let _ = proxy.send_event(event);
-            }
+    fn new(send: impl Fn(UserEvent) + Send + Sync + 'static) -> Self {
+        Self {
+            send: Box::new(send),
         }
+    }
+
+    fn send(&self, event: UserEvent) {
+        (self.send)(event);
     }
 }
 
@@ -141,11 +138,19 @@ fn start_host_thread(
 ) -> Option<HostSender> {
     #[cfg(target_os = "linux")]
     {
-        x11_host::start(state, thread_alive).map(HostSender::Channel)
+        x11_host::start(state, thread_alive).map(|tx| {
+            HostSender::new(move |event| {
+                let _ = tx.send(event);
+            })
+        })
     }
     #[cfg(not(target_os = "linux"))]
     {
-        winit_host::start(state, thread_alive).map(HostSender::Winit)
+        winit_host::start(state, thread_alive).map(|proxy| {
+            HostSender::new(move |event| {
+                let _ = proxy.send_event(event);
+            })
+        })
     }
 }
 
