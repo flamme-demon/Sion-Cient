@@ -55,10 +55,15 @@ qui **affiche** le rond.
 
 ## Sécurité
 
-- **Session Matrix dans le coffre du système** (Secret Service, Keychain,
-  Gestionnaire d'identifiants) : `session.json` ne contient plus le jeton
-  d'accès, migration silencieuse de l'ancien fichier en clair au premier
-  lancement, permissions `0600` sur ce qui reste.
+- **Session Matrix prête pour le coffre du système** (Secret Service, Keychain,
+  Gestionnaire d'identifiants) : le jeton d'accès sort de `session.json` dès
+  qu'un coffre l'accepte **réellement** — l'écriture est relue avant de retirer
+  la copie disque — et la migration de l'ancien fichier en clair est
+  automatique. Le fichier passe en `0600`.
+  *Les backends de coffre ne sont pas encore compilés (`keyring` sans feature de
+  keystore) : dans cette alpha le jeton reste donc sur disque, mais il n'est plus
+  jamais retiré sans être stocké ailleurs — c'était le cas, et ça vidait la
+  copie de secours qui sert à survivre à une purge du profil webview.*
 - **Aperçus de liens** : refus des schémas non HTTP(S), de `localhost`,
   `.local` et de toute adresse privée, loopback ou link-local — **y compris
   après redirection**. Une URL de message ne peut plus faire du client un proxy

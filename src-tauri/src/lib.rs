@@ -793,13 +793,65 @@ async fn fetch_link_preview_inner(url: &str) -> Result<LinkPreview, Box<dyn std:
 
 #[cfg(test)]
 mod security_tests {
-    use super::sanitize_download_filename;
+    use super::{sanitize_download_filename, session_credentials, session_json_for_disk};
 
     #[test]
     fn download_filename_cannot_escape_target_directory() {
         assert!(sanitize_download_filename("../secret.txt").is_err());
         assert!(sanitize_download_filename("/tmp/secret.txt").is_err());
         assert!(sanitize_download_filename("ok.txt").is_ok());
+    }
+
+    /// Le jeton ne quitte le fichier que si le coffre l'a confirmé. Sans cette
+    /// règle, un build au store de test (`keyring` sans backend) faisait
+    /// disparaître le jeton de `session.json` sans le stocker nulle part : la
+    /// seule copie de secours d'une session partait en fumée.
+    #[test]
+    fn session_token_leaves_disk_only_when_the_vault_holds_it() {
+        let blob = r#"{"sion_auth_credentials":"{\"accessToken\":\"syt_x\"}","sion_device_id":"DEV"}"#;
+        assert_eq!(
+            session_credentials(blob).as_deref(),
+            Some(r#"{"accessToken":"syt_x"}"#)
+        );
+
+        // Coffre confirmé : le jeton sort du fichier, le reste demeure.
+        let vaulted = serde_json::from_str::<serde_json::Value>(&session_json_for_disk(blob, true)).unwrap();
+        assert!(vaulted.get("sion_auth_credentials").is_none());
+        assert_eq!(vaulted.get("sion_device_id").and_then(|v| v.as_str()), Some("DEV"));
+
+        // Coffre absent/non persistant : copie disque intacte, octet pour octet.
+        assert_eq!(session_json_for_disk(blob, false), blob);
+
+        // Déjà sans jeton (déconnecté) : rien à retirer, rien à casser.
+        let logged_out = r#"{"sion_device_id":"DEV"}"#;
+        assert!(session_credentials(logged_out).is_none());
+        assert_eq!(session_json_for_disk(logged_out, true), logged_out);
+        assert_eq!(session_json_for_disk(logged_out, false), logged_out);
+
+        // Blob illisible : jamais tronqué par erreur.
+        assert_eq!(session_json_for_disk("pas du json", true), "pas du json");
+    }
+
+    /// Verrou de comportement : tant qu'aucun backend de coffre n'est compilé,
+    /// `keyring` fournit son store de test (rien n'est persisté). La sonde doit
+    /// refuser — sinon le jeton disparaît du seul fichier qui le garde.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn vault_store_without_persistence_is_not_trusted() {
+        use super::{secure_session_entry, secure_session_set_verified};
+        let Ok(entry) = secure_session_entry() else {
+            return; // aucun coffre joignable dans cet environnement
+        };
+        // Un vrai keystore relit ce qu'il écrit : ne pas écrire dans celui du
+        // développeur pendant les tests.
+        if entry
+            .get_credential()
+            .downcast_ref::<keyring::mock::MockCredential>()
+            .is_none()
+        {
+            return;
+        }
+        assert!(!secure_session_set_verified("jeton-de-test"));
     }
 }
 
@@ -914,22 +966,54 @@ fn exit_app(app: tauri::AppHandle<TauriRuntime>) {
 // app_data_dir (%APPDATA% / ~/.local/share) est un dossier séparé, donc ce
 // fichier survit — la session est restaurée au démarrage sans re-login forcé
 // ni nouveau device.
+/// Jeton d'accès porté par le blob de session, sans rien écrire. Pur.
+fn session_credentials(json: &str) -> Option<String> {
+    let blob: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json).ok()?;
+    let credentials = blob.get("sion_auth_credentials")?.as_str()?;
+    Some(credentials.to_string())
+}
+
+/// Contenu à écrire sur disque : le jeton ne quitte le fichier que si le coffre
+/// l'a **confirmé** (`vaulted`). Sinon la copie disque reste — c'est le seul
+/// filet de sécurité quand le profil webview est purgé (localStorage perdu).
+/// Pur, testé.
+fn session_json_for_disk(json: &str, vaulted: bool) -> String {
+    let Ok(mut blob) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json)
+    else {
+        return json.to_string();
+    };
+    if vaulted && blob.contains_key("sion_auth_credentials") {
+        blob.remove("sion_auth_credentials");
+        return serde_json::Value::Object(blob).to_string();
+    }
+    json.to_string()
+}
+
+/// Blob effectivement écrit sur disque (jeton confié au coffre s'il le garde).
+#[cfg(not(target_os = "android"))]
+fn session_json_to_persist(json: &str) -> String {
+    match session_credentials(json) {
+        Some(credentials) => session_json_for_disk(json, secure_session_set_verified(&credentials)),
+        // Déconnexion : purger le coffre d'un jeton mort.
+        None => {
+            secure_session_clear();
+            json.to_string()
+        }
+    }
+}
+
+/// Android : pas de coffre système, le fichier garde tout (comportement historique).
+#[cfg(target_os = "android")]
+fn session_json_to_persist(json: &str) -> String {
+    json.to_string()
+}
+
 #[tauri::command]
 fn persist_session(app: tauri::AppHandle<TauriRuntime>, json: String) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let mut disk_json = json.clone();
-    #[cfg(not(target_os = "android"))]
-    if let Ok(mut blob) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json) {
-        if let Some(credentials) = blob.get("sion_auth_credentials").and_then(|v| v.as_str()) {
-            if secure_session_set(credentials).is_ok() {
-                blob.remove("sion_auth_credentials");
-                disk_json = serde_json::Value::Object(blob).to_string();
-            }
-        } else {
-            secure_session_clear();
-        }
-    }
+    let disk_json = session_json_to_persist(&json);
     let path = dir.join("session.json");
     std::fs::write(&path, disk_json).map_err(|e| e.to_string())?;
     // The file contains a Matrix access token. Keep it owner-readable on
@@ -958,7 +1042,7 @@ fn load_session(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
                 }
             } else if let Some(credentials) = blob.get("sion_auth_credentials").and_then(|v| v.as_str()) {
                 // One-time migration from the pre-keychain plaintext file.
-                if secure_session_set(credentials).is_ok() {
+                if secure_session_set_verified(credentials) {
                     blob.remove("sion_auth_credentials");
                     let migrated = serde_json::Value::Object(blob).to_string();
                     let path = dir.join("session.json");
@@ -989,6 +1073,21 @@ fn secure_session_entry() -> Result<keyring::Entry, String> {
 #[cfg(not(target_os = "android"))]
 fn secure_session_set(credentials: &str) -> Result<(), String> {
     secure_session_entry()?.set_password(credentials).map_err(|e| e.to_string())
+}
+
+/// Écrit le jeton dans le coffre **puis le relit**.
+///
+/// Indispensable : un build sans feature de keystore compile le store de test
+/// de `keyring`, qui garde le secret dans l'objet `Entry` et rien d'autre. Sans
+/// cette vérification, `set_password` réussit, le jeton est retiré de
+/// `session.json`… et il n'existe plus nulle part au redémarrage suivant (profil
+/// webview purgé = déconnexion forcée). Un coffre réel relit ce qu'il a écrit.
+#[cfg(not(target_os = "android"))]
+fn secure_session_set_verified(credentials: &str) -> bool {
+    if secure_session_set(credentials).is_err() {
+        return false;
+    }
+    matches!(secure_session_get(), Ok(stored) if stored == credentials)
 }
 
 #[cfg(not(target_os = "android"))]
