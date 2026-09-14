@@ -563,6 +563,7 @@ struct LinkPreview {
 
 /// Download an image URL and return it as a data URI to bypass COEP/CORS restrictions.
 async fn image_to_data_uri(client: &reqwest::Client, image_url: &str) -> Option<String> {
+    validate_preview_url(image_url).ok()?;
     use base64::Engine;
     let resp = client.get(image_url).send().await.ok()?;
     if !resp.status().is_success() {
@@ -585,11 +586,49 @@ async fn image_to_data_uri(client: &reqwest::Client, image_url: &str) -> Option<
 
 #[tauri::command]
 async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
+    validate_preview_url(&url)?;
     fetch_link_preview_inner(&url).await.map_err(|e| {
         let msg = format!("[Sion] Link preview failed for {}: {}", url, e);
         log::warn!("{}", msg);
         msg
     })
+}
+
+/// Link previews are fetched by the native process, so never allow them to
+/// target local/private network endpoints. This prevents a message URL from
+/// turning the client into an SSRF proxy.
+fn validate_preview_url(raw: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(raw).map_err(|_| "URL de prévisualisation invalide".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("Seules les URLs HTTP(S) sont autorisées".into());
+    }
+    let host = parsed.host_str().ok_or("Hôte URL manquant")?;
+    let lower = host.trim_end_matches('.').to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") {
+        return Err("Hôte local interdit pour une prévisualisation".into());
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let private = match ip {
+            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local() || v6.is_unicast_link_local(),
+        };
+        if private { return Err("Adresse réseau privée interdite pour une prévisualisation".into()); }
+    }
+    Ok(())
+}
+
+async fn read_response_limited(mut response: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, String> {
+    if response.content_length().is_some_and(|n| n > max_bytes as u64) {
+        return Err("Réponse trop volumineuse".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("lecture réponse: {e}"))? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err("Réponse trop volumineuse".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 fn build_client() -> Result<reqwest::Client, reqwest::Error> {
@@ -678,6 +717,12 @@ async fn fetch_link_preview_inner(url: &str) -> Result<LinkPreview, Box<dyn std:
         .header("Accept-Language", "en-US,en;q=0.9")
         .send()
         .await?;
+    // Redirects are also untrusted: reject a public URL that lands on a
+    // local/private address before reading its body.
+    validate_preview_url(resp.url().as_str()).map_err(|e| {
+        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+            as Box<dyn std::error::Error>
+    })?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -746,6 +791,18 @@ async fn fetch_link_preview_inner(url: &str) -> Result<LinkPreview, Box<dyn std:
     })
 }
 
+#[cfg(test)]
+mod security_tests {
+    use super::sanitize_download_filename;
+
+    #[test]
+    fn download_filename_cannot_escape_target_directory() {
+        assert!(sanitize_download_filename("../secret.txt").is_err());
+        assert!(sanitize_download_filename("/tmp/secret.txt").is_err());
+        assert!(sanitize_download_filename("ok.txt").is_ok());
+    }
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
@@ -756,6 +813,7 @@ fn open_url(url: String) -> Result<(), String> {
 async fn open_file_default(url: String, filename: String) -> Result<String, String> {
     let temp_dir = std::env::temp_dir().join("sion-files");
     std::fs::create_dir_all(&temp_dir).map_err(|e| format!("mkdir: {e}"))?;
+    let filename = sanitize_download_filename(&filename)?;
     let path = temp_dir.join(&filename);
 
     let client = reqwest::Client::new();
@@ -767,7 +825,7 @@ async fn open_file_default(url: String, filename: String) -> Result<String, Stri
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+    let bytes = read_response_limited(resp, 512 * 1024 * 1024).await?;
     std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
 
     open::that(&path).map_err(|e| format!("open: {e}"))?;
@@ -782,6 +840,7 @@ async fn download_file(url: String, filename: String) -> Result<String, String> 
         .ok_or_else(|| "Cannot find Downloads directory".to_string())?;
     std::fs::create_dir_all(&downloads).map_err(|e| format!("mkdir: {e}"))?;
 
+    let filename = sanitize_download_filename(&filename)?;
     // Avoid overwriting: append (1), (2), etc. if file already exists
     let base = std::path::Path::new(&filename);
     let stem = base
@@ -809,10 +868,21 @@ async fn download_file(url: String, filename: String) -> Result<String, String> 
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+    let bytes = read_response_limited(resp, 512 * 1024 * 1024).await?;
     std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
 
     Ok(path.to_string_lossy().to_string())
+}
+
+fn sanitize_download_filename(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.bytes().any(|b| b == 0 || b < 0x20) {
+        return Err("Nom de fichier invalide".into());
+    }
+    if std::path::Path::new(name).is_absolute() {
+        return Err("Chemin de fichier absolu interdit".into());
+    }
+    Ok(name.chars().take(240).collect())
 }
 
 #[tauri::command]
@@ -848,13 +918,89 @@ fn exit_app(app: tauri::AppHandle<TauriRuntime>) {
 fn persist_session(app: tauri::AppHandle<TauriRuntime>, json: String) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("session.json"), json).map_err(|e| e.to_string())
+    let mut disk_json = json.clone();
+    #[cfg(not(target_os = "android"))]
+    if let Ok(mut blob) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json) {
+        if let Some(credentials) = blob.get("sion_auth_credentials").and_then(|v| v.as_str()) {
+            if secure_session_set(credentials).is_ok() {
+                blob.remove("sion_auth_credentials");
+                disk_json = serde_json::Value::Object(blob).to_string();
+            }
+        } else {
+            secure_session_clear();
+        }
+    }
+    let path = dir.join("session.json");
+    std::fs::write(&path, disk_json).map_err(|e| e.to_string())?;
+    // The file contains a Matrix access token. Keep it owner-readable on
+    // Unix even when the user's umask is permissive.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn load_session(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(std::fs::read_to_string(dir.join("session.json")).unwrap_or_default())
+    let raw = std::fs::read_to_string(dir.join("session.json")).unwrap_or_default();
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Ok(mut blob) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw) {
+            if !blob.contains_key("sion_auth_credentials") {
+                if let Ok(credentials) = secure_session_get() {
+                    blob.insert("sion_auth_credentials".into(), serde_json::Value::String(credentials));
+                    return Ok(serde_json::Value::Object(blob).to_string());
+                }
+            } else if let Some(credentials) = blob.get("sion_auth_credentials").and_then(|v| v.as_str()) {
+                // One-time migration from the pre-keychain plaintext file.
+                if secure_session_set(credentials).is_ok() {
+                    blob.remove("sion_auth_credentials");
+                    let migrated = serde_json::Value::Object(blob).to_string();
+                    let path = dir.join("session.json");
+                    if std::fs::write(&path, &migrated).is_ok() {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            if let Ok(meta) = std::fs::metadata(&path) {
+                                let mut perms = meta.permissions();
+                                perms.set_mode(0o600);
+                                let _ = std::fs::set_permissions(&path, perms);
+                            }
+                        }
+                    }
+                    return Ok(migrated);
+                }
+            }
+        }
+    }
+    Ok(raw)
+}
+
+#[cfg(not(target_os = "android"))]
+fn secure_session_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new("com.sion.client", "session").map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn secure_session_set(credentials: &str) -> Result<(), String> {
+    secure_session_entry()?.set_password(credentials).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn secure_session_get() -> Result<String, String> {
+    secure_session_entry()?.get_password().map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn secure_session_clear() {
+    if let Ok(entry) = secure_session_entry() {
+        let _ = entry.delete_credential();
+    }
 }
 
 /// Locale du système (« fr-FR », « en-US »…). Sous WRY/WebKitGTK,
@@ -2984,5 +3130,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-

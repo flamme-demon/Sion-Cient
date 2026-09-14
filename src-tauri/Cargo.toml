@@ -64,6 +64,9 @@ jpeg-rusturbo = { version = "0.9", optional = true }
 # Desktop-only dependencies (all platforms except Android)
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tauri-plugin-global-shortcut = "2"
+# Store the active Matrix session in the OS credential vault during the
+# transition to 2.1 (Secret Service, Keychain, or Windows Credential Manager).
+keyring = "3"
 # Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
 # les images dans `clipboardData.items`, contrairement à CEF/Chromium.
 arboard = { version = "3", features = ["wayland-data-control"] }
