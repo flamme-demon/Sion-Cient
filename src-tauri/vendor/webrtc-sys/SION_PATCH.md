@@ -79,3 +79,41 @@ WRY, la liste des sources ne contient qu'une entrée anonyme et la capture
 renvoie des erreurs temporaires en boucle : ces logs permettent de confirmer
 si le backend PipeWire (portail XDG) a bien été retenu ou si le binaire est
 retombé sur X11, qui ne voit rien sous Wayland natif.
+
+## Durcissement NVDEC (13/09/2026) — échec logiciel au lieu d'un abort
+
+**Symptôme** : chez un testeur NVIDIA (pilote propriétaire 580), le client
+mourait sur `SIGABRT` (`IOT instruction (core dumped)`) à la **première image
+du partage reçu**. La pile pointait `webrtc::internal::AudioSendStream` d'un
+côté, et surtout : `NvCodec/.../NvDecoder.cpp` lève `NVDECException` sur tout
+échec d'appel cuvid, alors que :
+- `NvidiaH264DecoderImpl::Configure()` construisait son `NvDecoder` **sans
+  try/catch** ;
+- `IsNvdecRuntimeAvailable()` ne testait qu'un `dlopen("libnvcuvid.so.1")` —
+  il prouve la présence de la bibliothèque, pas que le pilote sait ouvrir une
+  session de décodage H264 sur ce GPU ;
+- WebRTC n'attrape pas : une exception qui s'échappe termine le processus.
+
+**Correctif** (fichiers ci-dessous) :
+- `nvidia_decoder_factory.{h,cpp}` : drapeau process-wide `g_nvdec_failed`
+  (`NoteNvdecFailure`). Une fois positionné, `IsSupported()` renvoie faux — les
+  flux suivants décodent en logiciel au lieu de re-tenter le matériel.
+  - **sonde réelle** dans le constructeur : ouverture puis destruction d'une
+    session `NvDecoder` H264 (4096×4096). Un `dlopen` réussi ne suffit plus.
+  - `Create()` : créations H264/H265 sous try/catch.
+- `h264_decoder_impl.cpp` / `h265_decoder_impl.cpp` : `Configure`, la boucle
+  `Decode` et la récupération des images (`GetFrame` →
+  `cuvidMapVideoFrame64`) sont sous try/catch ; l'échec marque NVDEC
+  inutilisable et renvoie `WEBRTC_VIDEO_CODEC_ERROR` au lieu de propager.
+
+`LK_DISABLE_NVDEC=1` reste le contournement manuel (coupe la fabrique).
+
+**Non traité ici** : la collision de PT H264 dans le SDP
+(`Factory produced duplicate codecs` puis `BUNDLE group contains a codec
+collision`, `x-google-start-bitrate` présent sur un seul exemplaire). Elle
+vient du fait que la fabrique NVENC/NVDEC et les fabriques logicielles
+déclarent chacune H264 au même `payload_type` ; l'ajout de
+`x-google-start-bitrate` (côté crate `livekit` 0.8, non vendored) n'en touche
+qu'un exemplaire. Ne bloque pas la négociation (avertissement + poursuite)
+mais pollue l'offre : à reprendre en vendant `livekit` ou en dédoublonnant
+`GetSupportedFormats()`.

@@ -19,6 +19,13 @@ class NvidiaVideoDecoderFactory : public VideoDecoderFactory {
 
   static bool IsSupported();
 
+  /// Marque NVDEC comme inutilisable pour tout le processus : une session
+  /// cuvid qui échoue lève une `NVDECException`, et sans ce garde-fou le
+  /// processus mourait sur abort au premier flux partagé (constaté le 13/09
+  /// chez un testeur NVIDIA/pilote 580). Les flux suivants décodent alors en
+  /// logiciel.
+  static void NoteNvdecFailure(const char* where);
+
   std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override;
   std::unique_ptr<VideoDecoder> Create(
       const Environment& env,

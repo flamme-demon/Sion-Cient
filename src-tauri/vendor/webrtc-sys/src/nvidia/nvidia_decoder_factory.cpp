@@ -11,9 +11,11 @@
 #else
 #include <dlfcn.h>
 #endif
+#include <atomic>
 #include <memory>
 #include <mutex>
 
+#include "NvDecoder/NvDecoder.h"
 #include "cuda_context.h"
 #include "h264_decoder_impl.h"
 #include "h265_decoder_impl.h"
@@ -37,7 +39,20 @@ void LogNvdecDisabledByEnv() {
   });
 }
 
+/// NVDEC s'est-il révélé inutilisable sur cette machine ? Une fois positionné,
+/// on ne propose plus le décodage matériel : les flux suivants décodent en
+/// logiciel.
+std::atomic<bool> g_nvdec_failed{false};
+
 }  // namespace
+
+void NvidiaVideoDecoderFactory::NoteNvdecFailure(const char* where) {
+  if (!g_nvdec_failed.exchange(true)) {
+    RTC_LOG(LS_ERROR)
+        << "NVDEC marked unusable for this process (failure at " << where
+        << ") — falling back to software decoding for later streams.";
+  }
+}
 
 constexpr char kSdpKeyNameCodecImpl[] = "implementation_name";
 constexpr char kCodecName[] = "NvCodec";
@@ -144,6 +159,25 @@ NvidiaVideoDecoderFactory::NvidiaVideoDecoderFactory()
   } else {
     RTC_LOG(LS_ERROR) << "Failed to initialize CUDA context.";
   }
+
+  // ── Sonde RÉELLE (13/09) ────────────────────────────────────────────────
+  // `IsNvdecRuntimeAvailable()` ne fait qu'un `dlopen` : il prouve que la
+  // bibliothèque est là, pas que le pilote sait ouvrir une session de décodage
+  // H264 sur ce GPU. On ouvre donc une vraie session (et on la détruit
+  // aussitôt) ; si ça lève, NVDEC est marqué inutilisable et aucun flux ne
+  // tentera le décodage matériel.
+  if (!supported_formats_.empty()) {
+    try {
+      NvDecoder probe(cu_context_->GetContext(), false, cudaVideoCodec_H264,
+                      true, false, nullptr, nullptr, false, 4096, 4096);
+    } catch (const std::exception& e) {
+      NoteNvdecFailure("probe");
+      RTC_LOG(LS_ERROR) << "NVDEC probe failed: " << e.what();
+      supported_formats_.clear();
+      return;
+    }
+  }
+
   RTC_LOG(LS_INFO) << "NvidiaVideoDecoderFactory created with "
                    << supported_formats_.size() << " supported formats.";
 }
@@ -151,6 +185,10 @@ NvidiaVideoDecoderFactory::NvidiaVideoDecoderFactory()
 NvidiaVideoDecoderFactory::~NvidiaVideoDecoderFactory() {}
 
 bool NvidiaVideoDecoderFactory::IsSupported() {
+  if (g_nvdec_failed.load(std::memory_order_relaxed)) {
+    return false;
+  }
+
   if (IsNvdecDisabledByEnv()) {
     LogNvdecDisabledByEnv();
     return false;
@@ -185,11 +223,23 @@ std::unique_ptr<VideoDecoder> NvidiaVideoDecoderFactory::Create(
       }
       if (format.name == "H264") {
         RTC_LOG(LS_INFO) << "Using NVIDIA HW decoder (NVDEC) for H264";
-        return std::make_unique<NvidiaH264DecoderImpl>(cu_context_->GetContext());
+        try {
+          return std::make_unique<NvidiaH264DecoderImpl>(cu_context_->GetContext());
+        } catch (const std::exception& e) {
+          NoteNvdecFailure("Create H264");
+          RTC_LOG(LS_ERROR) << "NVDEC H264 decoder creation failed: " << e.what();
+          return nullptr;
+        }
       }
       if (format.name == "H265" || format.name == "HEVC") {
         RTC_LOG(LS_INFO) << "Using NVIDIA HW decoder (NVDEC) for H265/HEVC";
-        return std::make_unique<NvidiaH265DecoderImpl>(cu_context_->GetContext());
+        try {
+          return std::make_unique<NvidiaH265DecoderImpl>(cu_context_->GetContext());
+        } catch (const std::exception& e) {
+          NoteNvdecFailure("Create H265");
+          RTC_LOG(LS_ERROR) << "NVDEC H265 decoder creation failed: " << e.what();
+          return nullptr;
+        }
       }
     }
   }

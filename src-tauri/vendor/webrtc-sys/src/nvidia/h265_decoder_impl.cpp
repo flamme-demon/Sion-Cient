@@ -7,6 +7,7 @@
 
 #include "NvDecoder/NvDecoder.h"
 #include "Utils/NvCodecUtils.h"
+#include "nvidia_decoder_factory.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 
@@ -63,9 +64,18 @@ bool NvidiaH265DecoderImpl::Configure(const Settings& settings) {
   int maxWidth = 4096;
   int maxHeight = 4096;
 
-  decoder_ = std::make_unique<NvDecoder>(
-      cu_context_, false, cudaVideoCodec_HEVC, true, false, nullptr, nullptr,
-      false, maxWidth, maxHeight);
+  // Voir h264_decoder_impl.cpp : le constructeur d'NvDecoder ouvre une session
+  // cuvid et lève une `NVDECException` si le pilote/GPU refuse — sans ce
+  // try/catch l'exception s'échappait de WebRTC (abort du processus).
+  try {
+    decoder_ = std::make_unique<NvDecoder>(
+        cu_context_, false, cudaVideoCodec_HEVC, true, false, nullptr, nullptr,
+        false, maxWidth, maxHeight);
+  } catch (const std::exception& e) {
+    NvidiaVideoDecoderFactory::NoteNvdecFailure("H265 Configure");
+    RTC_LOG(LS_ERROR) << "NVDEC H265 Configure failed: " << e.what();
+    return false;
+  }
   return true;
 }
 
@@ -103,14 +113,21 @@ int32_t NvidiaH265DecoderImpl::Decode(const EncodedImage& input_image,
   }
 
   int nFrameReturned = 0;
-  do {
-    nFrameReturned = decoder_->Decode(
-        input_image.data(), static_cast<int>(input_image.size()),
-        CUVID_PKT_TIMESTAMP, input_image.RtpTimestamp());
-  } while (nFrameReturned == 0);
+  try {
+    do {
+      nFrameReturned = decoder_->Decode(
+          input_image.data(), static_cast<int>(input_image.size()),
+          CUVID_PKT_TIMESTAMP, input_image.RtpTimestamp());
+    } while (nFrameReturned == 0);
+  } catch (const std::exception& e) {
+    NvidiaVideoDecoderFactory::NoteNvdecFailure("H265 Decode");
+    RTC_LOG(LS_ERROR) << "NVDEC H265 Decode failed: " << e.what();
+    return WEBRTC_VIDEO_CODEC_ERROR;
+  }
 
   is_configured_decoder_ = true;
 
+  try {
   if (decoder_->GetOutputFormat() != cudaVideoSurfaceFormat_NV12) {
     RTC_LOG(LS_ERROR) << "not supported output format: "
                       << decoder_->GetOutputFormat();
@@ -152,6 +169,11 @@ int32_t NvidiaH265DecoderImpl::Decode(const EncodedImage& input_image,
     std::optional<int32_t> decodetime;
     std::optional<int> qp;  // Not parsed for H265 currently
     decoded_complete_callback_->Decoded(decoded_frame, decodetime, qp);
+  }
+  } catch (const std::exception& e) {
+    NvidiaVideoDecoderFactory::NoteNvdecFailure("H265 GetFrame");
+    RTC_LOG(LS_ERROR) << "NVDEC H265 frame retrieval failed: " << e.what();
+    return WEBRTC_VIDEO_CODEC_ERROR;
   }
 
   return WEBRTC_VIDEO_CODEC_OK;

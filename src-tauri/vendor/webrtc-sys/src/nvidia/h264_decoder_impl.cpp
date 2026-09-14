@@ -7,6 +7,7 @@
 
 #include "NvDecoder/NvDecoder.h"
 #include "Utils/NvCodecUtils.h"
+#include "nvidia_decoder_factory.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 
@@ -70,9 +71,20 @@ bool NvidiaH264DecoderImpl::Configure(const Settings& settings) {
   int maxHeight = 4096;
 
   // bUseDeviceFrame: allocate in memory or cuda device memory
-  decoder_ = std::make_unique<NvDecoder>(
-      cu_context_, false, cudaVideoCodec_H264, true, false, nullptr, nullptr,
-      false, maxWidth, maxHeight);
+  // Le constructeur d'NvDecoder ouvre une session cuvid : il lève une
+  // `NVDECException` si le pilote/GPU refuse (constaté en test le 13/09 : abort
+  // du processus au premier flux partagé). On la rattrape, on marque NVDEC
+  // inutilisable pour le processus et on échoue proprement la configuration —
+  // WebRTC bascule alors sur le décodeur logiciel du flux suivant.
+  try {
+    decoder_ = std::make_unique<NvDecoder>(
+        cu_context_, false, cudaVideoCodec_H264, true, false, nullptr, nullptr,
+        false, maxWidth, maxHeight);
+  } catch (const std::exception& e) {
+    NvidiaVideoDecoderFactory::NoteNvdecFailure("H264 Configure");
+    RTC_LOG(LS_ERROR) << "NVDEC H264 Configure failed: " << e.what();
+    return false;
+  }
   return true;
 }
 
@@ -122,62 +134,76 @@ int32_t NvidiaH264DecoderImpl::Decode(const EncodedImage& input_image,
   }
 
   int nFrameReturnd = 0;
-  do {
-    nFrameReturnd = decoder_->Decode(
-        input_image.data(), static_cast<int>(input_image.size()),
-        CUVID_PKT_TIMESTAMP, input_image.RtpTimestamp());
-  } while (nFrameReturnd == 0);
+  try {
+    do {
+      nFrameReturnd = decoder_->Decode(
+          input_image.data(), static_cast<int>(input_image.size()),
+          CUVID_PKT_TIMESTAMP, input_image.RtpTimestamp());
+    } while (nFrameReturnd == 0);
+  } catch (const std::exception& e) {
+    NvidiaVideoDecoderFactory::NoteNvdecFailure("H264 Decode");
+    RTC_LOG(LS_ERROR) << "NVDEC H264 Decode failed: " << e.what();
+    return WEBRTC_VIDEO_CODEC_ERROR;
+  }
 
   is_configured_decoder_ = true;
 
-  // todo: support other output format
-  // Chromium's H264 Encoder is output on NV12, so currently only NV12 is
-  // supported.
-  if (decoder_->GetOutputFormat() != cudaVideoSurfaceFormat_NV12) {
-    RTC_LOG(LS_ERROR) << "not supported this format: "
-                      << decoder_->GetOutputFormat();
-    return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
-  }
-
-  // Pass on color space from input frame if explicitly specified.
-  const ColorSpace& color_space =
-      input_image.ColorSpace()
-          ? *input_image.ColorSpace()
-          : ExtractH264ColorSpace(decoder_->GetVideoFormatInfo());
-
-  for (int i = 0; i < nFrameReturnd; i++) {
-    int64_t timeStamp;
-    uint8_t* pFrame = decoder_->GetFrame(&timeStamp);
-
-    webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer =
-        buffer_pool_.CreateI420Buffer(decoder_->GetWidth(),
-                                      decoder_->GetHeight());
-
-    int result;
-    {
-      result = libyuv::NV12ToI420(
-          pFrame, decoder_->GetDeviceFramePitch(),
-          pFrame + decoder_->GetHeight() * decoder_->GetDeviceFramePitch(),
-          decoder_->GetDeviceFramePitch(), i420_buffer->MutableDataY(),
-          i420_buffer->StrideY(), i420_buffer->MutableDataU(),
-          i420_buffer->StrideU(), i420_buffer->MutableDataV(),
-          i420_buffer->StrideV(), decoder_->GetWidth(), decoder_->GetHeight());
+  // La récupération des images (`GetFrame` → `cuvidMapVideoFrame64`) passe par
+  // les mêmes appels qui peuvent lever.
+  try {
+    // todo: support other output format
+    // Chromium's H264 Encoder is output on NV12, so currently only NV12 is
+    // supported.
+    if (decoder_->GetOutputFormat() != cudaVideoSurfaceFormat_NV12) {
+      RTC_LOG(LS_ERROR) << "not supported this format: "
+                        << decoder_->GetOutputFormat();
+      return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
     }
 
-    if (result) {
-      RTC_LOG(LS_INFO) << "libyuv::NV12ToI420 failed. error:" << result;
+    // Pass on color space from input frame if explicitly specified.
+    const ColorSpace& color_space =
+        input_image.ColorSpace()
+            ? *input_image.ColorSpace()
+            : ExtractH264ColorSpace(decoder_->GetVideoFormatInfo());
+
+    for (int i = 0; i < nFrameReturnd; i++) {
+      int64_t timeStamp;
+      uint8_t* pFrame = decoder_->GetFrame(&timeStamp);
+
+      webrtc::scoped_refptr<webrtc::I420Buffer> i420_buffer =
+          buffer_pool_.CreateI420Buffer(decoder_->GetWidth(),
+                                        decoder_->GetHeight());
+
+      int result;
+      {
+        result = libyuv::NV12ToI420(
+            pFrame, decoder_->GetDeviceFramePitch(),
+            pFrame + decoder_->GetHeight() * decoder_->GetDeviceFramePitch(),
+            decoder_->GetDeviceFramePitch(), i420_buffer->MutableDataY(),
+            i420_buffer->StrideY(), i420_buffer->MutableDataU(),
+            i420_buffer->StrideU(), i420_buffer->MutableDataV(),
+            i420_buffer->StrideV(), decoder_->GetWidth(), decoder_->GetHeight());
+      }
+
+      if (result) {
+        RTC_LOG(LS_INFO) << "libyuv::NV12ToI420 failed. error:" << result;
+      }
+
+      VideoFrame decoded_frame =
+          VideoFrame::Builder()
+              .set_video_frame_buffer(i420_buffer)
+              .set_timestamp_rtp(static_cast<uint32_t>(timeStamp))
+              .set_color_space(color_space)
+              .build();
+
+      // todo: measurement decoding time
+      std::optional<int32_t> decodetime;
+      decoded_complete_callback_->Decoded(decoded_frame, decodetime, qp);
     }
-
-    VideoFrame decoded_frame =
-        VideoFrame::Builder()
-            .set_video_frame_buffer(i420_buffer)
-            .set_timestamp_rtp(static_cast<uint32_t>(timeStamp))
-            .set_color_space(color_space)
-            .build();
-
-    // todo: measurement decoding time
-    std::optional<int32_t> decodetime;
-    decoded_complete_callback_->Decoded(decoded_frame, decodetime, qp);
+  } catch (const std::exception& e) {
+    NvidiaVideoDecoderFactory::NoteNvdecFailure("H264 GetFrame");
+    RTC_LOG(LS_ERROR) << "NVDEC H264 frame retrieval failed: " << e.what();
+    return WEBRTC_VIDEO_CODEC_ERROR;
   }
 
   return WEBRTC_VIDEO_CODEC_OK;
