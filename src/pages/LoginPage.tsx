@@ -264,7 +264,7 @@ export function LoginPage() {
         </div>
         <div style={styles.logo}>
           <div style={styles.logoText}>Sion</div>
-          <div style={styles.logoSub}>Matrix Voice & Text Client</div>
+          <div style={styles.logoSub}>{t("app.subtitle")}</div>
         </div>
 
         <div style={styles.segmented}>

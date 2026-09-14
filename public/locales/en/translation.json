@@ -1,6 +1,7 @@
 {
   "app": {
-    "pressBackAgain": "Press back again to exit"
+    "pressBackAgain": "Press back again to exit",
+    "subtitle": "Matrix voice and text client"
   },
   "update": {
     "available": "New version v{{version}} available",
@@ -122,10 +123,6 @@
     "newMessages_other": "{{count}} new messages",
     "unreadCount_one": "{{count}} unread",
     "unreadCount_other": "{{count}} unread",
-    "newMessages_one": "New message",
-    "newMessages_other": "New messages",
-    "unreadCount_one": "{{count}} new message",
-    "unreadCount_other": "{{count}} new messages",
     "placeholder": "Message #{{channel}}",
     "readOnly": "You don't have permission to write here",
     "shareScreen": "Share Screen",
@@ -157,11 +154,13 @@
     "loading": "Loading...",
     "miniPlayer": "Play in the floating mini-player",
     "miniPlayerTitle": "Mini-player",
-    "miniPlayerResize": "Resize the mini-player — double-click for the default size"
+    "miniPlayerResize": "Resize the mini-player — double-click for the default size",
+    "conversationStart": "Start of conversation",
+    "audioDecoding": "Decoding audio…",
+    "emojiTab": "Emoji",
+    "gifTab": "GIF"
   },
   "poll": {
-    "totalVotes_one": "{{count}} voter",
-    "totalVotes_other": "{{count}} voters",
     "menuItem": "Poll",
     "create": "Create a poll",
     "questionPlaceholder": "Ask a question",

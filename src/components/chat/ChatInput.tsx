@@ -720,7 +720,7 @@ export function ChatInput() {
                         color: pickerTab === "emoji" ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
                         borderBottom: pickerTab === "emoji" ? '2px solid var(--color-primary)' : '2px solid transparent',
                       }}
-                    >Emoji</button>
+                    >{t("chat.emojiTab")}</button>
                     <button
                       onMouseDown={(e) => { e.preventDefault(); setPickerTab("gif"); }}
                       style={{
@@ -729,7 +729,7 @@ export function ChatInput() {
                         color: pickerTab === "gif" ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
                         borderBottom: pickerTab === "gif" ? '2px solid var(--color-primary)' : '2px solid transparent',
                       }}
-                    >GIF</button>
+                    >{t("chat.gifTab")}</button>
                   </div>
 
                   {/* === EMOJI TAB === */}

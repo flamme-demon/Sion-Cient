@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { decodeAudioFile, computePeaks, computePeaksRange, playSlice } from "../../services/audioTrim";
 import { themeColor } from "../../utils/themeColor";
 
@@ -119,6 +120,7 @@ function WaveLane({ peaks, winStart, winEnd, region, cursor, bodyDraggable, onHa
 }
 
 export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
+  const { t } = useTranslation();
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [region, setRegion] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -292,7 +294,7 @@ export function AudioTrimmer({ file, maxSec, onChange, gain = 1 }: Props) {
   }, [buffer, maxSec]);
 
   if (error) return <div style={{ fontSize: 12, color: "var(--color-error)" }}>{error}</div>;
-  if (!buffer) return <div style={{ fontSize: 12, color: "var(--color-outline)" }}>Décodage de l'audio…</div>;
+  if (!buffer) return <div style={{ fontSize: 12, color: "var(--color-outline)" }}>{t("chat.audioDecoding")}</div>;
 
   const selLen = region.end - region.start;
   const overLimit = selLen > maxSec + 0.01;

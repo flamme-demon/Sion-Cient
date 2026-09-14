@@ -4,7 +4,13 @@ import LanguageDetector from "i18next-browser-languagedetector";
 import HttpBackend from "i18next-http-backend";
 
 // Check if user has a saved language preference
-const savedSettings = JSON.parse(localStorage.getItem("sion-settings") || "{}");
+let savedSettings: { state?: { language?: string } } = {};
+try {
+  const raw = localStorage.getItem("sion-settings");
+  if (raw) savedSettings = JSON.parse(raw) as typeof savedSettings;
+} catch {
+  // A corrupt settings record must not prevent the login screen from loading.
+}
 const savedLang = savedSettings?.state?.language;
 
 i18n

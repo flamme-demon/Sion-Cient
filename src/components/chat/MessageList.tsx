@@ -526,10 +526,10 @@ export function MessageList() {
         <div ref={contentRef} className="flex flex-col min-w-0">
         {/* Top indicator */}
         {isLoading && (
-          <div className="text-center text-text-muted text-sm py-3">Chargement...</div>
+          <div className="text-center text-text-muted text-sm py-3">{t("chat.loading")}</div>
         )}
         {!isLoading && !hasMore && messages.length > 0 && (
-          <div className="text-center text-text-muted text-sm py-3">Début de la conversation</div>
+          <div className="text-center text-text-muted text-sm py-3">{t("chat.conversationStart")}</div>
         )}
 
         {messages.map((msg, i) => {

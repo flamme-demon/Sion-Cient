@@ -1,6 +1,7 @@
 {
   "app": {
-    "pressBackAgain": "Appuyez encore pour quitter"
+    "pressBackAgain": "Appuyez encore pour quitter",
+    "subtitle": "Client vocal et texte Matrix"
   },
   "update": {
     "available": "Nouvelle version v{{version}} disponible",
@@ -119,10 +120,6 @@
     "newMessages_other": "{{count}} nouveaux messages",
     "unreadCount_one": "{{count}} non lu",
     "unreadCount_other": "{{count}} non lus",
-    "newMessages_one": "Nouveau message",
-    "newMessages_other": "Nouveaux messages",
-    "unreadCount_one": "{{count}} nouveau message",
-    "unreadCount_other": "{{count}} nouveaux messages",
     "placeholder": "Message #{{channel}}",
     "readOnly": "Vous n'avez pas les droits pour écrire ici",
     "shareScreen": "Partager l'écran",
@@ -154,11 +151,13 @@
     "loading": "Chargement...",
     "miniPlayer": "Lire dans le mini-lecteur flottant",
     "miniPlayerTitle": "Mini-lecteur",
-    "miniPlayerResize": "Redimensionner le mini-lecteur — double-clic pour la taille par défaut"
+    "miniPlayerResize": "Redimensionner le mini-lecteur — double-clic pour la taille par défaut",
+    "conversationStart": "Début de la conversation",
+    "audioDecoding": "Décodage de l'audio…",
+    "emojiTab": "Emoji",
+    "gifTab": "GIF"
   },
   "poll": {
-    "totalVotes_one": "{{count}} votant",
-    "totalVotes_other": "{{count}} votants",
     "menuItem": "Sondage",
     "create": "Créer un sondage",
     "questionPlaceholder": "Posez une question",
