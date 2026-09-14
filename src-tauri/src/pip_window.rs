@@ -641,9 +641,11 @@ impl PipApp {
     }
 
     /// Revient sur la fenêtre principale (dé-minimise, montre, focus) et la
-    /// relève côté X11 — sous Wayland natif la relève inter-processus est
-    /// refusée par le compositeur (simple clignotement de l'entrée), d'où le
-    /// backend X11 forcé au démarrage (`main.rs`).
+    /// relève côté X11 quand l'app y tourne (`SION_FORCE_X11=1`). En Wayland
+    /// natif (défaut), la relève inter-processus est refusée par le
+    /// compositeur : il ne reste que sa demande d'attention (l'entrée clignote)
+    /// — le PIP reste un client X11, il ne peut pas fournir le jeton
+    /// d'activation Wayland attendu. Sortie propre : xx-pip-v1, cf. `main.rs`.
     fn focus_main_window(&self) {
         let Some(app) = APP.get() else {
             return;

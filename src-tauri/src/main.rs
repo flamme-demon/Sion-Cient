@@ -2,19 +2,34 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    // ── Backend graphique X11/XWayland sous Linux (2026-09-12) ──────────────
-    // La fenêtre principale Wayland-native ne peut PAS être relevée/focus par
-    // une autre fenêtre du même processus : Wayland exige un jeton
-    // d'activation lié à un geste utilisateur, et le PIP (fenêtre X11 de
-    // winit, forcée X11 pour l'always-on-top) ne peut pas en fournir — le
-    // compositeur se contente de faire clignoter l'entrée. Sous XWayland, la
-    // relève par `_NET_ACTIVE_WINDOW` (méthode des pagers, cf. `pip_window`)
-    // fonctionne, et l'app rejoint l'overlay-curseurs/PIP déjà en X11.
-    // Écran en échelle 1 → aucun compromis de netteté. Opt-out :
-    // `SION_KEEP_WAYLAND=1`.
+    // ── Backend graphique sous Linux : Wayland par défaut (2026-09-13) ──────
+    // On ne force PLUS X11. La fenêtre principale tourne en Wayland natif quand
+    // la session en propose un (sinon GDK retombe seul sur X11).
+    //
+    // Le prix, assumé : le bouton « retour à Sion » du PIP ne peut pas relever
+    // la fenêtre principale — le PIP est une fenêtre X11 (winit, forcée X11
+    // pour l'always-on-top : Wayland n'en a pas pour un toplevel ordinaire) et
+    // un client X11 ne peut pas fournir de jeton d'activation à une fenêtre
+    // Wayland ; le compositeur se contente d'une demande d'attention (entrée
+    // qui clignote). La sortie propre est le protocole xx-pip-v1 (PiP en
+    // couche overlay) : KWin et Firefox l'implémentent déjà, mais il est
+    // désactivé par défaut côté compositeur et absent de Mutter — voir
+    // docs/roadmap-2.0.0.md §2.2.
+    //
+    // `SION_FORCE_X11=1` rétablit l'ancien comportement (tout X11/XWayland, la
+    // relève `_NET_ACTIVE_WINDOW` refonctionne). `SION_KEEP_WAYLAND` reste
+    // accepté (c'était l'opt-out du temps où X11 était le défaut).
     #[cfg(target_os = "linux")]
-    if std::env::var_os("SION_KEEP_WAYLAND").is_none() {
+    if std::env::var_os("SION_FORCE_X11").is_some() {
         std::env::set_var("GDK_BACKEND", "x11");
     }
+
+    // ── Repli « page blanche NVIDIA » (2026-09-13) ─────────────────────────
+    // Si le web process est déjà tombé une fois sur cette installation (pilote
+    // NVIDIA, renderer DMA-BUF cassé), la variable doit être posée AVANT toute
+    // init GTK/WebKit : c'est ici. Sinon rien ne se passe (cf. gpu_fallback).
+    #[cfg(target_os = "linux")]
+    app_lib::gpu_fallback::apply_marker_before_gtk();
+
     app_lib::run();
 }

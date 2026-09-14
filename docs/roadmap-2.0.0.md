@@ -294,6 +294,19 @@ Implémenté dans `src-tauri/src/pip_window.rs` :
 Reste (finitions) : position/taille persistées entre sessions, coin d'ancrage
 et tailles S/M/L, double-clic → ramener la fenêtre principale au premier plan.
 
+**Backend d'affichage (13/09/2026)** — la fenêtre principale est repassée en
+**Wayland natif par défaut** ; seul le couple PIP + overlay curseurs reste X11
+(always-on-top impossible pour un toplevel Wayland ordinaire). Conséquence
+assumée : le bouton **« retour à Sion »** ne peut plus relever la fenêtre
+principale — un client X11 ne peut pas fournir de jeton `xdg_activation` — et
+le compositeur se contente d'une demande d'attention (entrée qui clignote).
+La sortie propre est **`xx-pip-v1`** (PiP en couche overlay) : implémenté par
+KWin (MR 3612, Plasma 6.5) et Firefox (bug 1970372), mais **désactivé par
+défaut** côté KWin (`KWIN_WAYLAND_SUPPORT_XX_PIP_V1=1`) et absent de Mutter.
+À reprendre quand il s'active tout seul : un PiP Wayland fournit le geste
+utilisateur nécessaire au jeton, que GTK3 sait déjà consommer
+(`gdk_wayland_window_set_startup_id`). Opt-in X11 : `SION_FORCE_X11=1`.
+
 ### 2.3 Niveau 3 — PiP OS (Document PiP) — ❌ spike fait, non supporté ici
 
 `canvas.captureStream()` → `<video>` caché → `requestPictureInPicture()`.
