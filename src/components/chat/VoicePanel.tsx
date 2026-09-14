@@ -513,8 +513,10 @@ export function VoicePanel({ sounds, resolveSound, onUploaded, connectedVoice }:
       );
       onUploaded();
       if (alsoPlay) {
-        await playSoundLocal(mxcUrl);
-        broadcastSound(mxcUrl, "🗣️", duration);
+        // Durée mesurée à la lecture : le rond se cale sur le son joué, pas
+        // sur la métadonnée d'upload.
+        const measuredMs = await playSoundLocal(mxcUrl);
+        broadcastSound(mxcUrl, "🗣️", measuredMs ?? duration);
       }
       setResult(null);
       setText("");

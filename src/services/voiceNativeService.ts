@@ -96,6 +96,20 @@ export function playVoiceNativeSoundboard(pcmB64: string, gain: number): Promise
   return tauriInvoke<void>("voice_native_play_soundboard", { pcmB64, gain });
 }
 
+/** Repousse l'échéance du rond soundboard d'un expéditeur (`sender` = son
+ *  identité LiveKit) sur la durée réellement mesurée au démarrage de la
+ *  lecture locale. Le badge natif est posé à l'arrivée du paquet, donc avant
+ *  le téléchargement/décodage : sans ce réarmement, il s'éteint de toute la
+ *  latence de démarrage. `emoji` rallume un badge déjà expiré (une échéance
+ *  n'est jamais raccourcie). À n'utiliser que lorsqu'on joue vraiment le son. */
+export function extendVoiceNativeSoundboardBadge(
+  sender: string,
+  durationMs: number,
+  emoji?: string,
+): Promise<void> {
+  return tauriInvoke<void>("voice_native_extend_soundboard_badge", { sender, durationMs, emoji });
+}
+
 /** Coupe / rétablit le SON du partage d'écran d'un expéditeur (miroir du
  *  toggle 🔊 JS). Retourne `true` si une piste `ScreenshareAudio` existe.
  *  Le volume local de cette piste se règle séparément ci-dessous. */
@@ -382,11 +396,16 @@ export function parseVoiceNativeVideoPacket(data: ArrayBuffer): VoiceNativeBinar
   if (!width || !height) return null;
   const sender = new TextDecoder().decode(bytes.subarray(14, jpegOffset));
   if (!sender) return null;
+  // Reject malformed frames before handing them to ImageBitmap. This keeps a
+  // bad/partial packet from repeatedly clearing the canvas and makes the
+  // black-screen failure mode observable in logs instead of silent.
+  const jpeg = bytes.subarray(jpegOffset);
+  if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8 || jpeg[jpeg.length - 2] !== 0xff || jpeg[jpeg.length - 1] !== 0xd9) return null;
   return {
     sender,
     width,
     height,
-    jpeg: bytes.slice(jpegOffset),
+    jpeg: jpeg.slice(),
     receivedAt: performance.now(),
   };
 }
@@ -400,10 +419,36 @@ export async function connectVoiceNativeVideoStream(
   if (!port) throw new Error("transport vidéo natif indisponible");
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);
   socket.binaryType = "arraybuffer";
+  let loggedFrame = false;
+  let invalidPackets = 0;
   socket.onmessage = (event) => {
-    if (!(event.data instanceof ArrayBuffer)) return;
-    const frame = parseVoiceNativeVideoPacket(event.data);
-    if (frame) onFrame(frame);
+    // WebKitGTK has shipped versions that return Blob here even after
+    // binaryType="arraybuffer". Accept both forms; otherwise Rust sends valid
+    // frames but the canvas stays black with no visible error.
+    const data = event.data;
+    const consume = (bytes: ArrayBuffer) => {
+      const frame = parseVoiceNativeVideoPacket(bytes);
+      if (frame) {
+        if (!loggedFrame) {
+          loggedFrame = true;
+          console.info(`[Sion][partage-natif] première frame reçue ${frame.sender} ${frame.width}x${frame.height} ${frame.jpeg.byteLength} o`);
+        }
+        onFrame(frame);
+      } else if (invalidPackets++ < 3) {
+        console.warn("[Sion][partage-natif] paquet vidéo invalide", bytes.byteLength);
+      }
+    };
+    if (data instanceof ArrayBuffer) {
+      consume(data);
+    } else if (data && typeof (data as { arrayBuffer?: unknown }).arrayBuffer === "function") {
+      // Cross-realm WebKit objects can fail `instanceof Blob`; feature-test
+      // arrayBuffer instead so the binary payload is still consumed.
+      void (data as Blob).arrayBuffer().then(consume).catch(() => {
+        if (invalidPackets++ < 3) console.warn("[Sion][partage-natif] lecture Blob vidéo impossible");
+      });
+    } else if (invalidPackets++ < 3) {
+      console.warn("[Sion][partage-natif] paquet vidéo non-binaire", typeof data);
+    }
   };
   return () => {
     socket.onmessage = null;

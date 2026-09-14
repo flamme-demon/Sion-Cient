@@ -282,10 +282,41 @@ pub struct NativeParticipant {
     pub connection_quality: NativeConnectionQuality,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playing_sound_emoji: Option<String>,
+    /// Échéance du badge soundboard, en ms d'horloge monotone (`mono_ms`).
+    /// Le badge n'expire plus « après N ms » mais « à cette date » : plusieurs
+    /// sons qui se chevauchent repoussent l'échéance au lieu de s'entretuer, et
+    /// un réveil en retard revérifie avant d'éteindre. État interne, hors du
+    /// contrat front (`ParticipantInfo`) — d'où le `skip`.
+    #[serde(skip)]
+    pub badge_deadline_ms: u64,
 }
 
 fn default_quality() -> NativeConnectionQuality {
     NativeConnectionQuality::Unknown
+}
+
+/// Horloge monotone (ms) : insensible à un saut d'horloge système, contrairement
+/// au `SystemTime` employé pour les horodatages de curseur.
+fn mono_ms() -> u64 {
+    static BASE: OnceLock<std::time::Instant> = OnceLock::new();
+    BASE.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
+/// Durée de repli quand le payload n'en porte pas (ou zéro) : la sonde
+/// d'upload a pu échouer, le son existe quand même et il dure rarement moins.
+const BADGE_DEFAULT_MS: u64 = 3_000;
+/// Garde-fou : la soundboard plafonne à 20 s, une durée aberrante (payload
+/// forgé, artéfact d'encodage) ne doit pas figer un rond pour la session.
+const BADGE_MAX_MS: u64 = 60_000;
+
+/// Normalise une durée annoncée : 0/absente → repli, au-delà → plafond.
+/// Miroir JS de `resolveBadgeDurationMs` (`soundboardService.ts`).
+fn sane_badge_ms(raw: u64) -> u64 {
+    if raw == 0 {
+        BADGE_DEFAULT_MS
+    } else {
+        raw.min(BADGE_MAX_MS)
+    }
 }
 
 impl NativeParticipant {
@@ -301,6 +332,7 @@ impl NativeParticipant {
             audio_level: 0.0,
             connection_quality: NativeConnectionQuality::Unknown,
             playing_sound_emoji: None,
+            badge_deadline_ms: 0,
         }
     }
 }
@@ -328,13 +360,22 @@ pub struct AfkPayload {
 
 /// `{ mxc, emoji, duration, gain }` — cf. `broadcastSound`.
 /// `duration` en ms, `gain` multiplicateur (1.0 = niveau d'origine).
+/// `duration` absente (expéditeur qui ne la connaît pas) → repli, jamais 0 :
+/// un badge de 0 ms s'éteindrait avant même d'avoir été peint.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SoundboardPayload {
     pub mxc: String,
     pub emoji: String,
+    #[serde(default = "default_soundboard_duration")]
     pub duration: u64,
     #[serde(default = "default_gain")]
     pub gain: f32,
+}
+
+/// Repli contractuel partagé avec `broadcastSound` JS (3000 ms quand
+/// l'expéditeur ne connaît pas la durée).
+fn default_soundboard_duration() -> u64 {
+    BADGE_DEFAULT_MS
 }
 
 fn default_gain() -> f32 {
@@ -346,7 +387,7 @@ impl SoundboardPayload {
         Self {
             mxc: mxc.to_string(),
             emoji: emoji.unwrap_or("🔊").to_string(),
-            duration: duration_ms.unwrap_or(3000),
+            duration: duration_ms.unwrap_or_else(default_soundboard_duration),
             gain,
         }
     }
@@ -950,49 +991,122 @@ fn forward_cursor_to_overlay(topic: Option<&str>, payload_b64: &str, sender: &st
 }
 
 /// Décode un payload `sion-soundboard` (base64) et pose le badge sur
-/// l'expéditeur. Retourne la durée (ms) pour l'expiration. Fonction pure.
+/// l'expéditeur. Pousse l'échéance à `now + durée` (sans jamais la
+/// raccourcir : un son plus long encore en cours du même expéditeur garde son
+/// rond). Retourne la durée retenue (ms), normalisée. Fonction pure.
 #[cfg(feature = "native-voice")]
 fn apply_soundboard_badge(
     map: &mut HashMap<String, NativeParticipant>,
     sender: &str,
     payload_b64: &str,
+    now_ms: u64,
 ) -> Option<u64> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload_b64)
         .ok()?;
     let raw = String::from_utf8(bytes).ok()?;
     let data: SoundboardPayload = decode_json(&raw).ok()?;
-    upsert_participant(map, sender).playing_sound_emoji = Some(data.emoji.clone());
-    Some(data.duration)
+    let duration = sane_badge_ms(data.duration);
+    let p = upsert_participant(map, sender);
+    p.playing_sound_emoji = Some(data.emoji.clone());
+    p.badge_deadline_ms = p.badge_deadline_ms.max(now_ms.saturating_add(duration));
+    Some(duration)
 }
 
-/// Pose le badge et programme son expiration, miroir du timer JS de
-/// `setPlayingSound`. Partagé par la réception distante et l'envoi local
-/// (le data-channel ne revient pas vers l'expéditeur : sans ça, on ne voit
-/// jamais son propre badge quand on déclenche un son).
+/// Repousse l'échéance du badge d'un expéditeur à `now + durée` — jamais
+/// raccourcie — et rallume le badge quand le front fournit l'emoji (cas du
+/// récepteur : le badge posé à l'arrivée du paquet a pu expirer avant que le
+/// son ne démarre vraiment chez lui). Retourne `true` si l'échéance a bougé.
+/// Fonction pure.
+#[cfg(feature = "native-voice")]
+fn extend_badge_deadline(
+    map: &mut HashMap<String, NativeParticipant>,
+    sender: &str,
+    duration_ms: u64,
+    emoji: Option<&str>,
+    now_ms: u64,
+) -> bool {
+    let duration = sane_badge_ms(duration_ms);
+    let Some(p) = map.get_mut(sender) else {
+        return false;
+    };
+    // Badge éteint et pas d'emoji pour le rallumer : rien à faire (le son
+    // n'est pas joué localement — soundboard coupée, participant sourd…).
+    if emoji.is_none() && p.playing_sound_emoji.is_none() {
+        return false;
+    }
+    if let Some(emoji) = emoji {
+        p.playing_sound_emoji = Some(emoji.to_string());
+    }
+    let deadline = now_ms.saturating_add(duration);
+    let moved = deadline > p.badge_deadline_ms;
+    p.badge_deadline_ms = p.badge_deadline_ms.max(deadline);
+    moved
+}
+
+/// Thread d'expiration du badge d'un expéditeur.
+///
+/// Il ne dort plus « la durée du son » avant d'effacer : il vise l'échéance
+/// enregistrée, et revérifie à chaque réveil. Conséquences voulues —
+/// un ancien son ne peut plus éteindre le rond d'un son plus récent encore en
+/// cours (son minuteur dort sur une échéance périmée, il la relit), et deux
+/// sons qui se chevauchent gardent le rond jusqu'à la fin du dernier. Un seul
+/// thread vit par badge ; il sort dès qu'il n'y a plus rien à éteindre.
+#[cfg(feature = "native-voice")]
+fn spawn_badge_expiry(app: &tauri::AppHandle<TauriRuntime>, sender: &str) {
+    let app2 = app.clone();
+    let sender2 = sender.to_string();
+    std::thread::Builder::new()
+        .name("sion-voice-badge".into())
+        .spawn(move || loop {
+            // `None` = plus de badge à éteindre ; `Some(0)` = échéance atteinte.
+            let remaining = {
+                let map = participants_map().lock().unwrap_or_else(|e| e.into_inner());
+                match map.get(&sender2) {
+                    Some(p) if p.playing_sound_emoji.is_some() => {
+                        Some(p.badge_deadline_ms.saturating_sub(mono_ms()))
+                    }
+                    _ => None,
+                }
+            };
+            let Some(remaining) = remaining else { return };
+            if remaining > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(remaining));
+                continue;
+            }
+            // Re-vérification sous verrou : entre la lecture ci-dessus et ici,
+            // un son suivant a pu repousser l'échéance (ou rallumer le badge).
+            let cleared = {
+                let mut map = participants_map().lock().unwrap_or_else(|e| e.into_inner());
+                match map.get_mut(&sender2) {
+                    Some(p) if p.playing_sound_emoji.is_some() && p.badge_deadline_ms <= mono_ms() => {
+                        p.playing_sound_emoji = None;
+                        p.badge_deadline_ms = 0;
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            emit_participants(&app2);
+            if cleared {
+                return;
+            }
+        })
+        .ok();
+}
+
+/// Pose le badge et arme son expiration. Partagé par la réception distante et
+/// l'envoi local (le data-channel ne revient pas vers l'expéditeur : sans ça,
+/// on ne voit jamais son propre badge quand on déclenche un son).
 #[cfg(feature = "native-voice")]
 fn show_soundboard_badge(app: &tauri::AppHandle<TauriRuntime>, sender: &str, payload_b64: &str) {
-    let duration = {
+    let armed = {
         let mut map = participants_map().lock().unwrap_or_else(|e| e.into_inner());
-        apply_soundboard_badge(&mut map, sender, payload_b64)
+        apply_soundboard_badge(&mut map, sender, payload_b64, mono_ms())
     };
     emit_participants(app);
-    if let Some(ms) = duration {
-        let app2 = app.clone();
-        let sender2 = sender.to_string();
-        std::thread::Builder::new()
-            .name("sion-voice-badge".into())
-            .spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(ms));
-                {
-                    let mut map = participants_map().lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(p) = map.get_mut(&sender2) {
-                        p.playing_sound_emoji = None;
-                    }
-                }
-                emit_participants(&app2);
-            })
-            .ok();
+    if armed.is_some() {
+        spawn_badge_expiry(app, sender);
     }
 }
 /// Pompe d'événements moteur → front sur thread dédié (pas besoin du runtime
@@ -2280,6 +2394,48 @@ pub fn voice_native_publish_data(
     }
 }
 
+/// Repousse l'échéance du badge soundboard d'un expéditeur sur la durée
+/// **réellement mesurée** au démarrage de la lecture locale.
+///
+/// Le badge est posé par le Rust à l'arrivée du paquet, donc avant que le
+/// récepteur n'ait téléchargé, décodé et mis en file le clip : sans ce
+/// réarmement, le rond s'éteint de toute cette latence de démarrage. Le front
+/// appelle donc cette commande juste après avoir lancé la lecture, avec la
+/// durée qu'il a mesurée (et l'emoji, pour rallumer un badge déjà expiré).
+/// L'échéance n'est jamais raccourcie : un son long encore en cours du même
+/// expéditeur doit rester visible.
+#[tauri::command]
+pub fn voice_native_extend_soundboard_badge(
+    app: tauri::AppHandle<TauriRuntime>,
+    sender: String,
+    duration_ms: u64,
+    emoji: Option<String>,
+) -> Result<(), String> {
+    #[cfg(feature = "native-voice")]
+    {
+        if sender.trim().is_empty() {
+            return Err("expéditeur soundboard manquant".to_string());
+        }
+        let moved = {
+            let mut map = participants_map().lock().unwrap_or_else(|e| e.into_inner());
+            extend_badge_deadline(&mut map, &sender, duration_ms, emoji.as_deref(), mono_ms())
+        };
+        if moved {
+            emit_participants(&app);
+            // Le thread d'expiration d'origine a pu sortir pendant que le badge
+            // était éteint : on en réarme un (il se termine seul s'il n'y a
+            // plus rien à éteindre).
+            spawn_badge_expiry(&app, &sender);
+        }
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (app, sender, duration_ms, emoji);
+        Err("voix native indisponible".to_string())
+    }
+}
+
 /// Remet l'état global à zéro. Réservé aux tests.
 #[cfg(test)]
 pub fn test_reset() {
@@ -2754,12 +2910,152 @@ mod tests {
             let payload = base64::engine::general_purpose::STANDARD
                 .encode(r#"{"mxc":"mxc://h/s","emoji":"🥁","duration":2500,"gain":1.5}"#);
             assert_eq!(
-                apply_soundboard_badge(&mut map, "@dj:h", &payload),
+                apply_soundboard_badge(&mut map, "@dj:h", &payload, 1_000),
                 Some(2500)
             );
             assert_eq!(map["@dj:h"].playing_sound_emoji.as_deref(), Some("🥁"));
+            // Échéance = maintenant + durée : c'est elle qui décide de la fin,
+            // plus un `sleep(durée)` aveugle.
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 3_500);
             // Payload corrompu : pas de badge, pas de panique.
-            assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", "!!!"), None);
+            assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", "!!!", 1_000), None);
+        }
+
+        /// Le bug d'origine : un son court déclenché pendant un son long
+        /// éteignait le rond du son long. L'échéance ne recule jamais.
+        #[test]
+        fn soundboard_badge_deadline_never_moves_backwards() {
+            use base64::Engine as _;
+            let enc = |raw: &str| base64::engine::general_purpose::STANDARD.encode(raw);
+            let mut map = empty();
+            let long = enc(r#"{"mxc":"mxc://h/long","emoji":"🎵","duration":9000,"gain":1}"#);
+            let short = enc(r#"{"mxc":"mxc://h/short","emoji":"🔔","duration":2000,"gain":1}"#);
+            // Son long à t=0 → échéance 9 s.
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &long, 0),
+                Some(9000)
+            );
+            // Son court déclenché 1 s plus tard : l'échéance reste celle du long.
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &short, 1_000),
+                Some(2000)
+            );
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 9_000);
+            // Son suivant plus long : l'échéance est repoussée d'autant.
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &long, 5_000),
+                Some(9000)
+            );
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 14_000);
+            // Autre expéditeur : aucun mélange d'échéances.
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@p:h", &short, 5_000),
+                Some(2000)
+            );
+            assert_eq!(map["@p:h"].badge_deadline_ms, 7_000);
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 14_000);
+        }
+
+        /// Durée absente, nulle ou aberrante : jamais de rond instantané ni
+        /// de rond éternel.
+        #[test]
+        fn soundboard_badge_duration_is_sane() {
+            use base64::Engine as _;
+            let enc = |raw: &str| base64::engine::general_purpose::STANDARD.encode(raw);
+            let mut map = empty();
+            // Champ absent (vieux payload) → repli 3 s, payload quand même lu.
+            let no_duration = enc(r#"{"mxc":"mxc://h/s","emoji":"🔊","gain":1}"#);
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &no_duration, 0),
+                Some(BADGE_DEFAULT_MS)
+            );
+            // Durée 0 (sonde d'upload en échec côté client) → repli, pas 0 ms.
+            let zero = enc(r#"{"mxc":"mxc://h/z","emoji":"🔊","duration":0,"gain":1}"#);
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &zero, 0),
+                Some(BADGE_DEFAULT_MS)
+            );
+            assert_eq!(map["@dj:h"].badge_deadline_ms, BADGE_DEFAULT_MS);
+            // Durée aberrante → plafond.
+            let huge = enc(r#"{"mxc":"mxc://h/h","emoji":"🔊","duration":9999999,"gain":1}"#);
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &huge, 0),
+                Some(BADGE_MAX_MS)
+            );
+            assert_eq!(map["@dj:h"].badge_deadline_ms, BADGE_MAX_MS);
+        }
+
+        /// Réarmement côté récepteur : la latence de démarrage locale repousse
+        /// l'échéance, sans jamais la raccourcir ni ressusciter un badge éteint
+        /// quand le son n'est pas joué.
+        #[test]
+        fn soundboard_badge_extension_respects_playback_start() {
+            use base64::Engine as _;
+            let enc = |raw: &str| base64::engine::general_purpose::STANDARD.encode(raw);
+            let mut map = empty();
+            let payload = enc(r#"{"mxc":"mxc://h/s","emoji":"🎵","duration":4000,"gain":1}"#);
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", &payload, 0),
+                Some(4000)
+            );
+            // Le son démarre à 482 ms chez le récepteur : échéance repoussée.
+            assert!(extend_badge_deadline(
+                &mut map,
+                "@dj:h",
+                4000,
+                Some("🎵"),
+                482
+            ));
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 4_482);
+            // Une mesure plus courte (fichier réel plus court que l'annoncé) ne
+            // raccourcit pas l'échéance déjà posée.
+            assert!(!extend_badge_deadline(
+                &mut map,
+                "@dj:h",
+                1500,
+                Some("🎵"),
+                500
+            ));
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 4_482);
+            // Emoji connu mais badge éteint → rallumé (cas du badge expiré
+            // pendant un téléchargement lent).
+            map.get_mut("@dj:h").unwrap().playing_sound_emoji = None;
+            assert!(extend_badge_deadline(
+                &mut map,
+                "@dj:h",
+                4000,
+                Some("🎵"),
+                600
+            ));
+            assert_eq!(map["@dj:h"].playing_sound_emoji.as_deref(), Some("🎵"));
+            assert_eq!(map["@dj:h"].badge_deadline_ms, 4_600);
+            // Sans emoji et badge éteint : rien à rallumer (son non joué).
+            map.get_mut("@dj:h").unwrap().playing_sound_emoji = None;
+            let before = map["@dj:h"].badge_deadline_ms;
+            assert!(!extend_badge_deadline(&mut map, "@dj:h", 4000, None, 700));
+            assert_eq!(map["@dj:h"].badge_deadline_ms, before);
+            // Expéditeur inconnu : ignoré.
+            assert!(!extend_badge_deadline(
+                &mut map,
+                "@absent:h",
+                4000,
+                Some("🎵"),
+                700
+            ));
+        }
+
+        /// La durée normalisée côté Rust doit rester alignée sur le repli JS.
+        #[test]
+        fn soundboard_badge_fallback_matches_js_contract() {
+            assert_eq!(BADGE_DEFAULT_MS, 3_000);
+            assert_eq!(sane_badge_ms(0), 3_000);
+            assert_eq!(sane_badge_ms(500), 500);
+            assert_eq!(sane_badge_ms(BADGE_MAX_MS + 1), BADGE_MAX_MS);
+            // Payload minimal sans `duration` : sérialisé tel quel par un vieux
+            // client, il doit encore se décoder.
+            let minimal: SoundboardPayload = decode_json(r#"{"mxc":"mxc://h/s","emoji":"🔊"}"#).unwrap();
+            assert_eq!(minimal.duration, BADGE_DEFAULT_MS);
+            assert_eq!(minimal.gain, 1.0);
         }
 
         #[test]

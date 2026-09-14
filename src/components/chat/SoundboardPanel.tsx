@@ -280,8 +280,11 @@ export function SoundboardPanel() {
     if (!enabled) return;
     incrementPlay(s.eventId);
     try {
-      await playSoundLocal(s.mxcUrl, s.gain);
-      if (connectedVoice) broadcastSound(s.mxcUrl, s.emoji, s.duration, s.gain);
+      // Durée mesurée à la lecture : `info.duration` peut manquer (sonde
+      // d'upload en échec) ou mentir, et c'est elle qui règle la fin du rond
+      // chez tout le monde.
+      const measuredMs = await playSoundLocal(s.mxcUrl, s.gain);
+      if (connectedVoice) broadcastSound(s.mxcUrl, s.emoji, measuredMs ?? s.duration, s.gain);
     } catch (err) {
       console.warn("[Sion] play failed:", err);
       playErrorBuzzer();

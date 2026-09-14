@@ -1,7 +1,7 @@
 import { Filter, Direction } from "matrix-js-sdk";
 import { getSharedAudioContext } from "./audioContext";
 import { getMatrixClient, findSoundboardRoom, uploadFile } from "./matrixService";
-import { voiceNativePublishData, bytesToB64 } from "./voiceNativeService";
+import { voiceNativePublishData, extendVoiceNativeSoundboardBadge, bytesToB64 } from "./voiceNativeService";
 import { useAppStore } from "../stores/useAppStore";
 
 export interface SoundEntry {
@@ -489,8 +489,10 @@ function clampGain(v: number): number {
 
 /** Decode a browser-supported sound and convert it once to the native render
  * format. Linear resampling is sufficient here: clips are limited to 20 s and
- * WebRTC receives the final 48 kHz mono PCM without a realtime IPC stream. */
-async function decodeNativeSoundboardPcm(url: string): Promise<string> {
+ * WebRTC receives the final 48 kHz mono PCM without a realtime IPC stream.
+ * Retourne aussi la durée réellement décodée (ms) : c'est la seule vérité
+ * disponible quand la métadonnée Matrix du son est absente ou fausse. */
+async function decodeNativeSoundboardPcm(url: string): Promise<{ pcmB64: string; durationMs: number | null }> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Sound decode failed: ${response.status}`);
   const encoded = await response.arrayBuffer();
@@ -516,13 +518,17 @@ async function decodeNativeSoundboardPcm(url: string): Promise<string> {
     bytes[i * 2 + 1] = (pcm >> 8) & 0xff;
   }
   const { bytesToB64 } = await import("./voiceNativeService");
-  return bytesToB64(bytes);
+  return {
+    pcmB64: bytesToB64(bytes),
+    durationMs: Number.isFinite(decoded.duration) ? Math.round(decoded.duration * 1000) : null,
+  };
 }
 
-async function playSoundNative(url: string, gain: number): Promise<void> {
+async function playSoundNative(url: string, gain: number): Promise<number | null> {
   const { playVoiceNativeSoundboard } = await import("./voiceNativeService");
-  const pcmB64 = await decodeNativeSoundboardPcm(url);
+  const { pcmB64, durationMs } = await decodeNativeSoundboardPcm(url);
   await playVoiceNativeSoundboard(pcmB64, playbackVolume * clampGain(gain));
+  return durationMs;
 }
 
 /** Build the playback chain for one HTMLAudioElement and start playback.
@@ -530,7 +536,7 @@ async function playSoundNative(url: string, gain: number): Promise<void> {
  *  capped at 1.0 — boosting beyond that requires a GainNode. The
  *  DynamicsCompressor at the tail prevents loud clipping when a user pushes
  *  the gain too high. Cleanup is wired to `ended`/`error` of the element. */
-async function playElementWithGain(audio: HTMLAudioElement, gain: number, onCleanup?: () => void): Promise<void> {
+async function playElementWithGain(audio: HTMLAudioElement, gain: number, onCleanup?: () => void): Promise<number | null> {
   const ctx = getSharedAudioContext();
   if (ctx.state === "suspended") {
     try { await ctx.resume(); } catch { /* fine — first play after gesture will resume */ }
@@ -575,22 +581,28 @@ async function playElementWithGain(audio: HTMLAudioElement, gain: number, onClea
     cleanup();
     throw err;
   }
+  // Durée réelle du média une fois les métadonnées lues (null si le conteneur
+  // ne l'expose pas — flux infini, webm sans en-tête).
+  return Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : null;
 }
 
 /** Plays the sound locally with the per-sound gain applied. Used both for
- *  user-initiated plays and for handling remote broadcasts. */
-export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promise<void> {
+ *  user-initiated plays and for handling remote broadcasts.
+ *
+ *  Retourne la durée réellement lue (ms), ou `null` si elle n'est pas
+ *  mesurable — les appelants s'en servent pour diffuser un payload honnête et
+ *  pour caler l'échéance du badge sur la lecture, pas sur l'arrivée du paquet. */
+export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promise<number | null> {
   // Respect the deafen state — if the user is sourdine, they don't want to
   // hear anything, including their own soundboard triggers. Broadcast still
   // happens independently so other participants hear it.
-  if (useAppStore.getState().isDeafened) return;
+  if (useAppStore.getState().isDeafened) return null;
 
   const url = await resolveBlobUrl(mxcUrl);
   // En appel, le clip est mixé par le moteur Rust dans le rendu WebRTC (donc
   // aussi dans la référence AEC). Hors appel, lecture locale DOM classique.
   if (useAppStore.getState().connectedVoiceChannel) {
-    await playSoundNative(url, gain);
-    return;
+    return playSoundNative(url, gain);
   }
   // Attach to the DOM so the webview doesn't GC the element mid-play (which
   // manifests as AbortError: "media was removed from the document").
@@ -599,7 +611,7 @@ export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promis
   audio.style.display = "none";
   audio.preload = "auto";
   document.body.appendChild(audio);
-  await playElementWithGain(audio, gain);
+  return playElementWithGain(audio, gain);
 }
 
 /** Preview a sound from a local File (during upload) with the given gain.
@@ -620,6 +632,22 @@ export async function previewSoundFile(file: File, gain: number = 1.0): Promise<
 const afkEncoder = new TextEncoder();
 const afkDecoder = new TextDecoder();
 
+/** Repli quand la durée du son n'est pas connue (sonde d'upload en échec,
+ *  métadonnée absente) — miroir de `BADGE_DEFAULT_MS` côté Rust. */
+export const SOUNDBOARD_BADGE_DEFAULT_MS = 3_000;
+/** Plafond de sécurité : une durée aberrante ne doit pas figer un rond pour
+ *  la session — miroir de `BADGE_MAX_MS` côté Rust. */
+export const SOUNDBOARD_BADGE_MAX_MS = 60_000;
+
+/** Normalise la durée annoncée dans un payload de badge : 0/absente → repli,
+ *  au-delà du plafond → plafond. Miroir JS de `sane_badge_ms` (voice_native.rs). */
+export function resolveBadgeDurationMs(durationMs: number | null | undefined): number {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return SOUNDBOARD_BADGE_DEFAULT_MS;
+  }
+  return Math.min(Math.round(durationMs), SOUNDBOARD_BADGE_MAX_MS);
+}
+
 /**
  * Broadcasts a play command to all participants in the currently connected
  * LiveKit voice channel. Does nothing if not connected.
@@ -628,10 +656,14 @@ const afkDecoder = new TextDecoder();
  * The payload carries the emoji (fallback "🔊") and duration so receivers can
  * render a "now playing" badge on the sender's avatar without having to
  * resolve the sound from their local soundboard cache first.
+ *
+ * `durationMs` doit être la durée **réellement lue** (`playSoundLocal` la
+ * renvoie) : la métadonnée Matrix peut manquer ou être fausse, et c'est elle
+ * qui décide de la fin du rond chez tout le monde.
  */
 export function broadcastSound(mxcUrl: string, emoji: string | null, durationMs: number | null, gain: number = 1.0): void {
   const resolvedEmoji = emoji || "🔊";
-  const resolvedDuration = durationMs ?? 3000;
+  const resolvedDuration = resolveBadgeDurationMs(durationMs);
   const payload = afkEncoder.encode(JSON.stringify({
     mxc: mxcUrl,
     emoji: resolvedEmoji,
@@ -654,8 +686,13 @@ export const SOUNDBOARD_TOPIC = AFK_LIKE_TOPIC;
 /**
  * Handles a data-channel payload for the soundboard topic. Called by le
  * relais data-channel natif (`useLiveKit` → `voice-native-data`).
+ *
+ * Le badge est posé par le Rust à l'arrivée du paquet, donc **avant** que ce
+ * client n'ait téléchargé, décodé et mis en file le clip : on repousse
+ * l'échéance sur la durée réellement mesurée au démarrage de la lecture, pour
+ * que le rond finisse avec le son et pas avec la latence de démarrage.
  */
-export async function handleRemoteBroadcast(payload: Uint8Array, _senderIdentity: string): Promise<void> {
+export async function handleRemoteBroadcast(payload: Uint8Array, senderIdentity: string): Promise<void> {
   try {
     const data = JSON.parse(afkDecoder.decode(payload)) as { mxc?: string; emoji?: string; duration?: number; gain?: number };
     if (!data.mxc) return;
@@ -663,7 +700,14 @@ export async function handleRemoteBroadcast(payload: Uint8Array, _senderIdentity
     const { useSettingsStore } = await import("../stores/useSettingsStore");
     if (!useSettingsStore.getState().soundboardEnabled) return;
     // Older senders may not include `gain` — default to 1.0 (no boost).
-    await playSoundLocal(data.mxc, typeof data.gain === "number" ? data.gain : 1.0);
+    const measuredMs = await playSoundLocal(data.mxc, typeof data.gain === "number" ? data.gain : 1.0);
+    if (senderIdentity) {
+      await extendVoiceNativeSoundboardBadge(
+        senderIdentity,
+        resolveBadgeDurationMs(measuredMs ?? data.duration),
+        data.emoji || "🔊",
+      ).catch(() => { /* badge best-effort : la lecture, elle, a réussi */ });
+    }
   } catch (err) {
     console.warn("[Sion] soundboard remote play failed:", err);
   }
