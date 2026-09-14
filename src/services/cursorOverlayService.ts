@@ -77,11 +77,14 @@ export async function openCursorOverlay(): Promise<boolean> {
   }
 }
 
-/** Close the overlay. Safe to call multiple times. */
+/** Close the overlay. Safe to call multiple times.
+ *
+ *  Toujours transmis à Rust (la fermeture y est idempotente) plutôt que
+ *  retenu par l'état local : après un rechargement de la webview, `isOpen`
+ *  repart à `false` alors que la fenêtre X11 est toujours là — elle restait
+ *  alors mappée à la fin du partage (constaté le 13/09). */
 export async function closeCursorOverlay(): Promise<void> {
-  const wasOpen = isOpen;
   isOpen = false;
-  if (!wasOpen) return;
   if (!isTauri()) return;
   try {
     await invoke("cursor_overlay_close");

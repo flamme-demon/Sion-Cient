@@ -1,44 +1,18 @@
-//! Native cursor overlay window — transparent, click-through, always-on-top.
-//!
-//! Remplace l'ancienne approche webview transparente, peu fiable selon le
-//! runtime (fenêtre opaque sur certaines plateformes). On dessine l'overlay
-//! avec winit + tiny-skia — Linux (X11 + Wayland) et Windows, un seul backend
-//! Rust au lieu de contournements propres à chaque plateforme.
-//!
-//! Architecture:
-//!   - A single background thread hosts the winit event loop. It's spawned
-//!     on first `cursor_overlay_open` and stays alive until the app exits
-//!     or `cursor_overlay_shutdown` is called.
-//!   - `voice_native::forward_cursor_to_overlay` pousse les curseurs/clics
-//!     reçus du réseau; they land in a shared `Mutex<OverlayState>`.
-//!   - The event loop requests a redraw at ~60 Hz whenever the state is
-//!     non-empty. tiny-skia draws cursor arrows + click ripples into a
-//!     `Pixmap`, which `softbuffer` blits to the window surface.
-//!   - `winit` itself handles X11/Wayland selection and ARGB visuals via
-//!     `with_transparent(true)` + `with_cursor_hittest(false)` — no
-//!     platform-specific XShape / set_input_region code to maintain.
-//!
-//! Why not use winit across ALL windowing: winit is a windowing library, it
-//! doesn't render webviews. La fenêtre principale Sion a besoin de la pile
-//! HTML/CSS/JS (WRY), tandis que cet overlay ne peint que curseurs et ondes —
-//! assez simple pour de la 2D native.
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
-use softbuffer::{Context, Surface};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
-// Re-imports listed here are all used by the text-rendering path
-// (`Font::outline_glyph`, `PxScale`, `ScaleFont` extension methods).
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::window::{Window, WindowAttributes, WindowId, WindowLevel};
+// Hôtes par plateforme : X11 natif (Linux) ou winit (Windows, WRY).
+#[cfg(target_os = "linux")]
+#[path = "cursor_overlay_x11.rs"]
+mod x11_host;
+#[cfg(not(target_os = "linux"))]
+#[path = "cursor_overlay_winit.rs"]
+mod winit_host;
 
 /// Embedded font for the cursor name pill — DejaVu Sans Bold (Bitstream
 /// Vera derivative, free license). ~700 KB; loaded once on first redraw.
@@ -94,9 +68,34 @@ enum UserEvent {
     Shutdown,
 }
 
+/// Enveloppe d'envoi vers le fil qui héberge la fenêtre. L'hôte Linux est un
+/// simple canal mpsc (pas de winit) ; l'hôte Windows garde l'`EventLoopProxy`
+/// (seul type `Send` d'une EventLoop qui, elle, ne l'est pas).
+enum HostSender {
+    #[cfg(target_os = "linux")]
+    Channel(std::sync::mpsc::Sender<UserEvent>),
+    #[cfg(not(target_os = "linux"))]
+    Winit(EventLoopProxy<UserEvent>),
+}
+
+impl HostSender {
+    fn send(&self, event: UserEvent) {
+        match self {
+            #[cfg(target_os = "linux")]
+            HostSender::Channel(tx) => {
+                let _ = tx.send(event);
+            }
+            #[cfg(not(target_os = "linux"))]
+            HostSender::Winit(proxy) => {
+                let _ = proxy.send_event(event);
+            }
+        }
+    }
+}
+
 struct OverlayHandle {
     state: Arc<Mutex<OverlayState>>,
-    proxy: EventLoopProxy<UserEvent>,
+    proxy: HostSender,
     thread_alive: Arc<AtomicBool>,
 }
 
@@ -107,13 +106,8 @@ pub fn cursor_overlay_is_open() -> bool {
     OVERLAY_OPEN.load(Ordering::Acquire)
 }
 
-/// Start the winit event-loop thread on first use. Idempotent — subsequent
-/// calls return the existing handle.
-///
-/// On Linux the `EventLoop` is `!Send` (it holds `Rc`s into the compositor
-/// connection), so it must be constructed *inside* the thread that will
-/// run it. We ship the `EventLoopProxy` back out via a oneshot channel —
-/// the proxy IS `Send`, that's its whole point.
+/// Start the host thread on first use. Idempotent — subsequent calls return
+/// the existing handle.
 fn get_or_start_handle() -> Option<&'static OverlayHandle> {
     if let Some(h) = HANDLE.get() {
         return Some(h);
@@ -121,75 +115,7 @@ fn get_or_start_handle() -> Option<&'static OverlayHandle> {
 
     let state = Arc::new(Mutex::new(OverlayState::default()));
     let thread_alive = Arc::new(AtomicBool::new(true));
-    let (proxy_tx, proxy_rx) = std::sync::mpsc::channel::<Option<EventLoopProxy<UserEvent>>>();
-
-    let state_clone = state.clone();
-    let alive_clone = thread_alive.clone();
-    thread::Builder::new()
-        .name("sion-cursor-overlay".into())
-        .spawn(move || {
-            // `with_any_thread(true)` lets us build + run the loop off
-            // the OS main thread. Supported on Linux (X11/Wayland) and
-            // Windows; not macOS (Sion doesn't target macOS anyway).
-            #[cfg(target_os = "linux")]
-            use winit::platform::wayland::EventLoopBuilderExtWayland;
-            #[cfg(target_os = "windows")]
-            use winit::platform::windows::EventLoopBuilderExtWindows;
-            #[cfg(target_os = "linux")]
-            use winit::platform::x11::EventLoopBuilderExtX11;
-
-            let mut builder = EventLoop::<UserEvent>::with_user_event();
-            #[cfg(target_os = "linux")]
-            {
-                EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
-                EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
-                // Force the X11 (XWayland) backend. winit's native Wayland
-                // backend does NOT honor WindowLevel::AlwaysOnTop (Wayland has
-                // no always-on-top for ordinary toplevels; that needs
-                // wlr-layer-shell, which winit lacks), so the overlay sank
-                // behind app windows on KDE/GNOME Wayland and remote cursors
-                // were hidden under the shared app. XWayland maps AlwaysOnTop
-                // to _NET_WM_STATE_ABOVE, which KWin/Mutter respect → the
-                // overlay stays on top and is captured on top in the share.
-                EventLoopBuilderExtX11::with_x11(&mut builder);
-            }
-            #[cfg(target_os = "windows")]
-            {
-                EventLoopBuilderExtWindows::with_any_thread(&mut builder, true);
-            }
-
-            let event_loop = match builder.build() {
-                Ok(el) => el,
-                Err(err) => {
-                    log::warn!("[Sion][CursorOverlay] winit EventLoop build failed: {err:?}");
-                    let _ = proxy_tx.send(None);
-                    alive_clone.store(false, Ordering::Release);
-                    return;
-                }
-            };
-            // Ship the proxy back before we give up control to run_app.
-            let _ = proxy_tx.send(Some(event_loop.create_proxy()));
-
-            let mut app = App::new(state_clone);
-            if let Err(err) = event_loop.run_app(&mut app) {
-                log::warn!("[Sion][CursorOverlay] event loop exited with error: {err:?}");
-            }
-            alive_clone.store(false, Ordering::Release);
-            log::info!("[Sion][CursorOverlay] event loop thread stopped");
-        })
-        .ok()?;
-
-    let proxy = match proxy_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            log::warn!("[Sion][CursorOverlay] event loop thread failed to initialise");
-            return None;
-        }
-        Err(err) => {
-            log::warn!("[Sion][CursorOverlay] timed out waiting for event-loop proxy: {err:?}");
-            return None;
-        }
-    };
+    let proxy = start_host_thread(state.clone(), thread_alive.clone())?;
 
     let handle = OverlayHandle {
         state,
@@ -200,430 +126,26 @@ fn get_or_start_handle() -> Option<&'static OverlayHandle> {
     HANDLE.get()
 }
 
-// ── Linux: mark the overlay sticky (on all virtual desktops) ─────────────
-//
-// winit 0.30 has no portable API for "show on all workspaces". The overlay
-// is an XWayland window (we force the X11 backend for AlwaysOnTop), so we
-// drive it through EWMH directly: send a `_NET_WM_STATE` ClientMessage to the
-// root adding `_NET_WM_STATE_STICKY`, and set `_NET_WM_DESKTOP = 0xFFFFFFFF`
-// as a belt-and-suspenders fallback (some WMs read the property rather than
-// react to the message). KWin/Mutter honor either. Done via x11rb so we don't
-// shell out to wmctrl/xdotool (not installed by default).
-#[cfg(target_os = "linux")]
-fn make_sticky_x11(window: &Window) -> Result<(), Box<dyn std::error::Error>> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{
-        AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, PropMode,
-    };
-    use x11rb::wrapper::ConnectionExt as _;
-
-    // Only X11/XWayland windows carry an XID; a native Wayland surface would
-    // not, so bail quietly if winit ever stops forcing the X11 backend.
-    let xid = match window.window_handle()?.as_raw() {
-        RawWindowHandle::Xlib(h) => h.window as u32,
-        RawWindowHandle::Xcb(h) => h.window.get(),
-        other => {
-            log::info!("[Sion][CursorOverlay] not an X11 window ({other:?}); skipping sticky hint");
-            return Ok(());
-        }
-    };
-
-    let (conn, screen_num) = x11rb::connect(None)?;
-    let root = conn.setup().roots[screen_num].root;
-    let net_wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
-    let net_wm_state_sticky = conn
-        .intern_atom(false, b"_NET_WM_STATE_STICKY")?
-        .reply()?
-        .atom;
-    let net_wm_state_above = conn
-        .intern_atom(false, b"_NET_WM_STATE_ABOVE")?
-        .reply()?
-        .atom;
-    let net_wm_desktop = conn.intern_atom(false, b"_NET_WM_DESKTOP")?.reply()?.atom;
-
-    // La spec EWMH distingue les deux cas : une fenêtre DÉJÀ MAPPÉE se pilote
-    // par ClientMessage, une fenêtre pas encore mappée par la propriété. On
-    // appelle cette fonction juste après `create_window`, donc avant que le
-    // gestionnaire n'ait mappé quoi que ce soit — le message seul était ignoré,
-    // et l'overlay restait cantonné au bureau courant. On pose donc d'abord la
-    // propriété (chemin pré-map), puis on envoie le message (chemin post-map,
-    // utile au ré-appel après affichage).
-    conn.change_property32(
-        PropMode::REPLACE,
-        xid,
-        net_wm_state,
-        AtomEnum::ATOM,
-        &[net_wm_state_sticky, net_wm_state_above],
-    )?;
-
-    // _NET_WM_STATE_ADD = 1, source indication 1 = "application".
-    let event = ClientMessageEvent::new(32, xid, net_wm_state, [1, net_wm_state_sticky, 0, 1, 0]);
-    conn.send_event(
-        false,
-        root,
-        EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
-        event,
-    )?;
-
-    // 0xFFFFFFFF = "all desktops" per the EWMH spec.
-    conn.change_property32(
-        PropMode::REPLACE,
-        xid,
-        net_wm_desktop,
-        AtomEnum::CARDINAL,
-        &[0xFFFF_FFFF_u32],
-    )?;
-
-    conn.flush()?;
-    log::info!("[Sion][CursorOverlay] overlay marked sticky (all desktops) via EWMH");
-    Ok(())
-}
-
-// ── winit app ──────────────────────────────────────────────────────────
-
-struct App {
+/// Démarre le fil qui héberge la fenêtre.
+///
+/// Linux : hôte X11 natif (`x11_host`, x11rb). C'est le point de la
+/// correction du 13/09 — winit ne tolère qu'une EventLoop par processus et
+/// celle du PIP est préchauffée au démarrage ; l'overlay ne pouvait donc plus
+/// la créer (`RecreationAttempt`). Ici, plus aucune boucle winit : juste une
+/// connexion X11 à nous.
+///
+/// Ailleurs (Windows) : boucle winit historique, inchangée.
+fn start_host_thread(
     state: Arc<Mutex<OverlayState>>,
-    window: Option<Arc<Window>>,
-    // softbuffer needs its Context bound to the window; keep both alive.
-    surface: Option<Surface<Arc<Window>, Arc<Window>>>,
-    // Canvas-space pixmap, resized to match the window.
-    pixmap: Option<Pixmap>,
-    last_frame: Instant,
-    frame_counter: u64,
-    /// Cumul du temps passé dans `redraw()` (diagnostic, voir ci-dessus).
-    redraw_ms_total: u64,
-    redraw_count: u64,
-    /// Le collage sur tous les bureaux a-t-il été rejoué APRÈS le mappage ?
-    /// La propriété posée avant suffit à la plupart des gestionnaires, mais
-    /// certains la réécrivent en mappant — le ClientMessage, lui, n'a d'effet
-    /// qu'une fois la fenêtre mappée.
+    thread_alive: Arc<AtomicBool>,
+) -> Option<HostSender> {
     #[cfg(target_os = "linux")]
-    sticky_reapplied: bool,
-}
-
-impl App {
-    fn new(state: Arc<Mutex<OverlayState>>) -> Self {
-        Self {
-            state,
-            window: None,
-            surface: None,
-            pixmap: None,
-            last_frame: Instant::now(),
-            frame_counter: 0,
-            redraw_ms_total: 0,
-            redraw_count: 0,
-            #[cfg(target_os = "linux")]
-            sticky_reapplied: false,
-        }
+    {
+        x11_host::start(state, thread_alive).map(HostSender::Channel)
     }
-
-    /// Build the window targeting the primary monitor. Borderless, full
-    /// monitor size, transparent, always on top, click-through.
-    ///
-    /// `primary_monitor()` returns None on Wayland (the concept is
-    /// X11-specific — Wayland has no canonical "primary"), so we fall
-    /// back to the first available monitor. As a last resort we use a
-    /// reasonable default size so the window still appears even on
-    /// headless/CI setups.
-    fn build_window(&self, event_loop: &ActiveEventLoop) -> Option<Arc<Window>> {
-        let mon = event_loop
-            .primary_monitor()
-            .or_else(|| event_loop.available_monitors().next());
-        let (size, pos) = if let Some(m) = mon {
-            log::info!(
-                "[Sion][CursorOverlay] using monitor {:?} size={:?} pos={:?}",
-                m.name(),
-                m.size(),
-                m.position()
-            );
-            (
-                winit::dpi::PhysicalSize::new(m.size().width, m.size().height),
-                winit::dpi::PhysicalPosition::new(m.position().x, m.position().y),
-            )
-        } else {
-            log::warn!("[Sion][CursorOverlay] no monitor reported by winit — falling back to 1920x1080 at (0,0)");
-            (
-                winit::dpi::PhysicalSize::new(1920u32, 1080u32),
-                winit::dpi::PhysicalPosition::new(0i32, 0i32),
-            )
-        };
-
-        let attrs = WindowAttributes::default()
-            .with_title("Sion cursor overlay")
-            .with_decorations(false)
-            .with_transparent(true)
-            .with_resizable(false)
-            .with_window_level(WindowLevel::AlwaysOnTop)
-            .with_inner_size(size)
-            .with_position(pos);
-
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(err) => {
-                log::warn!("[Sion][CursorOverlay] create_window failed: {err:?}");
-                return None;
-            }
-        };
-
-        // Click-through: the OS forwards mouse events under the window.
-        // winit 0.30 exposes this directly.
-        if let Err(err) = window.set_cursor_hittest(false) {
-            log::warn!("[Sion][CursorOverlay] set_cursor_hittest(false) failed: {err:?}");
-        }
-
-        // Linux: pin the overlay to ALL virtual desktops so it keeps
-        // covering the shared work area even if the sharer switches
-        // desktop mid-share. The overlay runs on XWayland (we force the
-        // X11 backend above for AlwaysOnTop), so we can use the standard
-        // EWMH `_NET_WM_STATE_STICKY` hint, which KWin/Mutter honor.
-        #[cfg(target_os = "linux")]
-        if let Err(err) = make_sticky_x11(&window) {
-            log::warn!("[Sion][CursorOverlay] make_sticky_x11 failed: {err:?}");
-        }
-
-        Some(window)
-    }
-
-    fn redraw(&mut self) {
-        // Premier rendu = la fenêtre est mappée : c'est le moment où le
-        // ClientMessage EWMH est pris en compte.
-        #[cfg(target_os = "linux")]
-        if !self.sticky_reapplied {
-            self.sticky_reapplied = true;
-            if let Some(w) = self.window.as_ref() {
-                if let Err(err) = make_sticky_x11(w) {
-                    log::warn!("[Sion][CursorOverlay] sticky re-apply failed: {err:?}");
-                }
-            }
-        }
-
-        let (Some(window), Some(surface), Some(pixmap)) = (
-            self.window.as_ref(),
-            self.surface.as_mut(),
-            self.pixmap.as_mut(),
-        ) else {
-            log::warn!("[Sion][CursorOverlay] redraw skipped — window/surface/pixmap not ready");
-            return;
-        };
-
-        // Sweep expired entries. Positions are already sampled at ~60 Hz and
-        // are painted as received, avoiding another 30–70 ms before capture.
-        let now = Instant::now();
-        let (cursor_count, click_count) = {
-            let mut state = match self.state.lock() {
-                Ok(s) => s,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            state.cursors.retain(|_, c| c.expires_at > now);
-            state.clicks.retain(|c| c.expires_at > now);
-            (state.cursors.len(), state.clicks.len())
-        };
-
-        // Log every ~60 frames (~1s @ 60Hz) when we have something to draw,
-        // so the user can see the redraw loop is alive in the log.
-        self.frame_counter = self.frame_counter.wrapping_add(1);
-        if (cursor_count > 0 || click_count > 0) && self.frame_counter % 60 == 0 {
-            log::info!(
-                "[Sion][CursorOverlay] frame #{} cursors={} clicks={}",
-                self.frame_counter,
-                cursor_count,
-                click_count,
-            );
-        }
-
-        // Clear the pixmap (fully transparent).
-        pixmap.fill(Color::TRANSPARENT);
-
-        let (ww, wh) = {
-            let size = window.inner_size();
-            (size.width as f32, size.height as f32)
-        };
-
-        draw::draw(pixmap, ww, wh, &self.state.lock().unwrap(), now);
-
-        // Blit into the softbuffer surface.
-        if let Ok(mut buffer) = surface.buffer_mut() {
-            // softbuffer expects BGRA or platform-native u32. tiny-skia
-            // produces RGBA premultiplied. We repack on copy — en parallèle
-            // (scope) : 7,4 Mpx en scalaire -O0 prenaient >100 ms/frame et
-            // l'event loop ne suivait plus (curseur saccadé pour tous).
-            repack_rgba_to_bgra_parallel(&mut buffer, pixmap.data());
-            let _ = buffer.present();
-        }
-
-        self.last_frame = now;
-    }
-}
-
-impl ApplicationHandler<UserEvent> for App {
-    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
-        // winit 0.30 requires window creation in `resumed`. We don't
-        // actually create the window until the first `Show` user event —
-        // no point running a window when there's nothing to paint.
-    }
-
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::Show => {
-                if self.window.is_some() {
-                    if let Some(w) = &self.window {
-                        w.set_visible(true);
-                        w.request_redraw();
-                    }
-                    return;
-                }
-                let Some(window) = self.build_window(event_loop) else {
-                    return;
-                };
-                // softbuffer context/surface are bound to the window.
-                let context = match Context::new(window.clone()) {
-                    Ok(c) => c,
-                    Err(err) => {
-                        log::warn!("[Sion][CursorOverlay] softbuffer context failed: {err:?}");
-                        return;
-                    }
-                };
-                let mut surface = match Surface::new(&context, window.clone()) {
-                    Ok(s) => s,
-                    Err(err) => {
-                        log::warn!("[Sion][CursorOverlay] softbuffer surface failed: {err:?}");
-                        return;
-                    }
-                };
-                let size = window.inner_size();
-                if let (Ok(w), Ok(h)) = (
-                    std::num::NonZeroU32::try_from(size.width),
-                    std::num::NonZeroU32::try_from(size.height),
-                ) {
-                    let _ = surface.resize(w, h);
-                }
-                let pixmap = Pixmap::new(size.width, size.height);
-                self.window = Some(window.clone());
-                self.surface = Some(surface);
-                self.pixmap = pixmap;
-                window.request_redraw();
-                let pos = window.outer_position().ok();
-                log::info!(
-                    "[Sion][CursorOverlay] window created size={}x{} pos={:?} pixmap={}",
-                    size.width,
-                    size.height,
-                    pos,
-                    if self.pixmap.is_some() {
-                        "ok"
-                    } else {
-                        "ALLOC FAILED"
-                    },
-                );
-            }
-            UserEvent::Hide => {
-                if let Some(w) = self.window.take() {
-                    w.set_visible(false);
-                    // Drop the window so the compositor truly releases it.
-                    drop(w);
-                }
-                self.surface = None;
-                self.pixmap = None;
-                log::info!("[Sion][CursorOverlay] window hidden");
-            }
-            UserEvent::Shutdown => {
-                self.window = None;
-                self.surface = None;
-                self.pixmap = None;
-                event_loop.exit();
-            }
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        match event {
-            WindowEvent::CloseRequested => {
-                // User closed the window (shouldn't happen since it's
-                // undecorated, but belt-and-suspenders): hide rather than
-                // exit so the loop can reopen it.
-                if let Some(w) = &self.window {
-                    w.set_visible(false);
-                }
-                event_loop.set_control_flow(ControlFlow::Wait);
-            }
-            WindowEvent::RedrawRequested => {
-                // Mesure du coût réel du rendu (diagnostic : l'overlay
-                // plein écran en software est suspecté de saturer le CPU
-                // du sharer — voir logs `redraw Nms`).
-                let t_redraw = Instant::now();
-                self.redraw();
-                self.redraw_ms_total += t_redraw.elapsed().as_millis() as u64;
-                self.redraw_count += 1;
-                if self.redraw_count % 300 == 0 {
-                    log::info!(
-                        "[Sion][CursorOverlay] redraw {}ms en moyenne ({} frames)",
-                        self.redraw_ms_total / self.redraw_count.max(1),
-                        self.redraw_count
-                    );
-                    self.redraw_ms_total = 0;
-                    self.redraw_count = 0;
-                }
-                // Redessin conditionné : à 60 Hz en continu, le remplissage
-                // plein écran + le texte à chaque frame coûtent cher sur la
-                // machine du sharer (qui capture + encode déjà) → saccades
-                // pour tout le monde. On n'anime que si nécessaire :
-                // - clics actifs : on maintient une cadence d'animation ;
-                // - sinon (curseurs figés) : on dort jusqu'à la prochaine
-                //   expiration (sweep), zéro CPU entre-temps.
-                let (animate, wake_at) = {
-                    let s = self.state.lock().unwrap();
-                    let clicks = !s.clicks.is_empty();
-                    let mut wake: Option<Instant> = None;
-                    for c in s.cursors.values() {
-                        wake = Some(wake.map_or(c.expires_at, |t| t.min(c.expires_at)));
-                    }
-                    for c in &s.clicks {
-                        wake = Some(wake.map_or(c.expires_at, |t| t.min(c.expires_at)));
-                    }
-                    (clicks, wake)
-                };
-                // Cadence ~30 Hz pour les clics : à 5120 px de large, le
-                // remplissage plein écran + le texte à chaque frame saturent
-                // inutilement le CPU du sharer, qui capture et encode déjà.
-                if animate {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(
-                        Instant::now() + Duration::from_millis(33),
-                    ));
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                } else if let Some(t) = wake_at {
-                    // Un seul redraw à l'expiration (le sweep purge alors).
-                    // `request_redraw` dès maintenant : la demande reste en
-                    // file et n'est servie qu'au réveil à `t`.
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(t));
-                } else {
-                    event_loop.set_control_flow(ControlFlow::Wait);
-                }
-            }
-            WindowEvent::Resized(size) => {
-                if let (Some(surface), Ok(w), Ok(h)) = (
-                    self.surface.as_mut(),
-                    std::num::NonZeroU32::try_from(size.width),
-                    std::num::NonZeroU32::try_from(size.height),
-                ) {
-                    let _ = surface.resize(w, h);
-                }
-                self.pixmap = Pixmap::new(size.width, size.height);
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
-            }
-            _ => {}
-        }
+    #[cfg(not(target_os = "linux"))]
+    {
+        winit_host::start(state, thread_alive).map(HostSender::Winit)
     }
 }
 
@@ -897,7 +419,7 @@ pub fn cursor_overlay_open() -> bool {
         return false;
     }
     OVERLAY_OPEN.store(true, Ordering::Release);
-    let _ = handle.proxy.send_event(UserEvent::Show);
+    let _ = handle.proxy.send(UserEvent::Show);
     true
 }
 
@@ -907,7 +429,7 @@ pub fn cursor_overlay_close() {
     let Some(handle) = HANDLE.get() else {
         return;
     };
-    let _ = handle.proxy.send_event(UserEvent::Hide);
+    let _ = handle.proxy.send(UserEvent::Hide);
     if let Ok(mut state) = handle.state.lock() {
         state.cursors.clear();
         state.clicks.clear();
@@ -940,7 +462,7 @@ pub fn cursor_overlay_push(identity: String, name: String, x: f32, y: f32, expir
                 expires_at: Instant::now() + ttl,
             });
     }
-    let _ = handle.proxy.send_event(UserEvent::Show); // kick redraw
+    let _ = handle.proxy.send(UserEvent::Show); // kick redraw
 }
 
 pub fn cursor_overlay_clear(identity: String) {
@@ -955,7 +477,7 @@ pub fn cursor_overlay_clear(identity: String) {
     }
     // Kick un redraw : sans ça, la suppression resterait peinte si la
     // boucle dort (curseurs figés, cf. `RedrawRequested` conditionné).
-    let _ = handle.proxy.send_event(UserEvent::Show);
+    let _ = handle.proxy.send(UserEvent::Show);
 }
 
 pub fn cursor_overlay_push_click(id: String, identity: String, x: f32, y: f32, expires_at_ms: u64) {
@@ -977,7 +499,7 @@ pub fn cursor_overlay_push_click(id: String, identity: String, x: f32, y: f32, e
             expires_at: now + ttl,
         });
     }
-    let _ = handle.proxy.send_event(UserEvent::Show);
+    let _ = handle.proxy.send(UserEvent::Show);
 }
 
 fn now_ms() -> u64 {
@@ -985,6 +507,30 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Diagnostic (`SION_OVERLAY_OPEN=1`) : ouvre l'overlay au démarrage et y
+/// pousse un curseur et un clic factices. Sert à vérifier la fenêtre, le blit
+/// SHM et le rendu sans attendre qu'un viewer bouge sa souris (mise en place
+/// lors de la réécriture de l'hôte X11, 13/09).
+pub fn maybe_autotest_open() {
+    if std::env::var_os("SION_OVERLAY_OPEN").is_none() {
+        return;
+    }
+    if !cursor_overlay_open() {
+        log::warn!("[Sion][CursorOverlay] autotest : ouverture refusée");
+        return;
+    }
+    let deadline = now_ms() + 120_000;
+    cursor_overlay_push("autotest".into(), "autotest".into(), 0.35, 0.35, deadline);
+    cursor_overlay_push_click(
+        "autotest-clic".into(),
+        "autotest".into(),
+        0.55,
+        0.55,
+        deadline,
+    );
+    log::info!("[Sion][CursorOverlay] autotest : overlay ouvert (curseur + clic factices)");
 }
 
 /// Recopie RGBA (tiny-skia, premultiplié) → u32 BGRA (softbuffer), en

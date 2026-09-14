@@ -893,6 +893,21 @@ fn forward_cursor_to_overlay(topic: Option<&str>, payload_b64: &str, sender: &st
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
+    // Diagnostic (13/09) : un log unique quand une position passe le filtre de
+    // cible et part vers l'overlay — sans lui, « rien à l'écran » ne distingue
+    // pas « paquets filtrés » de « paquets non peints ».
+    static FORWARD_LOGGED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if !FORWARD_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::info!(
+            "[Sion][Cursor] rx → overlay : sender={} x={:?} y={:?} t={:?} (soi={:?})",
+            sender,
+            payload.x,
+            payload.y,
+            payload.t,
+            self_identity
+        );
+    }
     if topic == Some(TOPIC_CURSOR_CLICK) && payload.click == Some(true) {
         crate::cursor_overlay::cursor_overlay_push_click(
             format!("{sender}:{now}"),

@@ -9,6 +9,11 @@ mod cursor_overlay;
 mod pip_window;
 #[cfg(target_os = "linux")]
 mod portal_shortcuts;
+// Repli « page blanche NVIDIA » (renderer DMA-BUF de WebKitGTK) : surveille le
+// web process et relance une fois avec `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+// Public : `main.rs` y lit le marqueur avant l'init GTK.
+#[cfg(target_os = "linux")]
+pub mod gpu_fallback;
 #[cfg(not(target_os = "android"))]
 mod summarize;
 #[cfg(not(target_os = "android"))]
@@ -1275,15 +1280,18 @@ fn resolve_ffmpeg(configured: Option<&str>, managed: Option<&str>) -> String {
 /// runs (`-version`). Returns None if ffmpeg can't be found/run. Used by
 /// Settings → Advanced to show whether the transcode fallback is available.
 #[cfg(not(target_os = "android"))]
+/// Détection ffmpeg. `async` : `bin_runs` lance un sous-processus — en
+/// synchrone la commande s'exécute sur le fil principal et gèle l'UI au
+/// moment précis où le panneau Réglages s'ouvre.
 #[tauri::command]
-fn detect_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Option<String> {
+async fn detect_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<Option<String>, String> {
     let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ffmpeg(None, managed.as_deref());
-    if bin_runs(&bin, "-version") {
+    Ok(if bin_runs(&bin, "-version") {
         Some(bin)
     } else {
         None
-    }
+    })
 }
 
 /// Download a static ffmpeg build into `<app-data>/bin/` so the video
@@ -1557,15 +1565,17 @@ fn resolve_ytdlp(configured: Option<&str>, managed: Option<&str>) -> String {
 /// Report the yt-dlp the app would use (verifying it runs `--version`). None if
 /// not found. Used by Settings → Advanced to show availability.
 #[cfg(not(target_os = "android"))]
+/// Détection yt-dlp — `async` pour la même raison que `detect_ffmpeg`
+/// (sous-processus lancé par `bin_runs`).
 #[tauri::command]
-fn detect_ytdlp(app: tauri::AppHandle<TauriRuntime>) -> Option<String> {
+async fn detect_ytdlp(app: tauri::AppHandle<TauriRuntime>) -> Result<Option<String>, String> {
     let managed = managed_ytdlp_path(&app).map(|p| p.to_string_lossy().into_owned());
     let bin = resolve_ytdlp(None, managed.as_deref());
-    if bin_runs(&bin, "--version") {
+    Ok(if bin_runs(&bin, "--version") {
         Some(bin)
     } else {
         None
-    }
+    })
 }
 
 /// Report the installed yt-dlp version (`--version`) and the latest released
@@ -2823,8 +2833,10 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             {
                 use tauri::Manager;
+                // Le repli NVIDIA relance l'appli : il lui faut ce handle.
+                let gpu_handle = app.handle().clone();
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.with_webview(|webview| {
+                    let _ = window.with_webview(move |webview| {
                         use webkit2gtk::{
                             CacheModel, SettingsExt, WebContextExt, WebViewExt,
                         };
@@ -2838,9 +2850,17 @@ pub fn run() {
                         log::info!(
                             "[Sion][webkit] caches bridés (document viewer, page cache off)"
                         );
+                        // Page blanche sous pilote NVIDIA : surveille le web
+                        // process (cf. `gpu_fallback`).
+                        crate::gpu_fallback::watch_web_process(&gpu_handle, &view);
                     });
                 }
             }
+
+            // Diagnostic : overlay curseurs ouvert au démarrage
+            // (`SION_OVERLAY_OPEN=1`) — fenêtre + blit sans attendre un viewer.
+            #[cfg(not(target_os = "android"))]
+            crate::cursor_overlay::maybe_autotest_open();
 
             // Sans sink, WebRTC n'émet aucun log (échecs PipeWire/portail
             // indiscernables d'une absence de frame).
