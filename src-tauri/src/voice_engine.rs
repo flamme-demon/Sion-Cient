@@ -416,12 +416,13 @@ pub fn screenshare_publish_options(
     max_framerate: u32,
     codec: &str,
 ) -> TrackPublishOptions {
-    // Choix utilisateur (Réglages → partage). `vp9` par défaut : à débit égal
-    // c'est le plus net pour du texte/UI. `h264` peut être encodé par VAAPI
-    // (CPU quasi nul) ; `vp8` reste le repli compatible avec tout.
+    // Demande le backend matériel générique pour H264/AV1. La fabrique
+    // webrtc-sys ordonne alors les backends réels selon la plateforme
+    // (NVENC sur NVIDIA, VAAPI sur Linux/Intel/AMD, VideoToolbox sur Apple)
+    // et retombe proprement sur le logiciel si le pilote échoue.
     let (video_codec, video_encoder) = match codec {
-        "h264" => (VideoCodec::H264, VideoEncoderBackend::Vaapi),
-        "av1" => (VideoCodec::AV1, VideoEncoderBackend::Vaapi),
+        "h264" => (VideoCodec::H264, VideoEncoderBackend::Hardware),
+        "av1" => (VideoCodec::AV1, VideoEncoderBackend::Hardware),
         "vp8" => (VideoCodec::VP8, VideoEncoderBackend::Auto),
         _ => (VideoCodec::VP9, VideoEncoderBackend::Auto),
     };
@@ -2474,9 +2475,18 @@ impl LiveKitEngine {
                                         sender: id.clone(),
                                         sharing: true,
                                     });
-                                    // Pompe vidéo + qualité haute, comme au live.
-                                    publication.set_video_quality(VideoQuality::High);
-                                    publication.update_video_dimensions(TrackDimension(1920, 1080));
+                                    // Demander la couche haute uniquement pour
+                                    // une publication réellement simulcastée.
+                                    // Sur une piste mono-couche (anciens clients
+                                    // notamment), forcer une dimension peut
+                                    // sélectionner une couche inexistante et
+                                    // laisser le décodeur noir sans erreur.
+                                    if publication.simulcasted() {
+                                        publication.set_video_quality(VideoQuality::High);
+                                        publication.update_video_dimensions(TrackDimension(2560, 1440));
+                                    } else {
+                                        publication.set_enabled(true);
+                                    }
                                     if let Some(RemoteTrack::Video(video_track)) = publication.track() {
                                         start_remote_video_pump(
                                             &video_rt,
@@ -2627,11 +2637,19 @@ impl LiveKitEngine {
                     } => {
                         let sender = participant.identity().to_string();
                         if is_screenshare_video(publication.kind(), publication.source()) {
-                            // Couche haute + dimensions de rendu : sans ça le
-                            // SFU ne sert que la sous-couche (ex. 1280px pour
-                            // un écran 2560px) et le texte est illisible.
-                            publication.set_video_quality(VideoQuality::High);
-                            publication.update_video_dimensions(TrackDimension(1920, 1080));
+                            // Couche haute + dimensions de rendu uniquement
+                            // pour le simulcast. Une piste mono-couche doit
+                            // rester sur sa dimension annoncée : certains SFU
+                            // renvoient sinon une couche absente (écran noir).
+                            if publication.simulcasted() {
+                                publication.set_video_quality(VideoQuality::High);
+                                // Preserve enough headroom for ultrawide and
+                                // 1440p shares; local rendering remains capped
+                                // independently by the capture pipeline.
+                                publication.update_video_dimensions(TrackDimension(2560, 1440));
+                            } else {
+                                publication.set_enabled(true);
+                            }
                             // Échelle des couches (diagnostic : que propose le
                             // SFU ?). Pas d'API pour lister les couches
                             // simulcast — dimension + simulcast + dims des
@@ -3188,12 +3206,12 @@ mod tests {
         // H.264 = encodeur matériel VAAPI préféré.
         let h264 = screenshare_publish_options(1, 1, "h264");
         assert_eq!(h264.video_codec, VideoCodec::H264);
-        assert_eq!(h264.video_encoder, VideoEncoderBackend::Vaapi);
+        assert_eq!(h264.video_encoder, VideoEncoderBackend::Hardware);
         // AV1 = matériel aussi (VAAPI) : même chemin que H.264, meilleure
         // efficacité quand tout le monde le décode en matériel.
         let av1 = screenshare_publish_options(1, 1, "av1");
         assert_eq!(av1.video_codec, VideoCodec::AV1);
-        assert_eq!(av1.video_encoder, VideoEncoderBackend::Vaapi);
+        assert_eq!(av1.video_encoder, VideoEncoderBackend::Hardware);
     }
 
     #[test]

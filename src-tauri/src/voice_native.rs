@@ -2138,11 +2138,11 @@ pub fn voice_native_video_port() -> u16 {
 /// « viable » que si tout le monde le décode, et on le préfère si tout le
 /// monde le décode en matériel.
 ///
-/// Linux : lecture de `vainfo` (un `VAEntrypointEncSlice` = encodage
-/// matériel, `VAEntrypointVLD` = décodage). La libwebrtc fournit par ailleurs
-/// vp8/vp9 (libvpx) et h264 (openh264) en logiciel — valeurs de base,
-/// écrasées par le matériel quand il existe. Ailleurs (Windows/macOS) : la
-/// sonde reste à brancher, on n'annonce que le logiciel (prudent).
+/// La sonde s'appuie sur les backends réellement compilés et sondés par
+/// webrtc-sys (NVENC/VAAPI/VideoToolbox), au lieu de déduire un encodeur
+/// utilisable de la seule présence de `vainfo`. AV1 n'est annoncé que par le
+/// chemin effectivement exposé par libwebrtc ; cela évite de choisir AV1 sur
+/// une machine dont VAAPI sait le décoder mais pas l'encoder.
 #[tauri::command]
 pub fn voice_media_caps() -> serde_json::Value {
     use std::collections::BTreeMap;
@@ -2154,41 +2154,20 @@ pub fn voice_media_caps() -> serde_json::Value {
         dec.insert(codec.into(), "sw");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(feature = "native-voice")]
     {
-        if let Ok(out) = std::process::Command::new("vainfo").output() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                let mut parts = line.split(':');
-                let profile = parts.next().unwrap_or("").trim();
-                let entry = parts
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_start_matches("VAEntrypoint");
-                let codec = if profile.starts_with("VAProfileH264") {
-                    "h264"
-                } else if profile.starts_with("VAProfileHEVC") {
-                    "hevc"
-                } else if profile.starts_with("VAProfileAV1") {
-                    "av1"
-                } else if profile.starts_with("VAProfileVP9") {
-                    "vp9"
-                } else if profile.starts_with("VAProfileVP8") {
-                    "vp8"
-                } else {
-                    continue;
-                };
-                match entry {
-                    "EncSlice" | "EncSliceLP" => {
-                        enc.insert(codec.into(), "hw");
-                    }
-                    "VLD" => {
-                        dec.insert(codec.into(), "hw");
-                    }
-                    _ => {}
-                }
-            }
+        use livekit::options::VideoEncoderBackend;
+        let backends: Vec<_> = VideoEncoderBackend::list_available().into_iter().collect();
+        if backends.iter().any(|b| matches!(
+            b,
+            VideoEncoderBackend::Hardware
+                | VideoEncoderBackend::Nvenc
+                | VideoEncoderBackend::Vaapi
+                | VideoEncoderBackend::VideoToolbox
+        )) {
+            // All hardware factories currently exposed by webrtc-sys support
+            // H.264. Keep AV1 conservative until a per-codec query is bound.
+            enc.insert("h264".into(), "hw");
         }
     }
 
@@ -2218,7 +2197,7 @@ pub async fn voice_native_set_screensharing(
         let app_task = app.clone();
         // Cloné pour le thread bloquant : `video_codec` reste lisible par le
         // bloc de repli sans feature.
-        let codec = video_codec.clone().unwrap_or_else(|| "vp9".to_string());
+        let codec = video_codec.clone().unwrap_or_else(|| "h264".to_string());
         return tauri::async_runtime::spawn_blocking(move || {
             if enabled {
                 let config = crate::voice_engine::screenshare_config(

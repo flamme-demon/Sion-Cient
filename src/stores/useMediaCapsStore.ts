@@ -85,9 +85,19 @@ export function pickBestShareCodec(
 
 /** Résout le réglage (`auto` compris) en codec publié. */
 export function resolveShareVideoCodec(pref: string): ShareCodecCandidate {
-  if (pref !== "auto") return pref as ShareCodecCandidate;
   const participants = useLiveKitStore.getState().participants.map((p) => p.identity);
   const { self, peers } = useMediaCapsStore.getState();
+  if (pref !== "auto") {
+    const requested = pref as ShareCodecCandidate;
+    // Never force AV1 unless this build has a confirmed encoder and every
+    // current peer has advertised a decoder. A manual AV1 preference must not
+    // create a negotiated-but-undecodable black share.
+    if (requested !== "av1" || (self?.enc?.av1 && participants.every((id) => peers[id]?.dec?.av1))) {
+      return requested;
+    }
+    console.warn("[Sion][caps] AV1 demandé mais non confirmé partout, repli H264");
+    return "h264";
+  }
   return pickBestShareCodec(self, peers, participants);
 }
 

@@ -847,6 +847,14 @@ export function ScreenShareView() {
   }, []);
 
   useEffect(() => {
+    if (nativePipOpen) {
+      // The native PIP is now the sole video consumer. Closing this socket
+      // avoids receiving/copying and decoding the same JPEG a second time in
+      // the WebView. It reconnects automatically when PIP closes.
+      const canvas = canvasRef.current;
+      if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
     let cancelled = false;
     let closeVideo: (() => void) | null = null;
     let unsubStopped: (() => void) | null = null;
@@ -942,7 +950,10 @@ export function ScreenShareView() {
       // carte flottante, décoder ici ne servirait à rien (la carte a son
       // propre peintre via `subscribeFrames`).
       if (activeRef.current === frame.sender && canvasRef.current) paint();
-    }).then((close) => { closeVideo = close; }).catch((err) => {
+    }).then((close) => {
+      if (cancelled) close();
+      else closeVideo = close;
+    }).catch((err) => {
       console.warn("[Sion][partage-natif] connexion vidéo impossible:", err);
     });
     return () => {
@@ -955,7 +966,7 @@ export function ScreenShareView() {
     // vue simple — on repart avec un `lastPainted` neuf, sinon la frame en
     // cache serait considérée « déjà peinte » et l'écran resterait noir en
     // revenant de la mosaïque ou de la carte flottante.
-  }, [mosaic, shareDock]);
+  }, [mosaic, shareDock, nativePipOpen]);
 
   // Changement de partage actif (mosaïque ou carte flottante comprise) :
   // appliquer la frame en cache immédiatement — sans ça, l'écran restait noir
@@ -963,7 +974,7 @@ export function ScreenShareView() {
   useEffect(() => {
     if (!canvasRef.current) return;
     paintLatestRef.current();
-  }, [activeIdentity, mosaic, shareDock]);
+  }, [activeIdentity, mosaic, shareDock, nativePipOpen]);
 
   // Plus aucun partage actif : purger les JPEG en cache (sinon ils restent
   // jusqu'à la prochaine session de partage) et effacer le canvas.
@@ -1122,6 +1133,20 @@ export function ScreenShareView() {
       clearHideTimer();
       if (insideVideo) { broadcastCursorHide(activeIdentity); insideVideo = false; }
     };
+    // Pointer events are more reliable than `mouseleave` with WebKit when
+    // overlays/buttons sit above the canvas. The window-level fallback covers
+    // leaving the app without a final canvas event.
+    const onWindowOut = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      const related = e.relatedTarget as Node | null;
+      if (!related || !target || !video.contains(related)) onLeave();
+    };
+    const onDocumentPointerMove = (e: PointerEvent) => {
+      // Leaving the canvas for the toolbar/chat keeps the pointer inside the
+      // document, so no `document.mouseleave` is emitted. Check containment
+      // on every document-level move to clear the remote cursor immediately.
+      if (insideVideo && !video.contains(e.target as Node)) onLeave();
+    };
 
     // Quitter l'app (alt-tab, minimisation, fermeture/redémarrage) : on ne
     // pointe plus rien — masquage immédiat de NOTRE curseur partout, sinon un
@@ -1181,23 +1206,33 @@ export function ScreenShareView() {
     const onVisibility = () => { if (document.hidden) onAppAway(); };
 
     video.addEventListener("mousemove", onMove as EventListener);
+    video.addEventListener("pointermove", onMove as EventListener);
     video.addEventListener("mouseleave", onLeave);
+    video.addEventListener("pointerleave", onLeave);
+    video.addEventListener("pointerout", onWindowOut as EventListener);
     video.addEventListener("click", onClick as EventListener);
     video.addEventListener("dblclick", onDblClick as EventListener);
     window.addEventListener("blur", onAppAway);
     window.addEventListener("pagehide", onAppAway);
+    window.addEventListener("mouseout", onWindowOut);
     // Sortie de la fenêtre par un autre chemin que la vidéo (ex. sortie
     // rapide sans mouseleave vidéo fiable) : le document la voit toujours.
     document.addEventListener("mouseleave", onLeave);
+    document.addEventListener("pointermove", onDocumentPointerMove);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       video.removeEventListener("mousemove", onMove as EventListener);
+      video.removeEventListener("pointermove", onMove as EventListener);
       video.removeEventListener("mouseleave", onLeave);
+      video.removeEventListener("pointerleave", onLeave);
+      video.removeEventListener("pointerout", onWindowOut as EventListener);
       video.removeEventListener("click", onClick as EventListener);
       video.removeEventListener("dblclick", onDblClick as EventListener);
       window.removeEventListener("blur", onAppAway);
       window.removeEventListener("pagehide", onAppAway);
+      window.removeEventListener("mouseout", onWindowOut);
       document.removeEventListener("mouseleave", onLeave);
+      document.removeEventListener("pointermove", onDocumentPointerMove);
       document.removeEventListener("visibilitychange", onVisibility);
       clearHideTimer();
       // Démontage / changement de partage actif : notre curseur ne doit
@@ -1649,7 +1684,7 @@ export function ScreenShareView() {
           ref={canvasRef}
           aria-label={activeShare.participantName}
           className="w-full object-contain"
-          style={{ background: 'black', maxHeight: `${shareViewMaxVh}vh` }}
+          style={{ background: 'black', maxHeight: `${shareViewMaxVh}vh`, display: nativePipOpen ? 'none' : 'block' }}
         />
         {/* Carousel chevrons — overlaid on the video edges, in addition to the
             top tab bar, for quick prev/next cycling. Only when >1 share. */}

@@ -16,6 +16,51 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::{env, path, process::Command};
 
+fn resolve_cuda_home(default: &str) -> PathBuf {
+    if let Ok(value) = env::var("CUDA_HOME") {
+        let path = PathBuf::from(value);
+        if path.join("include").join("cuda.h").exists() {
+            return path;
+        }
+        println!("cargo:warning=CUDA_HOME is set but cuda.h was not found under {}", path.display());
+    }
+
+    let root = PathBuf::from(default);
+    if root.join("include").join("cuda.h").exists() {
+        return root;
+    }
+
+    // CUDA installers commonly use a versioned directory (v12.x/v13.x on
+    // Windows, cuda-12.x on Linux). Pick the newest lexical entry containing
+    // the headers so local builds behave like the release workflow.
+    let mut roots = vec![root.clone()];
+    if let Some(parent) = root.parent() {
+        roots.extend(std::fs::read_dir(parent)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten())
+            .map(|entry| entry.path()));
+    }
+    let mut candidates: Vec<PathBuf> = roots
+        .into_iter()
+        .flat_map(|candidate| {
+            let nested = std::fs::read_dir(&candidate)
+                .ok()
+                .into_iter()
+                .flat_map(|entries| entries.flatten())
+                .map(|entry| entry.path());
+            std::iter::once(candidate).chain(nested).collect::<Vec<_>>()
+        })
+        .filter(|path| path.is_dir() && path.join("include").join("cuda.h").exists())
+        .collect();
+    candidates.sort();
+    if let Some(path) = candidates.pop() {
+        println!("cargo:warning=CUDA toolkit detected at {}", path.display());
+        return path;
+    }
+    root
+}
+
 fn main() {
     if env::var("DOCS_RS").is_ok() {
         return;
@@ -190,10 +235,7 @@ fn main() {
             // dans le code, celui du pilote (nvcuda.dll) passe par cuda.lib,
             // la bibliothèque d'import livrée avec le toolkit.
             if target_arch == "x86_64" {
-                let cuda_home = PathBuf::from(match env::var("CUDA_HOME") {
-                    Ok(p) => p,
-                    Err(_) => "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA".to_owned(),
-                });
+                let cuda_home = resolve_cuda_home("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA");
                 let cuda_include_dir = cuda_home.join("include");
                 if cuda_include_dir.join("cuda.h").exists() {
                     // Conflits winsock (C2011 sockaddr/fd_set/timeval… vus en
@@ -367,10 +409,7 @@ fn main() {
             }
 
             if x86 || arm {
-                let cuda_home = PathBuf::from(match env::var("CUDA_HOME") {
-                    Ok(p) => p,
-                    Err(_) => "/usr/local/cuda".to_owned(),
-                });
+                let cuda_home = resolve_cuda_home("/usr/local/cuda");
                 let cuda_include_dir = cuda_home.join("include");
 
                 // libcuda and libnvcuvid are dlopened, so do not link them.

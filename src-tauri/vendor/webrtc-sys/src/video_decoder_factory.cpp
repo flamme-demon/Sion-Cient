@@ -112,9 +112,14 @@ std::vector<webrtc::SdpVideoFormat> VideoDecoderFactory::GetSupportedFormats()
     }
   }
 
+#if defined(RTC_DAV1D_IN_INTERNAL_DECODER_FACTORY)
+  // Only advertise AV1 when the matching decoder is actually linked. The
+  // previous unconditional advertisement let the SFU negotiate AV1 on
+  // builds where Create() returned nullptr, producing a silent black share.
   formats.push_back(webrtc::SdpVideoFormat(
       webrtc::SdpVideoFormat::AV1Profile0(),
       webrtc::LibaomAv1EncoderSupportedScalabilityModes()));
+#endif
   return formats;
 }
 

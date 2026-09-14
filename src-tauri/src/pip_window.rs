@@ -38,7 +38,7 @@ const LARGE_H: u32 = 432;
 const MARGIN: i32 = 24;
 /// Décodage borné à ~20 fps : la source émet ~30, décoder chaque frame
 /// coûterait un cœur pour un gain invisible sur une vignette.
-const MIN_DECODE_INTERVAL: Duration = Duration::from_millis(50);
+const MIN_DECODE_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Clone)]
 struct PipFrame {
@@ -64,10 +64,15 @@ struct PipState {
     last_pos: Option<(i32, i32)>,
     /// Grande taille (double-clic) — mémorisée aussi.
     large: bool,
+    /// Taille libre choisie par l'utilisateur (en pixels physiques).
+    size: Option<(u32, u32)>,
+    /// Taille à restaurer après le double-clic d'agrandissement.
+    normal_size: Option<(u32, u32)>,
     /// Son du partage coupé ? Renseigné par `pip_native_open` (hors du fil de
     /// l'event loop : interroger le moteur depuis ce fil retardait l'affichage
     /// — le moteur peut être tenu par le décodage vidéo).
     share_audio_muted: bool,
+    cursor_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -97,15 +102,11 @@ pub fn set_app_handle(app: tauri::AppHandle<crate::TauriRuntime>) {
     let _ = APP.set(app);
 }
 
-/// Préchauffe la boucle du PIP en arrière-plan : démarrée au lancement de
-/// l'app, elle ne se paie plus au premier clic sur « PIP natif » (constaté :
-/// « c'est long »).
+/// Préchauffe la boucle du PIP au démarrage. L'appel est volontairement
+/// synchrone : la création d'EventLoop (jusqu'à 5 s sur certains backends)
+/// doit être payée au lancement, jamais au premier clic utilisateur.
 pub fn prewarm() {
-    let _ = thread::Builder::new()
-        .name("sion-native-pip-prewarm".into())
-        .spawn(|| {
-            let _ = get_or_start_handle();
-        });
+    let _ = get_or_start_handle();
 }
 
 /// Boutons dessinés dans le coin haut-droit (24 px, 4 px d'écart, marge 8).
@@ -121,9 +122,16 @@ const BTN_MARGIN: u32 = 8;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct PipSaved {
+    #[serde(default)]
     x: Option<i32>,
+    #[serde(default)]
     y: Option<i32>,
+    #[serde(default)]
     large: bool,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -147,7 +155,7 @@ fn load_saved() -> PipSaved {
     PipSaved::default()
 }
 
-fn save_saved(pos: Option<(i32, i32)>, large: bool) {
+fn save_saved(pos: Option<(i32, i32)>, large: bool, size: Option<(u32, u32)>) {
     #[cfg(not(target_os = "android"))]
     {
         let Some(path) = saved_path() else {
@@ -159,6 +167,8 @@ fn save_saved(pos: Option<(i32, i32)>, large: bool) {
             current.y = Some(y);
         }
         current.large = large;
+        current.width = size.map(|s| s.0);
+        current.height = size.map(|s| s.1);
         if let Ok(text) = serde_json::to_string(&current) {
             let _ = std::fs::write(path, text);
         }
@@ -205,22 +215,28 @@ fn snap_pos_to_corner(
     (near_x, near_y)
 }
 
-/// Coins haut-gauche des deux boutons (retour, son) pour une surface donnée.
-fn button_rects(w: u32, _h: u32) -> ((u32, u32), (u32, u32)) {
+/// Coins haut-gauche des trois boutons (retour, son, pointeur).
+fn button_rects(w: u32, _h: u32) -> ((u32, u32), (u32, u32), (u32, u32)) {
     let mute_x = w.saturating_sub(BTN_MARGIN + BTN);
-    let back_x = mute_x.saturating_sub(BTN_GAP + BTN);
-    ((back_x, BTN_MARGIN), (mute_x, BTN_MARGIN))
+    let cursor_x = mute_x.saturating_sub(BTN_GAP + BTN);
+    let back_x = cursor_x.saturating_sub(BTN_GAP + BTN);
+    (
+        (back_x, BTN_MARGIN),
+        (mute_x, BTN_MARGIN),
+        (cursor_x, BTN_MARGIN),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PipButton {
     BackToApp,
     ToggleShareAudio,
+    ToggleCursor,
 }
 
 /// Bouton sous le curseur (position en pixels physiques, comme la fenêtre).
 fn hit_button(pos: (f64, f64), w: u32, h: u32) -> Option<PipButton> {
-    let (back, mute) = button_rects(w, h);
+    let (back, mute, cursor) = button_rects(w, h);
     let inside = |(x, y): (u32, u32)| {
         pos.0 >= x as f64
             && pos.0 < (x + BTN) as f64
@@ -231,6 +247,8 @@ fn hit_button(pos: (f64, f64), w: u32, h: u32) -> Option<PipButton> {
         Some(PipButton::BackToApp)
     } else if inside(mute) {
         Some(PipButton::ToggleShareAudio)
+    } else if inside(cursor) {
+        Some(PipButton::ToggleCursor)
     } else {
         None
     }
@@ -257,7 +275,11 @@ fn get_or_start_handle() -> Option<&'static PipHandle> {
     let saved = load_saved();
     let state = Arc::new(Mutex::new(PipState {
         last_pos: saved.x.zip(saved.y),
-        large: saved.large,
+        // `large` is a runtime preset flag only. A persisted custom size must
+        // never be interpreted as the preset after a restart.
+        large: false,
+        size: saved.width.zip(saved.height),
+        normal_size: None,
         ..PipState::default()
     }));
     let thread_alive = Arc::new(AtomicBool::new(true));
@@ -272,10 +294,10 @@ fn get_or_start_handle() -> Option<&'static PipHandle> {
             // du thread principal (l'app Tauri l'occupe déjà).
             #[cfg(target_os = "linux")]
             use winit::platform::wayland::EventLoopBuilderExtWayland;
-            #[cfg(target_os = "linux")]
-            use winit::platform::x11::EventLoopBuilderExtX11;
             #[cfg(target_os = "windows")]
             use winit::platform::windows::EventLoopBuilderExtWindows;
+            #[cfg(target_os = "linux")]
+            use winit::platform::x11::EventLoopBuilderExtX11;
 
             let mut builder = EventLoop::<UserEvent>::with_user_event();
             #[cfg(target_os = "linux")]
@@ -326,7 +348,11 @@ fn get_or_start_handle() -> Option<&'static PipHandle> {
         }
     };
 
-    let _ = HANDLE.set(PipHandle { state, proxy, thread_alive });
+    let _ = HANDLE.set(PipHandle {
+        state,
+        proxy,
+        thread_alive,
+    });
     HANDLE.get()
 }
 
@@ -428,10 +454,7 @@ fn x11_activate_main_window(title_hint: &str) -> bool {
             );
         }
     }
-    let _ = conn.configure_window(
-        win,
-        &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
-    );
+    let _ = conn.configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
     let _ = conn.flush();
     true
 }
@@ -501,26 +524,37 @@ pub fn pip_native_open(
     if sender.is_empty() {
         return Err("identité du partage manquante".into());
     }
-    // État du son lu ICI, pas dans la boucle d'événements : l'interrogation du
-    // moteur peut attendre son verrou (décodage vidéo) et retardait
-    // l'affichage de la fenêtre (constaté : « c'est long »).
-    #[cfg(feature = "native-voice")]
-    let muted = crate::voice_native::voice_native_get_screenshare_audio_state(
-        app.clone(),
-        sender.clone(),
-    )
-    .map(|st| st.muted)
-    .unwrap_or(false);
-    #[cfg(not(feature = "native-voice"))]
-    let muted = {
-        let _ = &app;
-        false
-    };
     if let Some(handle) = get_or_start_handle() {
         let mut state = handle.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.share_audio_muted = muted;
+        // Do not query the voice engine before showing the window: its mutex
+        // can be held by a video decode/publish operation for seconds. The
+        // exact mute state is resynchronised below, asynchronously.
+        state.share_audio_muted = false;
     }
     if open(&sender) {
+        #[cfg(feature = "native-voice")]
+        {
+            let app = app.clone();
+            let sender_state = sender.clone();
+            let _ = thread::Builder::new()
+                .name("sion-pip-audio-state".into())
+                .spawn(move || {
+                    let muted = crate::voice_native::voice_native_get_screenshare_audio_state(
+                        app,
+                        sender_state.clone(),
+                    )
+                    .map(|st| st.muted)
+                    .unwrap_or(false);
+                    if let Some(handle) = HANDLE.get() {
+                        if let Ok(mut state) = handle.state.lock() {
+                            if state.sender.as_deref() == Some(sender_state.as_str()) {
+                                state.share_audio_muted = muted;
+                            }
+                        }
+                        let _ = handle.proxy.send_event(UserEvent::Show);
+                    }
+                });
+        }
         Ok(())
     } else {
         Err("impossible d'ouvrir la fenêtre PIP native".into())
@@ -561,8 +595,13 @@ fn blit_fit(dst: &mut [u32], ww: u32, wh: u32, img: &image::RgbImage) {
         for dx in 0..dw {
             let sx = ((dx as u64 * iw as u64) / dw as u64) as u32;
             let p = img.get_pixel(sx, sy);
-            dst[row + (x0 + dx) as usize] =
-                ((p[0] as u32) << 16) | ((p[1] as u32) << 8) | p[2] as u32;
+            let index = row + (x0 + dx) as usize;
+            // A resize event can arrive between `inner_size()` and
+            // `surface.buffer_mut()`, leaving one frame with the old buffer
+            // length. Skip that pixel rather than killing the PIP thread.
+            if index < dst.len() {
+                dst[index] = ((p[0] as u32) << 16) | ((p[1] as u32) << 8) | p[2] as u32;
+            }
         }
     }
 }
@@ -584,6 +623,9 @@ struct PipApp {
     muted: bool,
     /// Horodatage du dernier clic (détection du double-clic → agrandir).
     last_click: Instant,
+    last_cursor_tx: Instant,
+    last_cursor_activity: Instant,
+    cursor_hidden: bool,
 }
 
 impl PipApp {
@@ -598,6 +640,9 @@ impl PipApp {
             cursor: (0.0, 0.0),
             muted: false,
             last_click: Instant::now() - Duration::from_secs(1),
+            last_cursor_tx: Instant::now() - Duration::from_secs(1),
+            last_cursor_activity: Instant::now(),
+            cursor_hidden: true,
         }
     }
 
@@ -605,39 +650,169 @@ impl PipApp {
     /// mémorisée avec la position (fichier d'état) ; si la vignette était
     /// collée au coin bas-droit, elle y reste après le changement de taille.
     fn toggle_large(&mut self) {
-        let large = {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            state.large = !state.large;
-            state.large
-        };
         let Some(window) = self.window.as_ref() else {
             return;
         };
+        let current = window.inner_size();
+        let (large, restore_size) = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let currently_large = state.large;
+            let next = !currently_large;
+            let restore = state.normal_size;
+            state.large = next;
+            (next, restore)
+        };
         let (w, h) = if large {
+            if let Ok(mut state) = self.state.lock() {
+                state.normal_size = Some((current.width, current.height));
+            }
             (LARGE_W, LARGE_H)
         } else {
-            (DEFAULT_W, DEFAULT_H)
+            restore_size.unwrap_or((DEFAULT_W, DEFAULT_H))
         };
+        if let Ok(mut state) = self.state.lock() {
+            state.size = Some((w, h));
+            state.painted = 0;
+        }
         let _ = window.request_inner_size(PhysicalSize::new(w, h));
-        if let Ok(pos) = window.outer_position() {
-            if let Some(mon) = window.current_monitor() {
-                let ms = mon.size();
-                let mp = mon.position();
-                let old_right = mp.x + ms.width as i32 - DEFAULT_W as i32;
-                let old_bottom = mp.y + ms.height as i32 - DEFAULT_H as i32;
-                let new_right = mp.x + ms.width as i32 - w as i32;
-                let new_bottom = mp.y + ms.height as i32 - h as i32;
-                const NEAR: i32 = 48;
-                let sx = if (pos.x - old_right).abs() <= NEAR { new_right } else { pos.x };
-                let sy = if (pos.y - old_bottom).abs() <= NEAR { new_bottom } else { pos.y };
-                if sx != pos.x || sy != pos.y {
-                    let _ = window.set_outer_position(PhysicalPosition::new(sx, sy));
+        // Keep the current top-left position. Resizing a frameless window
+        // must not unexpectedly snap it to a monitor corner.
+        let pos = window.outer_position().ok().map(|p| (p.x, p.y));
+        let size = window.inner_size();
+        save_saved(pos, large, Some((size.width, size.height)));
+    }
+
+    fn resize_direction(&self) -> Option<winit::window::ResizeDirection> {
+        let size = self.window.as_ref()?.inner_size();
+        const EDGE: f64 = 10.0;
+        let left = self.cursor.0 <= EDGE;
+        let right = self.cursor.0 >= size.width.saturating_sub(EDGE as u32) as f64;
+        let top = self.cursor.1 <= EDGE;
+        let bottom = self.cursor.1 >= size.height.saturating_sub(EDGE as u32) as f64;
+        use winit::window::ResizeDirection as D;
+        match (left, right, top, bottom) {
+            (true, false, true, false) => Some(D::NorthWest),
+            (false, true, true, false) => Some(D::NorthEast),
+            (true, false, false, true) => Some(D::SouthWest),
+            (false, true, false, true) => Some(D::SouthEast),
+            (true, false, false, false) => Some(D::West),
+            (false, true, false, false) => Some(D::East),
+            (false, false, true, false) => Some(D::North),
+            (false, false, false, true) => Some(D::South),
+            _ => None,
+        }
+    }
+
+    fn cursor_enabled(&self) -> bool {
+        self.state.lock().map(|s| s.cursor_enabled).unwrap_or(false)
+    }
+
+    fn publish_cursor(&mut self) {
+        if !self.cursor_enabled() || self.last_cursor_tx.elapsed() < Duration::from_millis(33) {
+            return;
+        }
+        let Some(app) = APP.get().cloned() else {
+            return;
+        };
+        let (sender, width, height) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(sender) = state.sender.clone() else {
+                return;
+            };
+            let (w, h) = state
+                .frame
+                .as_ref()
+                .map(|f| (f.width, f.height))
+                .unwrap_or((1, 1));
+            (sender, w, h)
+        };
+        let Some(status) = Some(crate::voice_native::voice_native_status()) else {
+            return;
+        };
+        let Some(identity) = status.identity else {
+            return;
+        };
+        self.last_cursor_tx = Instant::now();
+        self.last_cursor_activity = Instant::now();
+        self.cursor_hidden = false;
+        let x = (self.cursor.0 as f32
+            / self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().width)
+                .unwrap_or(1) as f32)
+            .clamp(0.0, 1.0);
+        let y = (self.cursor.1 as f32
+            / self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().height)
+                .unwrap_or(1) as f32)
+            .clamp(0.0, 1.0);
+        let _ = (width, height);
+        let _ = thread::Builder::new()
+            .name("sion-pip-cursor".into())
+            .spawn(move || {
+                use base64::Engine as _;
+                static INFLIGHT: AtomicBool = AtomicBool::new(false);
+                if INFLIGHT.swap(true, Ordering::AcqRel) {
+                    return;
                 }
+                let payload = serde_json::json!({ "x": x, "y": y, "t": sender, "n": identity });
+                if let Ok(raw) = serde_json::to_vec(&payload) {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+                    let _ = crate::voice_native::voice_native_publish_data(
+                        app,
+                        crate::voice_native::TOPIC_CURSOR.into(),
+                        b64,
+                        Some(false),
+                    );
+                }
+                INFLIGHT.store(false, Ordering::Release);
+            });
+    }
+
+    fn publish_cursor_hide(&mut self) {
+        if self.cursor_hidden {
+            return;
+        }
+        self.cursor_hidden = true;
+        let Some(app) = APP.get().cloned() else {
+            return;
+        };
+        let Some(target) = self.state.lock().ok().and_then(|s| s.sender.clone()) else {
+            return;
+        };
+        let _ = thread::Builder::new()
+            .name("sion-pip-cursor-hide".into())
+            .spawn(move || {
+                use base64::Engine as _;
+                let payload = serde_json::json!({ "expire": true, "t": target });
+                if let Ok(raw) = serde_json::to_vec(&payload) {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+                    let _ = crate::voice_native::voice_native_publish_data(
+                        app,
+                        crate::voice_native::TOPIC_CURSOR.into(),
+                        b64,
+                        Some(true),
+                    );
+                }
+            });
+    }
+
+    fn toggle_cursor(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.cursor_enabled = !state.cursor_enabled;
+            if state.cursor_enabled {
+                self.last_cursor_activity = Instant::now();
             }
         }
-        let pos = window.outer_position().ok().map(|p| (p.x, p.y));
-        save_saved(pos, large);
-        window.request_redraw();
+        if !self.cursor_enabled() {
+            self.publish_cursor_hide();
+        }
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
     }
 
     /// Revient sur la fenêtre principale (dé-minimise, montre, focus) et la
@@ -659,7 +834,9 @@ impl PipApp {
                 #[cfg(target_os = "linux")]
                 {
                     let x11_ok = x11_activate_main_window("Sion Client");
-                    log::info!("[Sion][PIP] retour sur la fenêtre principale (relève X11={x11_ok})");
+                    log::info!(
+                        "[Sion][PIP] retour sur la fenêtre principale (relève X11={x11_ok})"
+                    );
                 }
                 #[cfg(not(target_os = "linux"))]
                 log::info!("[Sion][PIP] retour sur la fenêtre principale");
@@ -705,7 +882,9 @@ impl PipApp {
     fn build_window(&self, event_loop: &ActiveEventLoop) -> Option<Arc<Window>> {
         let (mut w, mut h, pos_default) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.large {
+            if let Some((saved_w, saved_h)) = state.size {
+                (saved_w, saved_h, state.last_pos)
+            } else if state.large {
                 (LARGE_W, LARGE_H, state.last_pos)
             } else {
                 (DEFAULT_W, DEFAULT_H, state.last_pos)
@@ -738,7 +917,7 @@ impl PipApp {
         let attrs = WindowAttributes::default()
             .with_title("Sion — PIP partage")
             .with_decorations(false)
-            .with_resizable(false)
+            .with_resizable(true)
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_inner_size(PhysicalSize::new(w, h))
             .with_position(PhysicalPosition::new(pos.0, pos.1));
@@ -750,12 +929,17 @@ impl PipApp {
                 return None;
             }
         };
+        // Keep manual resizing useful without allowing a 4K software blit to
+        // monopolise the PIP thread and make the video appear to stutter.
+        window.set_min_inner_size(Some(PhysicalSize::new(240, 135)));
+        window.set_max_inner_size(Some(PhysicalSize::new(1920, 1080)));
         Some(window)
     }
 
     /// Décode la dernière image non peinte et blitte. Silencieux si rien de
     /// neuf (le throttle comme la source en pause arrivent ici).
     fn paint(&mut self) {
+        let cursor_enabled = self.cursor_enabled();
         let (Some(window), Some(surface)) = (self.window.as_ref(), self.surface.as_mut()) else {
             return;
         };
@@ -770,10 +954,17 @@ impl PipApp {
             }
         };
 
-        let img = match image::load_from_memory(&frame.jpeg) {
-            Ok(img) => img.to_rgb8(),
-            Err(err) => {
-                log::warn!("[Sion][PIP] décodage JPEG {}x{} échoué: {err}", frame.width, frame.height);
+        let img = match jpeg_rusturbo::decode::decode(&frame.jpeg, jpeg_rusturbo::PixelFormat::Rgb)
+            .ok()
+            .and_then(|pixels| image::RgbImage::from_raw(frame.width, frame.height, pixels))
+        {
+            Some(img) => img,
+            None => {
+                log::warn!(
+                    "[Sion][PIP] décodage JPEG {}x{} échoué",
+                    frame.width,
+                    frame.height
+                );
                 return;
             }
         };
@@ -785,7 +976,13 @@ impl PipApp {
         blit_fit(&mut buffer, size.width, size.height, &img);
         // Boutons par-dessus l'image : maison = revenir sur Sion,
         // haut-parleur = son du partage.
-        draw_controls(&mut buffer, size.width, size.height, self.muted);
+        draw_controls(
+            &mut buffer,
+            size.width,
+            size.height,
+            self.muted,
+            cursor_enabled,
+        );
         let _ = buffer.present();
 
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -815,7 +1012,8 @@ impl PipApp {
                 };
                 // Persistée sur disque : la vignette retrouve sa place et sa
                 // taille au prochain lancement de l'app.
-                save_saved(Some(pos), large);
+                let size = window.inner_size();
+                save_saved(Some(pos), large, Some((size.width, size.height)));
             }
             window.set_visible(false);
         }
@@ -891,6 +1089,19 @@ impl ApplicationHandler<UserEvent> for PipApp {
         match event {
             WindowEvent::RedrawRequested => self.paint(),
             WindowEvent::Resized(size) => {
+                // A new surface buffer starts blank even if the last frame's
+                // generation is unchanged. Force one repaint after every
+                // resize (double-click preset or edge drag).
+                if let Ok(mut state) = self.state.lock() {
+                    state.painted = 0;
+                    state.size = Some((size.width, size.height));
+                    if state.large && (size.width, size.height) != (LARGE_W, LARGE_H) {
+                        // A user drag leaves preset mode and becomes the new
+                        // normal size for the next double-click restore.
+                        state.large = false;
+                        state.normal_size = Some((size.width, size.height));
+                    }
+                }
                 if let Some(surface) = self.surface.as_mut() {
                     if let (Ok(w), Ok(h)) = (
                         std::num::NonZeroU32::try_from(size.width),
@@ -909,8 +1120,25 @@ impl ApplicationHandler<UserEvent> for PipApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                let icon = self
+                    .resize_direction()
+                    .map(winit::window::CursorIcon::from)
+                    .unwrap_or(winit::window::CursorIcon::Default);
+                if let Some(window) = self.window.as_ref() {
+                    window.set_cursor(icon);
+                }
+                self.publish_cursor();
+                if self.cursor_enabled()
+                    && self.last_cursor_activity.elapsed() >= Duration::from_secs(5)
+                {
+                    self.publish_cursor_hide();
+                }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
                 // Boutons dessinés (haut-droite) : le clic agit — maison =
                 // revenir sur Sion, haut-parleur = son du partage. Ailleurs,
                 // fenêtre sans décoration → on déplace en glissant.
@@ -927,13 +1155,25 @@ impl ApplicationHandler<UserEvent> for PipApp {
                             self.toggle_share_audio();
                             return;
                         }
+                        Some(PipButton::ToggleCursor) => {
+                            self.toggle_cursor();
+                            return;
+                        }
                         None => {
+                            if let Some(direction) = self.resize_direction() {
+                                if let Some(window) = self.window.as_ref() {
+                                    if let Err(err) = window.drag_resize_window(direction) {
+                                        log::debug!(
+                                            "[Sion][PIP] drag_resize_window indisponible: {err:?}"
+                                        );
+                                    }
+                                }
+                                return;
+                            }
                             // Double-clic sur l'image : agrandir / réduire
                             // (comme les lecteurs PIP du système).
                             let now = Instant::now();
-                            if now.duration_since(self.last_click)
-                                < Duration::from_millis(400)
-                            {
+                            if now.duration_since(self.last_click) < Duration::from_millis(400) {
                                 self.last_click = now - Duration::from_secs(1);
                                 self.toggle_large();
                                 return;
@@ -948,9 +1188,14 @@ impl ApplicationHandler<UserEvent> for PipApp {
                     }
                 }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Right, .. } => {
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
                 close();
             }
+            WindowEvent::CursorLeft { .. } => self.publish_cursor_hide(),
             WindowEvent::KeyboardInput { event: key, .. } => {
                 use winit::keyboard::{Key, NamedKey};
                 let is_escape = key.state == ElementState::Pressed
@@ -967,7 +1212,16 @@ impl ApplicationHandler<UserEvent> for PipApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // CursorMoved is not emitted while the pointer is still. Wake
+        // periodically so the five-second inactivity timeout can fire even
+        // when the PIP remains focused and unchanged.
+        if self.cursor_enabled() && self.last_cursor_activity.elapsed() >= Duration::from_secs(5) {
+            self.publish_cursor_hide();
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(250),
+        ));
         if let Some(at) = self.pending_redraw_at.take() {
             let now = Instant::now();
             if now >= at {
@@ -1074,12 +1328,25 @@ fn speaker_glyph(buf: &mut [u32], w: u32, h: u32, bx: u32, by: u32, muted: bool)
 }
 
 /// Peint les deux boutons par-dessus l'image déjà blittée.
-fn draw_controls(buf: &mut [u32], w: u32, h: u32, muted: bool) {
-    let (back, mute) = button_rects(w, h);
+fn draw_controls(buf: &mut [u32], w: u32, h: u32, muted: bool, cursor_enabled: bool) {
+    let (back, mute, cursor) = button_rects(w, h);
     draw_button(buf, w, h, back, house_glyph);
     draw_button(buf, w, h, mute, |b, ww, hh, x, y| {
         speaker_glyph(b, ww, hh, x, y, muted)
     });
+    draw_button(buf, w, h, cursor, |b, ww, hh, x, y| {
+        cursor_glyph(b, ww, hh, x, y, cursor_enabled)
+    });
+}
+
+fn cursor_glyph(buf: &mut [u32], w: u32, h: u32, bx: u32, by: u32, enabled: bool) {
+    let white = if enabled { 0x00FFFFFF } else { 0x00808080 };
+    for i in 0..12u32 {
+        put(buf, w, h, bx + 6 + i.min(7), by + 5 + i, white);
+        if i < 8 {
+            put(buf, w, h, bx + 6 + i, by + 5 + i, white);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1090,13 +1357,24 @@ mod tests {
     /// mêmes zones (source de vérité unique).
     #[test]
     fn boutons_du_pip_dans_le_coin() {
-        let (back, mute) = button_rects(480, 270);
+        let (back, mute, cursor) = button_rects(480, 270);
         assert_eq!(mute, (480 - BTN_MARGIN - BTN, BTN_MARGIN));
-        assert_eq!(back, (mute.0 - BTN_GAP - BTN, BTN_MARGIN));
+        assert_eq!(back, (cursor.0 - BTN_GAP - BTN, BTN_MARGIN));
         // Centres des boutons → la bonne action ; le milieu de l'image → rien.
-        let center = |(x, y): (u32, u32)| (x as f64 + BTN as f64 / 2.0, y as f64 + BTN as f64 / 2.0);
-        assert_eq!(hit_button(center(back), 480, 270), Some(PipButton::BackToApp));
-        assert_eq!(hit_button(center(mute), 480, 270), Some(PipButton::ToggleShareAudio));
+        let center =
+            |(x, y): (u32, u32)| (x as f64 + BTN as f64 / 2.0, y as f64 + BTN as f64 / 2.0);
+        assert_eq!(
+            hit_button(center(back), 480, 270),
+            Some(PipButton::BackToApp)
+        );
+        assert_eq!(
+            hit_button(center(mute), 480, 270),
+            Some(PipButton::ToggleShareAudio)
+        );
+        assert_eq!(
+            hit_button(center(cursor), 480, 270),
+            Some(PipButton::ToggleCursor)
+        );
         assert_eq!(hit_button((240.0, 135.0), 480, 270), None);
         // Hors zone (coin opposé) → aucun bouton.
         assert_eq!(hit_button((5.0, 5.0), 480, 270), None);
@@ -1112,7 +1390,10 @@ mod tests {
             eprintln!("ignoré (fenêtré) : SION_PIP_WINDOW_TEST=1 pour l'exécuter");
             return;
         }
-        assert!(open("@test:sion"), "open() a échoué — event loop winit en thread ?");
+        assert!(
+            open("@test:sion"),
+            "open() a échoué — event loop winit en thread ?"
+        );
         assert!(is_open(), "la fenêtre devrait être marquée ouverte");
         std::thread::sleep(std::time::Duration::from_millis(1500));
         close();

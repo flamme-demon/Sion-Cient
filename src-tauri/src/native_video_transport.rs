@@ -54,6 +54,7 @@ pub fn port() -> u16 {
                     let Ok(mut socket) = tungstenite::accept(stream) else {
                         continue;
                     };
+                    log::info!("[Sion][partage-natif] client vidéo WebSocket connecté");
                     let queue = Arc::new(ClientQueue {
                         // Amorcer avec les partages déjà reçus : un écran
                         // immobile reste visible même si la vue se connecte
@@ -71,6 +72,7 @@ pub fn port() -> u16 {
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .push(queue.clone());
+                    let mut sent_first = false;
                     std::thread::spawn(move || loop {
                         let packets = {
                             let mut frames = queue.frames.lock().unwrap_or_else(|e| e.into_inner());
@@ -80,7 +82,12 @@ pub fn port() -> u16 {
                             frames.drain().map(|(_, packet)| packet).collect::<Vec<_>>()
                         };
                         for packet in packets {
+                            if !sent_first {
+                                sent_first = true;
+                                log::info!("[Sion][partage-natif] envoi première frame au client ({} octets)", packet.len());
+                            }
                             if socket.send(Message::Binary(packet.into())).is_err() {
+                                log::info!("[Sion][partage-natif] client vidéo WebSocket déconnecté");
                                 queue.connected.store(false, Ordering::Release);
                                 return;
                             }
