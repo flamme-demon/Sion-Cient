@@ -616,6 +616,12 @@ struct LocalShareState {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     video_sid: TrackSid,
     audio_sid: Option<TrackSid>,
+    /// Fil de la pompe audio du partage. **Joint avant toute dépublication** :
+    /// sans ça sa dernière poussée pouvait tomber sur une piste déjà détruite
+    /// (`SIGSEGV` dans `AudioTransportImpl::SendProcessedData`) ou croiser le
+    /// micro (`SIGABRT` `RaceDetected` dans `AudioSendStream::SendAudioData`).
+    /// Constaté en test le 13/09.
+    audio_pump: Option<std::thread::JoinHandle<()>>,
 }
 
 /// Pompe audio du partage : PCM système (f32 48 kHz mono 20 ms, capturé
@@ -1856,9 +1862,14 @@ impl LiveKitEngine {
         // Son du système : seulement si demandé (case audio). Sans lui les
         // viewers voient "sans son" (détecté via l'absence de piste
         // ScreenshareAudio, comme en JS).
+        let mut audio_pump: Option<std::thread::JoinHandle<()>> = None;
         let audio_sid = if with_audio {
             match Self::start_share_audio(self.rt.handle(), room, &stop) {
-                Ok(sid) => sid,
+                Ok(Some((sid, pump))) => {
+                    audio_pump = Some(pump);
+                    Some(sid)
+                }
+                Ok(None) => None,
                 Err(e) => {
                     log::warn!("[Sion][voix-native] son du partage indisponible: {}", e);
                     None
@@ -1873,6 +1884,7 @@ impl LiveKitEngine {
             stop: std::sync::Arc::clone(&stop),
             video_sid: sid,
             audio_sid,
+            audio_pump,
         });
         // À partir d'ici, une panne ultérieure déclenche l'événement front qui
         // remet le bouton à zéro et demande la dépublication des pistes.
@@ -1895,10 +1907,23 @@ impl LiveKitEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        let Some(state) = state else {
+        let Some(mut state) = state else {
             return Ok(());
         };
         state.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        // 1) Fermer la capture système : le canal se termine, la pompe le voit
+        //    (elle sort en ≤ 50 ms — voir sa boucle).
+        crate::system_audio::system_audio_stop();
+        // 2) Attendre la pompe AVANT la moindre dépublication : sinon sa
+        //    dernière poussée tombait sur une piste détruite (SIGSEGV dans
+        //    `AudioTransportImpl::SendProcessedData`) ou croisait le micro
+        //    (SIGABRT `RaceDetected` dans `AudioSendStream::SendAudioData`).
+        //    Constaté en test le 13/09.
+        if let Some(pump) = state.audio_pump.take() {
+            if pump.join().is_err() {
+                log::warn!("[Sion][voix-native] pompe audio du partage terminée sur panique");
+            }
+        }
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(room) = room_guard.as_ref() {
             // Audio d'abord (miroir JS), vidéo en dernier.
@@ -1911,7 +1936,6 @@ impl LiveKitEngine {
                 .rt
                 .block_on(room.local_participant().unpublish_track(&state.video_sid));
         }
-        crate::system_audio::system_audio_stop();
         log::info!("[Sion][voix-native] partage local arrêté");
         Ok(())
     }
@@ -1920,11 +1944,11 @@ impl LiveKitEngine {
     /// piste `ScreenshareAudio`. Retourne le sid publié (ou une erreur —
     /// l'appelant continue sans le son, mode "sans son" côté viewers).
     /// Traitements OFF (boucle = écho garanti sinon), parité JS.
-    fn start_share_audio(
+    pub fn start_share_audio(
         rt: &tokio::runtime::Handle,
         room: &Room,
         stop: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) -> Result<Option<TrackSid>, String> {
+    ) -> Result<Option<(TrackSid, std::thread::JoinHandle<()>)>, String> {
         use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
         crate::system_audio::system_audio_start(None).map_err(|e| format!("capture: {}", e))?;
         let rx = crate::system_audio::system_audio_subscribe()
@@ -1961,13 +1985,13 @@ impl LiveKitEngine {
         );
         let stop_thread = std::sync::Arc::clone(stop);
         let rt_thread = rt.clone();
-        std::thread::Builder::new()
+        let pump = std::thread::Builder::new()
             .name("sion-share-audio".into())
             .spawn(move || {
                 run_share_audio_pump(rx, audio_source, rt_thread, stop_thread);
             })
             .map_err(|e| format!("thread audio: {}", e))?;
-        Ok(Some(sid))
+        Ok(Some((sid, pump)))
     }
 
     /// Read the level from the actual WebRTC capture, without opening a second
