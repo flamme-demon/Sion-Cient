@@ -66,7 +66,19 @@ jpeg-rusturbo = { version = "0.9", optional = true }
 tauri-plugin-global-shortcut = "2"
 # Store the active Matrix session in the OS credential vault during the
 # transition to 2.1 (Secret Service, Keychain, or Windows Credential Manager).
+#
+# MIGRATION PROGRESSIVE, en deux temps — ne pas sauter l'étape :
+#   1. aujourd'hui, aucun backend n'est activé (`keyring` sans feature), donc la
+#      crate compile son store de test en mémoire. Tant que c'est le cas, la
+#      migration reste dormante : `session.json` (0600) garde le jeton, puisque
+#      la sonde de `lib.rs` (`secure_session_set_verified`) refuse de retirer la
+#      copie disque sans relecture réussie ;
+#   2. pour activer le coffre, remplacer la ligne ci-dessous par la variante
+#      `features = [...]` et ajouter `libdbus-1-dev` aux paquets du runner
+#      Linux — la migration du fichier en clair se fait alors toute seule au
+#      premier `load_session`.
 keyring = "3"
+# keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-native", "apple-native"] }
 # Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
 # les images dans `clipboardData.items`, contrairement à CEF/Chromium.
 arboard = { version = "3", features = ["wayland-data-control"] }

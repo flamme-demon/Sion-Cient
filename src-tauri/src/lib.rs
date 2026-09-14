@@ -851,6 +851,10 @@ mod security_tests {
         {
             return;
         }
+        // C'est la condition d'origine de `persist_session` — elle était vraie
+        // ici, donc le jeton partait du fichier sans être stocké nulle part.
+        assert!(super::secure_session_set("jeton-de-test").is_ok());
+        // …et c'est celle qui remplace : le store de test ne relit rien.
         assert!(!secure_session_set_verified("jeton-de-test"));
     }
 }
