@@ -1977,11 +1977,24 @@ impl LiveKitEngine {
         }
         let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
         let room = room_guard.as_ref().ok_or("pas de session SFU")?;
+        // Repères de démarrage. Un plantage sur ce chemin abandonne le
+        // processus — 0xC0000409 sous Windows, même site dans `ucrtbase` que
+        // celui du 17/09 — et le journal s'arrêtait sur la ligne que libwebrtc
+        // écrit en créant son capturer, sans dire QUEL appel suivant abandonne.
+        // Ces traces encadrent chacun d'eux : la dernière écrite désigne le
+        // coupable, ce qu'aucune pile d'appels ne nous donnera pour un
+        // `abort()` en C++.
+        log::info!("[Sion][voix-native] partage : création du capturer");
         let mut opts = DesktopCapturerOptions::new(DesktopCaptureSourceType::Screen);
         opts.set_include_cursor(true);
         let capturer =
             DesktopCapturer::new(opts).ok_or("capture d'écran indisponible (portail Wayland ?)")?;
+        log::info!("[Sion][voix-native] partage : capturer créé, énumération des sources");
         let sources = capturer.get_source_list();
+        log::info!(
+            "[Sion][voix-native] partage : {} source(s) énumérée(s)",
+            sources.len()
+        );
         for listed in &sources {
             log::info!(
                 "[Sion][voix-native] source écran candidate {} (\"{}\", display_id={})",
@@ -2038,6 +2051,7 @@ impl LiveKitEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        log::info!("[Sion][voix-native] partage : démarrage du fil de capture");
         std::thread::Builder::new()
             .name("sion-share-capture".into())
             .spawn(move || {
@@ -2054,6 +2068,7 @@ impl LiveKitEngine {
                 );
             })
             .map_err(|e| format!("thread capture: {}", e))?;
+        log::info!("[Sion][voix-native] partage : publication de la piste vidéo");
         let publication = match self.rt.block_on(room.local_participant().publish_track(
             LocalTrack::Video(track),
             screenshare_publish_options(config.max_bitrate, config.framerate, video_codec),
