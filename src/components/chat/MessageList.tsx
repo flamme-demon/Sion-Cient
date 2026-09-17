@@ -466,6 +466,34 @@ export function MessageList() {
     loadRoomHistory(activeChannel);
   }, [activeChannel, roomHasMore, roomLoadingHistory, loadRoomHistory]);
 
+  // Recoller au bas quand la HAUTEUR DISPONIBLE change.
+  //
+  // Le positionnement initial se fait sur la hauteur du moment. La vue du
+  // partage d'écran, elle, se monte après — chargée paresseusement — et prend
+  // sa place au-dessus de la liste : le bas se déplace, `scrollTop` ne bouge
+  // pas, et on se retrouve plusieurs messages trop haut. Même effet en
+  // redimensionnant la fenêtre ou en ouvrant un panneau du dock.
+  //
+  // On ne recolle que si on était déjà en bas : quelqu'un qui lit l'historique
+  // ne doit pas être ramené de force. Et jamais pendant une pagination vers le
+  // haut, qui gère sa propre position.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let hauteurPrecedente = el.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const courant = containerRef.current;
+      if (!courant) return;
+      if (courant.clientHeight === hauteurPrecedente) return;
+      hauteurPrecedente = courant.clientHeight;
+      if (prependAnchorRef.current || suppressScrollLoadRef.current) return;
+      if (!isAtBottomRef.current) return;
+      courant.scrollTop = courant.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // Scroll handler
   const handleScroll = useCallback(() => {
     const el = containerRef.current;

@@ -19,9 +19,15 @@ export function PinnedBar() {
   const channelMessages = messages[activeChannel] || [];
 
   // Match pinned IDs to actual messages
-  const pinnedMessages = pinnedIds
+  // Du plus récent au plus ancien, comme la liste complète. L'ordre brut de
+  // l'événement d'état Matrix est celui des ajouts successifs, donc la plus
+  // ancienne d'abord : le bandeau et la liste présentaient les mêmes épingles
+  // en sens inverse l'un de l'autre.
+  const pinnedMessages = (pinnedIds
     .map((id) => channelMessages.find((m) => m.eventId === id || m.id === id))
-    .filter(Boolean) as typeof channelMessages;
+    .filter(Boolean) as typeof channelMessages)
+    .slice()
+    .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 
   const [activeIndex, setActiveIndex] = useState(0);
   const [listOpen, setListOpen] = useState(false);
