@@ -163,6 +163,22 @@ Write-Host "[8/10] Compilation Rust + voix native..." -ForegroundColor Yellow
 Write-Host "  Cela peut prendre plusieurs minutes a la premiere compilation..." -ForegroundColor Gray
 Write-Host ""
 
+# CUDA_HOME : le config.toml du projet pose "/opt/cuda" — un chemin LINUX — en
+# valeur par defaut (`force = false`, donc une variable deja definie gagne). La
+# CI en definit une depuis CUDA_PATH ; un build local Windows, lui, heritait du
+# chemin Linux et webrtc-sys compilait sans NVENC en affichant un message
+# trompeur : "cuda.h not found under /opt/cuda". Constate le 17/09.
+if ($env:CUDA_PATH -and (Test-Path "$env:CUDA_PATH\include\cuda.h")) {
+    $env:CUDA_HOME = $env:CUDA_PATH
+    Write-Host "  CUDA detecte ($env:CUDA_PATH) - NVENC compile" -ForegroundColor Green
+} else {
+    # Chemin Windows inexistant mais explicite : webrtc-sys compile sans NVENC,
+    # et le message nomme la vraie raison au lieu d'un chemin Unix.
+    $env:CUDA_HOME = "$env:TEMP\sion-cuda-absent"
+    Write-Host "  CUDA Toolkit absent - encodage video LOGICIEL" -ForegroundColor Yellow
+    Write-Host "    (installer le CUDA Toolkit puis relancer pour activer NVENC)" -ForegroundColor DarkGray
+}
+
 Set-Location $tauriDir
 cargo build --release
 if ($LASTEXITCODE -ne 0) {

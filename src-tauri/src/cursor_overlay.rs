@@ -8,7 +8,14 @@ use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Trans
 
 // Hôtes par plateforme. Sous Linux, Wayland layer-shell d'abord et X11 en
 // repli ; ailleurs (Windows, WRY), la boucle winit.
-#[cfg(not(target_os = "linux"))]
+// Windows : hôte Win32 natif. L'hôte winit ne pouvait plus démarrer depuis
+// l'alpha.2 — le PIP préchauffe la seule `EventLoop` que winit autorise par
+// processus, et l'overlay échouait en `RecreationAttempt` sans que rien ne le
+// signale à l'utilisateur. Même remède que sous Linux : pas de winit du tout.
+#[cfg(target_os = "windows")]
+#[path = "cursor_overlay_win32.rs"]
+mod win32_host;
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 #[path = "cursor_overlay_winit.rs"]
 mod winit_host;
 #[cfg(target_os = "linux")]
@@ -164,7 +171,15 @@ fn start_host_thread(
             })
         })
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        win32_host::start(state, thread_alive).map(|tx| {
+            HostSender::new(move |event| {
+                let _ = tx.send(event);
+            })
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         winit_host::start(state, thread_alive).map(|proxy| {
             HostSender::new(move |event| {
@@ -445,6 +460,10 @@ pub(crate) mod draw {
 #[tauri::command]
 pub fn cursor_overlay_open() -> bool {
     let Some(handle) = get_or_start_handle() else {
+        // Ce retour était MUET : sous Windows l'hôte échouait à démarrer depuis
+        // l'alpha.2 et l'utilisateur voyait simplement « pas de curseurs »,
+        // sans la moindre ligne de journal côté Rust pour l'expliquer.
+        log::warn!("[Sion][CursorOverlay] hôte indisponible — overlay non ouvert");
         return false;
     };
     if !handle.thread_alive.load(Ordering::Acquire) {
