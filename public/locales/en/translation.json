@@ -161,7 +161,11 @@
     "videoConvertAndPlay": "Convert and play",
     "videoProbing": "Probing format…",
     "videoConverting": "Converting…",
-    "videoPlaybackFailed": "Converted file cannot be played"
+    "videoPlaybackFailed": "Converted file cannot be played",
+    "pinnedList": "Pinned messages",
+    "pinnedNone": "No pinned message",
+    "pinnedCount": "{{count}} pinned — click to see the list",
+    "attachedFile": "Attached file"
   },
   "poll": {
     "menuItem": "Poll",

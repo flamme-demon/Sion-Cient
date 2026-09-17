@@ -1713,6 +1713,66 @@ export function getPinnedEventIds(roomId: string): string[] {
   return pinnedEvent?.getContent?.()?.pinned || [];
 }
 
+/** Résumé d'un message épinglé, y compris quand il n'est plus dans la portion
+ *  chargée du fil. */
+export interface PinnedSummary {
+  eventId: string;
+  sender: string;
+  ts: number;
+  text: string;
+  /** Faux quand l'événement a dû être récupéré sur le serveur : il n'est pas
+   *  dans le fil chargé, donc le rejoindre demandera de paginer. */
+  loaded: boolean;
+}
+
+/**
+ * Liste les épinglés d'un salon avec de quoi les afficher.
+ *
+ * La barre des épinglés ne montrait que ceux dont le message était déjà chargé
+ * — un épinglé de plusieurs mois disparaissait purement et simplement de la
+ * rotation. On complète donc depuis le serveur, événement par événement
+ * (`/rooms/{roomId}/event/{eventId}`), ce que le fil local ne contient pas.
+ *
+ * Les échecs sont silencieux et l'entrée est omise : un épinglé supprimé ou
+ * illisible ne doit pas faire échouer la liste entière.
+ */
+export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[]> {
+  if (!matrixClient) return [];
+  const room = matrixClient.getRoom(roomId);
+  const ids = getPinnedEventIds(roomId);
+  const resultats: PinnedSummary[] = [];
+  for (const eventId of ids) {
+    const local = room?.findEventById?.(eventId);
+    if (local) {
+      const contenu = local.getContent?.() as { body?: string } | undefined;
+      resultats.push({
+        eventId,
+        sender: room?.getMember?.(local.getSender() ?? "")?.name
+          || local.getSender()
+          || "",
+        ts: local.getTs?.() ?? 0,
+        text: String(contenu?.body ?? ""),
+        loaded: true,
+      });
+      continue;
+    }
+    try {
+      const distant = await matrixClient.fetchRoomEvent(roomId, eventId);
+      const contenu = distant.content as { body?: string } | undefined;
+      resultats.push({
+        eventId,
+        sender: room?.getMember?.(distant.sender ?? "")?.name || distant.sender || "",
+        ts: Number(distant.origin_server_ts ?? 0),
+        text: String(contenu?.body ?? ""),
+        loaded: false,
+      });
+    } catch {
+      /* épinglé supprimé ou illisible : on l'omet plutôt que de tout perdre */
+    }
+  }
+  return resultats.sort((a, b) => b.ts - a.ts);
+}
+
 export async function pinMessage(roomId: string, eventId: string): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   eventId = requireServerEventId(roomId, eventId);

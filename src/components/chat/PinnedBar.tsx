@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { PinIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import * as matrixService from "../../services/matrixService";
+import { PinnedListPanel } from "./PinnedListPanel";
 
 export function PinnedBar() {
+  const { t } = useTranslation();
   const activeChannel = useAppStore((s) => s.activeChannel);
   const setScrollToMessageId = useAppStore((s) => s.setScrollToMessageId);
   const messages = useMatrixStore((s) => s.messages);
@@ -20,7 +23,7 @@ export function PinnedBar() {
     .filter(Boolean) as typeof channelMessages;
 
   const [activeIndex, setActiveIndex] = useState(0);
-  const autoScrollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [listOpen, setListOpen] = useState(false);
   const isPaused = useRef(false);
 
   // Reset index when channel or pinned messages change
@@ -28,28 +31,30 @@ export function PinnedBar() {
     setActiveIndex(0);
   }, [activeChannel, pinnedMessages.length]);
 
-  // Auto-scroll every 5s if multiple pins
-  const startAutoScroll = useCallback(() => {
-    if (autoScrollTimer.current) clearInterval(autoScrollTimer.current);
-    if (pinnedMessages.length <= 1) return;
-    autoScrollTimer.current = setInterval(() => {
-      if (!isPaused.current) {
-        setActiveIndex((i) => (i + 1) % pinnedMessages.length);
-      }
-    }, 5000);
-  }, [pinnedMessages.length]);
-
+  // Rotation automatique toutes les 5 s quand plusieurs épinglés sont chargés.
+  // Le minuteur vit dans l'effet plutôt que dans un `useCallback` mémoïsé : la
+  // mémoïsation manuelle n'apportait rien et empêchait le compilateur React de
+  // traiter le composant.
+  const pinnedCount = pinnedMessages.length;
   useEffect(() => {
-    startAutoScroll();
-    return () => { if (autoScrollTimer.current) clearInterval(autoScrollTimer.current); };
-  }, [startAutoScroll]);
+    if (pinnedCount <= 1) return;
+    const minuteur = setInterval(() => {
+      if (!isPaused.current) setActiveIndex((i) => (i + 1) % pinnedCount);
+    }, 5000);
+    return () => clearInterval(minuteur);
+  }, [pinnedCount]);
 
-  if (pinnedMessages.length === 0) return null;
+  // On se base sur les IDs, pas sur les messages chargés : un épinglé ancien
+  // n'est pas dans le fil local, et faire disparaître la barre pour autant
+  // rendait ces épingles totalement inaccessibles.
+  if (pinnedIds.length === 0) return null;
 
-  const currentPinned = pinnedMessages[activeIndex % pinnedMessages.length];
-  if (!currentPinned) return null;
+  const currentPinned = pinnedMessages.length > 0
+    ? pinnedMessages[activeIndex % pinnedMessages.length]
+    : null;
 
   const handleClick = () => {
+    if (!currentPinned) { setListOpen(true); return; }
     const eventId = currentPinned.eventId || String(currentPinned.id);
     setScrollToMessageId(eventId);
   };
@@ -124,7 +129,7 @@ export function PinnedBar() {
           fontWeight: 600,
           color: 'var(--color-primary)',
         }}>
-          {currentPinned.user}
+          {currentPinned ? currentPinned.user : t("chat.pinnedList", { defaultValue: "Messages épinglés" })}
         </span>
         <span style={{
           fontSize: 12,
@@ -133,9 +138,33 @@ export function PinnedBar() {
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>
-          {currentPinned.text || (currentPinned.attachments?.length ? "Fichier joint" : "...")}
+          {currentPinned
+            ? (currentPinned.text || (currentPinned.attachments?.length ? "Fichier joint" : "..."))
+            : t("chat.pinnedCount", { defaultValue: "{{count}} épinglé(s) — cliquer pour voir la liste", count: pinnedIds.length })}
         </span>
       </div>
+
+      {/* Liste complète : la rotation ne montre que les épinglés chargés. */}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setListOpen((v) => !v); }}
+        title={t("chat.pinnedList", { defaultValue: "Messages épinglés" })}
+        style={{
+          width: 24, height: 24, borderRadius: 6, border: 'none', flexShrink: 0,
+          background: listOpen ? 'var(--color-secondary-container)' : 'transparent',
+          color: 'var(--color-on-surface-variant)', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
+        onMouseLeave={(e) => { if (!listOpen) e.currentTarget.style.background = 'transparent'; }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" />
+          <line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" />
+          <line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+        </svg>
+      </button>
+      {listOpen && <PinnedListPanel onClose={() => setListOpen(false)} />}
 
       {/* Nav arrows for multiple pins */}
       {pinnedMessages.length > 1 && (

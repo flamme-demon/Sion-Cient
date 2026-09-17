@@ -161,7 +161,11 @@
     "videoConvertAndPlay": "Convertir et lire",
     "videoProbing": "Analyse du format…",
     "videoConverting": "Conversion en cours…",
-    "videoPlaybackFailed": "Fichier converti illisible par le lecteur"
+    "videoPlaybackFailed": "Fichier converti illisible par le lecteur",
+    "pinnedList": "Messages épinglés",
+    "pinnedNone": "Aucun message épinglé",
+    "pinnedCount": "{{count}} épinglé(s) — cliquer pour voir la liste",
+    "attachedFile": "Fichier joint"
   },
   "poll": {
     "menuItem": "Sondage",
