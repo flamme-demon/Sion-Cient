@@ -6,10 +6,14 @@ use std::time::{Duration, Instant};
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
-// Hôtes par plateforme : X11 natif (Linux) ou winit (Windows, WRY).
+// Hôtes par plateforme. Sous Linux, Wayland layer-shell d'abord et X11 en
+// repli ; ailleurs (Windows, WRY), la boucle winit.
 #[cfg(not(target_os = "linux"))]
 #[path = "cursor_overlay_winit.rs"]
 mod winit_host;
+#[cfg(target_os = "linux")]
+#[path = "cursor_overlay_layershell.rs"]
+mod layershell_host;
 #[cfg(target_os = "linux")]
 #[path = "cursor_overlay_x11.rs"]
 mod x11_host;
@@ -138,6 +142,22 @@ fn start_host_thread(
 ) -> Option<HostSender> {
     #[cfg(target_os = "linux")]
     {
+        // Wayland d'abord. Sous KDE/Wayland, les hints X11 « tous les bureaux »
+        // sont sans effet : KWin gère ses bureaux virtuels nativement et
+        // XWayland n'en voit qu'un seul. Une surface layer-shell, elle, vit
+        // dans une couche du compositeur, indépendamment des bureaux.
+        if let Some(tx) = layershell_host::start(Arc::clone(&state), Arc::clone(&thread_alive)) {
+            return Some(HostSender::new(move |event| {
+                let _ = tx.send(event);
+            }));
+        }
+        // Repli : session X11 pure, ou compositeur sans `zwlr_layer_shell_v1`.
+        //
+        // Le drapeau est remis à vrai : l'hôte Wayland l'a passé à faux en
+        // s'arrêtant, et l'hôte X11 ne le relève jamais — il ne fait que le
+        // baisser à sa propre sortie. Sans ce rétablissement, un repli réussi
+        // serait quand même considéré comme un overlay mort.
+        thread_alive.store(true, Ordering::Release);
         x11_host::start(state, thread_alive).map(|tx| {
             HostSender::new(move |event| {
                 let _ = tx.send(event);

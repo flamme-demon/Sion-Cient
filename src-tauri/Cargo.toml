@@ -136,6 +136,14 @@ wayland-sys = { version = "0.31", features = ["client"] }
 # conversion YUV→RGB se fait dans le shader et la mise à l'échelle est faite
 # par l'échantillonneur — plus aucune conversion libyuv ni copie de 8,3 Mo par
 # image sur le chemin chaud.
+# Overlay des curseurs en surface `zwlr_layer_shell_v1`. Sous KDE/Wayland, KWin
+# gere ses bureaux virtuels nativement et ne les expose PAS a XWayland :
+# `_NET_NUMBER_OF_DESKTOPS` y vaut 1, donc `_NET_WM_STATE_STICKY` et
+# `_NET_WM_DESKTOP = 0xFFFFFFFF` demandent « tous les bureaux » a une couche qui
+# n'en connait qu'un. Une surface layer-shell n'est pas une fenetre de bureau :
+# elle vit dans une couche du compositeur, au-dessus des fenetres et
+# independamment des bureaux virtuels.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-egl = "0.32"
 # EGL chargé dynamiquement (`libEGL.so.1`) : aucune dépendance de lien
 # supplémentaire pour les machines qui n'ont pas de pile EGL.

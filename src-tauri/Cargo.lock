@@ -5915,6 +5915,7 @@ dependencies = [
  "urlencoding",
  "wayland-client",
  "wayland-egl",
+ "wayland-protocols-wlr",
  "wayland-sys",
  "webkit2gtk",
  "webrtc-sys",
