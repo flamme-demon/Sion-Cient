@@ -18,9 +18,9 @@
 #include "livekit/desktop_capturer.h"
 
 #include <cstdio>
-#include <typeinfo>
 
 #include "modules/desktop_capture/desktop_capture_options.h"
+#include "rtc_base/logging.h"
 
 using SourceList = webrtc::DesktopCapturer::SourceList;
 
@@ -91,9 +91,22 @@ std::unique_ptr<DesktopCapturer> new_desktop_capturer(
   }
 
   if (!capturer) {
-    std::fprintf(stderr, "[Sion][capture] aucun capturer disponible\n");
+    RTC_LOG(LS_ERROR) << "[Sion][capture] aucun capturer disponible";
     return nullptr;
   }
+  // Journalise par le canal de webrtc, pas par `stderr` : une application
+  // compilee en `windows_subsystem = "windows"` n'a pas de console, donc les
+  // `fprintf` de ce fichier n'ont jamais eu de lecteur. Les messages de webrtc,
+  // eux, arrivent bien dans le journal de l'application.
+  //
+  // `prefer_cursor_embedded` est ce qui fait envelopper le capturer dans un
+  // `DesktopAndCursorComposer` en amont. Le curseur systeme n'apparait pas dans
+  // la capture Windows (17/09) alors que l'option est cablee depuis
+  // `set_include_cursor(true)` : cette trace dira si elle vaut vraiment `true`
+  // au moment de la creation.
+  RTC_LOG(LS_WARNING) << "[Sion][capture] prefer_cursor_embedded="
+                      << webrtc_options.prefer_cursor_embedded()
+                      << " source_type=" << static_cast<int>(options.source_type);
   // Ici se trouvait un `typeid(*capturer).name()` de diagnostic. Il abattait le
   // processus sous Windows : `typeid` sur un objet polymorphe exige le RTTI, or
   // libwebrtc est fourni sans RTTI (configuration standard de Chromium)

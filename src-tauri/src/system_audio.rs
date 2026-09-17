@@ -1086,6 +1086,15 @@ mod windows_impl {
                 MIN_BUILD_FOR_PROCESS_LOOPBACK
             ));
         }
+        // Trace du mode retenu. Le module n'écrivait RIEN au démarrage : face à
+        // un partage qui renvoyait le son de Sion lui-même (17/09), impossible
+        // de savoir si l'exclusion du processus était réellement en place ou
+        // si Windows l'avait ignorée. On nomme donc le processus exclu.
+        log::info!(
+            "[Sion][sysaudio] capture WASAPI : exclusion de l'arbre du processus {} \
+             (PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE)",
+            std::process::id()
+        );
         // Stop any previous capture before starting a new one.
         stop_internal();
         CAPTURE_RUNNING.store(true, Ordering::Release);
