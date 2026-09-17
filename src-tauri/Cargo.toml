@@ -31,7 +31,7 @@ log = "0.4"
 # `extern_crate_alloc` exposes `pod_collect_to_vec` for the aligned bulk copy
 # from the 1-byte-aligned `Vec<u8>` delivered by Tauri into a `Vec<f32>`.
 
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = ["devtools", "protocol-asset"] }
 tauri-plugin-log = "2"
 open = "5"
 reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }

@@ -2268,6 +2268,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       await matrixService.sendFileMessage(channelId, file);
     } catch (err) {
       console.error("[Sion] Failed to send file:", err);
+      // L'erreur remonte : une vidéo qui n'a pas pu être préparée (ffmpeg
+      // absent, encodage en échec) ne doit pas disparaître en silence de la
+      // zone de saisie comme si elle était partie.
+      throw err;
     }
   },
 

@@ -152,7 +152,15 @@
     "conversationStart": "Début de la conversation",
     "audioDecoding": "Décodage de l'audio…",
     "emojiTab": "Emoji",
-    "gifTab": "GIF"
+    "gifTab": "GIF",
+    "videoPreparing": "Préparation de la vidéo…",
+    "videoNeedsFfmpeg": "ffmpeg est requis pour envoyer une vidéo : elle est convertie une fois ici plutôt que chez chaque destinataire.",
+    "installingPct": "Installation… {{pct}} %",
+    "installFfmpeg": "Installer ffmpeg (~80 Mo)",
+    "videoNeedsConvert": "conversion nécessaire pour lire ce format",
+    "videoConvertAndPlay": "Convertir et lire",
+    "videoProbing": "Analyse du format…",
+    "videoConverting": "Conversion en cours…"
   },
   "poll": {
     "menuItem": "Sondage",
@@ -268,8 +276,6 @@
     "empty": "Aucun son dans cette catégorie",
     "searchPlaceholder": "Rechercher un son...",
     "allCategories": "Toutes",
-    "soundCount_one": "{{count}} son",
-    "soundCount_other": "{{count}} sons",
     "favorites": "Favoris",
     "top": "Top",
     "allOf": "Tout {{name}}",

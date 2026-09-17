@@ -13,6 +13,7 @@ import { EMOJI_DATA } from "../../utils/emojiData";
 import { readClipboardImageFile } from "../../utils/clipboardImage";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { LargeMessageModal } from "./LargeMessageModal";
+import { FfmpegMissingError } from "../../services/videoPrepare";
 
 // Klipy GIF API — Tenor was shut down by Google on 2026-06-30. The key is
 // injected at build time via VITE_KLIPY_API_KEY: `.env.local` in dev, GitHub
@@ -40,6 +41,11 @@ export function ChatInput() {
   // Holds the size (KB) of an oversized draft awaiting the user's choice to
   // send it as a .txt attachment. null = no modal shown.
   const [largeMessageKb, setLargeMessageKb] = useState<number | null>(null);
+  // Conversion d'une vidéo avant envoi : progression, et le cas « ffmpeg
+  // absent » qui se répare d'un clic au lieu d'afficher une erreur technique.
+  const [convertPct, setConvertPct] = useState<number | null>(null);
+  const [ffmpegNeeded, setFfmpegNeeded] = useState(false);
+  const [installingFfmpeg, setInstallingFfmpeg] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeChannel = useAppStore((s) => s.activeChannel);
   const sendMessage = useMatrixStore((s) => s.sendMessage);
@@ -222,9 +228,33 @@ export function ChatInput() {
   // `asFile` ships the text as a .txt attachment instead of a chat message —
   // used when the user confirms the oversized-message modal.
   const performSend = async (asFile: boolean) => {
-    // Send files first
-    for (const pf of pendingFiles) {
-      await sendFile(activeChannel, pf.file);
+    // Send files first. Une vidéo est ré-encodée par l'expéditeur avant
+    // téléversement : on suit la progression et on garde les pièces jointes en
+    // attente si ça échoue, pour que l'utilisateur puisse réessayer.
+    const hasVideo = pendingFiles.some((pf) => pf.file.type.startsWith("video/"));
+    let unlisten: (() => void) | null = null;
+    if (hasVideo) {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ phase: string; pct: number }>(
+          "video-import-progress",
+          (e) => setConvertPct(Math.round(e.payload.pct)),
+        );
+      } catch { /* hors Tauri : pas de progression, l'envoi marche quand même */ }
+    }
+    try {
+      for (const pf of pendingFiles) {
+        if (pf.file.type.startsWith("video/")) setConvertPct(0);
+        await sendFile(activeChannel, pf.file);
+        setConvertPct(null);
+      }
+    } catch (err) {
+      setConvertPct(null);
+      if (err instanceof FfmpegMissingError) setFfmpegNeeded(true);
+      else useAppStore.getState().setFileError(String(err));
+      return;
+    } finally {
+      unlisten?.();
     }
     const trimmed = inputText.trim();
     if (trimmed) {
@@ -446,6 +476,57 @@ export function ChatInput() {
           onConfirm={() => { setLargeMessageKb(null); performSend(true); }}
           onClose={() => setLargeMessageKb(null)}
         />
+      )}
+      {/* Conversion vidéo en cours avant envoi */}
+      {convertPct !== null && (
+        <div style={{
+          padding: '8px 16px', marginBottom: 4, borderRadius: 12,
+          background: 'var(--color-surface-container-high)',
+          color: 'var(--color-on-surface-variant)', fontSize: 12, fontWeight: 500,
+        }}>
+          {t("chat.videoPreparing", { defaultValue: "Préparation de la vidéo…" })} {convertPct}%
+        </div>
+      )}
+      {/* ffmpeg requis pour envoyer une vidéo */}
+      {ffmpegNeeded && (
+        <div style={{
+          padding: '8px 16px', marginBottom: 4, borderRadius: 12,
+          background: 'var(--color-error-container)', color: 'var(--color-on-error-container)',
+          fontSize: 12, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{ flex: 1 }}>
+            {t("chat.videoNeedsFfmpeg", {
+              defaultValue: "ffmpeg est requis pour envoyer une vidéo : elle est convertie une fois ici plutôt que chez chaque destinataire.",
+            })}
+          </span>
+          <button
+            type="button"
+            disabled={installingFfmpeg !== null}
+            onClick={async () => {
+              setInstallingFfmpeg(0);
+              try {
+                const { installFfmpeg } = await import("../../services/ffmpegInstall");
+                await installFfmpeg((pct) => setInstallingFfmpeg(pct));
+                setFfmpegNeeded(false);
+              } catch (e) {
+                console.error("[Sion] Installation ffmpeg échouée:", e);
+              } finally {
+                setInstallingFfmpeg(null);
+              }
+            }}
+            style={{
+              flexShrink: 0, padding: '6px 14px', borderRadius: 20, border: 'none',
+              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+              fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+              cursor: installingFfmpeg !== null ? 'default' : 'pointer',
+              opacity: installingFfmpeg !== null ? 0.6 : 1,
+            }}
+          >
+            {installingFfmpeg !== null
+              ? t("chat.installingPct", { defaultValue: "Installation… {{pct}}%", pct: installingFfmpeg })
+              : t("chat.installFfmpeg", { defaultValue: "Installer ffmpeg (~80 Mo)" })}
+          </button>
+        </div>
       )}
       {/* File error banner (auto-dismiss) */}
       {fileError && (

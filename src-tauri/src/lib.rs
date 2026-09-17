@@ -1476,13 +1476,15 @@ pub(crate) fn bin_runs(bin: &str, version_flag: &str) -> bool {
 
 /// Clean up old Sion transcode temp files (older than 24 hours).
 fn cleanup_old_transcodes() {
-    let tmp_dir = std::env::temp_dir();
+    let tmp_dir = sion_media_dir();
     let cutoff = std::time::SystemTime::now() - Duration::from_secs(24 * 3600);
     if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if (name_str.starts_with("sion_in_") || name_str.starts_with("sion_out_"))
+            if (name_str.starts_with("sion_in_")
+                || name_str.starts_with("sion_out_")
+                || name_str.starts_with("sion_send_"))
                 && entry
                     .metadata()
                     .and_then(|m| m.modified())
@@ -1495,16 +1497,208 @@ fn cleanup_old_transcodes() {
     }
 }
 
-/// Transcode a video URL to WebM (VP9+Opus) using system ffmpeg.
-/// Returns base64-encoded WebM data.
+/// Dossier temporaire dédié aux médias. Isolé du `temp_dir` général pour que la
+/// portée du protocole `asset` (qui laisse la webview lire ces fichiers) puisse
+/// être restreinte à ce seul répertoire.
+fn sion_media_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("sion-media");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Écrit le corps binaire de la requête dans un fichier temporaire et renvoie
+/// son chemin.
+///
+/// Remplace l'aller-retour base64 hérité de l'époque CEF (ab3316d, 08/06), où
+/// les octets d'une vidéo traversaient l'IPC encodés en texte : une vidéo de
+/// 200 Mo devenait une chaîne de ~270 Mo côté processus web, plus les copies
+/// intermédiaires. Ici la webview envoie un `ArrayBuffer` brut, Tauri le remet
+/// tel quel, et rien n'est ré-encodé.
+#[tauri::command]
+fn stage_media(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes,
+        _ => return Err("corps binaire attendu".to_string()),
+    };
+    let ext = request
+        .headers()
+        .get("x-sion-ext")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>())
+        .filter(|v| !v.is_empty() && v.len() <= 8)
+        .unwrap_or_else(|| "bin".to_string());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.len().hash(&mut hasher);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    let path = sion_media_dir().join(format!("sion_in_{:x}.{}", hasher.finish(), ext));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Dimensions et durée lues dans la sortie de `ffmpeg -i`.
+///
+/// `ffprobe` serait plus propre, mais le téléchargement intégré n'installe que
+/// `ffmpeg` : dépendre de `ffprobe` ferait échouer la préparation exactement
+/// chez les utilisateurs pour qui le bouton d'installation a été écrit.
+fn probe_video(ffmpeg_bin: &str, path: &std::path::Path) -> Option<(u32, u32, f64)> {
+    let out = hidden_command(ffmpeg_bin).arg("-i").arg(path).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stderr);
+    let mut dims = None;
+    let mut duration = None;
+    for line in text.lines() {
+        if duration.is_none() {
+            if let Some(rest) = line.trim().strip_prefix("Duration: ") {
+                let stamp = rest.split(',').next().unwrap_or("");
+                let mut parts = stamp.split(':');
+                if let (Some(h), Some(m), Some(sec)) = (parts.next(), parts.next(), parts.next()) {
+                    if let (Ok(h), Ok(m), Ok(sec)) =
+                        (h.trim().parse::<f64>(), m.parse::<f64>(), sec.parse::<f64>())
+                    {
+                        duration = Some(h * 3600.0 + m * 60.0 + sec);
+                    }
+                }
+            }
+        }
+        if dims.is_none() && line.contains("Stream #") && line.contains("Video:") {
+            // « …, 1920x1080 [SAR 1:1 DAR 16:9], … » — le premier jeton WxH.
+            for token in line.split(|c: char| c == ' ' || c == ',') {
+                let token = token.trim();
+                let Some((w, h)) = token.split_once('x') else {
+                    continue;
+                };
+                if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                    if w > 0 && h > 0 {
+                        dims = Some((w, h));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let (w, h) = dims?;
+    Some((w, h, duration.unwrap_or(0.0)))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedVideo {
+    path: String,
+    mimetype: String,
+    width: u32,
+    height: u32,
+    duration_ms: u64,
+    transcoded: bool,
+}
+
+/// Normalise une vidéo AVANT téléversement : WebM VP9 + Opus, plus ses
+/// dimensions et sa durée.
+///
+/// Auparavant le fichier partait tel quel et CHAQUE destinataire le convertissait
+/// chez lui — cinq destinataires, cinq encodages `libvpx-vp9` de plusieurs
+/// minutes, et rien du tout pour qui n'avait pas ffmpeg. L'expéditeur paie une
+/// fois ; l'import par URL le faisait déjà (`recodeWebm`), le glisser-déposer
+/// non.
+///
+/// `already_compatible` évite le ré-encodage quand la source est déjà du WebM
+/// VP8/VP9 : l'appelant l'a sondée sans décoder (`detectWebmVideoCodec`).
+#[tauri::command]
+async fn prepare_video_for_send(
+    app: tauri::AppHandle<TauriRuntime>,
+    input_path: String,
+    ffmpeg_path: Option<String>,
+    already_compatible: bool,
+) -> Result<PreparedVideo, String> {
+    #[cfg(not(target_os = "android"))]
+    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    #[cfg(target_os = "android")]
+    let managed: Option<String> = None;
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed.as_deref());
+    let input = std::path::PathBuf::from(&input_path);
+    if !input.exists() {
+        return Err("fichier source introuvable".to_string());
+    }
+
+    if already_compatible {
+        let (width, height, secs) = probe_video(&ffmpeg_bin, &input).unwrap_or((0, 0, 0.0));
+        return Ok(PreparedVideo {
+            path: input_path,
+            mimetype: "video/webm".to_string(),
+            width,
+            height,
+            duration_ms: (secs * 1000.0) as u64,
+            transcoded: false,
+        });
+    }
+
+    let output = sion_media_dir().join(format!(
+        "sion_send_{}.webm",
+        input
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "video".to_string())
+    ));
+    let duration_secs = probe_video(&ffmpeg_bin, &input)
+        .map(|(_, _, d)| d)
+        .unwrap_or(0.0);
+    let input_arg = input.to_string_lossy().into_owned();
+    let output_arg = output.to_string_lossy().into_owned();
+    // `-progress pipe:1` : `run_ffmpeg_encode` lit la progression sur stdout et
+    // l'émet en `video-import-progress`, comme l'import par URL.
+    let args: Vec<&str> = vec![
+        "-y",
+        "-i",
+        &input_arg,
+        "-c:v",
+        "libvpx-vp9",
+        "-crf",
+        "33",
+        "-b:v",
+        "0",
+        "-deadline",
+        "good",
+        "-cpu-used",
+        "4",
+        "-row-mt",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "128k",
+        "-f",
+        "webm",
+        "-progress",
+        "pipe:1",
+        &output_arg,
+    ];
+    run_ffmpeg_encode(&app, &ffmpeg_bin, &args, duration_secs)?;
+    let _ = std::fs::remove_file(&input);
+    let (width, height, secs) = probe_video(&ffmpeg_bin, &output).unwrap_or((0, 0, duration_secs));
+    Ok(PreparedVideo {
+        path: output.to_string_lossy().into_owned(),
+        mimetype: "video/webm".to_string(),
+        width,
+        height,
+        duration_ms: (secs * 1000.0) as u64,
+        transcoded: true,
+    })
+}
+
+/// Convertit une vidéo en WebM (VP9 + Opus) et renvoie le **chemin** du fichier
+/// produit, que la webview lit ensuite par le protocole `asset`.
+///
+/// Renvoyait autrefois du base64 : les octets traversaient l'IPC en texte dans
+/// les deux sens (ab3316d, époque CEF). Un chemin suffit et ne copie rien.
 #[tauri::command]
 async fn transcode_video(
     app: tauri::AppHandle<TauriRuntime>,
     url: String,
     ffmpeg_path: Option<String>,
-    data_b64: Option<String>,
+    input_path: Option<String>,
 ) -> Result<String, String> {
-    use base64::Engine;
     // Resolve the ffmpeg binary: user-configured path (Settings → Advanced) →
     // app-managed download → common install locations → `ffmpeg` on PATH. Lets
     // the transcode work out-of-box when ffmpeg is installed but not on PATH
@@ -1523,15 +1717,12 @@ async fn transcode_video(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     url.hash(&mut hasher);
     let hash = hasher.finish();
-    let tmp_dir = std::env::temp_dir();
-    let input_path = tmp_dir.join(format!("sion_in_{:x}.mp4", hash));
+    let tmp_dir = sion_media_dir();
     let output_path = tmp_dir.join(format!("sion_out_{:x}.webm", hash));
 
-    // Return cached transcoded file if it exists
+    // Conversion déjà faite : on rend le même chemin, la webview le relira.
     if output_path.exists() {
-        let webm_bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&webm_bytes);
-        return Ok(b64);
+        return Ok(output_path.to_string_lossy().into_owned());
     }
 
     // Obtain the source bytes. Prefer the bytes the renderer already resolved
@@ -1540,20 +1731,20 @@ async fn transcode_video(
     // decryption, so it fails on authenticated-media servers (401) and on
     // encrypted channels (we'd fetch ciphertext that ffmpeg can't decode).
     // Fall back to downloading the URL only when no bytes were provided.
-    if let Some(b64) = data_b64.filter(|s| !s.is_empty()) {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64.as_bytes())
-            .map_err(|e| format!("base64 decode: {}", e))?;
-        std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
-    } else {
-        let client = build_client().map_err(|e| e.to_string())?;
-        let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
+    let input_path = match input_path.filter(|s| !s.is_empty()) {
+        Some(staged) => std::path::PathBuf::from(staged),
+        None => {
+            let downloaded = tmp_dir.join(format!("sion_in_{:x}.bin", hash));
+            let client = build_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+            std::fs::write(&downloaded, &bytes).map_err(|e| e.to_string())?;
+            downloaded
         }
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-        std::fs::write(&input_path, &bytes).map_err(|e| e.to_string())?;
-    }
+    };
 
     // Transcode with ffmpeg (fast preset)
     let output = hidden_command(&ffmpeg_bin)
@@ -1589,9 +1780,7 @@ async fn transcode_video(
         return Err(format!("ffmpeg error: {}", stderr));
     }
 
-    let webm_bytes = std::fs::read(&output_path).map_err(|e| e.to_string())?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&webm_bytes);
-    Ok(b64)
+    Ok(output_path.to_string_lossy().into_owned())
 }
 
 /// Path where the in-app "Installer ffmpeg" button stores the downloaded
@@ -3142,6 +3331,8 @@ pub fn run() {
         show_in_folder,
         fetch_link_preview,
         transcode_video,
+        stage_media,
+        prepare_video_for_send,
         exit_app,
         persist_session,
         load_session,
@@ -3225,6 +3416,8 @@ pub fn run() {
         show_in_folder,
         fetch_link_preview,
         transcode_video,
+        stage_media,
+        prepare_video_for_send,
         exit_app,
         persist_session,
         load_session,

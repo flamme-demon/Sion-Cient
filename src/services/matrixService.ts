@@ -829,10 +829,32 @@ export async function redactMessage(roomId: string, eventId: string) {
 export async function sendFileMessage(roomId: string, file: File) {
   if (!matrixClient) throw new Error("Matrix client not initialized");
 
-  const contentUri = await uploadFile(file);
   const isImage = file.type.startsWith("image/");
-  const isVideo = file.type.startsWith("video/");
+  let isVideo = file.type.startsWith("video/");
   const isAudio = file.type.startsWith("audio/");
+
+  // Une vidéo est normalisée AVANT le téléversement : WebM VP9 + Opus. Sans
+  // ça, chaque destinataire convertissait le fichier chez lui, encodage
+  // logiciel de plusieurs minutes compris — et ne voyait rien du tout s'il
+  // n'avait pas ffmpeg. `prepareVideoForSend` lève `FfmpegMissingError` quand
+  // l'outil manque : l'envoi échoue alors franchement, et l'interface propose
+  // l'installation, plutôt que de publier une vidéo que personne ne lira.
+  let outgoing = file;
+  let videoInfo: Record<string, unknown> = {};
+  if (isVideo) {
+    const { prepareVideoForSend } = await import("./videoPrepare");
+    const prepared = await prepareVideoForSend(file);
+    outgoing = prepared.file;
+    isVideo = true;
+    if (prepared.width > 0 && prepared.height > 0) {
+      videoInfo = { w: prepared.width, h: prepared.height };
+    }
+    if (prepared.durationMs > 0) {
+      videoInfo.duration = prepared.durationMs;
+    }
+  }
+
+  const contentUri = await uploadFile(outgoing);
 
   let msgtype = "m.file";
   if (isImage) msgtype = "m.image";
@@ -841,11 +863,12 @@ export async function sendFileMessage(roomId: string, file: File) {
 
   const content: Record<string, unknown> = {
     msgtype,
-    body: file.name,
+    body: outgoing.name,
     url: contentUri,
     info: {
-      mimetype: file.type,
-      size: file.size,
+      mimetype: outgoing.type,
+      size: outgoing.size,
+      ...videoInfo,
     },
   };
 

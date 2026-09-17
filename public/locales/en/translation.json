@@ -62,10 +62,7 @@
     "editLayoutHint": "Drag the blocks into the grid (top / right / bottom)",
     "editDone": "Done",
     "editReset": "Reset",
-    "editHidePanel": "Hide this block",
-    "zoneTop": "Top",
-    "zoneRight": "Right",
-    "zoneBottom": "Bottom"
+    "editHidePanel": "Hide this block"
   },
   "server": {
     "online": "Online",
@@ -155,7 +152,15 @@
     "conversationStart": "Start of conversation",
     "audioDecoding": "Decoding audio…",
     "emojiTab": "Emoji",
-    "gifTab": "GIF"
+    "gifTab": "GIF",
+    "videoPreparing": "Preparing video…",
+    "videoNeedsFfmpeg": "ffmpeg is required to send a video: it is converted once here rather than by every recipient.",
+    "installingPct": "Installing… {{pct}}%",
+    "installFfmpeg": "Install ffmpeg (~80 MB)",
+    "videoNeedsConvert": "conversion needed to play this format",
+    "videoConvertAndPlay": "Convert and play",
+    "videoProbing": "Probing format…",
+    "videoConverting": "Converting…"
   },
   "poll": {
     "menuItem": "Poll",
@@ -271,8 +276,6 @@
     "empty": "No sound in this category",
     "searchPlaceholder": "Search a sound...",
     "allCategories": "All",
-    "soundCount_one": "{{count}} sound",
-    "soundCount_other": "{{count}} sounds",
     "favorites": "Favorites",
     "top": "Top",
     "allOf": "All {{name}}",

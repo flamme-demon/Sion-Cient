@@ -135,9 +135,14 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   const isTauriDesktop = typeof window !== "undefined"
     && !!window.__TAURI_INTERNALS__
     && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const isLinuxWebm = isTauriDesktop
-    && /Linux/i.test(navigator.userAgent)
-    && attachment.mimeType.includes("webm");
+  // Le transcodage préventif n'existe QUE pour contourner GStreamer sous
+  // WebKitGTK. Ailleurs il coûte sans rien apporter : WebView2 est un Chromium
+  // complet et lit nativement H.264/AAC, donc un MP4 parfaitement lisible se
+  // retrouvait bloqué derrière une conversion — et derrière une installation
+  // d'ffmpeg quand elle manquait. Sous Windows et macOS on tente la lecture
+  // native et `onError` déclenche la conversion en secours.
+  const isLinuxDesktop = isTauriDesktop && /Linux/i.test(navigator.userAgent);
+  const isLinuxWebm = isLinuxDesktop && attachment.mimeType.includes("webm");
   const [webmProbe, setWebmProbe] = useState<{ url: string; codec: DetectedWebmVideoCodec } | null>(null);
   const webmCodec: WebmVideoCodec = !isLinuxWebm
     ? "not-needed"
@@ -159,10 +164,16 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     return () => { cancelled = true; };
   }, [isLinuxWebm, resolvedUrl]);
 
-  const mustTranscodeBeforePlayback = isTauriDesktop && (
+  const mustTranscodeBeforePlayback = isLinuxDesktop && (
     !attachment.mimeType.includes("webm")
-    || (isLinuxWebm && (webmCodec === "av1" || webmCodec === "unknown"))
+    || webmCodec === "av1"
+    || webmCodec === "unknown"
   );
+  // Rien n'est converti tant que personne n'a demandé à lire. Une conversion
+  // `libvpx-vp9` coûte plusieurs minutes de CPU : la lancer au défilement, pour
+  // une vidéo que l'utilisateur ne regardera peut-être jamais, était du travail
+  // pur perte — et plusieurs cartes visibles en même temps les lançaient toutes.
+  const [playRequested, setPlayRequested] = useState(false);
 
   const handleError = () => {
     // Native playback failed — transcode to WebM via ffmpeg
@@ -175,32 +186,34 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     setError(null);
     setTranscoding(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
+      const { invoke, convertFileSrc } = await import("@tauri-apps/api/core");
       // Feed ffmpeg the bytes the renderer already resolved — resolvedUrl is a
       // blob that has gone through E2EE decryption + Matrix media auth. Letting
       // Rust re-download attachment.url would have neither (401 on authed media,
       // ciphertext on encrypted channels). Fall back to URL download if the
       // blob can't be read for some reason.
-      let dataB64: string | undefined;
+      //
+      // Les octets partent en binaire brut (`ArrayBuffer`), plus en base64 : la
+      // version précédente transformait une vidéo de 200 Mo en une chaîne de
+      // ~270 Mo dans le processus web, à l'aller comme au retour. Rust rend un
+      // chemin, que le protocole `asset` sert directement à la balise vidéo —
+      // aucun octet ne retraverse l'IPC.
+      let stagedPath: string | undefined;
       try {
         const buf = await (await fetch(resolvedUrl)).arrayBuffer();
-        const u8 = new Uint8Array(buf);
-        let binary = "";
-        const CHUNK = 0x8000;
-        for (let i = 0; i < u8.length; i += CHUNK) {
-          binary += String.fromCharCode(...u8.subarray(i, i + CHUNK));
-        }
-        dataB64 = btoa(binary);
+        const ext = (attachment.name?.split(".").pop() || "bin").toLowerCase();
+        stagedPath = await invoke<string>("stage_media", new Uint8Array(buf), {
+          headers: { "x-sion-ext": ext },
+        });
       } catch (e) {
-        console.warn("[Sion] Lecture du blob pour transcodage échouée, fallback download:", e);
+        console.warn("[Sion] Mise en tampon pour transcodage échouée, fallback download:", e);
       }
-      const b64: string = await invoke("transcode_video", { url: attachment.url, ffmpegPath, dataB64 });
-      const raw = atob(b64);
-      const bytes = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      const blob = new Blob([bytes], { type: "video/webm" });
-      const blobUrl = URL.createObjectURL(blob);
-      setTranscodedUrl(blobUrl);
+      const outPath: string = await invoke("transcode_video", {
+        url: attachment.url,
+        ffmpegPath,
+        inputPath: stagedPath,
+      });
+      setTranscodedUrl(convertFileSrc(outPath));
     } catch (err) {
       console.error("[Sion] Transcodage échoué:", err);
       setError(String(err));
@@ -231,7 +244,9 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
 
   // Cleanup blob URL on unmount
   useEffect(() => {
-    return () => { if (transcodedUrl) URL.revokeObjectURL(transcodedUrl); };
+    // `transcodedUrl` est désormais une URL `asset:` servie depuis le disque :
+    // rien à révoquer, contrairement aux anciens blobs.
+    return () => { if (transcodedUrl?.startsWith("blob:")) URL.revokeObjectURL(transcodedUrl); };
   }, [transcodedUrl]);
 
   // Non-WebM formats keep their existing compatibility transcode. On Linux,
@@ -239,11 +254,11 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // immediate playback.
   useEffect(() => {
     if (webmCodec === "pending" || !resolvedUrl || transcodedUrl || transcoding || error) return;
-    if (mustTranscodeBeforePlayback) {
+    if (mustTranscodeBeforePlayback && playRequested) {
       runTranscode();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolvedUrl, webmCodec]);
+  }, [resolvedUrl, webmCodec, playRequested]);
 
   if (error) {
     const handleDownload = () => {
@@ -310,6 +325,49 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     );
   }
 
+  // Conversion nécessaire mais pas encore demandée : on affiche une carte avec
+  // un bouton plutôt que de lancer ffmpeg dans le dos de l'utilisateur.
+  if (mustTranscodeBeforePlayback && !transcodedUrl && !transcoding && webmCodec !== "pending") {
+    return (
+      <div style={{
+        marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
+        padding: '16px 20px', width: 520, maxWidth: '100%',
+        display: 'flex', alignItems: 'center', gap: 14,
+      }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: 12,
+          background: 'var(--color-primary-container)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {attachment.name}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
+            {formatFileSize(attachment.size)} — {t("chat.videoNeedsConvert", { defaultValue: "conversion nécessaire pour lire ce format" })}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPlayRequested(true)}
+          style={{
+            flexShrink: 0, padding: '8px 16px', borderRadius: 20, border: 'none',
+            background: 'var(--color-primary)', color: 'var(--color-on-primary)',
+            fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {t("chat.videoConvertAndPlay", { defaultValue: "Convertir et lire" })}
+        </button>
+      </div>
+    );
+  }
+
   // The synchronous guard prevents even a one-frame mount of an AV1/unknown
   // source while codec probing or the effect-triggered transcode is pending.
   if (webmCodec === "pending" || transcoding || (mustTranscodeBeforePlayback && !transcodedUrl)) {
@@ -336,7 +394,9 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
             {attachment.name}
           </div>
           <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
-            Transcodage en cours…
+            {webmCodec === "pending"
+              ? t("chat.videoProbing", { defaultValue: "Analyse du format…" })
+              : t("chat.videoConverting", { defaultValue: "Conversion en cours…" })}
           </div>
         </div>
       </div>
@@ -351,6 +411,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         key={videoSrc}
         controls
         playsInline
+        autoPlay={playRequested && !!transcodedUrl}
         preload={transcodedUrl ? "metadata" : "none"}
         src={videoSrc}
         style={{ width: '100%', maxHeight: 400, display: 'block' }}

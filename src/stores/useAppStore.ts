@@ -87,6 +87,8 @@ interface AppState {
   toggleAccountPanel: () => void;
   addPendingFile: (file: File) => Promise<void> | void;
   fileError: string | null;
+  /** Affiche un message d'erreur transitoire au-dessus de la zone de saisie. */
+  setFileError: (message: string) => void;
   kickMessage: string | null;
   kickedFromRoom: string | null;
   dismissKick: () => void;
@@ -320,6 +322,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   showDownloadNotification: (filename, path) => {
     set({ downloadNotification: { filename, path } });
     setTimeout(() => set({ downloadNotification: null }), 6000);
+  },
+  setFileError: (message) => {
+    set({ fileError: message });
+    setTimeout(() => set({ fileError: null }), 5000);
   },
   dismissDownloadNotification: () => set({ downloadNotification: null }),
   markAsDownloaded: (url) => set((s) => {
