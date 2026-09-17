@@ -2609,6 +2609,18 @@ mod imp {
     };
     use windows_core::w;
 
+    /// Le chemin planaire est propre au renderer EGL de Wayland. Ici la
+    /// présentation passe par `StretchDIBits`, qui ne sait peindre que du
+    /// BGRA : la pompe doit continuer à convertir côté CPU.
+    pub fn accepts_planar(_sender: &str) -> bool {
+        false
+    }
+
+    /// Inaccessible en pratique — `prefers_planar()` répond `false` au-dessus.
+    /// Le plan est relâché sans être peint plutôt que d'être converti ici, ce
+    /// qui masquerait une régression du côté appelant.
+    pub fn on_planar_frame(_sender: String, _frame: Box<dyn super::PlanarFrame>) {}
+
     const MAX_SURFACES: usize = 16;
     const MAX_FRAME_BYTES: usize = 4096 * 4096 * 4;
 
@@ -3086,6 +3098,17 @@ mod imp {
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod imp {
     use super::NativeVideoSurfaceSpec;
+
+    /// Le chemin planaire est propre au renderer EGL de Wayland. Ici la
+    /// présentation passe par le repli BGRA : la pompe doit continuer à convertir côté CPU.
+    pub fn accepts_planar(_sender: &str) -> bool {
+        false
+    }
+
+    /// Inaccessible en pratique — `prefers_planar()` répond `false` au-dessus.
+    /// Le plan est relâché sans être peint plutôt que d'être converti ici, ce
+    /// qui masquerait une régression du côté appelant.
+    pub fn on_planar_frame(_sender: String, _frame: Box<dyn super::PlanarFrame>) {}
 
     pub fn available() -> bool {
         false
