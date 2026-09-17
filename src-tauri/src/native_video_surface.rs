@@ -2882,6 +2882,22 @@ mod imp {
             if !current.contains_key(&surface.id) {
                 match create_surface_window(parent, surface) {
                     Ok(window) => {
+                        // Journalisé : sans cette ligne, un partage noir ne
+                        // permettait pas de distinguer « la fenêtre enfant n'a
+                        // pas été créée » de « elle existe mais reste derrière
+                        // la composition de WebView2 » — deux causes qui
+                        // n'appellent pas le même correctif.
+                        log::info!(
+                            "[Sion][partage-natif/windows] surface {} créée pour {} à {:.0},{:.0} \
+                             ({:.0}x{:.0} CSS, échelle {:.2})",
+                            surface.id,
+                            surface.sender,
+                            surface.x,
+                            surface.y,
+                            surface.width,
+                            surface.height,
+                            scale
+                        );
                         current.insert(surface.id.clone(), window);
                     }
                     Err(err) => {
