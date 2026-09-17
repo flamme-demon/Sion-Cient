@@ -7,6 +7,8 @@ import { findAdminRoom } from "../../services/adminCommandService";
 
 const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
+/** Plafond de paginations pour rejoindre un message épinglé ancien. */
+const MAX_JUMP_PAGES = 25;
 
 /** Returns true if both timestamps fall on the same calendar day (local time). */
 function isSameDay(a: number, b: number): boolean {
@@ -124,6 +126,8 @@ export function MessageList() {
    *  justifie de coller au bas. */
   const prevLastIdRef = useRef<string | null>(null);
   const suppressScrollLoadRef = useRef(false);
+  /** Hauteur et position juste avant une pagination vers le haut. */
+  const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const channelJustChangedRef = useRef(false);
 
   // Track unread state (disabled for admin room)
@@ -396,18 +400,30 @@ export function MessageList() {
 
     // (Own-message fast-path handled above, before channelJustChanged early-return.)
 
-    const newCount = currLen - prevLen;
     if ((!isAtBottomRef.current || isPrepend) && prevLen > 0) {
       suppressScrollLoadRef.current = true;
-      requestAnimationFrame(() => {
-        const children = el.children;
-        let addedHeight = 0;
-        for (let i = 0; i < newCount && i < children.length; i++) {
-          addedHeight += (children[i] as HTMLElement).offsetHeight;
-        }
-        el.scrollTop += addedHeight;
-        requestAnimationFrame(() => { suppressScrollLoadRef.current = false; });
-      });
+      const ancre = prependAnchorRef.current;
+      // On replace la vue sur le contenu qu'elle montrait : tout ce qui s'est
+      // ajouté au-dessus a poussé la hauteur totale d'autant, et `scrollTop`
+      // n'a pas bougé — d'où l'impression d'être redescendu.
+      const restaurer = () => {
+        if (!ancre) return;
+        const delta = el.scrollHeight - ancre.height;
+        if (delta > 0) el.scrollTop = ancre.top + delta;
+      };
+      restaurer();
+      // Les médias prennent leur hauteur définitive après coup (image décodée,
+      // métadonnées vidéo). On réajuste tant que la hauteur bouge, brièvement,
+      // au lieu de figer une correction sur une mesure prématurée.
+      const observer = new ResizeObserver(restaurer);
+      for (const enfant of Array.from(el.children).slice(0, 40)) {
+        observer.observe(enfant);
+      }
+      window.setTimeout(() => {
+        observer.disconnect();
+        prependAnchorRef.current = null;
+        suppressScrollLoadRef.current = false;
+      }, 1200);
       return;
     }
 
@@ -474,21 +490,63 @@ export function MessageList() {
     if (!userHasScrolledRef.current) return;
     const isScrollable = el.scrollHeight > el.clientHeight + 10;
     if (isScrollable && el.scrollTop < SCROLL_TOP_THRESHOLD && activeChannel && hasMore && !isLoading) {
+      // Instantané AVANT la pagination : la seule mesure qui survit à tout ce
+      // qui va s'insérer en tête. Additionner la hauteur des premiers enfants
+      // du DOM, comme on le faisait, suppose qu'ils correspondent un pour un
+      // aux messages ajoutés — faux dès qu'il y a l'indicateur de chargement,
+      // un séparateur de date, ou un média dont la hauteur arrive plus tard.
+      prependAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
       loadRoomHistory(activeChannel);
     }
   }, [activeChannel, hasMore, isLoading, loadRoomHistory, markAsRead]);
 
-  // Scroll to specific message (from PinnedBar)
+  // Aller à un message précis (barre des épinglés).
+  //
+  // Un épinglé peut dater de plusieurs mois : il n'est alors pas dans la
+  // portion chargée du fil. L'ancienne version ne faisait rien dans ce cas —
+  // elle effaçait la demande sans bouger. L'utilisateur restait en haut de
+  // liste, où la pagination automatique s'enchaînait toute seule, d'où
+  // l'impression de « remonter tout en haut sans raison ».
+  //
+  // On remonte donc l'historique jusqu'à trouver la cible, par paginations
+  // successives et avec un plafond : sans lui, un épinglé supprimé ou hors
+  // d'atteinte ferait défiler le salon entier.
+  const [pendingJump, setPendingJump] = useState<string | null>(null);
+  const jumpPagesRef = useRef(0);
   useEffect(() => {
-    if (!scrollToMessageId || !containerRef.current) return;
-    const el = containerRef.current.querySelector(`[data-event-id="${scrollToMessageId}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setHighlightedId(scrollToMessageId);
-      setTimeout(() => setHighlightedId(null), 2000);
-    }
+    if (!scrollToMessageId) return;
+    jumpPagesRef.current = 0;
+    setPendingJump(scrollToMessageId);
     setScrollToMessageId(null);
   }, [scrollToMessageId, setScrollToMessageId]);
+
+  useEffect(() => {
+    if (!pendingJump) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const cible = el.querySelector(`[data-event-id="${pendingJump}"]`);
+    if (cible) {
+      // Pas de défilement animé : la cible vient peut-être d'arriver au milieu
+      // d'une insertion en tête, et une animation partirait d'une position qui
+      // n'existera plus à son terme.
+      suppressScrollLoadRef.current = true;
+      cible.scrollIntoView({ block: "center" });
+      setHighlightedId(pendingJump);
+      setTimeout(() => setHighlightedId(null), 2000);
+      setPendingJump(null);
+      window.setTimeout(() => { suppressScrollLoadRef.current = false; }, 600);
+      return;
+    }
+    if (!activeChannel || !hasMore || jumpPagesRef.current >= MAX_JUMP_PAGES) {
+      // Hors d'atteinte : on abandonne sans laisser la pagination s'emballer.
+      setPendingJump(null);
+      return;
+    }
+    if (isLoading) return;
+    jumpPagesRef.current += 1;
+    suppressScrollLoadRef.current = true;
+    loadRoomHistory(activeChannel);
+  }, [pendingJump, messages, activeChannel, hasMore, isLoading, loadRoomHistory, setScrollToMessageId]);
 
   return (
     <div style={{ position: "relative", display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
