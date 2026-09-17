@@ -3273,45 +3273,21 @@ pub fn run() {
             // (windows_subsystem="windows") has no console, so without an
             // installed logger Rust `log::*` output is silently dropped and
             // there's no way to diagnose issues on it. The Webview target
-            // surfaces Rust logs in DevTools (exportable); a file target also
-            // writes them to disk — voir le choix du dossier ci-dessous.
-            {
-                use tauri_plugin_log::{Target, TargetKind};
-                let mut targets = vec![
-                    Target::new(TargetKind::Stdout),
-                    Target::new(TargetKind::Webview),
-                ];
-                // Sous Windows, `TargetKind::LogDir` écrit dans
-                // `%LOCALAPPDATA%\{identifiant}\logs`, donc
-                // `AppData\Local\com.sion.client\logs` : personne ne va
-                // chercher là, alors que l'application s'installe dans
-                // `AppData\Local\Sion Client`. On vise ce dossier-là pour que
-                // le journal soit à côté de l'application quand on le demande à
-                // un utilisateur. Sans `LOCALAPPDATA` (cas improbable), on
-                // retombe sur le dossier par défaut plutôt que de perdre le
-                // journal.
-                #[cfg(target_os = "windows")]
-                {
-                    match std::env::var_os("LOCALAPPDATA") {
-                        Some(local) => targets.push(Target::new(TargetKind::Folder {
-                            path: std::path::PathBuf::from(local)
-                                .join("Sion Client")
-                                .join("logs"),
-                            file_name: None,
-                        })),
-                        None => targets.push(Target::new(TargetKind::LogDir { file_name: None })),
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                targets.push(Target::new(TargetKind::LogDir { file_name: None }));
-
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .targets(targets)
-                        .build(),
-                )?;
-            }
+            // surfaces Rust logs in DevTools (exportable); the default LogDir
+            // target also writes them to a file, dans le dossier de données de
+            // l'application (`AppData\Local\com.sion.client\logs` sous
+            // Windows). Le viser ailleurs a été essayé puis annulé le 17/09 :
+            // écrire des journaux dans le dossier d'INSTALLATION mélange des
+            // fichiers qui changent sans cesse avec un dossier censé ne bouger
+            // qu'aux mises à jour, et un désinstalleur les emporterait.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .target(tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Webview,
+                    ))
+                    .build(),
+            )?;
 
             #[cfg(not(target_os = "android"))]
             install_window_state_resilience(app);
