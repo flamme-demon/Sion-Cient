@@ -340,7 +340,16 @@ impl Host {
             XEvent::Expose(_) | XEvent::VisibilityNotify(_) => {
                 self.need_redraw = true;
             }
+            XEvent::MapNotify(_) => {
+                // La fenêtre vient d'être prise en gestion : c'est seulement
+                // maintenant que le gestionnaire accepte un changement d'état.
+                self.reassert_above();
+            }
             XEvent::ConfigureNotify(ev) => {
+                // KWin réécrit `_NET_WM_STATE` quand il (re)positionne ou
+                // maximise la fenêtre. On réaffirme : l'appel est une requête
+                // X sans réponse, et les ConfigureNotify sont rares.
+                self.reassert_above();
                 if let Some(win) = self.win.as_mut() {
                     if ev.width != win.w || ev.height != win.h {
                         log::info!(
@@ -582,14 +591,44 @@ impl Host {
         Ok(())
     }
 
-    /// `_NET_WM_STATE` ADD `_NET_WM_STATE_STICKY` par ClientMessage (source 1
-    /// = application, action 1 = add).
+    /// Réaffirme « au-dessus + tous bureaux » sans faire échouer le rendu si
+    /// le gestionnaire refuse : l'overlay reste utilisable, simplement mal
+    /// empilé, et la prochaine occasion réessaiera.
+    fn reassert_above(&self) {
+        let Some(win) = self.win.as_ref() else {
+            return;
+        };
+        if let Err(err) = self.send_state_message(win.id) {
+            log::warn!("[Sion][CursorOverlay] réaffirmation « au-dessus » refusée: {err:?}");
+        }
+    }
+
+    /// `_NET_WM_STATE` ADD `_NET_WM_STATE_ABOVE` + `_NET_WM_STATE_STICKY` par
+    /// ClientMessage (source 1 = application, action 1 = add).
+    ///
+    /// Les deux états sont posés en propriété AVANT le mappage, mais KWin
+    /// remplace `_NET_WM_STATE` quand il prend la fenêtre en gestion. Mesuré le
+    /// 17/09 sur la fenêtre vivante : `_NET_WM_STATE` ne contenait plus que
+    /// `MAXIMIZED_VERT, MAXIMIZED_HORZ` — plus d'`ABOVE`, plus de `STICKY`.
+    /// L'overlay retombait donc dans la couche normale et toute fenêtre levée
+    /// ensuite passait devant lui (constat utilisateur : « le curseur passe
+    /// derrière Firefox »). Le ClientMessage envoyé juste après `map_window`
+    /// n'y changeait rien : le gestionnaire ignore les changements d'état d'une
+    /// fenêtre qu'il ne gère pas encore. Il est donc rejoué une fois la fenêtre
+    /// réellement gérée, à chaque `MapNotify` et `ConfigureNotify` — vérifié :
+    /// `ABOVE` et `STAYS_ON_TOP` réapparaissent alors dans la propriété.
     fn send_state_message(&self, win: Window) -> Result<(), Box<dyn std::error::Error>> {
         let event = ClientMessageEvent::new(
             32,
             win,
             self.atoms.net_wm_state,
-            [1, self.atoms.net_wm_state_sticky, 0, 1, 0],
+            [
+                1,
+                self.atoms.net_wm_state_above,
+                self.atoms.net_wm_state_sticky,
+                1,
+                0,
+            ],
         );
         self.conn.send_event(
             false,
