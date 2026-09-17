@@ -59,6 +59,32 @@ function alreadyCompatible(file: File, bytes: Uint8Array): boolean {
  * Hors bureau (mobile, web) la fonction rend le fichier inchangé : ffmpeg n'y
  * est pas disponible, et bloquer l'envoi y serait une régression.
  */
+/**
+ * Lit un fichier du dossier média et rend ses octets.
+ *
+ * `invoke` ne garantit pas la forme du retour d'une réponse binaire : selon que
+ * l'IPC passe par le protocole personnalisé ou retombe sur `postMessage`, on
+ * reçoit un `ArrayBuffer` ou un tableau de nombres. Passer ce dernier tel quel
+ * à `new Blob([...])` le sérialise en texte et produit un blob illisible —
+ * indiscernable d'un fichier corrompu. On normalise donc, et on journalise la
+ * taille et la signature pour que le prochain échec soit lisible du premier
+ * coup.
+ */
+export async function readMediaBytes(path: string, label: string): Promise<Uint8Array<ArrayBuffer>> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const raw = await invoke<ArrayBuffer | number[]>("read_media", { path });
+  const bytes: Uint8Array<ArrayBuffer> = raw instanceof ArrayBuffer
+    ? new Uint8Array(raw)
+    : Uint8Array.from(raw as number[]);
+  const magic = [...bytes.subarray(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+  void import("@tauri-apps/plugin-log")
+    .then(({ info }) => info(
+      `[Sion][vidéo] ${label} : ${bytes.byteLength} o, forme=${Object.prototype.toString.call(raw)}, signature=${magic}`,
+    ))
+    .catch(() => { /* hors Tauri */ });
+  return bytes;
+}
+
 export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
   if (!isTauriDesktop()) {
     return { file, width: 0, height: 0, durationMs: 0, transcoded: false };
@@ -90,9 +116,9 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
     throw err;
   }
 
-  // Retour en binaire brut (`read_media`), jamais en base64 : le protocole
-  // `asset` a été essayé et ne tient pas sous WebKitGTK.
-  const outBytes = await invoke<ArrayBuffer>("read_media", { path: prepared.path });
+  // Retour en binaire brut, jamais en base64 : le protocole `asset` a été
+  // essayé et ne tient pas sous WebKitGTK.
+  const outBytes = await readMediaBytes(prepared.path, "préparé pour l'envoi");
   const blob = new Blob([outBytes], { type: prepared.mimetype });
   const name = prepared.transcoded
     ? `${file.name.replace(/\.[^.]+$/, "")}.webm`

@@ -1497,6 +1497,12 @@ fn cleanup_old_transcodes() {
     }
 }
 
+/// Plafond de résolution des conversions de compatibilité : 1280 sur le grand
+/// côté, ratio conservé, dimensions paires (exigées par les encodeurs YUV).
+const VIDEO_SCALE_FILTER_FLAG: &str = "-vf";
+const VIDEO_SCALE_FILTER: &str =
+    "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
+
 /// Dossier temporaire dédié aux médias. Isolé du `temp_dir` général pour que la
 /// portée du protocole `asset` (qui laisse la webview lire ces fichiers) puisse
 /// être restreinte à ce seul répertoire.
@@ -1699,6 +1705,8 @@ async fn prepare_video_for_send(
         "libopus",
         "-b:a",
         "128k",
+        VIDEO_SCALE_FILTER_FLAG,
+        VIDEO_SCALE_FILTER,
         "-f",
         "webm",
         "-progress",
@@ -1729,7 +1737,15 @@ async fn transcode_video(
     url: String,
     ffmpeg_path: Option<String>,
     input_path: Option<String>,
+    codec: Option<String>,
 ) -> Result<String, String> {
+    // VP9 par défaut (meilleure compression). VP8 est le repli demandé quand le
+    // lecteur a échoué à décoder : mesuré le 17/09 sous WebKitGTK, un VP9
+    // 1080x1920 donne `MEDIA_ERR_DECODE` dès la première image alors que
+    // `ffmpeg` et `gst-launch` le décodent en logiciel sans broncher — le
+    // décodage matériel décroche. VP8 est le codec le plus universellement
+    // décodable de cette pile.
+    let vp8 = codec.as_deref() == Some("vp8");
     // Resolve the ffmpeg binary: user-configured path (Settings → Advanced) →
     // app-managed download → common install locations → `ffmpeg` on PATH. Lets
     // the transcode work out-of-box when ffmpeg is installed but not on PATH
@@ -1749,7 +1765,11 @@ async fn transcode_video(
     url.hash(&mut hasher);
     let hash = hasher.finish();
     let tmp_dir = sion_media_dir();
-    let output_path = tmp_dir.join(format!("sion_out_{:x}.webm", hash));
+    let output_path = tmp_dir.join(format!(
+        "sion_out_{:x}{}.webm",
+        hash,
+        if vp8 { "_vp8" } else { "" }
+    ));
 
     // Conversion déjà faite : on rend le même chemin, la webview le relira.
     if output_path.exists() {
@@ -1781,24 +1801,29 @@ async fn transcode_video(
     let output = hidden_command(&ffmpeg_bin)
         .args(["-y", "-i"])
         .arg(&input_path)
-        .args([
-            "-c:v",
-            "libvpx-vp9",
-            "-crf",
-            "35",
-            "-b:v",
-            "0",
-            "-deadline",
-            "realtime",
-            "-cpu-used",
-            "8",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "96k",
-            "-f",
-            "webm",
-        ])
+        // Plafond de résolution : 1280 sur le grand côté, ratio conservé,
+        // dimensions paires. Mesuré le 17/09 — deux conversions identiques en
+        // tout point (VP9 profil 0, yuv420p, bt709, 30 fps, ~1200 kb/s) se
+        // comportent différemment sous WebKitGTK selon leur seule taille : le
+        // 720x1280 se lit, le 1080x1920 donne `MEDIA_ERR_DECODE` dès la
+        // première image. Le décodeur décroche au-delà d'une certaine
+        // résolution, pas sur le codec. Le plafond réduit au passage le poids
+        // et le temps d'encodage.
+        .args(if vp8 {
+            // VP8 n'a pas de mode qualité constante utilisable seul : `-crf`
+            // demande un plafond de débit pour être pris en compte.
+            [
+                "-c:v", "libvpx", "-crf", "12", "-b:v", "2M", "-deadline",
+                "realtime", "-cpu-used", "8", "-c:a", "libopus", "-b:a", "96k",
+                VIDEO_SCALE_FILTER_FLAG, VIDEO_SCALE_FILTER, "-f", "webm",
+            ]
+        } else {
+            [
+                "-c:v", "libvpx-vp9", "-crf", "35", "-b:v", "0", "-deadline",
+                "realtime", "-cpu-used", "8", "-c:a", "libopus", "-b:a", "96k",
+                VIDEO_SCALE_FILTER_FLAG, VIDEO_SCALE_FILTER, "-f", "webm",
+            ]
+        })
         .arg(&output_path)
         .output()
         .map_err(|e| format!("ffmpeg not found: {}", e))?;

@@ -169,8 +169,23 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     return () => { cancelled = true; };
   }, [isLinuxWebm, resolvedUrl]);
 
+  // On DEMANDE au moteur ce qu'il sait lire, au lieu de le supposer. La règle
+  // précédente — « sous Linux, tout ce qui n'est pas WebM passe par ffmpeg » —
+  // convertissait des fichiers parfaitement lisibles : WebKitGTK délègue le
+  // décodage à GStreamer, et une machine qui a `avdec_h264` et `avdec_aac` lit
+  // un MP4 H.264/AAC sans aide. Une conversion inutile coûte plusieurs minutes
+  // de CPU et impose ffmpeg à quelqu'un qui n'en avait pas besoin.
+  //
+  // `canPlayType` rend "probably", "maybe" ou "" ; seul "" est un refus ferme.
+  // Un "maybe" qui se révélerait faux retombe sur `onError`, donc sur la
+  // conversion — on ne perd que l'immédiateté, jamais la lecture.
+  const playableNatively = !isLinuxDesktop || attachment.mimeType.includes("webm")
+    || document.createElement("video").canPlayType(attachment.mimeType) !== "";
+  // Le cas WebM AV1/inconnu reste préventif : là, GStreamer ne rend pas une
+  // erreur mais tue le processus web par une assertion, et `onError` n'y peut
+  // rien.
   const mustTranscodeBeforePlayback = isLinuxDesktop && (
-    !attachment.mimeType.includes("webm")
+    (!attachment.mimeType.includes("webm") && !playableNatively)
     || webmCodec === "av1"
     || webmCodec === "unknown"
   );
@@ -179,6 +194,10 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // une vidéo que l'utilisateur ne regardera peut-être jamais, était du travail
   // pur perte — et plusieurs cartes visibles en même temps les lançaient toutes.
   const [playRequested, setPlayRequested] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Codec visé par la conversion. VP9 d'abord ; VP8 seulement après un échec de
+  // décodage, voir `handleTranscodedError`.
+  const [codec, setCodec] = useState<"vp9" | "vp8">("vp9");
 
   const handleError = () => {
     // Native playback failed — transcode to WebM via ffmpeg
@@ -191,17 +210,44 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // gestionnaire l'erreur était avalée (`onError` valait `undefined` dès qu'une
   // conversion avait réussi) et la carte affichait un rectangle noir sans
   // contrôles, impossible à distinguer d'une vidéo vide.
-  const handleTranscodedError = () => {
+  const handleTranscodedError = (ev?: React.SyntheticEvent<HTMLVideoElement>) => {
     if (error) return;
+    // Relevé au moment exact de l'échec : la sonde différée arrive trop tard,
+    // l'élément est déjà démonté. Le code distingue les cas qui n'appellent pas
+    // le même correctif — 3 = décodage (flux illisible en cours de route),
+    // 4 = source/format refusé d'emblée.
+    const el = ev?.currentTarget;
+    const detail = el?.error
+      ? `code=${el.error.code} message=${el.error.message || "(vide)"}`
+      : "aucune erreur exposée";
+    const state = el
+      ? ` readyState=${el.readyState} networkState=${el.networkState} duration=${el.duration}`
+        + ` dims=${el.videoWidth}x${el.videoHeight} t=${el.currentTime}`
+      : "";
     void import("@tauri-apps/plugin-log")
-      .then(({ error: logError }) => logError(`[Sion][vidéo] source convertie illisible: ${transcodedUrl}`))
+      .then(({ error: logError }) => logError(
+        `[Sion][vidéo] source convertie illisible (codec=${codec}): ${detail}${state}`,
+      ))
       .catch(() => { /* hors Tauri */ });
+    // Échec de DÉCODAGE sur une conversion VP9 : le conteneur et les
+    // métadonnées étaient bons, c'est le décodeur qui a lâché. On retente une
+    // fois en VP8 avant d'abandonner — mesuré sous WebKitGTK, un VP9 portrait
+    // 1080x1920 échoue dès la première image alors que le fichier est valide.
+    if (el?.error?.code === 2 /* MEDIA_ERR_NETWORK */ || el?.error?.code === 3) {
+      if (codec === "vp9") {
+        setCodec("vp8");
+        setTranscodedUrl(null);
+        void runTranscode("vp8");
+        return;
+      }
+    }
     setError(t("chat.videoPlaybackFailed", {
       defaultValue: "Fichier converti illisible par le lecteur",
     }));
   };
 
-  const runTranscode = async () => {
+  const runTranscode = async (forceCodec?: "vp9" | "vp8") => {
+    const target = forceCodec ?? codec;
     setError(null);
     setTranscoding(true);
     try {
@@ -231,11 +277,13 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         url: attachment.url,
         ffmpegPath,
         inputPath: stagedPath,
+        codec: target,
       });
       // Les octets reviennent en binaire brut, pas en base64 ni par le
       // protocole `asset` : voir `read_media` côté Rust pour les deux essais
       // précédents et pourquoi ils ne tiennent pas.
-      const webm = await invoke<ArrayBuffer>("read_media", { path: outPath });
+      const { readMediaBytes } = await import("../../services/videoPrepare");
+      const webm = await readMediaBytes(outPath, "converti pour la lecture");
       setTranscodedUrl(URL.createObjectURL(new Blob([webm], { type: "video/webm" })));
     } catch (err) {
       console.error("[Sion] Transcodage échoué:", err);
@@ -286,6 +334,28 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedUrl, webmCodec, playRequested]);
+
+  // Sonde d'état du lecteur. Une vidéo « bloquée à 0:00 » ne dit rien par
+  // elle-même : selon le cas, les métadonnées ne sont pas arrivées
+  // (`readyState` 0), la source est en erreur (`error.code`), ou la lecture est
+  // simplement refusée par la politique de démarrage automatique. On relève
+  // l'état réel deux secondes après l'attachement de la source convertie.
+  useEffect(() => {
+    if (!transcodedUrl) return;
+    const timer = setTimeout(() => {
+      const el = videoRef.current;
+      if (!el) return;
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(
+          `[Sion][vidéo] état lecteur : readyState=${el.readyState} networkState=${el.networkState}`
+          + ` duration=${el.duration} dims=${el.videoWidth}x${el.videoHeight}`
+          + ` paused=${el.paused} currentTime=${el.currentTime}`
+          + ` erreur=${el.error ? `${el.error.code}/${el.error.message}` : "aucune"}`,
+        ))
+        .catch(() => { /* hors Tauri */ });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [transcodedUrl]);
 
   if (error) {
     const handleDownload = () => {
@@ -434,6 +504,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
       <video
         key={videoSrc}
+        ref={videoRef}
         controls
         playsInline
         autoPlay={playRequested && !!transcodedUrl}
