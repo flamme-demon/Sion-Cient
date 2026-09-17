@@ -229,7 +229,12 @@ $nsisBundleDir = "$releaseDir\bundle\nsis"
 if (Test-Path $msiBundleDir) { Remove-Item -Recurse -Force $msiBundleDir }
 if (Test-Path $nsisBundleDir) { Remove-Item -Recurse -Force $nsisBundleDir }
 
-bun run tauri build
+# NSIS uniquement, comme la CI. MSI refuse tout identifiant de pre-version non
+# numerique : avec une version `2.0.0-alpha.5`, `tauri build` echoue sur
+# « optional pre-release identifier in app version must be numeric-only ».
+# Le Rust est deja compile a ce stade ; seul l'empaquetage tombait, et
+# l'installeur reellement distribue est le NSIS.
+bun run tauri build --bundles nsis
 $tauriBuildExitCode = $LASTEXITCODE
 
 # Restore tauri.conf.json from backup (guaranteed clean)
