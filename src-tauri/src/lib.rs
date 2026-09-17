@@ -3574,13 +3574,33 @@ pub fn run() {
                         };
                         let view = webview.inner();
                         if let Some(context) = view.context() {
-                            context.set_cache_model(CacheModel::DocumentViewer);
+                            // `DocumentViewer` était utilisé ici : WebKit le
+                            // documente comme « désactive complètement le
+                            // cache », prévu pour une application affichant un
+                            // seul fichier local sans navigation. C'est ce qui
+                            // cassait TOUTE lecture vidéo — mesuré le 17/09.
+                            // Un média passe par le cache de ressources du
+                            // moteur : sans lui, l'élément lit ses métadonnées,
+                            // joue les deux secondes qu'il a en mémoire, puis
+                            // s'arrête. Sans erreur, sans événement, quel que
+                            // soit le codec, le conteneur ou le transport —
+                            // base64, `asset:`, `blob:` ou HTTP local. Les
+                            // mêmes fichiers se lisent intégralement dans
+                            // MiniBrowser, qui utilise le modèle par défaut.
+                            //
+                            // `DocumentBrowser` garde un cache modeste, ce dont
+                            // le lecteur a besoin, sans revenir au cache disque
+                            // d'un navigateur complet. Le gain mémoire visé à
+                            // l'origine — 100 à 200 Mo par rechargement — venait
+                            // du PAGE cache, réglage distinct, désactivé juste
+                            // en dessous et conservé.
+                            context.set_cache_model(CacheModel::DocumentBrowser);
                         }
                         if let Some(settings) = view.settings() {
                             settings.set_enable_page_cache(false);
                         }
                         log::info!(
-                            "[Sion][webkit] caches bridés (document viewer, page cache off)"
+                            "[Sion][webkit] caches bridés (document browser, page cache off)"
                         );
                         // Page blanche sous pilote NVIDIA : surveille le web
                         // process (cf. `gpu_fallback`).

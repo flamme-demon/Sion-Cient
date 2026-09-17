@@ -185,11 +185,19 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // lisibles s'arrêtent tous deux à ~2 s, alors que les mêmes fichiers
   // convertis en VP9/Opus et servis par le serveur média local se lisent
   // intégralement.
-  const mustTranscodeBeforePlayback = isLinuxDesktop && (
-    !attachment.mimeType.includes("webm")
-    || webmCodec === "av1"
-    || webmCodec === "unknown"
-  );
+  // Plus rien n'est converti d'office, sauf un codec dont on ignore tout.
+  //
+  // La cause des blocages n'était aucun de ceux qu'on a soupçonnés — ni le
+  // codec, ni le conteneur, ni la résolution, ni le transport : le modèle de
+  // cache `DocumentViewer` que l'application imposait à WebKit désactivait
+  // complètement son cache de ressources, donc toute lecture média s'arrêtait
+  // après les deux secondes tenues en mémoire. Corrigé dans `lib.rs`.
+  //
+  // Un codec INCONNU reste converti : `detectWebmVideoCodec` n'a rien reconnu,
+  // et un conteneur mal formé peut faire partir GStreamer en assertion qui tue
+  // le processus web, ce qu'aucun garde-fou côté page n'intercepte. Le chien de
+  // garde ci-dessous rattrape tout le reste.
+  const mustTranscodeBeforePlayback = isLinuxDesktop && webmCodec === "unknown";
   // Rien n'est converti tant que personne n'a demandé à lire. Une conversion
   // `libvpx-vp9` coûte plusieurs minutes de CPU : la lancer au défilement, pour
   // une vidéo que l'utilisateur ne regardera peut-être jamais, était du travail
@@ -365,6 +373,49 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedUrl, webmCodec, playRequested]);
 
+  // Chien de garde de la lecture native.
+  //
+  // Sous WebKitGTK, une lecture peut s'arrêter au bout de deux secondes SANS
+  // émettre la moindre erreur : `onError` ne part pas, `canPlayType` avait
+  // répondu « oui », et l'utilisateur se retrouve devant un lecteur mort. Vu le
+  // 17/09 sur un MP4 H.264/AAC comme sur un WebM AV1 — alors que d'autres MP4
+  // se lisent intégralement. Aucun critère ne permet de prédire lequel passera,
+  // donc on ne prédit plus : on essaie, et on surveille.
+  //
+  // Un lecteur qui cale reste reconnaissable : la position n'avance plus alors
+  // qu'il n'est ni en pause ni terminé. Trois secondes de position figée
+  // déclenchent la conversion, celle-là même qui n'aurait pas dû être imposée
+  // aux fichiers qui marchent.
+  useEffect(() => {
+    if (!isLinuxDesktop || transcodedUrl || transcoding || error) return;
+    let last = -1;
+    let frozen = 0;
+    const timer = setInterval(() => {
+      const el = videoRef.current;
+      if (!el || el.paused || el.ended || el.readyState < 2) {
+        frozen = 0;
+        return;
+      }
+      if (el.currentTime === last) {
+        frozen += 1;
+        if (frozen >= 3) {
+          clearInterval(timer);
+          void import("@tauri-apps/plugin-log")
+            .then(({ warn }) => warn(
+              `[Sion][vidéo] lecture native figée à ${el.currentTime}s sans erreur — conversion`,
+            ))
+            .catch(() => { /* hors Tauri */ });
+          void runTranscode();
+        }
+        return;
+      }
+      frozen = 0;
+      last = el.currentTime;
+    }, 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLinuxDesktop, transcodedUrl, transcoding, error, resolvedUrl]);
+
   // Sonde d'état du lecteur. Une vidéo « bloquée à 0:00 » ne dit rien par
   // elle-même : selon le cas, les métadonnées ne sont pas arrivées
   // (`readyState` 0), la source est en erreur (`error.code`), ou la lecture est
@@ -457,7 +508,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // carte de fichier : le geste attendu reste « appuyer sur play », la
   // conversion est un détail d'implémentation que l'utilisateur n'a pas à
   // connaître. Elle n'est simplement plus lancée avant ce geste.
-  if (mustTranscodeBeforePlayback && !transcodedUrl && !transcoding && webmCodec !== "pending") {
+  if (mustTranscodeBeforePlayback && !transcodedUrl && !transcoding) {
     return (
       <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
         <button
