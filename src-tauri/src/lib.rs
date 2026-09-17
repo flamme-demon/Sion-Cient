@@ -3718,8 +3718,21 @@ pub fn run() {
             // sont des enfants frères, placés exactement sur les canvas DOM :
             // les frames BGRA restent hors de JavaScript et les hit-tests
             // traversent vers la WebView.
+            // Sous Windows la surface native est OPT-IN, contrairement à Linux.
+            //
+            // Elle se déclare disponible et le moteur lui envoie les frames —
+            // « frames vidéo … en surface native (sans JPEG ni ticker) » — mais
+            // l'image reste noire chez le viewer (alpha 5, 17/09, partage VP8
+            // 1920x1080 reçu). Elle n'a jamais été validée en session réelle ;
+            // la feuille de route le note comme critère de sortie non atteint.
+            //
+            // Tant que ce n'est pas diagnostiqué sur une vraie machine, le
+            // chemin JPEG — celui d'alpha 4, fonctionnel — reprend la main.
+            // `SION_NATIVE_VIDEO_SURFACE=1` la réactive pour le diagnostic.
             #[cfg(target_os = "windows")]
-            if std::env::var_os("SION_DISABLE_NATIVE_VIDEO_SURFACE").is_none() {
+            if std::env::var_os("SION_NATIVE_VIDEO_SURFACE").is_some()
+                && std::env::var_os("SION_DISABLE_NATIVE_VIDEO_SURFACE").is_none()
+            {
                 if let Some(window) = app.get_webview_window("main") {
                     match (window.hwnd(), window.scale_factor()) {
                         (Ok(hwnd), Ok(scale_factor)) => {
