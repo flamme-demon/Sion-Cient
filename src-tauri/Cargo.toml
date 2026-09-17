@@ -190,6 +190,9 @@ jni = "0.21"
 windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # `IVirtualDesktopManager` : ramener l'overlay des curseurs sur le bureau
+    # virtuel courant. API documentee et stable, contrairement a l'epinglage.
+    "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",

@@ -102,6 +102,10 @@ struct App {
     /// Cumul du temps passé dans `redraw()` (diagnostic, voir ci-dessus).
     redraw_ms_total: u64,
     redraw_count: u64,
+    /// Arrête le fil qui ramène l'overlay sur le bureau virtuel courant
+    /// (Windows). Inutilisé ailleurs, mais gardé sans `cfg` pour que la
+    /// structure reste identique sur toutes les cibles.
+    desktop_stop: Arc<AtomicBool>,
 }
 
 impl App {
@@ -115,6 +119,7 @@ impl App {
             frame_counter: 0,
             redraw_ms_total: 0,
             redraw_count: 0,
+            desktop_stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -172,9 +177,31 @@ impl App {
             log::warn!("[Sion][CursorOverlay] set_cursor_hittest(false) failed: {err:?}");
         }
 
-        // (Le collage « tous bureaux » `_NET_WM_STATE_STICKY` de l'époque Linux
-        // est fait par `cursor_overlay_x11.rs` ; sur Windows le mode
-        // « toujours au-dessus » suffit.)
+        // Le collage « tous bureaux » n'a pas le même mécanisme selon la
+        // plateforme. Sous Linux c'est `_NET_WM_STATE_STICKY`, posé par
+        // `cursor_overlay_x11.rs`. Sous Windows aucun équivalent documenté
+        // n'existe : une fenêtre appartient au bureau virtuel où elle est née
+        // et y reste. « Toujours au-dessus » ne suffit donc pas — l'overlay
+        // disparaît dès que l'utilisateur change de bureau, alors que le
+        // partage, lui, suit l'écran. On le fait suivre.
+        #[cfg(target_os = "windows")]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            // Drapeau remis à zéro : une fenêtre neuve ne doit pas hériter de
+            // l'arrêt demandé pour la précédente.
+            self.desktop_stop.store(false, Ordering::Relaxed);
+            match window.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(handle)) => {
+                    crate::virtual_desktop::suivre(
+                        handle.hwnd.get(),
+                        std::sync::Arc::clone(&self.desktop_stop),
+                    );
+                }
+                _ => log::warn!(
+                    "[Sion][CursorOverlay] handle Win32 indisponible — pas de suivi des bureaux"
+                ),
+            }
+        }
 
         Some(window)
     }
@@ -299,6 +326,9 @@ impl ApplicationHandler<UserEvent> for App {
                 );
             }
             UserEvent::Hide => {
+                // Arrête le suivi des bureaux virtuels sans attendre que la
+                // destruction de la fenêtre soit constatée.
+                self.desktop_stop.store(true, Ordering::Relaxed);
                 if let Some(w) = self.window.take() {
                     w.set_visible(false);
                     // Drop the window so the compositor truly releases it.
