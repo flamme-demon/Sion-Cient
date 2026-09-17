@@ -47,6 +47,7 @@ jobs:
             libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev libglib2.0-dev \
             libasound2-dev libudev-dev libpulse-dev libxcb1-dev \
+            libva-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libwayland-dev \
             libnss3 libgbm1 libxss1 libasound2t64 libxshmfence1 \
@@ -54,6 +55,14 @@ jobs:
             libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
             libgtk-3-0t64 libfuse2t64
 
+      # NOTE `libva-dev` ci-dessus : VAAPI couvre Intel et AMD, soit la
+      # grande majorité des machines Linux. Sans lui, webrtc-sys compile
+      # « without hardware accelerated video codecs » et la demande explicite
+      # de `VideoEncoderBackend::Hardware` faite par `screenshare_publish_options`
+      # retombe silencieusement sur libvpx/openH264 — le partageur y brûle
+      # nettement plus de CPU. `libva.so.2` est présent sur pratiquement toute
+      # installation de bureau, rien à empaqueter dans l'AppImage.
+      #
       # Codecs NVIDIA (NVENC/NVDEC) pour l'AppImage : le crate webrtc-sys
       # compile son implémentation NVIDIA quand cuda.h est présent. Tolérant :
       # si le paquet est indisponible, on construit sans (chemin logiciel).
