@@ -2026,6 +2026,30 @@ mod imp {
                 }
                 let needed = (stride * (height - 1) + width * bytes_per_pixel) as usize;
                 if pixels.len() < needed {
+                    // Abandon jusqu'ici SILENCIEUX : les trois plans étaient
+                    // écartés sans un mot et la surface restait noire, alors
+                    // que le PIP — qui consomme du BGRA et pas des plans —
+                    // affichait la même vidéo sans problème. Une fois par
+                    // seconde suffit à comprendre sans noyer le journal.
+                    use std::sync::atomic::{AtomicU64, Ordering as O};
+                    static DERNIER: AtomicU64 = AtomicU64::new(0);
+                    let maintenant = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if DERNIER.swap(maintenant, O::Relaxed) != maintenant {
+                        log::warn!(
+                            "[Sion][partage-natif] plan {} ignoré : {} octets reçus, {} attendus \
+                             ({}x{}, pas {}, {} o/px)",
+                            index,
+                            pixels.len(),
+                            needed,
+                            width,
+                            height,
+                            stride,
+                            bytes_per_pixel
+                        );
+                    }
                     return;
                 }
                 super::glActiveTexture(GL_TEXTURE0 + index as u32);

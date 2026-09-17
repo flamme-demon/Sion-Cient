@@ -47,24 +47,20 @@ std::unique_ptr<DesktopCapturer> new_desktop_capturer(
     default:
       break;
   }
-  // Capturer DirectX (duplication DXGI) desactive par defaut : il abat le
-  // processus sur les machines multi-adaptateurs. Trace du crash du 17/09 sur
-  // un Windows 11 :
-  //   dxgi_adapter_duplicator.cc:116  Cannot initialize any DxgiOutputDuplicator
-  //   dxgi_duplicator_controller.cc:286 Failed to initialize ... on adapter 1
-  //   screen_capturer_win.cc:30       cree ScreenCapturerWinDirectx
-  //   <fin du journal, 0xC0000409>
-  // `ScreenCapturerWinDirectx::IsSupported()` repond vrai des qu'UN adaptateur
-  // s'initialise, meme si un autre a echoue : libwebrtc choisit alors le
-  // chemin DXGI sur une duplication a moitie morte. WGC (Win10 2004+) reste
-  // autorise et prioritaire ; sinon le repli GDI prend la main : plus lent,
-  // mais il ne tue pas l'application.
-  // `SION_ALLOW_DIRECTX_CAPTURER=1` le rearme pour comparer les performances.
-  const char* allow_dxgi = std::getenv("SION_ALLOW_DIRECTX_CAPTURER");
-  const bool dxgi_opt_in = allow_dxgi != nullptr && allow_dxgi[0] == '1';
-  webrtc_options.set_allow_directx_capturer(dxgi_opt_in);
-  std::fprintf(stderr, "[Sion][capture] allow_directx_capturer=%d\n",
-               dxgi_opt_in ? 1 : 0);
+  // Capturer DirectX (duplication DXGI) actif.
+  //
+  // Il a ete soupconne puis mis hors de cause. Le 17/09, un partage abattait le
+  // processus (0xC0000409) et la trace s'arretait juste apres la creation d'un
+  // ScreenCapturerWinDirectx : DXGI a donc ete desarme, ce qui a bien stoppe les
+  // plantages. Le vrai coupable etait ailleurs : un `typeid` sur un objet
+  // libwebrtc compile sans RTTI, quelques lignes plus bas dans ce fichier. Une
+  // fois celui-ci retire, DXGI a ete reactive et mesure : aucun plantage, et
+  // 26 im/s capturees contre 14,7 en repli GDI.
+  //
+  // `SION_FORCE_GDI_CAPTURER=1` force le repli logiciel pour diagnostiquer.
+  const char* force_gdi = std::getenv("SION_FORCE_GDI_CAPTURER");
+  const bool gdi_only = force_gdi != nullptr && force_gdi[0] == '1';
+  webrtc_options.set_allow_directx_capturer(!gdi_only);
 #endif /* _WIN64 */
 #ifdef WEBRTC_USE_PIPEWIRE
   webrtc_options.set_allow_pipewire(true);
@@ -100,7 +96,7 @@ std::unique_ptr<DesktopCapturer> new_desktop_capturer(
   }
   // Ici se trouvait un `typeid(*capturer).name()` de diagnostic. Il abattait le
   // processus sous Windows : `typeid` sur un objet polymorphe exige le RTTI, or
-  // libwebrtc est fourni sans RTTI — configuration standard de Chromium —
+  // libwebrtc est fourni sans RTTI (configuration standard de Chromium)
   // tandis que ce fichier est compile avec (defaut de MSVC). Lire dans la
   // vtable une information qui n'y est pas se termine en `abort()`, vu le
   // 17/09 comme un 0xC0000409 dans `ucrtbase.dll` des qu'un partage demarrait.
