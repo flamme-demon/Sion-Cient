@@ -56,6 +56,18 @@ pub struct VoiceNativeStatus {
     /// `muted=true` + micro encore publié). Le deafen s'en sert pour forcer
     /// la coupure au lieu de faire confiance au store.
     pub mic_published: bool,
+    /// Vérité terrain moteur : une piste de partage d'écran est-elle publiée ?
+    ///
+    /// Le store front repart à zéro à chaque rechargement de webview, alors que
+    /// le moteur Rust, lui, continue de partager. Sans cette information le
+    /// front se croyait à l'arrêt et ne rouvrait pas l'overlay curseurs : les
+    /// viewers pouvaient pointer, plus rien ne s'affichait sur l'écran partagé
+    /// jusqu'à ce que le partage soit relancé à la main (constaté le 16/09).
+    pub screenshare_published: bool,
+    /// Vérité terrain moteur : le partage local publie-t-il aussi le son ?
+    /// L'avertissement « partage sans son » était calculé au démarrage du
+    /// partage et perdu à tout rechargement de webview.
+    pub screenshare_audio_published: bool,
     /// Identité LiveKit locale (`@user:serveur:deviceID`), si connue.
     pub identity: Option<String>,
 }
@@ -88,6 +100,8 @@ fn snapshot(inner: &VoiceNativeInner) -> VoiceNativeStatus {
         muted: inner.muted,
         deafened: inner.deafened,
         mic_published: holder_mic_published(),
+        screenshare_published: holder_screenshare_published(),
+        screenshare_audio_published: holder_screenshare_audio_published(),
         identity: inner.identity.clone(),
     }
 }
@@ -149,6 +163,36 @@ fn holder_mic_published() -> bool {
         engine_holder()
             .lock()
             .map(|g| g.as_ref().is_some_and(|e| e.is_microphone_published()))
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "native-voice"))]
+    {
+        false
+    }
+}
+
+/// Vérité terrain : le moteur tient-il une publication de partage d'écran ?
+fn holder_screenshare_published() -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        engine_holder()
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|e| e.is_screensharing()))
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "native-voice"))]
+    {
+        false
+    }
+}
+
+/// Vérité terrain : le partage local publie-t-il aussi le son du système ?
+fn holder_screenshare_audio_published() -> bool {
+    #[cfg(feature = "native-voice")]
+    {
+        engine_holder()
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|e| e.is_screenshare_audio_published()))
             .unwrap_or(false)
     }
     #[cfg(not(feature = "native-voice"))]
@@ -299,7 +343,9 @@ fn default_quality() -> NativeConnectionQuality {
 /// au `SystemTime` employé pour les horodatages de curseur.
 fn mono_ms() -> u64 {
     static BASE: OnceLock<std::time::Instant> = OnceLock::new();
-    BASE.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+    BASE.get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
 }
 
 /// Durée de repli quand le payload n'en porte pas (ou zéro) : la sonde
@@ -885,6 +931,73 @@ fn cursor_display_name(
         .collect()
 }
 
+/// Miroir viewer de `forward_cursor_to_overlay` : pousse vers la surface
+/// vidéo intégrée les curseurs des AUTRES viewers pointant un partage que
+/// cette fenêtre affiche. Le calque DOM étant occlu par la peinture GTK,
+/// c'est le seul endroit où les voir. Retourne early tant que la surface
+/// n'est pas disponible (fallback JPEG actif → le DOM s'en occupe).
+#[cfg(all(feature = "native-voice", not(target_os = "android")))]
+fn forward_cursor_to_viewer_surface(topic: Option<&str>, payload_b64: &str, sender: Option<&str>) {
+    use base64::Engine as _;
+    let Some(sender) = sender else { return };
+    let Some(target) = crate::native_video_surface::viewer_targets() else {
+        return;
+    };
+    let self_identity = manager()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .identity
+        .clone();
+    if sender == self_identity.as_deref().unwrap_or("") {
+        // Notre propre curseur : déjà géré côté DOM (capture et broadcast) ;
+        // le peindre ici ferait un doublon à l'écran.
+        return;
+    }
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(payload_b64) else {
+        return;
+    };
+    let Ok(payload) = serde_json::from_slice::<NativeCursorPayload>(&bytes) else {
+        return;
+    };
+    let Some(target_identity) = payload.t.as_deref() else {
+        return;
+    };
+    // Cible inconnue de nos surfaces affichées : jeter silencieusement (à
+    // 60 Hz et plusieurs partages, c'est le cas le plus fréquent). Un
+    // ensemble VIDE (aucun rectangle publié : transition React) garde le
+    // paquet — la surface se publie quelques millisecondes plus tard.
+    if !target.is_empty() && !target.contains(target_identity) {
+        return;
+    }
+    let participant_name = participants_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(sender)
+        .map(|p| p.name.clone());
+    let name = cursor_display_name(payload.n.as_deref(), participant_name.as_deref(), sender);
+    if topic == Some(TOPIC_CURSOR_CLICK) && payload.click == Some(true) {
+        crate::native_video_surface::on_viewer_cursor_packet(
+            target_identity,
+            sender,
+            &name,
+            true,
+            payload.x.unwrap_or(0.0),
+            payload.y.unwrap_or(0.0),
+            false,
+        );
+    } else if topic == Some(TOPIC_CURSOR) {
+        crate::native_video_surface::on_viewer_cursor_packet(
+            target_identity,
+            sender,
+            &name,
+            false,
+            payload.x.unwrap_or(0.0),
+            payload.y.unwrap_or(0.0),
+            payload.expire == Some(true),
+        );
+    }
+}
+
 /// Chemin court data-channel → overlay natif. Il évite le détour
 /// Rust→Tauri→JS→Tauri→Rust qui ajoutait plusieurs frames de retard au
 /// curseur vu par le sharer. L'événement générique reste émis pour que les
@@ -913,13 +1026,11 @@ fn forward_cursor_to_overlay(topic: Option<&str>, payload_b64: &str, sender: &st
     // aussi, sinon un alt-tab ou un redémarrage laissait un curseur fantôme
     // jusqu'au TTL. Une position sans cible reste ignorée — ambiguë avec
     // plusieurs partages concurrents.
-    let untargeted_expire = topic == Some(TOPIC_CURSOR)
-        && payload.expire == Some(true)
-        && payload.t.is_none();
+    let untargeted_expire =
+        topic == Some(TOPIC_CURSOR) && payload.expire == Some(true) && payload.t.is_none();
     if payload.t.as_deref() != self_identity.as_deref() && !untargeted_expire {
         // Throttle : 3 premières occurrences seulement (sinon 60 logs/s).
-        static MISMATCH_LOGS: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+        static MISMATCH_LOGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         if MISMATCH_LOGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
             log::info!(
                 "[Sion][Cursor] rx {} ignoré : cible {:?} != soi {:?}",
@@ -1079,7 +1190,9 @@ fn spawn_badge_expiry(app: &tauri::AppHandle<TauriRuntime>, sender: &str) {
             let cleared = {
                 let mut map = participants_map().lock().unwrap_or_else(|e| e.into_inner());
                 match map.get_mut(&sender2) {
-                    Some(p) if p.playing_sound_emoji.is_some() && p.badge_deadline_ms <= mono_ms() => {
+                    Some(p)
+                        if p.playing_sound_emoji.is_some() && p.badge_deadline_ms <= mono_ms() =>
+                    {
                         p.playing_sound_emoji = None;
                         p.badge_deadline_ms = 0;
                         true
@@ -1168,6 +1281,22 @@ fn spawn_forward_task(
                             #[cfg(not(target_os = "android"))]
                             if let Some(sender) = sender {
                                 forward_cursor_to_overlay(topic.as_deref(), payload_b64, sender);
+                            }
+                            // Miroir viewer : les curseurs des autres viewers
+                            // pointant un partage que NOUS affichons doivent
+                            // être peints par la surface intégrée (le calque
+                            // DOM est occlu par la peinture GTK). Le filtre
+                            // `t == partage affiché` est fait en Rust.
+                            #[cfg(all(feature = "native-voice", not(target_os = "android")))]
+                            if matches!(
+                                topic.as_deref(),
+                                Some(TOPIC_CURSOR) | Some(TOPIC_CURSOR_CLICK)
+                            ) {
+                                forward_cursor_to_viewer_surface(
+                                    topic.as_deref(),
+                                    payload_b64,
+                                    sender.as_deref(),
+                                );
                             }
                             // Relais générique pour les futurs dispatchers front
                             // (AFK, curseurs, transcribe-arm).
@@ -1935,6 +2064,10 @@ pub fn voice_native_play_soundboard(
         if pcm_b64.len() > MAX_B64_LEN {
             return Err("clip soundboard trop long".into());
         }
+        // Inutile de distinguer les retours d'action : ce chemin alimente le
+        // rendu WebRTC, que la sourdine rend justement silencieux. Un cue de
+        // sourdine joué ici serait accepté puis inaudible (constaté le 16/09) —
+        // il reste donc sur le chemin DOM, seul à contourner ce rendu.
         if manager().lock().unwrap_or_else(|e| e.into_inner()).deafened {
             return Ok(());
         }
@@ -2272,13 +2405,15 @@ pub fn voice_media_caps() -> serde_json::Value {
     {
         use livekit::options::VideoEncoderBackend;
         let backends: Vec<_> = VideoEncoderBackend::list_available().into_iter().collect();
-        if backends.iter().any(|b| matches!(
-            b,
-            VideoEncoderBackend::Hardware
-                | VideoEncoderBackend::Nvenc
-                | VideoEncoderBackend::Vaapi
-                | VideoEncoderBackend::VideoToolbox
-        )) {
+        if backends.iter().any(|b| {
+            matches!(
+                b,
+                VideoEncoderBackend::Hardware
+                    | VideoEncoderBackend::Nvenc
+                    | VideoEncoderBackend::Vaapi
+                    | VideoEncoderBackend::VideoToolbox
+            )
+        }) {
             // All hardware factories currently exposed by webrtc-sys support
             // H.264. Keep AV1 conservative until a per-codec query is bound.
             enc.insert("h264".into(), "hw");
@@ -2918,7 +3053,10 @@ mod tests {
             // plus un `sleep(durée)` aveugle.
             assert_eq!(map["@dj:h"].badge_deadline_ms, 3_500);
             // Payload corrompu : pas de badge, pas de panique.
-            assert_eq!(apply_soundboard_badge(&mut map, "@dj:h", "!!!", 1_000), None);
+            assert_eq!(
+                apply_soundboard_badge(&mut map, "@dj:h", "!!!", 1_000),
+                None
+            );
         }
 
         /// Le bug d'origine : un son court déclenché pendant un son long
@@ -3053,7 +3191,8 @@ mod tests {
             assert_eq!(sane_badge_ms(BADGE_MAX_MS + 1), BADGE_MAX_MS);
             // Payload minimal sans `duration` : sérialisé tel quel par un vieux
             // client, il doit encore se décoder.
-            let minimal: SoundboardPayload = decode_json(r#"{"mxc":"mxc://h/s","emoji":"🔊"}"#).unwrap();
+            let minimal: SoundboardPayload =
+                decode_json(r#"{"mxc":"mxc://h/s","emoji":"🔊"}"#).unwrap();
             assert_eq!(minimal.duration, BADGE_DEFAULT_MS);
             assert_eq!(minimal.gain, 1.0);
         }

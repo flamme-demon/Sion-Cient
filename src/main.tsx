@@ -1,23 +1,16 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "./i18n";
 import "highlight.js/styles/github-dark.css";
 import "./index.css";
-import App from "./App";
 import { openExternalUrl } from "./utils/openExternal";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 import { attachConsole } from "@tauri-apps/plugin-log";
-import { installThemeSync } from "./services/themeService";
 import { installMemoryDiagnostics } from "./services/memoryDiagnostics";
 
 // Route Rust `log::*` records into the webview console — the only way to see
 // them on the shipped Windows build (no terminal). Pairs with the Rust
 // logger's Webview target. No-op outside Tauri.
 attachConsole().catch(() => {});
-
-// Thème : appliqué avant le premier rendu (aucun flash du thème par défaut),
-// puis à chaque changement depuis les réglages.
-installThemeSync();
 
 // DIAGNOSTIC DEV : compteurs mémoire (messages retenus, blobs vivants) dans la
 // console/le log — pour expliquer la courbe RSS du processus WebKit.
@@ -66,16 +59,32 @@ window.addEventListener("keydown", (e) => {
   }
 }, { capture: true });
 
-// Re-hydrate the session from app-data BEFORE rendering, so the auth store's
-// restoreSession() (run from an App effect) sees the credentials/device_id even
-// si une mise à jour de la webview purge localStorage. No-op (instant) on web.
-hydrateSessionFromAppData().finally(() => {
+// IMPORTANT: App, i18n et themeService sont importés dynamiquement seulement
+// APRÈS l'hydratation. Un import ES statique est évalué avant ce code : App
+// charge alors les stores Zustand sur un localStorage encore vide et garde les
+// valeurs par défaut en mémoire, même si hydrateSessionFromAppData remplit le
+// stockage quelques millisecondes plus tard. La première modification finit
+// ensuite par écraser la sauvegarde globale (notamment voiceSounds).
+async function bootstrap() {
+  await hydrateSessionFromAppData();
+
+  // i18n lit directement sion-settings à l'évaluation du module.
+  await import("./i18n");
+  const [{ default: App }, { installThemeSync }, { useSettingsStore }] = await Promise.all([
+    import("./App"),
+    import("./services/themeService"),
+    import("./stores/useSettingsStore"),
+  ]);
+
+  // Thème : appliqué avant le premier rendu React (aucun flash du thème par
+  // défaut), mais après restauration de son store persistant.
+  installThemeSync();
+
   // Langue : tant que l'utilisateur n'a pas choisi explicitement (store
   // `language` vide = « Système »), on lit la locale OS côté Rust. Sous
   // WRY/WebKitGTK, `navigator.language` peut annoncer en-US sur un système
   // français ; la locale OS fait donc foi pour la détection automatique.
-  import("./stores/useSettingsStore").then(({ useSettingsStore }) => {
-    if (useSettingsStore.getState().language) return;
+  if (!useSettingsStore.getState().language) {
     import("@tauri-apps/api/core").then(({ invoke }) =>
       invoke<string>("system_locale").then((loc) => {
         const lng = loc.slice(0, 2).toLowerCase();
@@ -84,7 +93,7 @@ hydrateSessionFromAppData().finally(() => {
         }
       }).catch(() => {}),
     ).catch(() => {});
-  }).catch(() => {});
+  }
   // Keep the settings snapshot in app-data fresh as the user changes them.
   startSettingsMirror();
   createRoot(document.getElementById("root")!).render(
@@ -92,4 +101,6 @@ hydrateSessionFromAppData().finally(() => {
       <App />
     </StrictMode>,
   );
-});
+}
+
+void bootstrap();

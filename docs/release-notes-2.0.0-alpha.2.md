@@ -24,8 +24,6 @@ les correctifs de la soirée de test du 12/09 (voix + partage d'écran).
 - **Choix automatique du codec** : chaque client sonde son matériel et
   l'annonce aux autres ; « auto » prend le meilleur codec décodable par tout
   le monde, **matériel d'abord** (H.264/AV1 par GPU). AV1 est exposé en option.
-- **Mini-lecteur flottant** pour les vidéos du chat.
-
 ### Voix & thèmes
 - Voix 100 % Rust : qualité audio, son du partage, echo-cancel, transcription.
 - **Thèmes** : section Apparence dans les Réglages, **Sion Dark** et

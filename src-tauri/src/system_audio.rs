@@ -572,7 +572,6 @@ mod linux_impl {
     }
 
     pub fn start(_sink_monitor: Option<String>) -> Result<(), String> {
-
         // Stop any previous capture before starting a new one. Must happen
         // BEFORE we mark the new capture as running, otherwise the old thread
         // would keep reading stdout of a killed process and spam EOF errors.
@@ -746,7 +745,6 @@ mod linux_impl {
         log::info!("[Sion][sysaudio] stop requested");
         stop_internal();
     }
-
 }
 
 // ============================================================================
@@ -1107,5 +1105,4 @@ mod windows_impl {
         log::info!("[Sion][sysaudio] stop requested");
         stop_internal();
     }
-
 }

@@ -7,12 +7,12 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 // Hôtes par plateforme : X11 natif (Linux) ou winit (Windows, WRY).
-#[cfg(target_os = "linux")]
-#[path = "cursor_overlay_x11.rs"]
-mod x11_host;
 #[cfg(not(target_os = "linux"))]
 #[path = "cursor_overlay_winit.rs"]
 mod winit_host;
+#[cfg(target_os = "linux")]
+#[path = "cursor_overlay_x11.rs"]
+mod x11_host;
 
 /// Embedded font for the cursor name pill — DejaVu Sans Bold (Bitstream
 /// Vera derivative, free license). ~700 KB; loaded once on first redraw.
@@ -156,7 +156,7 @@ fn start_host_thread(
 
 // ── drawing ─────────────────────────────────────────────────────────────
 
-mod draw {
+pub(crate) mod draw {
     use super::*;
 
     pub(super) fn draw(pixmap: &mut Pixmap, w: f32, h: f32, state: &OverlayState, now: Instant) {
@@ -168,13 +168,21 @@ mod draw {
         }
     }
 
-    fn color_for_identity(identity: &str) -> Color {
+    /// Couleur stable par identité (u8). Partagée avec la surface vidéo
+    /// intégrée du viewer : un même viewer garde exactement la même couleur
+    /// chez le partageur (overlay X11) et chez les autres viewers (surface
+    /// Cairo intégrée).
+    pub(crate) fn identity_color_rgba8(identity: &str) -> (u8, u8, u8) {
         let mut h: i32 = 0;
         for c in identity.chars() {
             h = ((h.wrapping_shl(5)).wrapping_sub(h)).wrapping_add(c as i32);
         }
         let hue = (h.unsigned_abs() % 360) as f32;
-        let (r, g, b) = hsl_to_rgb(hue, 0.75, 0.55);
+        hsl_to_rgb(hue, 0.75, 0.55)
+    }
+
+    fn color_for_identity(identity: &str) -> Color {
+        let (r, g, b) = identity_color_rgba8(identity);
         Color::from_rgba8(r, g, b, 255)
     }
 

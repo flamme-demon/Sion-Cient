@@ -89,24 +89,104 @@ async function playCustom(cfg: VoiceSoundCfg): Promise<boolean> {
 
 // ---- bundled default file playback ---------------------------------------
 
-/** Références des éléments en cours : sans ça, WebKit peut les GC avant la
- *  fin du son (coupures intermittentes). */
+// Les assets du bundle sont servis via le schéma custom Tauri en production.
+// WebKitGTK refuse ce schéma dans HTMLAudioElement, alors qu'il lit bien un
+// `blob:`. Web Audio (`decodeAudioData`) semblait contourner le problème mais,
+// une fois le moteur vocal natif ouvert, seul le premier MP3 était décodé ;
+// tous les suivants (unmute/deafen/join/...) échouaient. On ne lui confie donc
+// plus les fichiers embarqués : fetch → Blob URL → HTMLAudioElement.
+const blobUrlCache = new Map<string, string>();
 const playingFiles = new Set<HTMLAudioElement>();
 
-async function playFile(url: string): Promise<boolean> {
+async function blobUrlFor(url: string): Promise<string | null> {
+  const cached = blobUrlCache.get(url);
+  if (cached) return cached;
   try {
-    const a = new Audio(url);
-    a.volume = FILE_VOLUME;
-    playingFiles.add(a);
-    const release = () => playingFiles.delete(a);
-    a.addEventListener("ended", release, { once: true });
-    a.addEventListener("error", release, { once: true });
-    // Filet de sécurité : si ni `ended` ni `error` n'arrive (lecture bloquée),
-    // la référence serait conservée pour toujours.
-    setTimeout(release, 15_000);
-    await a.play();
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(url, blobUrl);
+    return blobUrl;
+  } catch (error) {
+    console.error(`[Sion][cue] impossible de charger ${url}`, error);
+    return null;
+  }
+}
+
+/** Éléments audio déjà décodés, réutilisés d'un déclenchement à l'autre.
+ *
+ *  Un `new Audio()` par cue impose un cycle chargement + décodage avant que
+ *  `play()` ne se résolve. Mesuré le 16/09 : environ une seconde entre l'appui
+ *  sur F8 et le début du son, alors que l'URL blob était DÉJÀ en cache — ce
+ *  n'est donc pas le téléchargement qui coûte, c'est le décodage, refait à
+ *  chaque fois. Un élément déjà décodé redémarre en remettant `currentTime`
+ *  à zéro, sans aucune latence.
+ *
+ *  Le petit bassin permet à deux déclenchements rapprochés de se superposer
+ *  au lieu de se couper l'un l'autre. */
+const audioPool = new Map<string, HTMLAudioElement[]>();
+const AUDIO_POOL_MAX = 4;
+
+function acquireAudio(blobUrl: string): HTMLAudioElement {
+  const pool = audioPool.get(blobUrl);
+  const free = pool?.find((element) => element.paused || element.ended);
+  if (free) {
+    // `currentTime` lève tant que le média n'est pas décodable ; dans ce cas
+    // l'élément repart de zéro tout seul.
+    try {
+      free.currentTime = 0;
+    } catch { /* pas encore prêt */ }
+    return free;
+  }
+  const audio = new Audio(blobUrl);
+  audio.preload = "auto";
+  audio.volume = FILE_VOLUME;
+  // Écouteurs posés UNE FOIS, à la création. Les attacher à chaque lecture —
+  // même en `{ once: true }` — les accumulait sur un élément réutilisé : un
+  // `once` ne se retire qu'en se déclenchant, or une lecture interrompue par
+  // `stopActionCues()` n'émet jamais `ended`. Chaque cue coupé laissait donc
+  // deux écouteurs derrière lui, indéfiniment.
+  const release = () => playingFiles.delete(audio);
+  audio.addEventListener("ended", release);
+  audio.addEventListener("error", release);
+  audio.addEventListener("pause", release);
+  // `preload` amorce déjà le chargement ; `load()` ne fait que le forcer et
+  // n'existe pas dans toutes les implémentations (mocks de test).
+  try {
+    audio.load?.();
+  } catch { /* implémentation partielle */ }
+  const next = pool ?? [];
+  if (next.length < AUDIO_POOL_MAX) {
+    next.push(audio);
+    audioPool.set(blobUrl, next);
+  }
+  return audio;
+}
+
+/** Précharge et décode un cue sans le jouer, pour que le PREMIER appui soit
+ *  aussi instantané que les suivants. */
+export async function primeCue(url: string): Promise<void> {
+  const playableUrl = await blobUrlFor(url);
+  if (!playableUrl) return;
+  acquireAudio(playableUrl);
+}
+
+async function playFile(url: string): Promise<boolean> {
+  const playableUrl = await blobUrlFor(url);
+  if (!playableUrl) return false;
+  try {
+    const audio = acquireAudio(playableUrl);
+    audio.volume = FILE_VOLUME;
+    playingFiles.add(audio);
+    await audio.play();
     return true;
-  } catch {
+  } catch (error) {
+    // `pause()` pendant un `play()` en attente rejette avec `AbortError` : la
+    // lecture a été volontairement remplacée par un cue plus récent, ce n'est
+    // pas un échec et surtout il ne faut pas jouer le timbre de repli.
+    if (error instanceof DOMException && error.name === "AbortError") return true;
+    console.error(`[Sion][cue] lecture du Blob refusée pour ${url}`, error);
     return false;
   }
 }
@@ -204,7 +284,77 @@ const GATED: ReadonlySet<Cue> = new Set<Cue>(["join", "leave", "timeout"]);
 // "deafen" confirmation itself would be swallowed the instant you deafen.
 const ACTION_FEEDBACK: ReadonlySet<Cue> = new Set<Cue>(["mute", "unmute", "deafen", "undeafen"]);
 
+/** Cues que le moteur natif ne peut pas servir, quoi qu'il arrive.
+ *
+ *  `deafen` alimente le rendu WebRTC, que la sourdine rend justement silencieux
+ *  à l'instant même où ce cue est joué : le clip y est accepté puis inaudible
+ *  (constaté le 16/09). Il garde le chemin DOM, seul à contourner ce rendu, au
+ *  prix de la latence de sortie de WebKit. */
+const NEVER_NATIVE: ReadonlySet<Cue> = new Set<Cue>(["deafen"]);
+
+/** Le chemin natif est-il utilisable pour ce cue, ici et maintenant ?
+ *
+ *  Hors appel, il n'existe pas. En sourdine, le moteur jette tout clip reçu —
+ *  ce qui conviendrait aux retours d'action mais écraserait le réglage
+ *  `muteSoundsWhenDeafened`, désactivé par défaut : l'utilisateur est censé
+ *  continuer d'entendre les arrivées et départs en sourdine. On repasse donc
+ *  par le DOM dans ce cas, qui applique ce réglage correctement. */
+function nativePathUsable(cue: Cue): boolean {
+  if (NEVER_NATIVE.has(cue)) return false;
+  const app = useAppStore.getState();
+  return !!app.connectedVoiceChannel && !app.isDeafened;
+}
+
+/** PCM déjà décodé, par cue : la lecture se réduit alors à un appel IPC. */
+const nativePcmCache = new Map<Cue, string>();
+
+async function nativePcmFor(cue: Cue): Promise<string | null> {
+  const cached = nativePcmCache.get(cue);
+  if (cached) return cached;
+  const url = fileFor(cue);
+  if (!url) return null;
+  const { decodeNativeSoundboardPcm } = await import("./soundboardService");
+  const { pcmB64 } = await decodeNativeSoundboardPcm(url);
+  nativePcmCache.set(cue, pcmB64);
+  return pcmB64;
+}
+
+/** Joue un retour d'action par le moteur Rust, comme le fait déjà la
+ *  soundboard en appel.
+ *
+ *  En appel, l'ADM natif détient le périphérique et la sortie audio de WebKit
+ *  attend : mesuré le 16/09, deux à trois secondes entre l'appel à `play()` —
+ *  qui se résout pourtant immédiatement — et le son réellement audible. Assez
+ *  pour que le son du mute se fasse entendre après le clic sur unmute, les deux
+ *  se télescopant en ce qui s'entend comme un son joué deux fois. Le rendu natif
+ *  ne souffre pas de cette attente, et le clip entre au passage dans la
+ *  référence d'annulation d'écho. Lecture purement locale : rien n'est envoyé
+ *  aux autres participants. */
+async function playNativeAction(cue: Cue): Promise<boolean> {
+  try {
+    const pcm = await nativePcmFor(cue);
+    if (!pcm) return false;
+    const { playVoiceNativeSoundboard } = await import("./voiceNativeService");
+    await playVoiceNativeSoundboard(pcm, FILE_VOLUME);
+    return true;
+  } catch (error) {
+    console.warn(`[Sion][cue] chemin natif refusé pour ${cue}`, error);
+    return false;
+  }
+}
+
 function playDefault(cue: Cue) {
+  if (nativePathUsable(cue)) {
+    void playNativeAction(cue).then((ok) => {
+      logCue(`${cue}: natif ${ok ? "joué" : "refusé → repli DOM"}`);
+      if (!ok) playDomFile(cue);
+    });
+    return;
+  }
+  playDomFile(cue);
+}
+
+function playDomFile(cue: Cue) {
   const url = fileFor(cue);
   if (url) {
     // `HTMLAudioElement.play()` peut échouer (fichier absent du bundle,
@@ -221,8 +371,32 @@ function playDefault(cue: Cue) {
   SYNTH[cue]();
 }
 
+/** Coupe les retours d'action encore en cours (micro, sourdine).
+ *
+ *  Un cue peut démarrer avec plusieurs secondes de retard quand le sink audio
+ *  est occupé par le stop/start de la capture. Sans cette coupure, le son du
+ *  mute se faisait entendre APRÈS le clic sur unmute, et les deux s'enchaînaient
+ *  — ce qui s'entend comme un son joué deux fois (constaté le 16/09). Le retour
+ *  le plus récent est toujours le seul pertinent. */
+function stopActionCues() {
+  for (const cue of ACTION_FEEDBACK) {
+    const source = fileFor(cue);
+    if (!source) continue;
+    const blobUrl = blobUrlCache.get(source);
+    if (!blobUrl) continue;
+    for (const element of audioPool.get(blobUrl) ?? []) {
+      if (element.paused) continue;
+      element.pause();
+      try {
+        element.currentTime = 0;
+      } catch { /* pas encore décodable */ }
+    }
+  }
+}
+
 function play(cue: Cue) {
   if (GATED.has(cue) && !ENABLED()) return;
+  if (ACTION_FEEDBACK.has(cue)) stopActionCues();
   // Opt-in: silence every cue while deafened. Off by default — most users like
   // still hearing who joins even while deafened. Action-feedback cues are exempt
   // (you must hear your own mute/deafen confirmation).
@@ -291,6 +465,31 @@ export function resetVoiceCues() {
   for (const timer of pendingLeaves.values()) clearTimeout(timer);
   pendingLeaves.clear();
   bouncedBack.clear();
+}
+
+/** Préchauffe les cues de retour d'action (micro, sourdine) dès l'entrée en
+ *  vocal.
+ *
+ *  Mesuré le 16/09 : le TOUT PREMIER unmute d'une session mettait environ deux
+ *  secondes entre la fin de l'opération moteur (91 ms) et le début du son —
+ *  entièrement passées dans le chargement et le décodage du fichier. Les
+ *  lectures suivantes, servies par le bassin d'éléments déjà décodés, partent
+ *  sans délai. Décoder à l'entrée en vocal supprime aussi ce premier retard,
+ *  au moment où l'utilisateur n'attend encore aucun son. */
+export async function primeActionCues(): Promise<void> {
+  const cues: Cue[] = ["mute", "unmute", "deafen", "undeafen"];
+  await Promise.all(
+    cues.map(async (cue) => {
+      // Un override utilisateur a son propre chemin de lecture ; on ne
+      // préchauffe que les fichiers par défaut du bundle.
+      if (overrideFor(cue)) return;
+      const url = fileFor(cue);
+      if (url) await primeCue(url);
+      // Décodage PCM du chemin natif, pour que le premier mute en appel
+      // n'attende pas non plus.
+      if (!NEVER_NATIVE.has(cue)) await nativePcmFor(cue).catch(() => null);
+    }),
+  );
 }
 
 export function playJoinCue() {

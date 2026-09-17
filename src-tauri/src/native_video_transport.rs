@@ -113,16 +113,34 @@ fn packet(sender: &str, width: u32, height: u32, jpeg: &[u8]) -> Option<Vec<u8>>
     Some(out)
 }
 
+/// Décode le cache de dernière image pour son garde-fou unitaire. En
+/// production, ce cache amorce directement chaque nouvelle file WebSocket.
+#[cfg(test)]
+pub fn latest_frame(sender: &str) -> Option<(u32, u32, Vec<u8>)> {
+    let packets = last_packets().lock().unwrap_or_else(|e| e.into_inner());
+    let packet = packets.get(sender)?;
+    if packet.len() < HEADER_LEN || &packet[..4] != MAGIC {
+        return None;
+    }
+    let sender_len = u16::from_le_bytes([packet[4], packet[5]]) as usize;
+    let jpeg_offset = HEADER_LEN.checked_add(sender_len)?;
+    if jpeg_offset >= packet.len() {
+        return None;
+    }
+    let width = u32::from_le_bytes(packet[6..10].try_into().ok()?);
+    let height = u32::from_le_bytes(packet[10..14].try_into().ok()?);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((width, height, packet[jpeg_offset..].to_vec()))
+}
+
 pub fn broadcast(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
     // Initialise le serveur au premier partage même si le front n'a pas encore
     // demandé le port. La première image peut être perdue, jamais mise en file.
     if port() == 0 {
         return;
     }
-    // Second consommateur, sans passer par la webview : la fenêtre PIP native
-    // (si elle est ouverte sur CE partage) reçoit l'image telle quelle.
-    #[cfg(not(target_os = "android"))]
-    crate::pip_window::on_frame(sender, width, height, jpeg);
     let Some(packet) = packet(sender, width, height, jpeg) else {
         return;
     };
@@ -181,5 +199,18 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[10..14].try_into().unwrap()), 804);
         assert_eq!(&bytes[14..14 + name_len], b"@picsou:sion");
         assert_eq!(&bytes[14 + name_len..], jpeg);
+    }
+
+    #[test]
+    fn derniere_frame_peut_amorcer_un_consommateur_tardif() {
+        let sender = "@statique:sion";
+        let jpeg = [0xff, 0xd8, 7, 8, 0xff, 0xd9];
+        let bytes = packet(sender, 1280, 720, &jpeg).unwrap();
+        last_packets()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(sender.into(), bytes);
+
+        assert_eq!(latest_frame(sender), Some((1280, 720, jpeg.to_vec())));
     }
 }

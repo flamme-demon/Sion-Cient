@@ -27,6 +27,40 @@ export interface VoiceSoundCfg {
   gain: number;
 }
 
+const EMPTY_VOICE_SOUNDS: Record<VoiceCue, VoiceSoundCfg | null> = {
+  join: null,
+  leave: null,
+  timeout: null,
+  poke: null,
+  kick: null,
+  memberKicked: null,
+  mute: null,
+  unmute: null,
+  deafen: null,
+  undeafen: null,
+};
+
+/** Migration du snapshot Zustand historique (version implicite 0).
+ *
+ * `persist` fusionne l'état seulement au premier niveau : lorsqu'un nouveau
+ * son est ajouté, un ancien objet `voiceSounds` écraserait donc entièrement
+ * les valeurs par défaut. La migration conserve toutes les préférences
+ * connues et complète les cues absents, sans toucher aux chemins personnalisés
+ * encore valides sur disque. */
+export function migrateSettingsState(persistedState: unknown): Partial<SettingsState> {
+  if (!persistedState || typeof persistedState !== "object" || Array.isArray(persistedState)) {
+    return {};
+  }
+  const state = persistedState as Partial<SettingsState>;
+  const voiceSounds = state.voiceSounds && typeof state.voiceSounds === "object"
+    ? state.voiceSounds
+    : {};
+  return {
+    ...state,
+    voiceSounds: { ...EMPTY_VOICE_SOUNDS, ...voiceSounds },
+  };
+}
+
 interface SettingsState {
   mutedSpeakAlert: boolean;
   joinMuted: boolean;
@@ -216,7 +250,7 @@ export const useSettingsStore = create<SettingsState>()(
       soundboardVolume: 0.2,
       voiceChannelSounds: true,
       muteSoundsWhenDeafened: false,
-      voiceSounds: { join: null, leave: null, timeout: null, poke: null, kick: null, memberKicked: null, mute: null, unmute: null, deafen: null, undeafen: null },
+      voiceSounds: { ...EMPTY_VOICE_SOUNDS },
       soundboardOpenAtLaunch: false,
       hiddenCategories: [],
       soundboardFavorites: [],
@@ -320,6 +354,10 @@ export const useSettingsStore = create<SettingsState>()(
         import("../services/pushService").then(({ syncPushRules }) => syncPushRules(v)).catch(() => {});
       },
     }),
-    { name: "sion-settings" },
+    {
+      name: "sion-settings",
+      version: 1,
+      migrate: (persistedState) => migrateSettingsState(persistedState),
+    },
   ),
 );

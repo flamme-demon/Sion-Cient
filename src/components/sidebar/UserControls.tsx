@@ -80,7 +80,9 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
     padding: 8,
     borderRadius: 12,
     display: 'flex' as const,
-    transition: 'background 150ms',
+    // Pas de fondu : le retour visuel du micro et de la sourdine doit être
+    // instantané. Un `transition: background 150ms` faisait « monter » le
+    // rouge progressivement, ce qui se lit comme une latence de l'appli.
     background: active
       ? variant === 'accent' ? 'var(--color-secondary-container)' : 'var(--color-error-container)'
       : 'transparent',
@@ -100,7 +102,6 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
         fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
         background: active ? 'var(--color-error-container)' : 'var(--color-surface-container-highest)',
         color: active ? 'var(--color-error)' : 'var(--color-on-surface)',
-        transition: 'background 150ms',
       }}
     >{icon}{label}</button>
   );

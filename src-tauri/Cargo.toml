@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "sion-client"
-version = "2.0.0-alpha.4"
+version = "2.0.0-alpha.5"
 description = "Sion Client - Voice/Text client based on Matrix + LiveKit"
 authors = ["Sion"]
 license = ""
@@ -124,6 +124,22 @@ ab_glyph = "0.2"
 
 # Linux-only dependencies (rdev for evdev keyboard capture)
 [target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+# Surface vidéo réellement séparée du toplevel WebKit sous Wayland. On réutilise
+# la connexion libwayland détenue par GDK (un objet parent wl_surface ne peut
+# pas être référencé depuis une seconde connexion).
+gdkwayland-sys = "0.18"
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-sys = { version = "0.31", features = ["client"] }
+# `wl_egl_window` : la sous-surface vidéo est présentée par le GPU, pas par un
+# memcpy `wl_shm`. Le compositeur reçoit une texture déjà en mémoire GPU, la
+# conversion YUV→RGB se fait dans le shader et la mise à l'échelle est faite
+# par l'échantillonneur — plus aucune conversion libyuv ni copie de 8,3 Mo par
+# image sur le chemin chaud.
+wayland-egl = "0.32"
+# EGL chargé dynamiquement (`libEGL.so.1`) : aucune dépendance de lien
+# supplémentaire pour les machines qui n'ont pas de pile EGL.
+khronos-egl = { version = "6", features = ["dynamic"] }
 rdev = { git = "https://github.com/rustdesk-org/rdev" }
 # Background global shortcuts via the XDG portal (org.freedesktop.portal.
 # GlobalShortcuts). The X11-grab path (tauri-plugin-global-shortcut) resolves
@@ -174,6 +190,7 @@ jni = "0.21"
 windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",
     "Win32_Media_Multimedia",
@@ -184,6 +201,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
     "Win32_Foundation",
     "implement",
 ] }
@@ -230,13 +248,10 @@ libwebrtc = { path = "vendor/libwebrtc" }
 # tokio de Tauri (notifications muettes). Le fork isole l'appel sur un thread
 # std. Voir vendor/notify-rust/SION_PATCH.md.
 notify-rust = { path = "vendor/notify-rust" }
-tauri = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
-tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
-tauri-macros = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
-tauri-runtime = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
-tauri-runtime-wry = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
-tauri-utils = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
-tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "7372c8ee" }
+# La branche WRY n'a plus besoin du fork Tauri historique introduit pour CEF.
+# On suit les crates Tauri 2 stables et on ne conserve qu'un correctif Linux
+# ciblé. Voir vendor/tauri-runtime-wry/SION_PATCH.md.
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry" }
 
 # Vendored softbuffer with the Wayland buffer format patched from `Xrgb8888`
 # to `Argb8888`. Without this, the cursor-overlay window appears as an opaque

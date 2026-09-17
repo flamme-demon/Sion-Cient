@@ -81,6 +81,10 @@ let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
 export function startSettingsMirror(): void {
   if (!isTauri()) return;
   import("../stores/useSettingsStore").then(({ useSettingsStore }) => {
+    // Réécrit aussi le snapshot tout de suite : une migration Zustand qui a
+    // eu lieu pendant le bootstrap doit atteindre le miroir global sans
+    // attendre que l'utilisateur change manuellement un réglage.
+    void mirrorSessionToAppData();
     useSettingsStore.subscribe(() => {
       if (mirrorTimer) clearTimeout(mirrorTimer);
       mirrorTimer = setTimeout(() => { mirrorTimer = null; void mirrorSessionToAppData(); }, 1500);

@@ -27,9 +27,9 @@ import { createDecryptedObjectUrl } from "../../utils/decryptMedia";
 import { openFileWithDefaultApp, downloadFileToDownloads } from "../../utils/openExternal";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
-import { useMiniPlayerStore } from "../../stores/useMiniPlayerStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
+import { detectWebmVideoCodec, type WebmVideoCodec as DetectedWebmVideoCodec } from "../../utils/webmCodec";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -108,8 +108,40 @@ function useResolvedUrl(attachment: FileAttachment, enabled: boolean = true): st
   return resolvedUrl;
 }
 
+type WebmVideoCodec = DetectedWebmVideoCodec | "pending" | "not-needed";
+
+/** Read the Matroska CodecID without involving the browser media stack. */
+async function sniffWebmVideoCodec(url: string): Promise<DetectedWebmVideoCodec> {
+  try {
+    // Track metadata is near the start. A bounded range avoids copying a whole
+    // video just to decide whether it is safe to give to GStreamer.
+    const response = await fetch(url, { headers: { Range: "bytes=0-524287" } });
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return detectWebmVideoCodec(bytes);
+  } catch (err) {
+    console.warn("[Sion] Détection du codec WebM échouée:", err);
+  }
+  return "unknown";
+}
+
 function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachment: FileAttachment }) {
   const { t } = useTranslation();
+  // WebKitGTK/GStreamer may start parsing a media source as soon as `src` is
+  // attached, even with preload="none".  Some valid-enough WebM files make
+  // gst-plugins-good hit a process-wide assertion instead of reporting a
+  // media error, so `onError` cannot protect the web process. On Linux/Tauri,
+  // inspect the WebM CodecID without the media stack and route AV1/unknown
+  // inputs through the existing VP9/Opus compatibility transcode first.
+  const isTauriDesktop = typeof window !== "undefined"
+    && !!window.__TAURI_INTERNALS__
+    && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isLinuxWebm = isTauriDesktop
+    && /Linux/i.test(navigator.userAgent)
+    && attachment.mimeType.includes("webm");
+  const [webmProbe, setWebmProbe] = useState<{ url: string; codec: DetectedWebmVideoCodec } | null>(null);
+  const webmCodec: WebmVideoCodec = !isLinuxWebm
+    ? "not-needed"
+    : webmProbe?.url === resolvedUrl ? webmProbe.codec : "pending";
   const [transcodedUrl, setTranscodedUrl] = useState<string | null>(null);
   const [transcoding, setTranscoding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,9 +150,19 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
   const [installing, setInstalling] = useState<number | null>(null);
   const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
-  // Élément <video> de la carte : le mini-lecteur reprend la lecture à la
-  // position courante au moment où on détache.
-  const videoElRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (!isLinuxWebm) return;
+    let cancelled = false;
+    sniffWebmVideoCodec(resolvedUrl).then((codec) => {
+      if (!cancelled) setWebmProbe({ url: resolvedUrl, codec });
+    });
+    return () => { cancelled = true; };
+  }, [isLinuxWebm, resolvedUrl]);
+
+  const mustTranscodeBeforePlayback = isTauriDesktop && (
+    !attachment.mimeType.includes("webm")
+    || (isLinuxWebm && (webmCodec === "av1" || webmCodec === "unknown"))
+  );
 
   const handleError = () => {
     // Native playback failed — transcode to WebM via ffmpeg
@@ -192,21 +234,16 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     return () => { if (transcodedUrl) URL.revokeObjectURL(transcodedUrl); };
   }, [transcodedUrl]);
 
-  // Proactive transcode: le support des codecs dépend de la webview système
-  // (WebKitGTK s'appuie sur GStreamer, WebView2 sur Chromium). Un mp4 non
-  // supporté affiche un lecteur figé sans `onError` exploitable, donc on
-  // transcode prudemment tout non-WebM en WebM. WebM (VP9/Opus) est laissé au
-  // <video> + `onError`.
-  const isTauriDesktop = typeof window !== "undefined"
-    && !!window.__TAURI_INTERNALS__
-    && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  // Non-WebM formats keep their existing compatibility transcode. On Linux,
+  // only legacy AV1/unknown WebMs are normalized; VP8/VP9 keeps direct,
+  // immediate playback.
   useEffect(() => {
-    if (!resolvedUrl || transcodedUrl || transcoding || error) return;
-    if (isTauriDesktop && !attachment.mimeType.includes("webm")) {
+    if (webmCodec === "pending" || !resolvedUrl || transcodedUrl || transcoding || error) return;
+    if (mustTranscodeBeforePlayback) {
       runTranscode();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolvedUrl]);
+  }, [resolvedUrl, webmCodec]);
 
   if (error) {
     const handleDownload = () => {
@@ -273,7 +310,9 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     );
   }
 
-  if (transcoding) {
+  // The synchronous guard prevents even a one-frame mount of an AV1/unknown
+  // source while codec probing or the effect-triggered transcode is pending.
+  if (webmCodec === "pending" || transcoding || (mustTranscodeBeforePlayback && !transcodedUrl)) {
     return (
       <div style={{
         marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
@@ -309,11 +348,10 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   return (
     <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
       <video
-        ref={videoElRef}
         key={videoSrc}
         controls
         playsInline
-        preload="auto"
+        preload={transcodedUrl ? "metadata" : "none"}
         src={videoSrc}
         style={{ width: '100%', maxHeight: 400, display: 'block' }}
         onError={transcodedUrl ? undefined : handleError}
@@ -340,23 +378,6 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
           }}
         >
           {t("chat.download", { defaultValue: "Télécharger" })}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            const el = videoElRef.current;
-            const at = el?.currentTime ?? 0;
-            el?.pause();
-            useMiniPlayerStore.getState().open({ src: videoSrc, title: attachment.name, time: at, playing: true });
-          }}
-          title={t("chat.miniPlayer", { defaultValue: "Lire dans le mini-lecteur flottant" })}
-          style={{
-            flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
-            border: '1px solid var(--color-outline-variant)', background: 'transparent',
-            color: 'var(--color-on-surface-variant)', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-          }}
-        >
-          {t("chat.miniPlayerTitle", { defaultValue: "Mini-lecteur" })}
         </button>
       </div>
     </div>

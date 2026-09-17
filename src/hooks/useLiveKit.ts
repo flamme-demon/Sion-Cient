@@ -3,8 +3,9 @@ import { useLiveKitStore } from "../stores/useLiveKitStore";
 import { connectNativeSession, disconnectNativeSession } from "../services/nativeVoiceSession";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { setNativeCursorDisplayName } from "../services/cursorService";
-import { onParticipantJoined, onParticipantLeft, noteConnectionLost, resetVoiceCues } from "../services/voiceChannelSounds";
+import { onParticipantJoined, onParticipantLeft, noteConnectionLost, resetVoiceCues, primeActionCues } from "../services/voiceChannelSounds";
 import type { ParticipantInfo } from "../types/livekit";
+import { getVoiceNativeStatus } from "../services/voiceNativeService";
 import type { VoiceNativeData, VoiceNativeE2eeState } from "../services/voiceNativeService";
 
 /** Session vocale LiveKit native (moteur Rust). La webview ne crée plus de
@@ -185,6 +186,25 @@ export function useLiveKit() {
       onParticipants, onData, onE2ee, onLocalScreenShareFailed,
       onClosed: clearNativeResources, onDisconnected,
     });
+    // Décodage des cues dès l'entrée en vocal : sans ça le tout premier unmute
+    // attendait environ deux secondes le chargement du fichier (mesuré le
+    // 16/09), alors que l'opération moteur ne prenait que 91 ms.
+    void primeActionCues();
+    // L'overlay curseurs ne s'OUVRE qu'à la transition « je commence à
+    // partager ». Après un rechargement de webview en plein partage, le store
+    // front repart à zéro alors que le moteur publie toujours : cette
+    // transition n'a jamais lieu, et plus aucun curseur de viewer n'apparaît
+    // sur notre écran jusqu'au relancement manuel du partage (constaté le
+    // 16/09). On interroge donc la vérité terrain du moteur.
+    void getVoiceNativeStatus()
+      .then(async (status) => {
+        if (!status.screenshare_published) return;
+        const { useAppStore } = await import("../stores/useAppStore");
+        useAppStore.setState({ isScreenSharing: true });
+        const { openCursorOverlay } = await import("../services/cursorOverlayService");
+        await openCursorOverlay();
+      })
+      .catch(() => {});
     // Heartbeat AFK natif : tout état manqué ou rassis chez les pairs se
     // répare sous 30 s.
     if (nativeAfkHeartbeat.current) clearInterval(nativeAfkHeartbeat.current);

@@ -492,7 +492,10 @@ function clampGain(v: number): number {
  * WebRTC receives the final 48 kHz mono PCM without a realtime IPC stream.
  * Retourne aussi la durée réellement décodée (ms) : c'est la seule vérité
  * disponible quand la métadonnée Matrix du son est absente ou fausse. */
-async function decodeNativeSoundboardPcm(url: string): Promise<{ pcmB64: string; durationMs: number | null }> {
+/** Décodage PCM 48 kHz mono pour le chemin natif. Exporté pour que les cues de
+ *  retour d'action (micro) empruntent exactement le même chemin que la
+ *  soundboard en appel. */
+export async function decodeNativeSoundboardPcm(url: string): Promise<{ pcmB64: string; durationMs: number | null }> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Sound decode failed: ${response.status}`);
   const encoded = await response.arrayBuffer();

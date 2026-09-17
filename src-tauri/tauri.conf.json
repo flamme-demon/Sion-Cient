@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Sion Client",
-  "version": "2.0.0-alpha.4",
+  "version": "2.0.0-alpha.5",
   "identifier": "com.sion.client",
   "build": {
     "frontendDist": "../dist",

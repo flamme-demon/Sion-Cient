@@ -4,16 +4,15 @@
 //! fenêtre est une vraie fenêtre OS, `AlwaysOnTop`, sans décoration, pilotée
 //! par winit + softbuffer — même pile que l'overlay de curseurs, et pour la
 //! même raison : les images du partage sont **déjà côté Rust** quand elles
-//! arrivent du réseau (`native_video_transport::broadcast`), on les décode une
-//! seconde fois ici et on les blitte, sans repasser par la webview.
+//! sortent de libwebrtc. Elles sont converties une fois d'I420 vers BGRA puis
+//! blitées ici, sans recompression JPEG ni passage par la webview.
 //!
 //! Architecture (calquée sur `cursor_overlay.rs`) :
 //!   - un thread hôte porte l'event loop winit (X11 forcé sous Linux, sinon
 //!     Wayland ignore `WindowLevel::AlwaysOnTop`) ;
-//!   - `on_frame()` (appelé depuis le moteur vocal) dépose la dernière image
-//!     JPEG dans un état partagé puis réveille la boucle par un `UserEvent` ;
-//!   - la boucle décode à ~20 fps maximum (une vignette n'a pas besoin des
-//!     30 fps de la source) et blitte l'image ajustée (letterbox noir) ;
+//!   - `on_bgra_frame()` dépose la dernière image dans un état partagé puis
+//!     réveille la boucle par un `UserEvent` ;
+//!   - la boucle blitte à ~30 fps maximum (latest-wins, letterbox noir) ;
 //!   - glisser au clic gauche déplace la fenêtre, clic droit ou Échap la
 //!     ferme — pas de décoration, donc pas de bouton système.
 //!
@@ -36,15 +35,15 @@ const DEFAULT_H: u32 = 270;
 const LARGE_W: u32 = 768;
 const LARGE_H: u32 = 432;
 const MARGIN: i32 = 24;
-/// Décodage borné à ~20 fps : la source émet ~30, décoder chaque frame
-/// coûterait un cœur pour un gain invisible sur une vignette.
-const MIN_DECODE_INTERVAL: Duration = Duration::from_millis(33);
+/// Peinture bornée à ~30 fps : une vignette n'a pas besoin de suivre une
+/// source 60 fps et l'état latest-wins remplace les frames intermédiaires.
+const MIN_PAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Clone)]
 struct PipFrame {
     width: u32,
     height: u32,
-    jpeg: Vec<u8>,
+    bgra: Vec<u8>,
     /// Incrémentée à chaque image reçue ; la boucle compare pour savoir si
     /// elle a déjà peint celle-ci.
     generation: u64,
@@ -77,7 +76,9 @@ struct PipState {
 
 #[derive(Debug)]
 enum UserEvent {
-    Show,
+    /// Affiche la fenêtre. Le canal optionnel confirme que la surface native
+    /// existe réellement avant que le front coupe son propre lecteur.
+    Show(Option<std::sync::mpsc::SyncSender<bool>>),
     Hide,
     /// Une nouvelle image est disponible (réveille la boucle).
     Frame,
@@ -364,15 +365,34 @@ pub fn open(sender: &str) -> bool {
     {
         let mut state = handle.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.sender.as_deref() != Some(sender) {
-            // Nouveau partage : on repart d'un écran noir, l'ancienne image
-            // ne doit pas rester une seconde en évidence.
+            // Ne jamais montrer une frame de l'expéditeur précédent.
             state.frame = None;
             state.painted = 0;
             state.sender = Some(sender.to_owned());
         }
     }
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let sent = handle
+        .proxy
+        .send_event(UserEvent::Show(Some(ready_tx)))
+        .is_ok();
+    let ready = sent
+        && ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(false);
+    if !ready {
+        let mut state = handle.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.sender.as_deref() == Some(sender) {
+            state.sender = None;
+            state.frame = None;
+            state.painted = 0;
+        }
+        OPEN.store(false, Ordering::Release);
+        let _ = handle.proxy.send_event(UserEvent::Hide);
+        log::warn!("[Sion][PIP] ouverture de la surface native échouée pour {sender}");
+        return false;
+    }
     OPEN.store(true, Ordering::Release);
-    let _ = handle.proxy.send_event(UserEvent::Show);
     emit_pip_state(true);
     log::info!("[Sion][PIP] fenêtre native ouverte pour {sender}");
     true
@@ -475,15 +495,53 @@ pub fn close() {
     emit_pip_state(false);
 }
 
-/// Une image de partage vient d'arriver (appelée par le transport binaire).
-pub fn on_frame(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
+/// Ce partage est-il actuellement affiché dans le PIP ? Le PIP blitte du BGRA
+/// en GDI/softbuffer : quand il est ouvert sur ce partage, la pompe doit
+/// produire du BGRA pour tout le monde au lieu des plans I420 du renderer EGL.
+pub fn wants_frames(sender: &str) -> bool {
+    if !is_open() {
+        return false;
+    }
+    HANDLE
+        .get()
+        .and_then(|handle| handle.state.lock().ok())
+        .is_some_and(|state| state.sender.as_deref() == Some(sender))
+}
+
+/// Taille de rendu utile au PIP actuellement visible. Le moteur vidéo combine
+/// cette borne avec celles des surfaces intégrées avant de convertir l'I420.
+pub fn preferred_frame_bounds(sender: &str) -> Option<(u32, u32)> {
+    if !is_open() {
+        return None;
+    }
+    let handle = HANDLE.get()?;
+    let state = handle.state.lock().ok()?;
+    if state.sender.as_deref() != Some(sender) {
+        return None;
+    }
+    Some(state.size.unwrap_or(if state.large {
+        (LARGE_W, LARGE_H)
+    } else {
+        (DEFAULT_W, DEFAULT_H)
+    }))
+}
+
+/// Une image BGRA de partage vient d'arriver directement du moteur vocal.
+pub fn on_bgra_frame(sender: &str, width: u32, height: u32, bgra: &[u8]) {
     let Some(handle) = HANDLE.get() else {
         return;
     };
-    // La dernière image est gardée même fenêtre fermée : la réouverture du
-    // PIP repart de l'image courante au lieu d'un écran noir en attendant la
-    // prochaine frame (et `paint` ne décode que si une nouvelle génération
-    // est arrivée).
+    let Some(expected) = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return;
+    };
+    if width == 0 || height == 0 || expected > 4096 * 4096 * 4 || bgra.len() != expected {
+        return;
+    }
+    // Pendant l'ouverture, seule la dernière image est gardée et `paint` ne
+    // blitte que si une nouvelle génération est arrivée.
     {
         let mut state = handle.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.sender.as_deref() != Some(sender) {
@@ -493,7 +551,7 @@ pub fn on_frame(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
         state.frame = Some(PipFrame {
             width,
             height,
-            jpeg: jpeg.to_vec(),
+            bgra: bgra.to_vec(),
             generation,
         });
     }
@@ -551,7 +609,7 @@ pub fn pip_native_open(
                                 state.share_audio_muted = muted;
                             }
                         }
-                        let _ = handle.proxy.send_event(UserEvent::Show);
+                        let _ = handle.proxy.send_event(UserEvent::Show(None));
                     }
                 });
         }
@@ -577,6 +635,7 @@ pub fn pip_native_status() -> bool {
 /// Ajuste l'image dans la surface (letterbox noir), écrit en 0x00RRGGBB
 /// (XRGB8888, ce qu'attend softbuffer — même convention que le repack de
 /// l'overlay de curseurs).
+#[cfg(test)]
 fn blit_fit(dst: &mut [u32], ww: u32, wh: u32, img: &image::RgbImage) {
     let (iw, ih) = img.dimensions();
     if iw == 0 || ih == 0 || ww == 0 || wh == 0 {
@@ -604,6 +663,63 @@ fn blit_fit(dst: &mut [u32], ww: u32, wh: u32, img: &image::RgbImage) {
             }
         }
     }
+}
+
+/// Même ajustement, directement depuis les octets BGRA produits par libyuv.
+/// softbuffer attend 0x00RRGGBB : aucun décodeur ni allocation intermédiaire.
+fn blit_fit_bgra(dst: &mut [u32], ww: u32, wh: u32, bgra: &[u8], iw: u32, ih: u32) {
+    if iw == 0 || ih == 0 || ww == 0 || wh == 0 || bgra.len() != iw as usize * ih as usize * 4 {
+        return;
+    }
+    let scale = f64::min(ww as f64 / iw as f64, wh as f64 / ih as f64);
+    let dw = ((iw as f64 * scale).round() as u32).clamp(1, ww);
+    let dh = ((ih as f64 * scale).round() as u32).clamp(1, wh);
+    let x0 = (ww - dw) / 2;
+    let y0 = (wh - dh) / 2;
+
+    dst.fill(0);
+    for dy in 0..dh {
+        let sy = ((dy as u64 * ih as u64) / dh as u64) as usize;
+        let row = (y0 + dy) as usize * ww as usize;
+        for dx in 0..dw {
+            let sx = ((dx as u64 * iw as u64) / dw as u64) as usize;
+            let source = (sy * iw as usize + sx) * 4;
+            let index = row + (x0 + dx) as usize;
+            if index < dst.len() {
+                let b = bgra[source] as u32;
+                let g = bgra[source + 1] as u32;
+                let r = bgra[source + 2] as u32;
+                dst[index] = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
+/// Convertit un point de la fenêtre vers les coordonnées normalisées de
+/// l'image réellement visible. Les bandes de letterbox ne font pas partie du
+/// partage et ne doivent jamais produire un faux pointeur distant.
+fn normalise_content_point(
+    point: (f64, f64),
+    window: (u32, u32),
+    frame: (u32, u32),
+) -> Option<(f32, f32)> {
+    let (ww, wh) = window;
+    let (fw, fh) = frame;
+    if ww == 0 || wh == 0 || fw == 0 || fh == 0 {
+        return None;
+    }
+    let scale = f64::min(ww as f64 / fw as f64, wh as f64 / fh as f64);
+    let width = fw as f64 * scale;
+    let height = fh as f64 * scale;
+    let left = (ww as f64 - width) / 2.0;
+    let top = (wh as f64 - height) / 2.0;
+    if point.0 < left || point.0 >= left + width || point.1 < top || point.1 >= top + height {
+        return None;
+    }
+    Some((
+        ((point.0 - left) / width).clamp(0.0, 1.0) as f32,
+        ((point.1 - top) / height).clamp(0.0, 1.0) as f32,
+    ))
 }
 
 struct PipApp {
@@ -634,7 +750,7 @@ impl PipApp {
             state,
             window: None,
             surface: None,
-            last_paint: Instant::now() - MIN_DECODE_INTERVAL,
+            last_paint: Instant::now() - MIN_PAINT_INTERVAL,
             pending_redraw_at: None,
             painted_count: 0,
             cursor: (0.0, 0.0),
@@ -735,21 +851,17 @@ impl PipApp {
         self.last_cursor_tx = Instant::now();
         self.last_cursor_activity = Instant::now();
         self.cursor_hidden = false;
-        let x = (self.cursor.0 as f32
-            / self
-                .window
-                .as_ref()
-                .map(|w| w.inner_size().width)
-                .unwrap_or(1) as f32)
-            .clamp(0.0, 1.0);
-        let y = (self.cursor.1 as f32
-            / self
-                .window
-                .as_ref()
-                .map(|w| w.inner_size().height)
-                .unwrap_or(1) as f32)
-            .clamp(0.0, 1.0);
-        let _ = (width, height);
+        let window_size = self
+            .window
+            .as_ref()
+            .map(|w| w.inner_size())
+            .map(|s| (s.width, s.height))
+            .unwrap_or((0, 0));
+        let Some((x, y)) = normalise_content_point(self.cursor, window_size, (width, height))
+        else {
+            self.publish_cursor_hide();
+            return;
+        };
         let _ = thread::Builder::new()
             .name("sion-pip-cursor".into())
             .spawn(move || {
@@ -954,26 +1066,18 @@ impl PipApp {
             }
         };
 
-        let img = match jpeg_rusturbo::decode::decode(&frame.jpeg, jpeg_rusturbo::PixelFormat::Rgb)
-            .ok()
-            .and_then(|pixels| image::RgbImage::from_raw(frame.width, frame.height, pixels))
-        {
-            Some(img) => img,
-            None => {
-                log::warn!(
-                    "[Sion][PIP] décodage JPEG {}x{} échoué",
-                    frame.width,
-                    frame.height
-                );
-                return;
-            }
-        };
-
         let size = window.inner_size();
         let Ok(mut buffer) = surface.buffer_mut() else {
             return;
         };
-        blit_fit(&mut buffer, size.width, size.height, &img);
+        blit_fit_bgra(
+            &mut buffer,
+            size.width,
+            size.height,
+            &frame.bgra,
+            frame.width,
+            frame.height,
+        );
         // Boutons par-dessus l'image : maison = revenir sur Sion,
         // haut-parleur = son du partage.
         draw_controls(
@@ -1025,36 +1129,39 @@ impl ApplicationHandler<UserEvent> for PipApp {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Show => {
-                if self.window.is_none() {
-                    let Some(window) = self.build_window(event_loop) else {
-                        return;
-                    };
-                    let context = match softbuffer::Context::new(window.clone()) {
-                        Ok(c) => c,
-                        Err(err) => {
-                            log::warn!("[Sion][PIP] softbuffer context failed: {err:?}");
-                            return;
+            UserEvent::Show(reply) => {
+                let ready = (|| {
+                    if self.window.is_none() {
+                        let Some(window) = self.build_window(event_loop) else {
+                            return false;
+                        };
+                        let context = match softbuffer::Context::new(window.clone()) {
+                            Ok(c) => c,
+                            Err(err) => {
+                                log::warn!("[Sion][PIP] softbuffer context failed: {err:?}");
+                                return false;
+                            }
+                        };
+                        let mut surface = match softbuffer::Surface::new(&context, window.clone()) {
+                            Ok(s) => s,
+                            Err(err) => {
+                                log::warn!("[Sion][PIP] softbuffer surface failed: {err:?}");
+                                return false;
+                            }
+                        };
+                        let size = window.inner_size();
+                        if let (Ok(w), Ok(h)) = (
+                            std::num::NonZeroU32::try_from(size.width),
+                            std::num::NonZeroU32::try_from(size.height),
+                        ) {
+                            let _ = surface.resize(w, h);
                         }
-                    };
-                    let mut surface = match softbuffer::Surface::new(&context, window.clone()) {
-                        Ok(s) => s,
-                        Err(err) => {
-                            log::warn!("[Sion][PIP] softbuffer surface failed: {err:?}");
-                            return;
-                        }
-                    };
-                    let size = window.inner_size();
-                    if let (Ok(w), Ok(h)) = (
-                        std::num::NonZeroU32::try_from(size.width),
-                        std::num::NonZeroU32::try_from(size.height),
-                    ) {
-                        let _ = surface.resize(w, h);
+                        self.window = Some(window.clone());
+                        self.surface = Some(surface);
                     }
-                    self.window = Some(window.clone());
-                    self.surface = Some(surface);
-                }
-                if let Some(window) = self.window.as_ref() {
+                    let Some(window) = self.window.as_ref() else {
+                        return false;
+                    };
                     // État du bouton 🔊 : renseigné par `pip_native_open` —
                     // aucun appel moteur sur ce fil (il attendait le verrou du
                     // moteur et retardait l'affichage de la fenêtre).
@@ -1064,6 +1171,14 @@ impl ApplicationHandler<UserEvent> for PipApp {
                     };
                     window.set_visible(true);
                     window.request_redraw();
+                    true
+                })();
+                if let Some(reply) = reply {
+                    let _ = reply.send(ready);
+                }
+                if !ready {
+                    OPEN.store(false, Ordering::Release);
+                    emit_pip_state(false);
                 }
             }
             UserEvent::Hide => self.hide(),
@@ -1071,14 +1186,14 @@ impl ApplicationHandler<UserEvent> for PipApp {
                 let Some(window) = self.window.as_ref() else {
                     return;
                 };
-                if self.last_paint.elapsed() >= MIN_DECODE_INTERVAL {
+                if self.last_paint.elapsed() >= MIN_PAINT_INTERVAL {
                     window.request_redraw();
                 } else {
                     // Trop tôt : on repassera au prochain tour — la dernière
                     // image sera peinte, pas une vieille.
-                    self.pending_redraw_at = Some(self.last_paint + MIN_DECODE_INTERVAL);
+                    self.pending_redraw_at = Some(self.last_paint + MIN_PAINT_INTERVAL);
                     event_loop.set_control_flow(ControlFlow::WaitUntil(
-                        self.last_paint + MIN_DECODE_INTERVAL,
+                        self.last_paint + MIN_PAINT_INTERVAL,
                     ));
                 }
             }
@@ -1395,6 +1510,8 @@ mod tests {
             "open() a échoué — event loop winit en thread ?"
         );
         assert!(is_open(), "la fenêtre devrait être marquée ouverte");
+        let red_bgra = [0u8, 0, 255, 255].repeat(320 * 180);
+        on_bgra_frame("@test:sion", 320, 180, &red_bgra);
         std::thread::sleep(std::time::Duration::from_millis(1500));
         close();
         assert!(!is_open(), "la fenêtre devrait être fermée");
@@ -1418,5 +1535,29 @@ mod tests {
         let mut dst = vec![0u32; 4 * 2];
         blit_fit(&mut dst, 4, 2, &img);
         assert!(dst.iter().all(|&p| p == 0x0000FF00));
+    }
+
+    #[test]
+    fn blit_bgra_direct_conserve_les_canaux() {
+        // Deux pixels BGRA : rouge puis bleu, agrandis sans conversion JPEG.
+        let bgra = [0, 0, 255, 255, 255, 0, 0, 255];
+        let mut dst = vec![0u32; 8];
+        blit_fit_bgra(&mut dst, 4, 2, &bgra, 2, 1);
+        let row = [0x00FF0000, 0x00FF0000, 0x000000FF, 0x000000FF];
+        assert_eq!(&dst[..4], &row);
+        assert_eq!(&dst[4..], &row);
+    }
+
+    #[test]
+    fn pointeur_pip_ignore_les_bandes_de_letterbox() {
+        // Source 2:1 dans une fenêtre carrée : image entre y=50 et y=150.
+        assert_eq!(
+            normalise_content_point((100.0, 100.0), (200, 200), (400, 200)),
+            Some((0.5, 0.5))
+        );
+        assert_eq!(
+            normalise_content_point((100.0, 25.0), (200, 200), (400, 200)),
+            None
+        );
     }
 }

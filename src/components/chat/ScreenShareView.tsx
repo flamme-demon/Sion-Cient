@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, type RemoteCursor, type RemoteCursorClick } from "../../services/cursorService";
-import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, onVoiceNativeShareAudio, onVoiceNativePip, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
+import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, isNativeVideoSurfaceAvailable, registerNativeVideoSurface, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, onVoiceNativeShareAudio, onVoiceNativePip, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useLayoutStore, SHARE_VIEW_MIN_VH, SHARE_VIEW_MAX_VH, SHARE_FLOATING_MIN_W, SHARE_FLOATING_MIN_H } from "../../stores/useLayoutStore";
@@ -80,6 +80,34 @@ const CURSOR_BROADCAST_INTERVAL = Math.floor(1000 / CURSOR_BROADCAST_HZ);
  *  Un simple mouvement la fait réapparaître. */
 const CURSOR_HIDE_AFTER_MS = 5000;
 
+/** Branche un placeholder canvas à la surface GTK superposée. Le canvas
+ *  conserve uniquement la géométrie, le focus et les événements : les pixels
+ *  restent dans Rust depuis la frame I420 décodée jusqu'au blit Cairo. */
+function useNativeVideoSurface(
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  sender: string | null,
+  enabled: boolean,
+) {
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!enabled || !sender || !canvas) return;
+    let disposed = false;
+    let unregister: (() => void) | null = null;
+    void registerNativeVideoSurface(canvas, sender)
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unregister = cleanup;
+      })
+      .catch((error) => {
+        console.warn("[Sion][partage-natif] surface intégrée impossible:", error);
+      });
+    return () => {
+      disposed = true;
+      unregister?.();
+    };
+  }, [canvasRef, enabled, sender]);
+}
+
 // Compteur diagnostique (stutter curseurs constaté en prod) : re-rendus
 // effectifs de l'overlay, loggés toutes les 5 s quand actifs.
 let cursorRenderCount = 0;
@@ -146,8 +174,18 @@ function syncCursorLayer(
  *  when metadata hasn't loaded yet. */
 function getVideoContentRect(el: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement) {
   const elRect = el.getBoundingClientRect();
-  const vw = el instanceof HTMLVideoElement ? el.videoWidth : el instanceof HTMLImageElement ? el.naturalWidth : el.width;
-  const vh = el instanceof HTMLVideoElement ? el.videoHeight : el instanceof HTMLImageElement ? el.naturalHeight : el.height;
+  const nativeWidth = el instanceof HTMLCanvasElement ? Number(el.dataset.nativeVideoWidth) : 0;
+  const nativeHeight = el instanceof HTMLCanvasElement ? Number(el.dataset.nativeVideoHeight) : 0;
+  // Canvas de surface native : son backing-store ne porte AUCUNE information
+  // de résolution (placeholder 1×1, ou 300×150 par défaut tant que rien ne
+  // l'a dimensionné). Retomber dessus fabriquerait un ratio 2:1 plausible mais
+  // faux, et tout le letterbox — donc toutes les coordonnées de curseur —
+  // partirait de travers. Sans taille connue, mieux vaut ne pas corriger.
+  if (el instanceof HTMLCanvasElement && el.dataset.nativeSurface === "true" && !(nativeWidth && nativeHeight)) {
+    return { left: elRect.left, top: elRect.top, width: elRect.width, height: elRect.height };
+  }
+  const vw = el instanceof HTMLVideoElement ? el.videoWidth : el instanceof HTMLImageElement ? el.naturalWidth : nativeWidth || el.width;
+  const vh = el instanceof HTMLVideoElement ? el.videoHeight : el instanceof HTMLImageElement ? el.naturalHeight : nativeHeight || el.height;
   if (!vw || !vh || elRect.width === 0 || elRect.height === 0) {
     return { left: elRect.left, top: elRect.top, width: elRect.width, height: elRect.height };
   }
@@ -255,6 +293,9 @@ interface ShareTileProps {
   onVolumeChange: (identity: string, v: number) => Promise<boolean>;
   /** Marque ce partage comme « pointé » (nettoyage global au blur/quit). */
   markPointed: (identity: string) => void;
+  /** Les pixels de cette tuile sont peints par la surface GTK, pas par le
+   *  décodeur JPEG du canvas. */
+  nativeSurfaceEnabled: boolean;
   /** Carte flottante : le canvas remplit la hauteur restante (le lettrage
    *  reste géré par la peinture « contain »). */
   fill?: boolean;
@@ -269,8 +310,13 @@ interface ShareTileProps {
  *  viewport — même géométrie que `getVideoContentRect` en vue simple. */
 function tileContentRect(canvas: HTMLCanvasElement, frame: VoiceNativeBinaryFrame | null | undefined) {
   const rect = canvas.getBoundingClientRect();
-  const fw = frame?.width ?? 0;
-  const fh = frame?.height ?? 0;
+  const nativeW = Number(canvas.dataset.nativeVideoWidth);
+  const nativeH = Number(canvas.dataset.nativeVideoHeight);
+  // Même garde qu'en vue simple : pas de repli sur le backing-store d'un
+  // canvas de surface native, il ne dit rien de la résolution du flux.
+  if (!frame && canvas.dataset.nativeSurface === "true" && !(nativeW && nativeH)) return rect;
+  const fw = frame?.width ?? (nativeW || canvas.width);
+  const fh = frame?.height ?? (nativeH || canvas.height);
   if (!fw || !fh || rect.width === 0 || rect.height === 0) return rect;
   const scale = Math.min(rect.width / fw, rect.height / fh);
   const w = fw * scale;
@@ -282,9 +328,10 @@ function tileContentRect(canvas: HTMLCanvasElement, frame: VoiceNativeBinaryFram
  *  zone (latest-wins, un décodage à la fois), porte SES contrôles son et le
  *  pointage (curseur vu par les autres viewers). Clic = vue simple sur ce
  *  partage ; double-clic sur l'image = plein écran. */
-function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLatest, onSelect, onToggleMute, onVolumeChange, markPointed, fill = false, onHeaderDragStart, headerExtra }: ShareTileProps) {
+function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLatest, onSelect, onToggleMute, onVolumeChange, markPointed, nativeSurfaceEnabled, fill = false, onHeaderDragStart, headerExtra }: ShareTileProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  useNativeVideoSurface(canvasRef, identity, nativeSurfaceEnabled);
   const lastFrameRef = useRef<VoiceNativeBinaryFrame | null>(null);
   const drawingRef = useRef(false);
   const pendingRef = useRef<VoiceNativeBinaryFrame | null>(null);
@@ -317,8 +364,8 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
       const f = lastFrameRef.current;
-      const fw = f?.width ?? 0;
-      const fh = f?.height ?? 0;
+      const fw = f?.width ?? canvas.width;
+      const fh = f?.height ?? canvas.height;
       if (!fw || !fh || !cssW || !cssH) {
         box.style.left = "0"; box.style.top = "0";
         box.style.width = "100%"; box.style.height = "100%";
@@ -357,6 +404,19 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
       })();
     };
 
+    // En rendu natif, le ResizeObserver reste utile aux calques curseurs, mais
+    // aucun JPEG n'est demandé, décodé ou peint dans la WebView.
+    const observer = new ResizeObserver(() => {
+      syncCursorBox();
+      const f = lastFrameRef.current;
+      if (!nativeSurfaceEnabled && f) paint(f);
+    });
+    if (canvasRef.current) observer.observe(canvasRef.current);
+    if (nativeSurfaceEnabled) {
+      syncCursorBox();
+      return () => observer.disconnect();
+    }
+
     // Frame en cache dès le montage : pas de tuile noire en attendant la
     // prochaine image (~250 ms max, souvent déjà là).
     const initial = getLatest();
@@ -364,25 +424,27 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
     const unsubscribe = subscribe(paint);
     // Un changement de gabarit (bascule mosaïque, resize) repeint la dernière
     // frame : le canvas est dimensionné à l'affiché à chaque peinture.
-    const observer = new ResizeObserver(() => {
-      syncCursorBox();
-      const f = lastFrameRef.current;
-      if (f) paint(f);
-    });
-    if (canvasRef.current) observer.observe(canvasRef.current);
     return () => {
       unsubscribe();
       observer.disconnect();
     };
     // `getLatest`/`subscribe` s'appuient sur des refs du parent (stables).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
+  }, [identity, nativeSurfaceEnabled]);
 
   // Curseurs distants pointant CE partage — en mosaïque aussi, chacun voit
   // les curseurs des autres viewers sur la bonne tuile.
   useEffect(() => {
     const cache = cursorElCache.current;
     const layer = cursorLayerRef.current;
+    // La surface native peint déjà ces curseurs en GTK, dans le même
+    // letterbox que la texture. Garder aussi le calque DOM produirait un
+    // doublon décalé : son canvas n'a volontairement qu'un backing-store 1×1.
+    if (nativeSurfaceEnabled) {
+      cache.clear();
+      if (layer) layer.innerHTML = "";
+      return;
+    }
     const unsub = onCursorsChange((c) => {
       syncCursorLayer(layer, cache, c, identity);
     });
@@ -391,7 +453,7 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
       cache.clear();
       if (layer) layer.innerHTML = "";
     };
-  }, [identity]);
+  }, [identity, nativeSurfaceEnabled]);
 
   // Pointage depuis cette tuile : nos positions partent pour CE partage
   // (watchdog 5 s d'immobilité, hide en sortant — mêmes règles que la vue
@@ -519,9 +581,11 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
             ? { width: '100%', height: '100%', background: LETTERBOX_BLACK, display: 'block' }
             : { width: '100%', aspectRatio: '16 / 9', background: LETTERBOX_BLACK, display: 'block' }}
         />
-        <div ref={cursorBoxRef} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'hidden' }}>
-          <div ref={cursorLayerRef} style={{ position: 'absolute', inset: 0 }} />
-        </div>
+        {!nativeSurfaceEnabled && (
+          <div ref={cursorBoxRef} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'hidden' }}>
+            <div ref={cursorLayerRef} style={{ position: 'absolute', inset: 0 }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -576,6 +640,7 @@ interface FloatingShareCardProps {
   onToggleMute: (identity: string) => Promise<boolean>;
   onVolumeChange: (identity: string, v: number) => Promise<boolean>;
   markPointed: (identity: string) => void;
+  nativeSurfaceEnabled: boolean;
   onMove: (x: number, y: number) => void;
   onResizeW: (w: number) => void;
   onResizeH: (h: number) => void;
@@ -587,7 +652,7 @@ interface FloatingShareCardProps {
  *  les bords gauche/bas (le bord droit reste ancré), son/pointage/curseurs
  *  fournis par `ShareTile`. `position: fixed` — la carte survit aux
  *  changements de salon. */
-function FloatingShareCard({ identity, name, hasAudio, muted, volume, x, y, w, h, subscribe, getLatest, onToggleMute, onVolumeChange, markPointed, onMove, onResizeW, onResizeH, onDockBack }: FloatingShareCardProps) {
+function FloatingShareCard({ identity, name, hasAudio, muted, volume, x, y, w, h, subscribe, getLatest, onToggleMute, onVolumeChange, markPointed, nativeSurfaceEnabled, onMove, onResizeW, onResizeH, onDockBack }: FloatingShareCardProps) {
   const { t } = useTranslation();
 
   // Drag par le bandeau : écouteurs fenêtre le temps du geste, snap aux coins
@@ -655,6 +720,7 @@ function FloatingShareCard({ identity, name, hasAudio, muted, volume, x, y, w, h
             onToggleMute={onToggleMute}
             onVolumeChange={onVolumeChange}
             markPointed={markPointed}
+            nativeSurfaceEnabled={nativeSurfaceEnabled}
             fill
             onHeaderDragStart={startDrag}
             headerExtra={(
@@ -762,11 +828,22 @@ export function ScreenShareView() {
   // PIP natif (fenêtre OS au-dessus des autres applis) : état reflété depuis
   // Rust — elle peut s'être fermée seule (fin de partage, clic droit).
   const [nativePipOpen, setNativePipOpen] = useState(false);
+  // `null` = sonde Rust en cours. On ne démarre pas le fallback JPEG pendant
+  // ces quelques millisecondes, sinon chaque lancement créerait inutilement
+  // un serveur et une connexion WebSocket avant de basculer sur GTK.
+  const [nativeSurfaceEnabled, setNativeSurfaceEnabled] = useState<boolean | null>(null);
   useEffect(() => {
     let alive = true;
     void pipNativeStatus().then((open) => { if (alive) setNativePipOpen(open); });
     return () => { alive = false; };
   }, [activeIdentity]);
+  useEffect(() => {
+    let alive = true;
+    void isNativeVideoSurfaceAvailable().then((available) => {
+      if (alive) setNativeSurfaceEnabled(available);
+    });
+    return () => { alive = false; };
+  }, []);
 
   // Cache des dernières frames natives (binaire par expéditeur) + miroir de
   // l'identité active pour le callback d'événement (abonnement unique).
@@ -775,6 +852,11 @@ export function ScreenShareView() {
   const framesRef = useRef(new Map<string, VoiceNativeBinaryFrame>());
   const activeRef = useRef<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  useNativeVideoSurface(
+    canvasRef,
+    activeIdentity,
+    nativeSurfaceEnabled === true && !mosaic && shareDock !== "floating",
+  );
   // Partages vers lesquels on a pointé dans cette session — permet de tout
   // nettoyer chez les partageurs (blur, minimisation, fermeture), y compris
   // leurs anciennes versions qui n'acceptent que les masquages CIBLÉS.
@@ -855,6 +937,10 @@ export function ScreenShareView() {
       if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
+    // Surface GTK active : le moteur livre directement du BGRA à Cairo.
+    // Ne pas ouvrir le transport local évite toute production de JPEG et
+    // garantit que le canvas DOM reste un simple rectangle interactif.
+    if (nativeSurfaceEnabled !== false) return;
     let cancelled = false;
     let closeVideo: (() => void) | null = null;
     let unsubStopped: (() => void) | null = null;
@@ -966,7 +1052,7 @@ export function ScreenShareView() {
     // vue simple — on repart avec un `lastPainted` neuf, sinon la frame en
     // cache serait considérée « déjà peinte » et l'écran resterait noir en
     // revenant de la mosaïque ou de la carte flottante.
-  }, [mosaic, shareDock, nativePipOpen]);
+  }, [mosaic, shareDock, nativePipOpen, nativeSurfaceEnabled]);
 
   // Changement de partage actif (mosaïque ou carte flottante comprise) :
   // appliquer la frame en cache immédiatement — sans ça, l'écran restait noir
@@ -974,7 +1060,7 @@ export function ScreenShareView() {
   useEffect(() => {
     if (!canvasRef.current) return;
     paintLatestRef.current();
-  }, [activeIdentity, mosaic, shareDock, nativePipOpen]);
+  }, [activeIdentity, mosaic, shareDock, nativePipOpen, nativeSurfaceEnabled]);
 
   // Plus aucun partage actif : purger les JPEG en cache (sinon ils restent
   // jusqu'à la prochaine session de partage) et effacer le canvas.
@@ -1470,6 +1556,7 @@ export function ScreenShareView() {
         onToggleMute={handleToggleAudioMute}
         onVolumeChange={handleVolumeChange}
         markPointed={(id) => { pointedTargetsRef.current.add(id); }}
+        nativeSurfaceEnabled={nativeSurfaceEnabled === true}
         onMove={(mx, my) => setShareFloating({ x: mx, y: my })}
         onResizeW={(nw) => setShareFloating({ x: Math.max(4, fx + (fw - nw)), w: nw })}
         onResizeH={(nh) => setShareFloating({ h: nh })}
@@ -1611,6 +1698,23 @@ export function ScreenShareView() {
         >
           <FloatIcon />
         </button>
+        {activeIdentity && !mosaic && shareDock !== "floating" && (
+          <button
+            type="button"
+            onClick={handleToggleFullscreen}
+            title={t("screenShare.fullscreen", { defaultValue: "Plein écran" })}
+            aria-label={t("screenShare.fullscreen", { defaultValue: "Plein écran" })}
+            className="flex items-center transition-colors shrink-0"
+            style={{
+              padding: '0 10px', alignSelf: 'stretch',
+              border: 'none', borderLeft: '1px solid var(--color-outline-variant)',
+              background: 'transparent', color: 'var(--color-on-surface-variant)',
+              cursor: 'pointer',
+            }}
+          >
+            <ExpandIcon />
+          </button>
+        )}
         {activeIdentity && (
           <button
             type="button"
@@ -1674,6 +1778,7 @@ export function ScreenShareView() {
                 onToggleMute={handleToggleAudioMute}
                 onVolumeChange={handleVolumeChange}
                 markPointed={(id) => { pointedTargetsRef.current.add(id); }}
+                nativeSurfaceEnabled={nativeSurfaceEnabled === true}
               />
             );
           })}
@@ -1684,11 +1789,20 @@ export function ScreenShareView() {
           ref={canvasRef}
           aria-label={activeShare.participantName}
           className="w-full object-contain"
-          style={{ background: 'black', maxHeight: `${shareViewMaxVh}vh`, display: nativePipOpen ? 'none' : 'block' }}
+          style={{
+            background: 'black',
+            maxHeight: `${shareViewMaxVh}vh`,
+            display: nativePipOpen ? 'none' : 'block',
+            // Lue par `applyNativeFrameSize` pour borner la largeur à
+            // « hauteur maximale × ratio du flux » : la boîte épouse alors
+            // l'image au lieu de la laisser flotter au milieu de bandes
+            // noires inertes.
+            ['--sion-share-max-height' as string]: `${shareViewMaxVh}vh`,
+          } as React.CSSProperties}
         />
         {/* Carousel chevrons — overlaid on the video edges, in addition to the
             top tab bar, for quick prev/next cycling. Only when >1 share. */}
-        {activeShares.length > 1 && (
+        {nativeSurfaceEnabled !== true && activeShares.length > 1 && (
           <>
             <button
               type="button"
@@ -1721,7 +1835,7 @@ export function ScreenShareView() {
         {/* Click ripples. Positioned against the video *content* rect (not
             the element rect) so ripples land on the sharer's actual pixels
             when the video is letterboxed. */}
-        <div style={{
+        {nativeSurfaceEnabled !== true && <div style={{
           position: 'absolute',
           left: contentBox?.left ?? 0,
           top: contentBox?.top ?? 0,
@@ -1748,13 +1862,13 @@ export function ScreenShareView() {
               ))}
             </div>
           ))}
-        </div>
+        </div>}
         {/* Cursor overlay. Positioned against the video content rect (sized
             via contentBox) so percent-based placement stays aligned with the
             sharer's screen pixels when the video is letterboxed.
             pointer-events: none so overlays never steal the video controls.
             Enfants gérés en DOM direct (`syncCursorLayer`), pas en React. */}
-        <div ref={cursorLayerRef} style={{
+        {nativeSurfaceEnabled !== true && <div ref={cursorLayerRef} style={{
           position: 'absolute',
           left: contentBox?.left ?? 0,
           top: contentBox?.top ?? 0,
@@ -1763,11 +1877,11 @@ export function ScreenShareView() {
           pointerEvents: 'none',
           overflow: 'hidden',
         }}>
-        </div>
+        </div>}
         {/* Bouton plein écran posé sur la vidéo (visibilité gérée par la
             règle `.ss-expand` du <style> ci-dessus : au survol, au clavier
             et sur tactile). Le double-clic sur la vidéo reste équivalent. */}
-        <button
+        {nativeSurfaceEnabled !== true && <button
           type="button"
           onClick={handleToggleFullscreen}
           title={t("screenShare.fullscreen", { defaultValue: "Plein écran" })}
@@ -1780,7 +1894,7 @@ export function ScreenShareView() {
           }}
         >
           <ExpandIcon />
-        </button>
+        </button>}
       </div>
       )}
       {/* Poignée de hauteur du partage : tire vers le haut pour réduire (le

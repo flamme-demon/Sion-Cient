@@ -578,8 +578,8 @@ mod tests {
         assert!(samples.len() > 48_000, "PCM trop court");
 
         let port = transcribe_start_native(model, "fr".into(), true).expect("start");
-        let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}"))
-            .expect("connexion WS");
+        let (mut ws, _) =
+            tungstenite::connect(format!("ws://127.0.0.1:{port}")).expect("connexion WS");
         if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
             stream
                 .set_read_timeout(Some(Duration::from_secs(60)))
@@ -594,7 +594,10 @@ mod tests {
                 Err(e) => panic!("attente ready: {e}"),
             }
         }
-        println!("[test] moteur prêt, injection de {} éch. @48 kHz", samples.len());
+        println!(
+            "[test] moteur prêt, injection de {} éch. @48 kHz",
+            samples.len()
+        );
 
         for frame in samples.chunks(480) {
             if frame.len() == 480 {

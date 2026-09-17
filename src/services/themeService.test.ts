@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { BUILTIN_THEMES, SION_LIGHT } from "../themes/builtin";
+import { THEME_TOKEN_NAMES } from "../themes/types";
 
 // Le store de thèmes (persisté) touche localStorage dès l'évaluation : stub
 // avant l'import dynamique (même schéma que appStoreVoice.test.ts).
@@ -30,6 +32,14 @@ const themeFile = (over: Record<string, unknown> = {}) =>
     tokens: { "color-primary": "#ff0000", "color-surface": "#100000" },
     ...over,
   });
+
+describe("thèmes intégrés", () => {
+  it("fournit Sion Light avec tous les tokens et le color-scheme clair", () => {
+    expect(BUILTIN_THEMES).toContain(SION_LIGHT);
+    expect(SION_LIGHT.mode).toBe("light");
+    expect(Object.keys(SION_LIGHT.tokens).sort()).toEqual([...THEME_TOKEN_NAMES].sort());
+  });
+});
 
 describe("parseThemeFile — import communautaire", () => {
   it("accepte un thème valide et préfixe l'id en custom-", () => {

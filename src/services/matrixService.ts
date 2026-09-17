@@ -4,6 +4,38 @@ import { parseMentions } from "../utils/mentions";
 
 let matrixClient: MatrixClient | null = null;
 
+// La base par défaut du SDK peut entrer dans une boucle WASM/IndexedDB sans fin
+// sous WebKitGTK (observé après la migration de profil alpha.3/alpha.4). Une
+// base neuve la contourne — mais en basculer d'office coûterait très cher :
+// l'OlmMachine repartirait d'un magasin vide SOUS LE MÊME `device_id`, donc
+// régénérerait les clés d'identité d'un appareil déjà publié. Vérification
+// croisée perdue, pairs voyant des clés qui ne correspondent plus, et tout
+// l'historique Megolm reçu jusque-là indéchiffrable hors sauvegarde de clés.
+// C'est exactement le piège qui avait déjà mordu le projet (purge de cache
+// sous même `device_id`, corrigée en 709af50).
+//
+// On ne bascule donc QUE si la base d'origine a réellement échoué, et on s'en
+// souvient pour ne pas retenter une base qu'on sait bloquée à chaque lancement.
+const CRYPTO_DATABASE_PREFIX = "sion-matrix-sdk-v2";
+const CRYPTO_PREFIX_MARKER = "sion_crypto_db_prefix";
+const CRYPTO_INIT_TIMEOUT_MS = 30_000;
+
+/** Préfixe réellement en service. `undefined` = base par défaut du SDK, celle
+ *  qui porte l'identité cryptographique des installations existantes. */
+function cryptoPrefixInUse(): string | undefined {
+  try {
+    return localStorage.getItem(CRYPTO_PREFIX_MARKER) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberCryptoPrefix(prefix: string): void {
+  try {
+    localStorage.setItem(CRYPTO_PREFIX_MARKER, prefix);
+  } catch { /* stockage indisponible : on retentera la bascule au prochain échec */ }
+}
+
 // Test-only injection point — lets unit tests exercise call.member
 // bookkeeping (sendCallMemberEvent, publishLocalVoiceState, …) without a
 // real login flow. Never called from application code.
@@ -263,6 +295,25 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
   const currentDeviceId = matrixClient.getDeviceId();
   const currentUserId = matrixClient.getUserId();
 
+  const initCryptoWithTimeout = async (prefix?: string): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        prefix
+          ? matrixClient!.initRustCrypto({ cryptoDatabasePrefix: prefix })
+          : matrixClient!.initRustCrypto(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`initRustCrypto timed out after ${CRYPTO_INIT_TIMEOUT_MS / 1000}s`)),
+            CRYPTO_INIT_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   async function tryInitCrypto(attempt: number): Promise<boolean> {
     try {
       // Check if we need to clear the crypto store due to device mismatch
@@ -273,13 +324,9 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
         await clearCryptoStores();
       }
 
-      // initRustCrypto can hang if IndexedDB is in a bad state — add a timeout
-      await Promise.race([
-        matrixClient!.initRustCrypto(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("initRustCrypto timed out after 30s")), 30000)
-        ),
-      ]);
+      // A timeout cannot cancel the WASM call. It only lets startup continue;
+      // crucially, never stack another init on top of a timed-out one below.
+      await initCryptoWithTimeout(cryptoPrefixInUse());
       // Clear any previous failure flag (e.g. from React Strict Mode double-call)
       delete (matrixClient as unknown as Record<string, unknown>).__sionCryptoFailed;
       delete (matrixClient as unknown as Record<string, unknown>).__sionCryptoError;
@@ -304,8 +351,23 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
         return tryInitCrypto(2);
       }
 
-      // For timeout or transient errors — retry without clearing the store
-      if (attempt === 1 && (msg.includes("getMigrationState") || msg.includes("timed out"))) {
+      // Base d'origine réellement bloquée (la boucle WASM/IndexedDB se
+      // manifeste par ce délai dépassé) : on bascule alors sur une base
+      // nommée, et une seule fois — le marqueur évite de retenter chaque
+      // lancement une base qu'on sait inutilisable. Tant que ce chemin n'est
+      // pas emprunté, l'identité cryptographique existante reste intacte.
+      if (attempt === 1 && !cryptoPrefixInUse() && msg.includes("timed out")) {
+        console.warn(
+          `[Sion] base crypto par défaut bloquée — bascule définitive sur ${CRYPTO_DATABASE_PREFIX}`,
+        );
+        rememberCryptoPrefix(CRYPTO_DATABASE_PREFIX);
+        return tryInitCrypto(2);
+      }
+
+      // A rejected migration check is finished and may safely be retried.
+      // A timed-out WASM call is still alive: retrying it doubled CPU usage
+      // and made the entire interface react several seconds late.
+      if (attempt === 1 && msg.includes("getMigrationState")) {
         await new Promise((r) => setTimeout(r, 1000));
         return tryInitCrypto(2);
       }

@@ -21,6 +21,14 @@ export interface VoiceNativeStatus {
   /** Vérité terrain moteur : une publication micro existe-t-elle vraiment ?
    *  Peut contredire `muted` après une désync historique. */
   mic_published: boolean;
+  /** Vérité terrain moteur : une piste de partage d'écran est-elle publiée ?
+   *  Le store front repart à zéro à chaque rechargement de webview alors que
+   *  le moteur, lui, continue de partager — c'est la seule source fiable. */
+  screenshare_published: boolean;
+  /** Vérité terrain moteur : le partage local publie-t-il aussi le son ?
+   *  L'avertissement « partage sans son » était calculé au démarrage et perdu
+   *  à tout rechargement de webview. */
+  screenshare_audio_published: boolean;
   identity: string | null;
 }
 
@@ -381,6 +389,267 @@ export interface VoiceNativeBinaryFrame {
   height: number;
   jpeg: Uint8Array;
   receivedAt: number;
+}
+
+export interface VoiceNativeFrameSize {
+  sender: string;
+  width: number;
+  height: number;
+}
+
+interface NativeVideoSurfaceRegistration {
+  id: string;
+  sender: string;
+  element: HTMLCanvasElement;
+}
+
+interface NativeVideoSurfaceRect {
+  id: string;
+  sender: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const nativeSurfaceRegistrations = new Map<string, NativeVideoSurfaceRegistration>();
+const nativeSurfaceSizes = new Map<string, { width: number; height: number }>();
+let nativeSurfaceSequence = 0;
+let nativeSurfaceTimer: number | null = null;
+let nativeSurfaceResizeObserver: ResizeObserver | null = null;
+let nativeSurfaceWindowObserversActive = false;
+let nativeSurfaceLastPayload = "";
+let nativeSurfaceAvailablePromise: Promise<boolean> | null = null;
+let nativeSurfaceSizeListenerPromise: Promise<void> | null = null;
+
+/** Le renderer intégré n'est disponible que lorsque Rust a effectivement
+ *  installé son GtkOverlay. Le résultat est stable pour la durée de la page. */
+export function isNativeVideoSurfaceAvailable(): Promise<boolean> {
+  if (!nativeSurfaceAvailablePromise) {
+    nativeSurfaceAvailablePromise = tauriInvoke<boolean>("native_video_surface_available")
+      .catch(() => false);
+  }
+  return nativeSurfaceAvailablePromise;
+}
+
+function applyNativeFrameSize(sender: string, width: number, height: number) {
+  // libwebrtc peut livrer brièvement une frame sentinelle 8×8 pendant une
+  // republication. Elle est utile au renderer, mais ne doit jamais modifier
+  // le ratio du DOM : en mosaïque la tuile passerait 16:9 → 1:1 → 16:9.
+  if (width < 64 || height < 64) return;
+  nativeSurfaceSizes.set(sender, { width, height });
+  for (const registration of nativeSurfaceRegistrations.values()) {
+    if (registration.sender !== sender) continue;
+    // La surface native porte les pixels : garder un backing-store canvas à
+    // la résolution vidéo ferait malgré tout composer plusieurs Mo par
+    // WebKit à chaque frame. Le DOM conserve le ratio et les dimensions
+    // source en métadonnées, avec un tampon symbolique de 1×1 seulement.
+    registration.element.dataset.nativeVideoWidth = String(width);
+    registration.element.dataset.nativeVideoHeight = String(height);
+    // Une tuile possède déjà son ratio de mise en page (16:9 ou dimensions
+    // contraintes). Seule la vue simple, sans ratio inline, est pilotée par
+    // le flux. Le marqueur permet ensuite d'actualiser ce ratio si la source
+    // change réellement de résolution.
+    if (!registration.element.style.aspectRatio || registration.element.dataset.nativeAspectManaged === "true") {
+      registration.element.style.aspectRatio = `${width} / ${height}`;
+      registration.element.dataset.nativeAspectManaged = "true";
+      // L'élément doit épouser l'image, pas la déborder. Avec seulement
+      // `width: 100%` et `aspect-ratio`, une hauteur bridée par `max-height`
+      // casse le ratio : la boîte reste pleine largeur et laisse des bandes
+      // noires latérales qui ressemblent à la vidéo sans en être — le
+      // pointeur y produit des coordonnées hors [0,1] et aucun curseur n'est
+      // émis. Borner aussi la largeur par « hauteur maximale × ratio » rend
+      // la boîte strictement égale à l'image dans les deux orientations.
+      registration.element.style.maxWidth =
+        `min(100%, calc(var(--sion-share-max-height, 100vh) * ${width / height}))`;
+    }
+    registration.element.width = 1;
+    registration.element.height = 1;
+  }
+}
+
+function ensureNativeSurfaceSizeListener(): Promise<void> {
+  if (!nativeSurfaceSizeListenerPromise) {
+    nativeSurfaceSizeListenerPromise = import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        await listen<VoiceNativeFrameSize>("voice-native-frame-size", (event) => {
+          const frame = event.payload;
+          applyNativeFrameSize(frame.sender, frame.width, frame.height);
+        });
+      })
+      .catch((error) => {
+        nativeSurfaceSizeListenerPromise = null;
+        throw error;
+      });
+  }
+  return nativeSurfaceSizeListenerPromise;
+}
+
+/** Un élément hors du conteneur du partage recouvre-t-il la zone vidéo ?
+ *
+ *  `elementFromPoint` respecte `pointer-events: none`, donc les calques
+ *  décoratifs du lecteur ne comptent jamais comme occultants. On échantillonne
+ *  le centre et quatre points internes plutôt que les coins, qui tombent sur
+ *  les bordures arrondies. */
+function isOccluded(
+  element: HTMLCanvasElement,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): boolean {
+  const container = element.parentElement;
+  if (!container) return false;
+  const samples: Array<[number, number]> = [
+    [left + width / 2, top + height / 2],
+    [left + width * 0.25, top + height * 0.25],
+    [left + width * 0.75, top + height * 0.25],
+    [left + width * 0.25, top + height * 0.75],
+    [left + width * 0.75, top + height * 0.75],
+  ];
+  for (const [x, y] of samples) {
+    const hit = document.elementFromPoint(x, y);
+    // Rien sous le point (hors viewport) : ne pas conclure à une occultation.
+    if (!hit) continue;
+    if (hit !== element && !container.contains(hit)) return true;
+  }
+  return false;
+}
+
+function nativeSurfaceLoop() {
+  nativeSurfaceTimer = null;
+  const surfaces: NativeVideoSurfaceRect[] = [];
+  for (const registration of nativeSurfaceRegistrations.values()) {
+    const element = registration.element;
+    const style = getComputedStyle(element);
+    if (!element.isConnected || style.display === "none" || style.visibility === "hidden") continue;
+    // getBoundingClientRect() ignores clipping performed by ancestors. A
+    // native Wayland subsurface has no knowledge of that DOM clipping and
+    // would otherwise paint over sidebars, rounded cards, or hidden panels.
+    // Intersect every ancestor that establishes an overflow clip before
+    // handing the rectangle to Rust.
+    let visible = element.getBoundingClientRect();
+    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const ancestorStyle = getComputedStyle(ancestor);
+      const clipsX = ancestorStyle.overflowX !== "visible";
+      const clipsY = ancestorStyle.overflowY !== "visible";
+      if (!clipsX && !clipsY) continue;
+      const clip = ancestor.getBoundingClientRect();
+      if (clipsX) {
+        visible = new DOMRect(
+          Math.max(visible.left, clip.left),
+          visible.top,
+          Math.min(visible.right, clip.right) - Math.max(visible.left, clip.left),
+          visible.height,
+        );
+      }
+      if (clipsY) {
+        visible = new DOMRect(
+          visible.left,
+          Math.max(visible.top, clip.top),
+          visible.width,
+          Math.min(visible.bottom, clip.bottom) - Math.max(visible.top, clip.top),
+        );
+      }
+      if (visible.width <= 0 || visible.height <= 0) break;
+    }
+    const left = Math.max(0, visible.left);
+    const top = Math.max(0, visible.top);
+    const right = Math.min(window.innerWidth, visible.right);
+    const bottom = Math.min(window.innerHeight, visible.bottom);
+    const width = Math.round(right - left);
+    const height = Math.round(bottom - top);
+    if (width < 1 || height < 1) continue;
+    // La surface native est peinte AU-DESSUS de la WebView : aucun menu,
+    // aucune boîte de dialogue, aucune liste déroulante DOM ne peut passer
+    // devant elle, quel que soit son z-index. Tant qu'on ne sait pas découper
+    // la surface autour de l'élément qui la recouvre, le seul comportement
+    // correct est de s'effacer. On échantillonne la zone : tout ce qui
+    // appartient au conteneur du partage (boutons, chevrons, calques) reste
+    // légitime ; un élément venu d'ailleurs dans le DOM est un occultant.
+    if (isOccluded(element, left, top, width, height)) continue;
+    surfaces.push({
+      id: registration.id,
+      sender: registration.sender,
+      x: Math.round(left),
+      y: Math.round(top),
+      width,
+      height,
+    });
+  }
+  const payload = JSON.stringify(surfaces);
+  if (payload !== nativeSurfaceLastPayload) {
+    nativeSurfaceLastPayload = payload;
+    void tauriInvoke<boolean>("native_video_surfaces_set", { surfaces }).catch(() => false);
+  }
+  if (nativeSurfaceRegistrations.size > 0) {
+    // Une rAF permanente maintenait WebKit et le GtkOverlay en composition
+    // continue, même avec une géométrie inchangée. Quatre contrôles par
+    // seconde suffisent pour suivre resize/scroll/transitions sans brûler le
+    // thread principal pendant toute la durée d'un partage.
+    nativeSurfaceTimer = window.setTimeout(nativeSurfaceLoop, 250);
+  }
+}
+
+function startNativeSurfaceLoop() {
+  if (nativeSurfaceRegistrations.size === 0) return;
+  if (nativeSurfaceTimer !== null) window.clearTimeout(nativeSurfaceTimer);
+  nativeSurfaceTimer = window.setTimeout(nativeSurfaceLoop, 0);
+}
+
+function ensureNativeSurfaceGeometryObservers() {
+  if (!nativeSurfaceResizeObserver) {
+    nativeSurfaceResizeObserver = new ResizeObserver(startNativeSurfaceLoop);
+  }
+  if (!nativeSurfaceWindowObserversActive) {
+    window.addEventListener("resize", startNativeSurfaceLoop, { passive: true });
+    window.addEventListener("scroll", startNativeSurfaceLoop, { passive: true, capture: true });
+    nativeSurfaceWindowObserversActive = true;
+  }
+}
+
+/** Enregistre le rectangle DOM qui doit recevoir les pixels natifs. La
+ *  géométrie est envoyée à Rust seulement lorsqu'elle change ; aucun pixel ne
+ *  traverse l'IPC. */
+export async function registerNativeVideoSurface(
+  element: HTMLCanvasElement,
+  sender: string,
+): Promise<() => void> {
+  if (!sender || !(await isNativeVideoSurfaceAvailable())) return () => {};
+  // Le premier changement de taille peut être émis dès que la surface est
+  // publiée à Rust. Installer l'écouteur avant cette publication évite de
+  // rater l'unique événement d'un partage dont la résolution reste fixe.
+  await ensureNativeSurfaceSizeListener();
+  const id = `native-video-${++nativeSurfaceSequence}`;
+  // Marque l'élément comme placeholder de surface native : son backing-store
+  // ne porte aucune résolution, les calculs de letterbox doivent le savoir.
+  element.dataset.nativeSurface = "true";
+  nativeSurfaceRegistrations.set(id, { id, sender, element });
+  ensureNativeSurfaceGeometryObservers();
+  nativeSurfaceResizeObserver?.observe(element);
+  console.info(`[Sion][partage-natif] surface DOM enregistrée ${id} pour ${sender}`);
+  const knownSize = nativeSurfaceSizes.get(sender);
+  if (knownSize) applyNativeFrameSize(sender, knownSize.width, knownSize.height);
+  startNativeSurfaceLoop();
+  return () => {
+    nativeSurfaceResizeObserver?.unobserve(element);
+    delete element.dataset.nativeSurface;
+    nativeSurfaceRegistrations.delete(id);
+    console.info(`[Sion][partage-natif] surface DOM retirée ${id} pour ${sender}`);
+    if (nativeSurfaceRegistrations.size === 0) {
+      if (nativeSurfaceTimer !== null) window.clearTimeout(nativeSurfaceTimer);
+      nativeSurfaceTimer = null;
+      nativeSurfaceResizeObserver?.disconnect();
+      nativeSurfaceResizeObserver = null;
+      if (nativeSurfaceWindowObserversActive) {
+        window.removeEventListener("resize", startNativeSurfaceLoop);
+        window.removeEventListener("scroll", startNativeSurfaceLoop, true);
+        nativeSurfaceWindowObserversActive = false;
+      }
+      nativeSurfaceLastPayload = "[]";
+      void tauriInvoke<boolean>("native_video_surfaces_set", { surfaces: [] }).catch(() => false);
+    }
+  };
 }
 
 export function parseVoiceNativeVideoPacket(data: ArrayBuffer): VoiceNativeBinaryFrame | null {

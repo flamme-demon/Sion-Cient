@@ -945,6 +945,89 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Conversion d'une frame décodée vers la surface native intégrée.
+///
+/// Ni JPEG, ni socket, ni budget de débit : les pixels ne quittent pas le
+/// processus, il n'y a donc rien à budgéter. `scratch` est le tampon BGRA
+/// rendu par la publication précédente (la file est latest-wins, l'image
+/// remplacée allait être libérée) : en régime établi cette fonction n'alloue
+/// plus rien, là où l'ancien chemin allouait et zérotait 8,3 Mo par image en
+/// 1080p.
+///
+/// Le balayage `y_samples` de l'ancien pont n'est pas fait ici : il ne servait
+/// qu'à éviter un ré-encodage JPEG sur écran fixe, et coûtait un parcours du
+/// plan Y complet pour un résultat inutilisé côté natif.
+/// Adaptateur zéro-copie : le thread de rendu EGL lit directement les plans
+/// que libwebrtc vient de décoder, sans passer par un tampon intermédiaire.
+struct I420Planes(livekit::webrtc::video_frame::I420Buffer);
+
+impl crate::native_video_surface::PlanarFrame for I420Planes {
+    fn dimensions(&self) -> (u32, u32) {
+        use livekit::webrtc::video_frame::VideoBuffer as _;
+        (self.0.width(), self.0.height())
+    }
+
+    fn planes(&self) -> (&[u8], &[u8], &[u8]) {
+        self.0.data()
+    }
+
+    fn strides(&self) -> (u32, u32, u32) {
+        self.0.strides()
+    }
+}
+
+fn convert_to_native_surface(
+    sender: String,
+    frame: livekit::webrtc::video_frame::BoxVideoFrame,
+    mut scratch: Vec<u8>,
+) -> Vec<u8> {
+    let buf = frame.buffer.as_ref();
+    let (sw, sh) = (buf.width(), buf.height());
+    // Aucun consommateur natif visible (montage React, vue masquée, PIP
+    // fermé) : jeter la frame plutôt que convertir du 1080p pour personne. La
+    // suivante amorcera la surface dès qu'un rectangle est publié. C'est aussi
+    // ce qui remplace l'ancien `wants_frames` : les bornes combinent déjà la
+    // surface intégrée et la fenêtre PIP.
+    let Some((dw, dh)) = crate::native_video_surface::preferred_frame_dimensions(&sender, sw, sh)
+    else {
+        return scratch;
+    };
+    if dw == 0 || dh == 0 {
+        return scratch;
+    }
+    // Résolution SOURCE : c'est elle qui donne son ratio à la boîte DOM. La
+    // taille réduite `dw x dh` dérive de cette boîte — l'annoncer refermerait
+    // une boucle et ferait osciller l'image.
+    crate::native_video_surface::announce_source_dimensions(&sender, sw, sh);
+    let mut i420 = buf.to_i420();
+    // La réduction reste faite ici même en mode planaire : elle est bien moins
+    // chère qu'une conversion BGRA et divise d'autant le volume téléversé vers
+    // le GPU. L'ajustement final au rectangle visible, lui, appartient au
+    // shader.
+    if dw != sw || dh != sh {
+        i420 = i420.scale(dw as i32, dh as i32);
+    }
+    // Renderer EGL en place : les plans partent tels quels, la conversion
+    // YUV→RGB est faite par le fragment shader. Plus aucun `libyuv::I420ToARGB`
+    // sur le chemin chaud, et 1,5 o/px transférés au lieu de 4.
+    if crate::native_video_surface::prefers_planar(&sender) {
+        crate::native_video_surface::on_planar_frame(sender, Box::new(I420Planes(i420)));
+        return scratch;
+    }
+    // Cairo `Format::ARgb32` et le blit GDI attendent des octets BGRA sur une
+    // machine little-endian. Le binding libyuv expose précisément cet ordre
+    // via `VideoFormatType::ARGB` (test `libyuv_to_argb_produit_le_bgra_de_cairo`).
+    scratch.resize(dw as usize * dh as usize * 4, 0);
+    i420.to_argb(
+        livekit::webrtc::video_frame::VideoFormatType::ARGB,
+        &mut scratch,
+        dw * 4,
+        dw as i32,
+        dh as i32,
+    );
+    crate::native_video_surface::on_frame(sender, dw, dh, scratch).unwrap_or_default()
+}
+
 /// Pompe vidéo : partage d'écran distant → JPEG adaptatif par WebSocket local
 /// binaire. Le flux décodé par libwebrtc EST fluide et net
 /// (vrai codec adaptatif côté SFU) ; le pont JPEG n'en garde que l'essentiel :
@@ -995,6 +1078,14 @@ fn spawn_video_pump(
         // qu'un filet (couche en pause, dynacast), ça se voit ici.
         let mut stat_arrived: u64 = 0;
         let mut stat_since = tokio::time::Instant::now();
+        // `available()` est posé une fois pour toutes par `attach()` au
+        // démarrage, avant qu'aucune pompe n'existe : le mode est stable pour
+        // toute la durée du partage.
+        let native_mode = crate::native_video_surface::replaces_legacy_transport();
+        // Mode natif : une seule conversion en vol, tampon BGRA recyclé.
+        let mut native_pending: Option<tokio::task::JoinHandle<Vec<u8>>> = None;
+        let mut native_scratch: Vec<u8> = Vec::new();
+        let mut native_count: u64 = 0;
         loop {
             tokio::select! {
                 _ = &mut stop => break,
@@ -1003,7 +1094,17 @@ fn spawn_video_pump(
                     stat_arrived += 1;
                     latest = Some(frame);
                 }
-                _ = ticker.tick() => {
+                // Récolte de la conversion native dès qu'elle finit, sans
+                // polling ni tick : `&mut JoinHandle` est annulable, la tâche
+                // survit aux tours de `select!` où cette branche n'est pas
+                // retenue.
+                recycled = async { native_pending.as_mut().unwrap().await },
+                    if native_pending.is_some() =>
+                {
+                    native_pending = None;
+                    native_scratch = recycled.unwrap_or_default();
+                }
+                _ = ticker.tick(), if !native_mode => {
                     // Récolte de l'encodage précédent (sans attendre).
                     if let Some(h) = pending.take() {
                         if h.is_finished() {
@@ -1114,8 +1215,46 @@ fn spawn_video_pump(
                     }
                 }
             }
+            // ── Mode natif : relance immédiate, sans ticker ───────────────
+            // L'ancien pont JPEG cadençait à 40 ms (`VIDEO_TICKS_MS[0]`) pour
+            // tenir un budget de débit local. En natif il n'y a plus de débit
+            // à tenir, et ce ticker coûtait cher : plafond à 25 im/s, chute à
+            // 12,5 dès qu'une conversion dépassait un tick, et battement
+            // contre le drain GTK (40 ms contre 16 ms) qui produisait du
+            // judder à cadence pourtant stable. Ici la frame la plus récente
+            // part dès que la précédente est convertie — le latest-wins
+            // interdit tout backlog.
+            if native_mode && native_pending.is_none() {
+                if let Some(frame) = latest.take() {
+                    let target = sender.clone();
+                    let buffer = std::mem::take(&mut native_scratch);
+                    native_pending = Some(tokio::task::spawn_blocking(move || {
+                        convert_to_native_surface(target, frame, buffer)
+                    }));
+                    native_count += 1;
+                    if native_count == 1 {
+                        log::info!(
+                            "[Sion][voix-native] frames vidéo {} en surface native (sans JPEG ni ticker)",
+                            sender
+                        );
+                    }
+                    if stat_since.elapsed().as_secs() >= 30 {
+                        let secs = stat_since.elapsed().as_secs_f64();
+                        log::info!(
+                            "[Sion][voix-native] vidéo {} : reçues {:.1} im/s, converties {:.1} im/s (surface native)",
+                            sender,
+                            stat_arrived as f64 / secs,
+                            native_count as f64 / secs
+                        );
+                        stat_arrived = 0;
+                        native_count = 0;
+                        stat_since = tokio::time::Instant::now();
+                    }
+                }
+            }
         }
         log::info!("[Sion][voix-native] fin de partage {}", sender);
+        crate::native_video_surface::remove(&sender);
         crate::native_video_transport::remove(&sender);
         let _ = app.emit(
             "voice-native-frame-stopped",
@@ -1498,22 +1637,30 @@ impl LiveKitEngine {
                         .cloned()
                         .ok_or("aucune sortie audio disponible")?;
                     if !selected.0.is_empty() && input.id.as_str() != selected.0 {
-                        log::warn!("[Sion][voix-native] microphone mémorisé absent, utilisation du défaut");
+                        log::warn!(
+                            "[Sion][voix-native] microphone mémorisé absent, utilisation du défaut"
+                        );
                         selected.0.clear();
                     }
                     if !selected.1.is_empty() && output.id.as_str() != selected.1 {
-                        log::warn!("[Sion][voix-native] sortie mémorisée absente, utilisation du défaut");
+                        log::warn!(
+                            "[Sion][voix-native] sortie mémorisée absente, utilisation du défaut"
+                        );
                         selected.1.clear();
                     }
                     let input_ready = audio.switch_recording_device(&input.id);
-                    let output_ready = input_ready
-                        .as_ref()
-                        .map_err(|e| e.to_string())
-                        .and_then(|_| audio.switch_playout_device(&output.id).map_err(|e| e.to_string()));
+                    let output_ready =
+                        input_ready
+                            .as_ref()
+                            .map_err(|e| e.to_string())
+                            .and_then(|_| {
+                                audio
+                                    .switch_playout_device(&output.id)
+                                    .map_err(|e| e.to_string())
+                            });
                     match (input_ready, output_ready) {
                         (Ok(()), Ok(())) => break,
-                        (Err(AudioError::DeviceNotFound), _)
-                        | (Ok(()), Err(_))
+                        (Err(AudioError::DeviceNotFound), _) | (Ok(()), Err(_))
                             if std::time::Instant::now() < deadline =>
                         {
                             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1522,7 +1669,9 @@ impl LiveKitEngine {
                         (_, Err(e)) => return Err(format!("sélection sortie: {e}")),
                     }
                 } else if std::time::Instant::now() >= deadline {
-                    return Err("périphériques audio natifs indisponibles (ADM non initialisé)".into());
+                    return Err(
+                        "périphériques audio natifs indisponibles (ADM non initialisé)".into(),
+                    );
                 } else {
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
@@ -1745,6 +1894,16 @@ impl LiveKitEngine {
         self.local_share
             .lock()
             .map(|g| g.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Le partage local publie-t-il aussi le son du système ? Permet au front
+    /// de retrouver cet état après un rechargement de webview, au lieu de le
+    /// déduire d'une intention passée qu'il a oubliée.
+    pub fn is_screenshare_audio_published(&self) -> bool {
+        self.local_share
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|share| share.audio_sid.is_some()))
             .unwrap_or(false)
     }
 
@@ -2200,9 +2359,7 @@ impl LiveKitEngine {
                     let _rt_enter = self.rt.enter();
                     track.unmute();
                 }
-                log::info!(
-                    "[Sion][voix-native] micro réactivé (piste conservée, sans republish)"
-                );
+                log::info!("[Sion][voix-native] micro réactivé (piste conservée, sans republish)");
                 return Ok(());
             }
             // Aucune piste conservée (première publication ou après un
@@ -2216,7 +2373,9 @@ impl LiveKitEngine {
                         let _rt_enter = self.rt.enter();
                         track.mute();
                     }
-                    log::info!("[Sion][voix-native] micro muté (piste conservée, sans dépublication)");
+                    log::info!(
+                        "[Sion][voix-native] micro muté (piste conservée, sans dépublication)"
+                    );
                 }
                 None => log::info!("[Sion][voix-native] micro déjà coupé (aucune piste)"),
             }
@@ -3104,6 +3263,30 @@ mod tests {
         assert!(near(convert(145, 54, 34), [0, 255, 0, 255]), "vert");
         assert!(near(convert(41, 240, 110), [0, 0, 255, 255]), "bleu");
         assert!(near(convert(235, 128, 128), [255, 255, 255, 255]), "blanc");
+    }
+
+    /// Cairo `Format::ARgb32` lit BGRA en mémoire sur nos machines
+    /// little-endian. Ce test verrouille le format demandé au chemin GTK :
+    /// une frame rouge doit donc sortir B=0, G=0, R=255, A=255.
+    #[test]
+    fn libyuv_to_argb_produit_le_bgra_de_cairo() {
+        use livekit::webrtc::video_frame::{I420Buffer, VideoFormatType};
+        let mut buf = I420Buffer::new(2, 2);
+        let (dy, du, dv) = buf.data_mut();
+        dy.fill(82);
+        du.fill(90);
+        dv.fill(240);
+        let mut out = [0u8; 16];
+        buf.to_argb(VideoFormatType::ARGB, &mut out, 8, 2, 2);
+        let expected = [0u8, 0, 255, 255];
+        assert!(
+            out[..4]
+                .iter()
+                .zip(expected)
+                .all(|(got, expected)| (*got as i16 - expected as i16).abs() <= 25),
+            "BGRA rouge attendu, obtenu {:?}",
+            &out[..4]
+        );
     }
 
     /// L'encodeur lit bien du RGBA dans l'ordre (rouge encodé = rouge

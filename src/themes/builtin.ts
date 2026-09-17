@@ -55,6 +55,62 @@ export const SION_DARK: Theme = {
   tokens: SION_DARK_TOKENS,
 };
 
+/** Sion Light — pendant clair du thème historique. Palette volontairement
+ *  froide et peu éblouissante : fonds bleu-gris, accent Sion plus soutenu et
+ *  couleurs sémantiques assombries pour conserver leur contraste sur blanc. */
+export const SION_LIGHT_TOKENS: Record<ThemeTokenName, string> = {
+  "color-surface": "#f8f9ff",
+  "color-surface-container-lowest": "#ffffff",
+  "color-surface-container-low": "#f2f3f9",
+  "color-surface-container": "#eceef4",
+  "color-surface-container-high": "#e6e8ee",
+  "color-surface-container-highest": "#dfe2e8",
+  "color-surface-variant": "#e1e2ec",
+  "color-inverse-surface": "#2f3036",
+  "color-on-surface": "#191c20",
+  "color-on-surface-variant": "#44474f",
+  "color-outline": "#74777f",
+  "color-outline-variant": "#c4c6cf",
+  "color-border": "rgba(0, 0, 0, 0.10)",
+  "color-primary": "#285ea8",
+  "color-on-primary": "#ffffff",
+  "color-primary-container": "#d7e3ff",
+  "color-on-primary-container": "#001b3f",
+  "color-secondary": "#515f74",
+  "color-on-secondary": "#ffffff",
+  "color-secondary-container": "#d5e3fa",
+  "color-on-secondary-container": "#0d1c2e",
+  "color-tertiary": "#6b5778",
+  "color-on-tertiary": "#ffffff",
+  "color-tertiary-container": "#f3daff",
+  "color-on-tertiary-container": "#251431",
+  "color-error": "#ba1a1a",
+  "color-on-error": "#ffffff",
+  "color-error-container": "#ffdad6",
+  "color-green": "#287a3b",
+  "color-red": "#ba1a1a",
+  "color-yellow": "#735c00",
+  "color-orange": "#9c4417",
+  "color-accent": "#285ea8",
+  "color-warning": "#8a4f00",
+  "color-pending": "#965800",
+  "color-amber": "#7d5700",
+  "color-success": "#2e7d32",
+  "color-success-hover": "#1b5e20",
+  "color-glow-strong": "rgba(40, 122, 59, 0.24)",
+  "color-glow": "rgba(40, 122, 59, 0.10)",
+  "font-family-sans": "\"Google Sans\", \"Roboto\", ui-sans-serif, system-ui, -apple-system, sans-serif",
+  "font-family-mono": "\"JetBrains Mono\", \"Roboto Mono\", \"Fira Code\", ui-monospace, monospace",
+};
+
+export const SION_LIGHT: Theme = {
+  id: "sion-light",
+  name: "Sion Light",
+  format: 1,
+  mode: "light",
+  tokens: SION_LIGHT_TOKENS,
+};
+
 /** AMOLED — noirs purs (écrans OLED) : surfaces à #000 et conteneurs très
  *  sombres, accents identiques à Sion Dark (contraste déjà calibré). */
 export const SION_AMOLED: Theme = {
@@ -79,4 +135,4 @@ export const SION_AMOLED: Theme = {
   },
 };
 
-export const BUILTIN_THEMES: Theme[] = [SION_DARK, SION_AMOLED];
+export const BUILTIN_THEMES: Theme[] = [SION_DARK, SION_LIGHT, SION_AMOLED];

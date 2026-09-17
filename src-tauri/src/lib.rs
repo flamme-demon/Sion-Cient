@@ -6,6 +6,8 @@ use tauri::Manager;
 #[cfg(not(target_os = "android"))]
 mod cursor_overlay;
 #[cfg(not(target_os = "android"))]
+mod native_video_surface;
+#[cfg(not(target_os = "android"))]
 mod pip_window;
 #[cfg(target_os = "linux")]
 mod portal_shortcuts;
@@ -598,7 +600,8 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 /// target local/private network endpoints. This prevents a message URL from
 /// turning the client into an SSRF proxy.
 fn validate_preview_url(raw: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(raw).map_err(|_| "URL de prévisualisation invalide".to_string())?;
+    let parsed =
+        reqwest::Url::parse(raw).map_err(|_| "URL de prévisualisation invalide".to_string())?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("Seules les URLs HTTP(S) sont autorisées".into());
     }
@@ -609,20 +612,39 @@ fn validate_preview_url(raw: &str) -> Result<(), String> {
     }
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         let private = match ip {
-            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.is_unique_local() || v6.is_unicast_link_local(),
+            std::net::IpAddr::V4(v4) => {
+                v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local()
+            }
         };
-        if private { return Err("Adresse réseau privée interdite pour une prévisualisation".into()); }
+        if private {
+            return Err("Adresse réseau privée interdite pour une prévisualisation".into());
+        }
     }
     Ok(())
 }
 
-async fn read_response_limited(mut response: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, String> {
-    if response.content_length().is_some_and(|n| n > max_bytes as u64) {
+async fn read_response_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|n| n > max_bytes as u64)
+    {
         return Err("Réponse trop volumineuse".into());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| format!("lecture réponse: {e}"))? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("lecture réponse: {e}"))?
+    {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             return Err("Réponse trop volumineuse".into());
         }
@@ -793,7 +815,10 @@ async fn fetch_link_preview_inner(url: &str) -> Result<LinkPreview, Box<dyn std:
 
 #[cfg(test)]
 mod security_tests {
-    use super::{sanitize_download_filename, session_credentials, session_json_for_disk};
+    use super::{
+        sanitize_download_filename, session_credentials, session_json_for_disk,
+        write_private_file_atomic,
+    };
 
     #[test]
     fn download_filename_cannot_escape_target_directory() {
@@ -808,16 +833,21 @@ mod security_tests {
     /// seule copie de secours d'une session partait en fumée.
     #[test]
     fn session_token_leaves_disk_only_when_the_vault_holds_it() {
-        let blob = r#"{"sion_auth_credentials":"{\"accessToken\":\"syt_x\"}","sion_device_id":"DEV"}"#;
+        let blob =
+            r#"{"sion_auth_credentials":"{\"accessToken\":\"syt_x\"}","sion_device_id":"DEV"}"#;
         assert_eq!(
             session_credentials(blob).as_deref(),
             Some(r#"{"accessToken":"syt_x"}"#)
         );
 
         // Coffre confirmé : le jeton sort du fichier, le reste demeure.
-        let vaulted = serde_json::from_str::<serde_json::Value>(&session_json_for_disk(blob, true)).unwrap();
+        let vaulted =
+            serde_json::from_str::<serde_json::Value>(&session_json_for_disk(blob, true)).unwrap();
         assert!(vaulted.get("sion_auth_credentials").is_none());
-        assert_eq!(vaulted.get("sion_device_id").and_then(|v| v.as_str()), Some("DEV"));
+        assert_eq!(
+            vaulted.get("sion_device_id").and_then(|v| v.as_str()),
+            Some("DEV")
+        );
 
         // Coffre absent/non persistant : copie disque intacte, octet pour octet.
         assert_eq!(session_json_for_disk(blob, false), blob);
@@ -830,6 +860,35 @@ mod security_tests {
 
         // Blob illisible : jamais tronqué par erreur.
         assert_eq!(session_json_for_disk("pas du json", true), "pas du json");
+    }
+
+    #[test]
+    fn session_write_replaces_the_complete_file_atomically() {
+        let directory = std::env::temp_dir().join(format!(
+            "sion-session-atomic-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("session.json");
+
+        write_private_file_atomic(&path, br#"{"generation":1}"#).unwrap();
+        write_private_file_atomic(&path, br#"{"generation":2,"complete":true}"#).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"generation":2,"complete":true}"#
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(directory);
     }
 
     /// Verrou de comportement : tant qu'aucun backend de coffre n'est compilé,
@@ -932,7 +991,13 @@ async fn download_file(url: String, filename: String) -> Result<String, String> 
 
 fn sanitize_download_filename(raw: &str) -> Result<String, String> {
     let name = raw.trim();
-    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.bytes().any(|b| b == 0 || b < 0x20) {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.bytes().any(|b| b == 0 || b < 0x20)
+    {
         return Err("Nom de fichier invalide".into());
     }
     if std::path::Path::new(name).is_absolute() {
@@ -982,8 +1047,7 @@ fn session_credentials(json: &str) -> Option<String> {
 /// filet de sécurité quand le profil webview est purgé (localStorage perdu).
 /// Pur, testé.
 fn session_json_for_disk(json: &str, vaulted: bool) -> String {
-    let Ok(mut blob) =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json)
+    let Ok(mut blob) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json)
     else {
         return json.to_string();
     };
@@ -1013,23 +1077,92 @@ fn session_json_to_persist(json: &str) -> String {
     json.to_string()
 }
 
+/// Écrit un fichier sensible sans jamais exposer une version partiellement
+/// écrite : contenu dans un voisin temporaire, flush, puis remplacement
+/// atomique sur le même système de fichiers.
+fn write_private_file_atomic(path: &std::path::Path, contents: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "chemin de session sans dossier parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "nom de fichier de session invalide".to_string())?;
+    let temp_id = NEXT_TEMP_ID.fetch_add(1, AtomicOrdering::Relaxed);
+    let temp_path = parent.join(format!(".{file_name}.tmp-{}-{temp_id}", std::process::id()));
+
+    let result = (|| -> Result<(), String> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp_path).map_err(|e| e.to_string())?;
+        file.write_all(contents).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::Win32::Storage::FileSystem::{
+                MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+            };
+            use windows_core::PCWSTR;
+
+            let from = temp_path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            let to = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            unsafe {
+                MoveFileExW(
+                    PCWSTR(from.as_ptr()),
+                    PCWSTR(to.as_ptr()),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            }
+            .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        std::fs::rename(&temp_path, path).map_err(|e| e.to_string())?;
+
+        // Sur Unix, le fsync du dossier rend aussi le renommage durable après
+        // une coupure brutale. Le mode 0600 est fixé dès create(), donc aucune
+        // fenêtre de temps ne rend le jeton lisible par un autre utilisateur.
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
+}
+
 #[tauri::command]
 fn persist_session(app: tauri::AppHandle<TauriRuntime>, json: String) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let disk_json = session_json_to_persist(&json);
     let path = dir.join("session.json");
-    std::fs::write(&path, disk_json).map_err(|e| e.to_string())?;
-    // The file contains a Matrix access token. Keep it owner-readable on
-    // Unix even when the user's umask is permissive.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path).map_err(|e| e.to_string())?.permissions();
-        perms.set_mode(0o600);
-        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    write_private_file_atomic(&path, disk_json.as_bytes())
 }
 
 #[tauri::command]
@@ -1038,29 +1171,26 @@ fn load_session(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
     let raw = std::fs::read_to_string(dir.join("session.json")).unwrap_or_default();
     #[cfg(not(target_os = "android"))]
     {
-        if let Ok(mut blob) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw) {
+        if let Ok(mut blob) =
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+        {
             if !blob.contains_key("sion_auth_credentials") {
                 if let Ok(credentials) = secure_session_get() {
-                    blob.insert("sion_auth_credentials".into(), serde_json::Value::String(credentials));
+                    blob.insert(
+                        "sion_auth_credentials".into(),
+                        serde_json::Value::String(credentials),
+                    );
                     return Ok(serde_json::Value::Object(blob).to_string());
                 }
-            } else if let Some(credentials) = blob.get("sion_auth_credentials").and_then(|v| v.as_str()) {
+            } else if let Some(credentials) =
+                blob.get("sion_auth_credentials").and_then(|v| v.as_str())
+            {
                 // One-time migration from the pre-keychain plaintext file.
                 if secure_session_set_verified(credentials) {
                     blob.remove("sion_auth_credentials");
                     let migrated = serde_json::Value::Object(blob).to_string();
                     let path = dir.join("session.json");
-                    if std::fs::write(&path, &migrated).is_ok() {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            if let Ok(meta) = std::fs::metadata(&path) {
-                                let mut perms = meta.permissions();
-                                perms.set_mode(0o600);
-                                let _ = std::fs::set_permissions(&path, perms);
-                            }
-                        }
-                    }
+                    let _ = write_private_file_atomic(&path, migrated.as_bytes());
                     return Ok(migrated);
                 }
             }
@@ -1076,7 +1206,9 @@ fn secure_session_entry() -> Result<keyring::Entry, String> {
 
 #[cfg(not(target_os = "android"))]
 fn secure_session_set(credentials: &str) -> Result<(), String> {
-    secure_session_entry()?.set_password(credentials).map_err(|e| e.to_string())
+    secure_session_entry()?
+        .set_password(credentials)
+        .map_err(|e| e.to_string())
 }
 
 /// Écrit le jeton dans le coffre **puis le relit**.
@@ -1096,7 +1228,9 @@ fn secure_session_set_verified(credentials: &str) -> bool {
 
 #[cfg(not(target_os = "android"))]
 fn secure_session_get() -> Result<String, String> {
-    secure_session_entry()?.get_password().map_err(|e| e.to_string())
+    secure_session_entry()?
+        .get_password()
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1151,7 +1285,10 @@ async fn pick_audio_file() -> Option<String> {
 async fn pick_image_file() -> Option<String> {
     rfd::AsyncFileDialog::new()
         .set_title("Sélectionner une image")
-        .add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"])
+        .add_filter(
+            "Images",
+            &["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"],
+        )
         .pick_file()
         .await
         .map(|h| h.path().to_string_lossy().to_string())
@@ -1209,10 +1346,16 @@ async fn read_clipboard_image() -> Result<tauri::ipc::Response, String> {
 #[cfg(all(not(target_os = "android"), target_os = "linux"))]
 fn read_clipboard_image_blocking() -> Result<tauri::ipc::Response, String> {
     use std::io::Read;
-    use wl_clipboard_rs::paste::{get_contents, ClipboardType, Error as PasteError, MimeType, Seat};
+    use wl_clipboard_rs::paste::{
+        get_contents, ClipboardType, Error as PasteError, MimeType, Seat,
+    };
 
     for mime in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
-        match get_contents(ClipboardType::Regular, Seat::Unspecified, MimeType::Specific(mime)) {
+        match get_contents(
+            ClipboardType::Regular,
+            Seat::Unspecified,
+            MimeType::Specific(mime),
+        ) {
             Ok((mut pipe, _actual_mime)) => {
                 let mut bytes = Vec::new();
                 pipe.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
@@ -1247,14 +1390,15 @@ fn read_clipboard_image_via_arboard() -> Result<tauri::ipc::Response, String> {
         }
         Err(e) => return Err(e.to_string()),
     };
-    let rgba = image::RgbaImage::from_raw(image.width as u32, image.height as u32, image.bytes.into_owned())
-        .ok_or_else(|| "presse-papiers: image invalide".to_string())?;
-    let mut png = Vec::new();
-    rgba.write_to(
-        &mut std::io::Cursor::new(&mut png),
-        image::ImageFormat::Png,
+    let rgba = image::RgbaImage::from_raw(
+        image.width as u32,
+        image.height as u32,
+        image.bytes.into_owned(),
     )
-    .map_err(|e| format!("presse-papiers: encodage PNG: {e}"))?;
+    .ok_or_else(|| "presse-papiers: image invalide".to_string())?;
+    let mut png = Vec::new();
+    rgba.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| format!("presse-papiers: encodage PNG: {e}"))?;
     Ok(tauri::ipc::Response::new(png))
 }
 
@@ -2512,51 +2656,11 @@ async fn import_url_video(
                 .collect()
         };
 
-        // Priority order: constant-QUALITY first (AV1/VP9 beat H.264 at equal
-        // quality → smaller file); if that overflows the limit, a bitrate-capped
-        // pass guarantees it fits. AV1 (GPU) before VP9 (CPU).
+        // Keep the uploaded codec aligned with the format picker and the native
+        // webview compatibility contract: WebM is always VP9/Opus. AV1 VAAPI
+        // used to be preferred here, but those files can abort WebKitGTK's
+        // GStreamer Matroska demuxer before HTMLMediaElement reports an error.
         let mut candidates: Vec<Vec<String>> = Vec::new();
-        #[cfg(target_os = "linux")]
-        {
-            if std::path::Path::new("/dev/dri/renderD128").exists() {
-                // AMD AV1 VAAPI uses -global_quality (not -qp) for constant
-                // quality; ~125 ≈ good quality, smaller than the source H.264.
-                // MUST be scoped to the video stream (:v) — applied globally it
-                // hits libopus, which rejects quality-based encoding and aborts.
-                candidates.push(mk(&[
-                    "-y",
-                    "-vaapi_device",
-                    "/dev/dri/renderD128",
-                    "-i",
-                    src_s.as_str(),
-                    "-vf",
-                    "format=nv12,hwupload",
-                    "-c:v",
-                    "av1_vaapi",
-                    "-rc_mode",
-                    "CQP",
-                    "-global_quality:v",
-                    "125",
-                ]));
-                candidates.push(mk(&[
-                    "-y",
-                    "-vaapi_device",
-                    "/dev/dri/renderD128",
-                    "-i",
-                    src_s.as_str(),
-                    "-vf",
-                    "format=nv12,hwupload",
-                    "-c:v",
-                    "av1_vaapi",
-                    "-rc_mode",
-                    "VBR",
-                    "-b:v",
-                    fit.as_str(),
-                    "-maxrate",
-                    fit.as_str(),
-                ]));
-            }
-        }
         candidates.push(mk(&[
             "-y",
             "-i",
@@ -2902,6 +3006,112 @@ fn get_shortcut_ws_port() -> u16 {
     WS_PORT.load(Ordering::Relaxed)
 }
 
+#[cfg(not(target_os = "android"))]
+struct WindowStatePersistence {
+    save: std::sync::mpsc::SyncSender<()>,
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(not(target_os = "android"))]
+#[derive(Deserialize)]
+struct SavedMainWindowState {
+    width: u32,
+    height: u32,
+    #[serde(default)]
+    maximized: bool,
+    #[serde(default)]
+    fullscreen: bool,
+}
+
+#[cfg(not(target_os = "android"))]
+#[derive(Deserialize)]
+struct SavedWindowStates {
+    main: Option<SavedMainWindowState>,
+}
+
+/// Renforce `tauri-plugin-window-state` sur deux points observés en pratique :
+///
+/// - son restore très précoce peut être ignoré avant que WRY ait associé la
+///   fenêtre à son écran (et le plugin applique une `PhysicalSize`) ;
+/// - il n'écrit normalement sur disque qu'à la sortie. Un crash, Ctrl-C ou le
+///   redémarrage du serveur dev laisse donc un fichier ancien.
+///
+/// On capture l'état disque avant les premiers événements de fenêtre, on
+/// réapplique sa taille une fois WRY prêt, puis on sauvegarde sur le thread UI
+/// après 600 ms sans resize/move. Le passage par le thread UI évite le deadlock
+/// amont du plugin (verrou du cache + getter de fenêtre depuis un worker).
+#[cfg(not(target_os = "android"))]
+fn install_window_state_resilience(app: &tauri::App<TauriRuntime>) {
+    use std::sync::atomic::Ordering as AtomicOrdering;
+    use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+
+    let saved = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join(".window-state.json")).ok())
+        .and_then(|raw| serde_json::from_str::<SavedWindowStates>(&raw).ok())
+        .and_then(|states| states.main)
+        .filter(|state| state.width > 0 && state.height > 0);
+
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(saved.is_none()));
+    let (save, requests) = std::sync::mpsc::sync_channel::<()>(1);
+    app.manage(WindowStatePersistence {
+        save,
+        ready: ready.clone(),
+    });
+
+    let save_app = app.handle().clone();
+    thread::spawn(move || {
+        while requests.recv().is_ok() {
+            // Un drag produit beaucoup d'événements : attendre le dernier et
+            // ne faire qu'une écriture disque.
+            while requests.recv_timeout(Duration::from_millis(600)).is_ok() {}
+            let app = save_app.clone();
+            let _ = save_app.run_on_main_thread(move || {
+                let flags = StateFlags::SIZE
+                    | StateFlags::POSITION
+                    | StateFlags::MAXIMIZED
+                    | StateFlags::FULLSCREEN;
+                if let Err(error) = app.save_window_state(flags) {
+                    log::warn!("[Sion][fenêtre] sauvegarde différée impossible: {error}");
+                }
+            });
+        }
+    });
+
+    let Some(saved) = saved else {
+        return;
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        ready.store(true, AtomicOrdering::Release);
+        return;
+    };
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(700));
+        let result = if saved.maximized {
+            window.maximize()
+        } else if saved.fullscreen {
+            // Le plugin a déjà restauré le fullscreen. Conserver ici la taille
+            // normale en cache pour le retour au mode fenêtré.
+            Ok(())
+        } else {
+            window.set_size(tauri::PhysicalSize::new(saved.width, saved.height))
+        };
+        match result {
+            Ok(()) => log::info!(
+                "[Sion][fenêtre] état restauré après initialisation WRY: {}x{} maximisée={} plein-écran={}",
+                saved.width,
+                saved.height,
+                saved.maximized,
+                saved.fullscreen
+            ),
+            Err(error) => log::warn!("[Sion][fenêtre] restauration différée impossible: {error}"),
+        }
+        ready.store(true, AtomicOrdering::Release);
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
@@ -2955,6 +3165,8 @@ pub fn run() {
         save_imported_audio,
         cursor_overlay::cursor_overlay_open,
         cursor_overlay::cursor_overlay_close,
+        native_video_surface::native_video_surface_available,
+        native_video_surface::native_video_surfaces_set,
         pip_window::pip_native_open,
         pip_window::pip_native_close,
         pip_window::pip_native_status,
@@ -3072,6 +3284,9 @@ pub fn run() {
                     .build(),
             )?;
 
+            #[cfg(not(target_os = "android"))]
+            install_window_state_resilience(app);
+
             // ── Réglages WebKit du web process (perf mémoire, 2026-09-12) ──
             // Mesuré : la release est plate (691 → 694 Mo sur 28 min) mais son
             // plancher est ~690 Mo, tout côté web process. WebKit y entretient
@@ -3104,7 +3319,50 @@ pub fn run() {
                         // Page blanche sous pilote NVIDIA : surveille le web
                         // process (cf. `gpu_fallback`).
                         crate::gpu_fallback::watch_web_process(&gpu_handle, &view);
+                        // Surface intégrée native par défaut. Le correctif WRY
+                        // garde la WebView interactive sous Wayland ; un
+                        // opt-out explicite reste disponible pour diagnostiquer
+                        // un pilote/compositeur exotique.
+                        if std::env::var_os("SION_DISABLE_NATIVE_VIDEO_SURFACE").is_none() {
+                            if let Err(err) =
+                                crate::native_video_surface::attach(&gpu_handle, &view)
+                            {
+                                log::warn!(
+                                    "[Sion][partage-natif] surface GTK indisponible: {err}"
+                                );
+                            }
+                        } else {
+                            log::info!(
+                                "[Sion][partage-natif] surface GTK désactivée par SION_DISABLE_NATIVE_VIDEO_SURFACE"
+                            );
+                        }
                     });
+                }
+            }
+
+            // WebView2 est déjà un enfant de cette fenêtre. Les surfaces HWND
+            // sont des enfants frères, placés exactement sur les canvas DOM :
+            // les frames BGRA restent hors de JavaScript et les hit-tests
+            // traversent vers la WebView.
+            #[cfg(target_os = "windows")]
+            if std::env::var_os("SION_DISABLE_NATIVE_VIDEO_SURFACE").is_none() {
+                if let Some(window) = app.get_webview_window("main") {
+                    match (window.hwnd(), window.scale_factor()) {
+                        (Ok(hwnd), Ok(scale_factor)) => {
+                            if let Err(err) = crate::native_video_surface::attach(
+                                app.handle(),
+                                hwnd.0 as isize,
+                                scale_factor,
+                            ) {
+                                log::warn!(
+                                    "[Sion][partage-natif/windows] surface HWND indisponible: {err}"
+                                );
+                            }
+                        }
+                        (Err(err), _) | (_, Err(err)) => log::warn!(
+                            "[Sion][partage-natif/windows] fenêtre principale inaccessible: {err}"
+                        ),
+                    }
                 }
             }
 
@@ -3206,6 +3464,17 @@ pub fn run() {
         // down the voice session just because the overlay was closed.
         if window.label() != "main" {
             return;
+        }
+        if matches!(
+            event,
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+        ) {
+            if let Some(state) = window.try_state::<WindowStatePersistence>() {
+                use std::sync::atomic::Ordering as AtomicOrdering;
+                if state.ready.load(AtomicOrdering::Acquire) {
+                    let _ = state.save.try_send(());
+                }
+            }
         }
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();

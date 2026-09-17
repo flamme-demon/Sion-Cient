@@ -573,7 +573,11 @@ impl Host {
             h,
             x,
             y,
-            if self.shm.is_some() { "oui" } else { "non (repli put_image)" }
+            if self.shm.is_some() {
+                "oui"
+            } else {
+                "non (repli put_image)"
+            }
         );
         Ok(())
     }
@@ -607,7 +611,9 @@ impl Host {
         match self.conn.extension_information(shm::X11_EXTENSION_NAME) {
             Ok(Some(_)) => {}
             other => {
-                log::warn!("[Sion][CursorOverlay] MIT-SHM indisponible ({other:?}) — repli put_image");
+                log::warn!(
+                    "[Sion][CursorOverlay] MIT-SHM indisponible ({other:?}) — repli put_image"
+                );
                 return;
             }
         }
@@ -691,9 +697,7 @@ impl Host {
                         .count();
                     if n > 0 {
                         self.logged_content = true;
-                        log::info!(
-                            "[Sion][CursorOverlay] première frame non vide ({n} px peints)"
-                        );
+                        log::info!("[Sion][CursorOverlay] première frame non vide ({n} px peints)");
                     }
                 }
             }
@@ -799,9 +803,8 @@ impl Host {
         } else {
             self.wire.resize(pixels, 0);
             super::repack_rgba_to_bgra_parallel(&mut self.wire, pixmap.data());
-            let data: &[u8] = unsafe {
-                std::slice::from_raw_parts(self.wire.as_ptr() as *const u8, pixels * 4)
-            };
+            let data: &[u8] =
+                unsafe { std::slice::from_raw_parts(self.wire.as_ptr() as *const u8, pixels * 4) };
             self.conn.put_image(
                 ImageFormat::Z_PIXMAP,
                 win_id,
@@ -923,15 +926,21 @@ fn intern(conn: &RustConnection, name: &[u8]) -> Result<u32, Box<dyn std::error:
 
 /// Géométrie du moniteur principal via RANDR ; `None` si l'extension manque
 /// ou ne répond pas (repli : l'écran entier).
-fn primary_monitor(
-    conn: &RustConnection,
-    root: Window,
-) -> Option<(i16, i16, u16, u16)> {
-    let primary = conn.randr_get_output_primary(root).ok()?.reply().ok()?.output;
+fn primary_monitor(conn: &RustConnection, root: Window) -> Option<(i16, i16, u16, u16)> {
+    let primary = conn
+        .randr_get_output_primary(root)
+        .ok()?
+        .reply()
+        .ok()?
+        .output;
     if primary == x11rb::NONE {
         return None;
     }
-    let res = conn.randr_get_screen_resources_current(root).ok()?.reply().ok()?;
+    let res = conn
+        .randr_get_screen_resources_current(root)
+        .ok()?
+        .reply()
+        .ok()?;
     let info = conn
         .randr_get_output_info(primary, res.config_timestamp)
         .ok()?

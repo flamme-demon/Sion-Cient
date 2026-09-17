@@ -1,9 +1,9 @@
-# Roadmap 2.0.0 — Layout modulable, PIP, Thèmes
+# Roadmap 2.0.0 — Layout modulable, lecteur natif, PIP système, thèmes
 
-Proposition d'architecture pour la 2.0.0 finale, basée sur l'état réel du code
-au sortir de 2.0.0-alpha.1.
+Document vivant pour la 2.0.0 finale, remis en phase avec le code de
+2.0.0-alpha.5.
 
-> **État d'avancement (11/09/2026, soir)** —
+> **État d'avancement (16/09/2026)** —
 > ✅ **Chantier 1 (layout)** : socle complet — `useLayoutStore` persisté (v3 +
 > migrations), `ResizeHandle` double axe, sidebar 200→400 px / rail 72 px /
 > **masquée** (Ctrl+B cycle les trois, poignée de révélation sur le bord),
@@ -13,31 +13,56 @@ au sortir de 2.0.0-alpha.1.
 > et taille persistées) ; `resetLayout`, **presets Chat / Voix / Streaming**
 > dans l'en-tête du salon. Bonus : mini-avatars d'occupants (parole/son/AFK/
 > micro) + carte de survol complète (rôles, réseau, clic droit).
-> ✅ **Chantier 2 (partage)** : hauteur réglable persistée, barre d'onglets
+> ✅ **Chantier 2 (partage natif)** : hauteur réglable persistée, barre d'onglets
 > navigateur (son + volume + plein écran), **mosaïque** (tuiles multi-partages,
 > son et curseurs par tuile), **PIP interne** (Ctrl+Maj+P : drag, snap, cumul
 > mosaïque, position persistée), curseurs assainis (TTL 5 s, watchdog,
-> masquage global), recalage de l'état audio moteur après reload, et **PIP
-> natif** (§2.2, v1) — fenêtre OS always-on-top (winit + softbuffer) branchée
-> sur les JPEG déjà côté Rust : bouton dans la barre du partage, glisser pour
-> déplacer, clic droit ou Échap pour fermer, se ferme avec le partage — et
-> **mini-lecteur flottant** des vidéos du chat (§2.4).
+> masquage global) et recalage de l'état audio moteur après reload. Le **PIP
+> système natif** est livré (§2.2) : fenêtre always-on-top redimensionnable,
+> position/taille persistées, double-clic de taille, retour à Sion, son et
+> pointeur. Le chemin direct I420 → BGRA → texture GL/GDK du lecteur
+> principal est implémenté et affiche bien le direct sous Wayland. La surface est
+> bornée aux rectangles vidéo, possède une région d'entrée vide et le runtime
+> WRY crée son `GtkOverlay` avant la WebView : les entrées traversent bien la
+> surface, mais la composition du même toplevel ralentit encore WebKit pendant
+> un partage (mesure : ~38 % d'un cœur côté `WebKitWebProcess`). La sortie de
+> la vidéo vers une `wl_subsurface` Wayland / fenêtre enfant X11 est le blocage
+> performance courant ; état de reprise détaillé dans
+> `docs/native-video-surface-handoff.md`.
+> Le renderer DMA-BUF accéléré de WebKitGTK reste le défaut : le repli logiciel
+> mesuré à ~95 % d'un cœur au repos n'est activé qu'après un crash GPU détecté
+> ou via `SION_NATIVE_VIDEO_SOFTWARE_COMPOSITING=1`. La zone GTK reste non
+> mappée tant qu'aucun partage n'est visible, afin d'éviter un repaint à 60 Hz.
+> La surface Linux est désormais
+> active par défaut (opt-out diagnostic `SION_DISABLE_NATIVE_VIDEO_SURFACE=1`).
+> Une surface Windows intégrée est également livrée : un HWND enfant par zone
+> visible, peinture BGRA directe par GDI, géométrie/DPI suivis et hit-test
+> traversant vers WebView2. Le PIP système consomme
+> déjà les mêmes frames BGRA sans recompression. Le socle GTK repose sur Tauri 2.11.5,
+> retrait complet du fork CEF et correctif local ciblé de `tauri-runtime-wry`
+> 2.11.4 pour accepter une WebView imbriquée dans un `GtkOverlay`.
 > ✅ **Chantier 3, phase 1** : tokenisation complète — aucune couleur en dur
 > hors « Matrix » et habillages posés sur le média (constants nommées),
 > `utils/themeColor` pour les canvas, et **garde anti-hex en test**
 > (`services/themeGuard.test.ts` : échappatoires `themeColor(…, "#repli")` et
 > marqueur `theme-exempt`).
-> ✅ **Chantier 3, phase 2** : `themeStore` persisté + `applyTheme` appliqué
+> ✅ **Chantier 3, phases 2–3** : `themeStore` persisté + `applyTheme` appliqué
 > avant le premier rendu (aucun flash), section **Apparence** dans les Réglages
-> (vignettes, « Sion Dark » / « AMOLED », suppression) — et l'**import/export
+> (vignettes, « Sion Dark » / **« Sion Light »** / « AMOLED », suppression) — et l'**import/export
 > JSON** de la phase 5 est livré au passage.
+> ✅ **Stabilité locale** : état de fenêtre restauré après initialisation WRY
+> et sauvegardé en continu, `sion-settings` versionné avec migration v0→v1,
+> puis `session.json` écrit par remplacement atomique durable en mode privé.
+> Le store crypto Matrix est isolé dans une IndexedDB Sion versionnée : la
+> base SDK historique qui bouclait dans WASM/WebKitGTK n'est plus ouverte et
+> un timeout ne déclenche plus une seconde initialisation concurrente.
 > ⏳ **Restent** — Chantier 1 : presets exportables/importables, mode Arrange
 > (Ctrl+Shift+L) et finitions container queries du dock bas. Chantier 3 :
-> « Sion Light » (phase 3), accent seed (phase 4), fin de la phase 5 (préview
+> revue visuelle exhaustive de Sion Light, accent seed (phase 4), fin de la phase 5 (préview
 > au survol, sync Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 :
-> ne restent que les finitions du PIP natif (position/taille persistées entre
-> sessions, coin d'ancrage, double-clic → app au premier plan) — le PiP OS est
-> écarté, WebKitGTK ne l'expose pas (spike du 11/09).
+> validation prolongée des transitions/DPI sous Linux et validation sur une
+> vraie machine Windows (dont curseurs/contrôles superposés), puis retrait du
+> fallback JPEG/SVF1 lorsque la parité multi-plateforme sera acquise.
 
 ---
 
@@ -45,21 +70,16 @@ au sortir de 2.0.0-alpha.1.
 
 | Sujet | Constat | Fichier |
 |---|---|---|
-| Layout racine | `app-root` = flex ; Sidebar + MainArea | `src/App.tsx:357` |
-| Sidebar | largeur **260px en dur** (inline style), pas de collapse | `src/components/layout/Sidebar.tsx:16` |
-| Panneaux droits | MemberPanel **240px** / Soundboard **360px** / Transcript **300px**, largeurs en dur | `MemberPanel.tsx:92`, `SoundboardPanel.tsx:335`, `TranscriptPanel.tsx:298` |
-| Toggles panneaux | `showMemberPanel` / `showSoundboardPanel` mutuellement exclusifs, pas de notion de taille | `src/stores/useAppStore.ts:54,269-277` |
-| Partage d'écran | Rust capture → JPEG WebSocket → **`<canvas>` peint hors React**, jamais d'`<iframe>` | `ScreenShareView.tsx` (805 l.) |
-| Redimensionnement canvas | le paint lit `canvas.clientWidth` à chaque frame (sizing DPR + `imageSmoothingQuality`) → **s'adapte déjà à n'importe quelle taille** | `ScreenShareView.tsx:294-313` |
-| Fenêtre native | précédent existant : overlay curseurs **winit + softbuffer**, transparent, click-through, always-on-top, X11/Wayland gérés | `src-tauri/src/cursor_overlay.rs` |
-| Transport vidéo Rust | frames vidéo déjà côté Rust avant envoi webview | `src-tauri/src/native_video_transport.rs` |
-| Thèmes | Tailwind 4, **41 tokens `--color-*`** dans `@theme` (M3 dark) → custom properties runtime | `src/index.css:3-64` |
-| Couleurs en dur | 12 hex dans les composants + `color-scheme: dark`, `select option #1f1f24`, chevron SVG `%23c9c9d0`, `rgba()` d'ombres/glows | voir §3.4 |
-| Persistance | pattern zustand `persist` déjà utilisé partout | `useSettingsStore.ts:1-2` |
+| Layout | store v3 migré, sidebar trois états, docks droite/bas, onglets, panneaux flottants et presets | `useLayoutStore.ts`, `DockZone.tsx`, `FloatingPanels.tsx` |
+| Lecteur natif | Linux : I420 → BGRA → texture GL/GDK fonctionnel sous Wayland, mais isolation hors du toplevel WebKit encore à faire pour supprimer le lag ; Windows : I420 → BGRA → HWND/GDI sans passage JS. Surface active par défaut, opt-out diagnostic `SION_DISABLE_NATIVE_VIDEO_SURFACE=1` | `main.rs`, `native_video_surface.rs`, `voice_engine.rs`, `ScreenShareView.tsx` |
+| PIP système | vraie fenêtre OS winit + softbuffer, always-on-top, redimensionnable, persistée et alimentée directement en BGRA | `src-tauri/src/pip_window.rs` |
+| Fallback | JPEG/SVF1/WebSocket conservé uniquement lorsque la surface intégrée native n'est pas disponible | `native_video_transport.rs` |
+| Cible restante | validation Windows réelle, transitions/DPI multi-écrans, parité des calques superposés et retrait définitif du fallback JPEG | voir §2.3 |
+| Thèmes | tokenisation et garde anti-hex livrées ; thèmes Dark/Light/AMOLED, application au boot et import/export JSON livrés | `src/themes/`, `useThemeStore.ts` |
 
-Point clé : les trois chantiers partagent **une même primitive** — un panneau
-flottant/redimensionnable — et la tokenisation déjà en place rend les thèmes
-quasi gratuits en infrastructure.
+Point clé : ni le PIP système ni le lecteur intégré natif ne font traverser
+les pixels dans WebKit. La WebView publie uniquement les rectangles visibles ; Rust garde une file
+latest-wins par expéditeur et peint les frames directement.
 
 ---
 
@@ -211,11 +231,10 @@ WebKitGTK). Mode « Arrange » (Ctrl+Shift+L) : les zones se matérialisent en
 strips, on drag le header du panneau, le drop insère (position selon le
 curseur dans la zone), ✕ masque, Échap annule.
 
-**Une seule primitive flottante pour tout** : la carte du PIP (§2.1) — drag,
-resize, snap, persistance — est le même objet que les panneaux flottants de
-l'éditeur. On la construit une fois (à l'occasion du PIP), on la généralise
-ensuite. Et le jour où le PIP natif (§2.2) existe, un panneau flottant peut
-devenir une vraie fenêtre OS.
+**Deux primitives distinctes** : les panneaux et le PIP interne partagent la
+carte flottante React (drag, resize, snap, persistance). Le PIP système est une
+fenêtre Rust séparée ; il ne faut pas transformer les panneaux ordinaires en
+fenêtres OS ni coupler leur cycle de vie au moteur vidéo.
 
 **Libs vs maison** (compat React 19 vérifiée sur npm) :
 
@@ -249,89 +268,131 @@ multi-instances d'un même panneau, éditeur sur mobile (desktop-only).
 
 ---
 
-## 2. Chantier 2 — PIP du partage d'écran
+## 2. Chantier 2 — Lecteur natif et PIP système du partage d'écran
 
-Toujours pas d'iframe : le partage est un `<canvas>` alimenté en JPEG natif.
-« Réduire » = un **mode d'affichage** du `ScreenShareView`, pas un changement
-de technologie. Trois niveaux, à faire dans cet ordre.
+### 2.1 Expérience de lecture — ✅ livrée, rendu natif Linux en validation
 
-### 2.1 Niveau 1 — PIP interne à l'app — ✅ livré
+La vue en ligne, le plein écran, la mosaïque multi-partages et la carte
+flottante interne sont fonctionnels. Les contrôles audio sont propres à chaque
+partage et les curseurs restent ciblés sur le bon expéditeur. La carte interne
+conserve sa position et sa taille via `useLayoutStore.shareFloating` ;
+**Ctrl+Shift+P** la bascule en ligne/flottante.
 
-Une carte flottante **dans la webview**, au-dessus de tout :
+Sous Linux, `spawn_video_pump` réduit la frame I420 décodée par libwebrtc à la
+plus grande surface native visible, la convertit en BGRA via libyuv et la
+dépose dans une file latest-wins. Une `GtkDrawingArea` compose la dernière
+frame via une texture GL et `gdk_cairo_draw_from_gl` aux rectangles DOM de la
+vue simple, de la mosaïque ou de la carte flottante ; Cairo reste le repli et
+peint les curseurs. Aucun pixel ne traverse l'IPC ; le canvas WebKit est un
+placeholder de géométrie et d'interactions uniquement. Son suivi est cadencé à
+4 Hz plutôt que par une boucle `requestAnimationFrame` permanente.
 
-- C'est le `ScreenShareView` rendu dans un conteneur `position: fixed` au lieu
-  du slot inline de `MainArea.tsx:94`. Le canvas, les curseurs, l'audio et les
-  contrôles suivent tels quels.
-- Drag (via `ResizeHandle` + un `useDragMove`), resize, snap aux 4 coins avec
-  marge, tailles S/M/L, opacité optionnelle quand non survolée.
-- Le downscale est **déjà géré** : le paint lit `canvas.clientWidth` par frame
-  et redimensionne la surface en DPR (`ScreenShareView.tsx:294-313`). Réduire à
-  320×180 rend même le rendu moins cher.
-- Règles d'affichage : visible même après changement de salon ; auto-passage en
-  flottant quand l'utilisateur scrolle le chat ou ouvre un panneau (option
-  « réduire automatiquement ») ; bouton « remettre inline » ; croix = masquer
-  (le partage continue, réactivable depuis le header).
-- Position/taille persistées dans `useLayoutStore.shareFloating`.
-- Raccourci : **Ctrl+Shift+P** (basculer inline/flottant).
+### 2.2 PIP système natif — ✅ livré
 
-### 2.2 Niveau 2 — PIP natif always-on-top — ✅ livré (v1)
+`src-tauri/src/pip_window.rs` fournit une vraie fenêtre OS sans décoration,
+always-on-top et indépendante de la webview :
 
-Implémenté dans `src-tauri/src/pip_window.rs` :
+- fenêtre winit + softbuffer, préchauffée au lancement ; X11/XWayland sous
+  Linux pour garantir l'always-on-top, backend natif sous Windows ;
+- glisser pour déplacer, redimensionnement libre par les bords, bornes
+  240×135 → 1920×1080 et double-clic pour basculer le preset 768×432 ;
+- position et taille persistées dans `pip-state.json`, avec rappel au coin
+  proche lors de la restauration ;
+- boutons natifs retour à Sion, son et pointeur ; clic droit ou Échap pour
+  fermer ; fermeture automatique lorsque le partage prend fin ;
+- lorsque ce PIP est ouvert, il reçoit directement le BGRA de libyuv et le
+  blitte dans softbuffer : aucun encodage/décodage JPEG.
 
-- Fenêtre winit sans décoration, `AlwaysOnTop`, **X11 forcé sous Linux**
-  (Wayland ignore l'always-on-top pour un toplevel ordinaire) — mêmes choix
-  que `cursor_overlay.rs`, même thread d'event loop dédié.
-- Second consommateur branché dans `native_video_transport::broadcast()` :
-  `pip_window::on_frame()` dépose le JPEG dans l'état partagé, la boucle le
-  décode (`image`) à ~20 fps maximum et le blitte (letterbox) — **zéro
-  passage par la webview, zéro décodage double**, comme prévu ici.
-- Commandes `pip_native_open(sender)` / `pip_native_close` /
-  `pip_native_status` ; bouton dédié dans la barre d'onglets du partage ;
-  la fenêtre se ferme d'elle-même avec le partage (`on_share_removed`).
-- Contrôles : glisser = déplacer (`drag_window`), clic droit ou Échap =
-  fermer. Position mémorisée en mémoire de session.
+Le bouton retour appelle bien `show`/`unminimize`/`set_focus`. Sous Wayland,
+le compositeur peut refuser l'activation sans jeton utilisateur, car le PIP
+always-on-top vit sous XWayland ; dans ce cas Sion demande l'attention. Cette
+limitation du protocole n'empêche ni l'affichage ni les autres contrôles du
+PIP. Le Document PiP WebKit n'est plus un objectif : la fenêtre native couvre
+déjà le besoin de PIP système.
 
-Reste (finitions) : position/taille persistées entre sessions, coin d'ancrage
-et tailles S/M/L, double-clic → ramener la fenêtre principale au premier plan.
+### 2.3 Lecteur principal entièrement natif — 🟡 pixels natifs, isolation du compositeur en cours
 
-**Backend d'affichage (13/09/2026)** — la fenêtre principale est repassée en
-**Wayland natif par défaut** ; seul le couple PIP + overlay curseurs reste X11
-(always-on-top impossible pour un toplevel Wayland ordinaire). Conséquence
-assumée : le bouton **« retour à Sion »** ne peut plus relever la fenêtre
-principale — un client X11 ne peut pas fournir de jeton `xdg_activation` — et
-le compositeur se contente d'une demande d'attention (entrée qui clignote).
-La sortie propre est **`xx-pip-v1`** (PiP en couche overlay) : implémenté par
-KWin (MR 3612, Plasma 6.5) et Firefox (bug 1970372), mais **désactivé par
-défaut** côté KWin (`KWIN_WAYLAND_SUPPORT_XX_PIP_V1=1`) et absent de Mutter.
-À reprendre quand il s'active tout seul : un PiP Wayland fournit le geste
-utilisateur nécessaire au jeton, que GTK3 sait déjà consommer
-(`gdk_wayland_window_set_startup_id`). Opt-in X11 : `SION_FORCE_X11=1`.
+**Socle livré (15/09/2026)** : le pin Git Tauri hérité de CEF a été retiré.
+Le client utilise les crates Tauri 2 stables (`tauri` 2.11.5,
+`tauri-runtime-wry` 2.11.4). Seul le runtime WRY est vendorié : son
+gestionnaire Linux retrouve maintenant la vraie `GtkWindow` dans les ancêtres
+de la WebView au lieu de supposer la hiérarchie fixe
+`WebView → GtkBox → GtkWindow`. Cela supprime le crash GTK lors de l'ajout d'un
+`GtkOverlay` tout en conservant le redimensionnement souris et tactile des
+fenêtres sans décorations. Le patch et sa procédure de retrait sont documentés
+dans `src-tauri/vendor/tauri-runtime-wry/SION_PATCH.md`.
 
-### 2.3 Niveau 3 — PiP OS (Document PiP) — ❌ spike fait, non supporté ici
+**Implémentation validée en direct (15/09/2026)** : le runtime WRY crée un
+`GtkOverlay` avant la WebView. `native_video_surface.rs` y installe une
+`GtkDrawingArea` bornée à l'union des rectangles fournis par le front, avec une
+région d'entrée native vide. Elle conserve uniquement la dernière frame BGRA
+par expéditeur et la charge dans une texture GL composée par GDK, sans bloquer
+les clics du DOM. Le repli Cairo reste disponible si le contexte GL ou
+l'upload BGRA ne sont pas supportés. Le moteur contourne alors complètement
+`encode_jpeg_rgba` et `native_video_transport`. Le PIP système partage ce
+chemin BGRA direct via softbuffer.
 
-`canvas.captureStream()` → `<video>` caché → `requestPictureInPicture()`.
-Ça donnerait le **faux-PiP flottant du système** gratuitement… quand la
-plateforme le supporte.
+Les curseurs des autres viewers et leurs ondes de clic sont peints dans le
+même Cairo (`draw_viewer_cursors`) : en mode natif le calque DOM est occlu
+par la peinture GTK, c'est désormais le seul chemin où les voir. Le filtre
+« pointe un partage affiché par cette fenêtre » est fait en Rust
+(`forward_cursor_to_viewer_surface`), même couleur par identité que l'overlay
+du partageur (`cursor_overlay::draw::identity_color_rgba8`), même TTL 5 s,
+même plafond d'ondes, latest-wins partout.
 
-**Spike fait (11/09/2026)** : sonde exécutée dans le WebKitGTK de Sion
-(UA `AppleWebKit/605.1.15`, Version/60.5) → `document.pictureInPictureEnabled`
-absent et `HTMLVideoElement.prototype.requestPictureInPicture` **undefined** ;
-seul `captureStream` existe. Verdict : **pas de PiP OS sur Linux/WebKitGTK** —
-le niveau 3 est mort ici, et c'est le PIP natif (§2.2) qui couvre le besoin
-« au-dessus des autres apps ». À re-tester si WebView2 (Windows) est visé : le
-support y est plausible.
+Les essais interactifs ont révélé puis fermé deux défauts Wayland distincts :
+une surface overlay plein écran interceptait toutes les entrées, puis le
+renderer DMA-BUF de WebKitGTK 2.52 conservait visuellement la première texture
+alors que les empreintes BGRA et les callbacks Cairo changeaient. La surface
+est désormais bornée et input-transparent. Le contournement
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` avait débloqué la texture mais saturait
+WebKit au repos ; il reste donc limité au repli de crash NVIDIA et au diagnostic
+explicite `SION_NATIVE_VIDEO_SOFTWARE_COMPOSITING=1`. Deux captures espacées ont
+confirmé l'orientation et 8,6 % de pixels différents dans la zone vidéo. La
+surface native est active par défaut depuis le 16/09 ;
+`SION_DISABLE_NATIVE_VIDEO_SURFACE=1` force le fallback pour le diagnostic.
 
-### 2.4 Vidéos du chat — ✅ livré
+**Blocage performance constaté le 16/09/2026** : même sans aucun pixel, Blob
+ou canvas vidéo dans JavaScript, le `GtkGLArea` reste composé dans le même
+toplevel GTK que WebKit. Avec un partage actif, `sion-client` consomme environ
+52 % d'un cœur et `WebKitWebProcess` environ 38 % ; les clics et changements
+d'état deviennent visiblement tardifs. Le prochain jalon est donc une vraie
+surface enfant indépendante (`wl_subsurface` sous Wayland, fenêtre enfant X11
+sous X11/XWayland), avec le backend GTK actuel en repli. Le diagnostic, les
+essais annulés et le plan de reprise sont consignés dans
+[`native-video-surface-handoff.md`](native-video-surface-handoff.md).
 
-Les vidéos de messages sont des `<video>` natifs. Le **mini-lecteur flottant**
-reprend la lecture dans la même carte que le PIP du partage (drag par le
-bandeau, snap aux coins, resize, position en mémoire de session) : bouton
-« Mini-lecteur » sous chaque vidéo, `useMiniPlayerStore` non persisté (la
-source est un objectURL qui meurt au reload), entrée à la position courante,
-lecture dès les métadonnées chargées — on peut changer de salon ou scroller,
-la vidéo continue.
+**Windows (16/09/2026)** : WebView2 publie les mêmes rectangles CSS et Rust
+crée un HWND enfant borné par rectangle, converti en pixels physiques avec le
+facteur DPI de la fenêtre. La dernière frame BGRA est peinte directement par
+`StretchDIBits` (letterbox inclus), sans JPEG, Blob ni canvas. `WM_NCHITTEST`
+retourne `HTTRANSPARENT` afin que les interactions atteignent la WebView. Le
+code passe le contrôle croisé Rust jusqu'au build des dépendances natives ; la
+validation visuelle/perf sur une vraie session Windows reste un critère de
+sortie avant suppression du fallback.
 
----
+Critères de sortie :
+
+1. plus d'appel à `encode_jpeg_rgba` dans le chemin des partages reçus ;
+2. plus de WebSocket `native_video_transport` pour transporter les pixels ;
+3. plus de `Blob`, `createImageBitmap`, `Image` ou peinture canvas pour le
+   média dans `ScreenShareView` ;
+4. une seule source latest-wins par expéditeur, partagée entre les surfaces
+   visibles sans redécodage ni file non bornée ;
+5. parité fonctionnelle : sélection multi-partages, mosaïque, plein écran,
+   carte flottante, audio, pointeurs, fin de piste et reconnexion ;
+6. nettoyage déterministe de chaque surface et frame à la fermeture, au
+   changement de partage et à la déconnexion ;
+7. validation Linux Wayland/X11 et Windows, avec mesures réception→pixels,
+   cadence, CPU, RSS/PSS et test d'arrêt/reprise prolongé.
+
+Les critères média 1 à 4 et le nettoyage déterministe sont validés sur Linux.
+L'affichage direct fonctionne, mais la fluidité globale n'est pas encore un
+critère acquis tant que la surface GTK réveille la composition WebKit. La
+surface média Windows est codée ; restent sa validation réelle, les
+contrôles/curseurs superposés, les transitions prolongées et le DPI
+multi-écrans. Le pont JPEG/SVF1 demeure uniquement comme fallback de sûreté
+jusqu'à cette validation.
 
 ## 3. Chantier 3 — Thèmes
 
@@ -420,7 +481,7 @@ de tests — sauf les deux échappatoires documentées, le repli de
 |---|---|---|
 | ✅ 1 | Tokenisation complète (§3.3) + garde anti-hex (`services/themeGuard.test.ts`) | très faible |
 | ✅ 2 | `themeStore` + `applyTheme` + section **Apparence** dans SettingsPanel + « Sion Dark » (actuel) + « AMOLED » | faible |
-| 3 | « Sion Light » — le vrai morceau : repassage visuel de chaque écran, contrastes, images, canvas | moyen |
+| ✅ 3 | « Sion Light » — palette complète claire livrée ; repassage visuel exhaustif encore à valider | moyen |
 | 4 | Accent seed (génération de palette type Material You, ~150 l. de HCT simplifié ou vendor `material-color-utilities`) | moyen |
 | 5 | ✅ Import/export JSON (livré avec la phase 2 — thèmes partiels acceptés, `custom-` rétabli au re-import) — reste : préview au survol + (option) sync Matrix `com.sion.theme` en account data → le thème suit le compte sur tous les appareils | faible |
 
@@ -435,30 +496,26 @@ un thème », « réinitialiser ».
   reste maître, mais informé.
 - **Thème au boot** : sous-ensemble minimal en `localStorage` appliqué avant
   React (éviter le flash au lancement, surtout en mode clair).
-- Le thème ne touche **pas** : couleurs des curseurs distants (dérivées par
-  identité, `ScreenShareView.tsx:143`), ni le rendu du partage d'écran
-  (pixels bruts).
+- Le thème ne touche **pas** les pixels du partage ni les couleurs des
+  curseurs distants dérivées de l'identité. Les contrôles placés au-dessus de
+  la surface native continuent, eux, d'utiliser les tokens du thème.
 
 ---
 
 ## 4. Ordre de réalisation conseillé pour la 2.0.0 finale
 
-1. **Socle layout** (chantier 1, §1.1-1.5) — valeur immédiate, risque faible,
-   aucun couplage. Construit `ResizeHandle` + le store, réutilisés partout.
-2. **Thèmes, phase 1** (§3.3) — petit, et évite que tout ce qui sera peint
-   ensuite (PIP, éditeur, outils) le soit en dur.
-3. **PIP interne** (chantier 2, niveau 1) — contient le prototype de la carte
-   flottante, primitive partagée avec l'éditeur.
-4. **Layout editor** (§1.6, étapes 2-4) — zones dockables, onglets, flottants
-   généralisés, presets. Réutilise 1 et 3.
-5. **Thèmes, phases 2-5** — Apparence, AMOLED, Light, accent, import/export.
-6. **PIP natif / PiP OS** (chantier 2, niveaux 2-3) — seulement si le niveau 1
-   montre que le « au-dessus des autres apps » manque.
+1. 🚧 **Parité lecteur natif** (§2.3) — valider toutes les transitions Linux,
+   porter la surface intégrée sous Windows, puis supprimer le fallback JPEG.
+2. ⏳ **Finitions layout** (§1.6) — presets exportables/importables, décision
+   sur le mode Arrange et container queries du dock bas.
+3. ⏳ **Thème Sion Light** (§3.4, phase 3) avec audit visuel et contraste WCAG.
+4. ⏳ **Accent seed** (§3.4, phase 4).
+5. ⏳ **Finitions thèmes** (§3.4, phase 5) — aperçu au survol et décision sur
+   la synchronisation Matrix `com.sion.theme`.
 
-Les cinq premières étapes sont indépendantes deux à deux (chaque étape livre un
-état stable) : si la 2.0.0 finale doit sortir serrée, 1-2-3 portent déjà les
-trois demandes (modulable, PIP, thèmes), et l'éditeur complet (§1.6) peut
-glisser en 2.1 sans casser le modèle de données.
+Le socle layout, le PIP interne, le PIP système natif, la tokenisation, Dark,
+AMOLED et l'import/export JSON sont déjà livrés ; ils ne sont plus des étapes
+à planifier.
 
 ## 5. Vérifications transverses
 
@@ -467,9 +524,17 @@ glisser en 2.1 sans casser le modèle de données.
 - Stores persistés : ajouter `version` + `migrate` (les utilisateurs alpha ont
   déjà un `localStorage` rempli) — vaut aussi pour `LayoutDoc`, qui doit
   survivre aux ajouts/retraits de panneaux sans perdre le layout.
-- WebKitGTK : tester le drag de panneaux **au-dessus du canvas de partage** dès
-  le premier commit du chantier 1 — c'est le point de friction probable. Même
-  vigilance pour le drag/drop de l'éditeur (pointer events, jamais HTML5 DnD).
+- Lecteur natif : tester les changements de géométrie pendant un drag/resize,
+  le passage inline ↔ flottant ↔ plein écran ↔ PIP système, la mosaïque et les
+  changements de moniteur/DPI sans flash noir ni surface orpheline.
+- Transport vidéo : le runtime Linux doit journaliser `flux direct GTK ...
+  BGRA (sans JPEG/WebSocket)` et ne plus produire de statistiques d'encodage
+  JPEG ; profiler encore une source 1440p/60 avant suppression du fallback.
+- PIP système : garder un test fenêtré opt-in en plus des tests purs de rendu ;
+  vérifier always-on-top, restauration position/taille, son, pointeur, retour
+  à Sion et fermeture automatique sur Linux et Windows.
+- Drag/drop de l'éditeur : pointer events uniquement, jamais HTML5 DnD sous
+  WebKitGTK.
 - Container queries : valider tôt le rendu de Members et Transcript en **dock
   bas** (rangée d'avatars, max-width de lecture) — c'est le cas d'usage le plus
   éloigné du design actuel.

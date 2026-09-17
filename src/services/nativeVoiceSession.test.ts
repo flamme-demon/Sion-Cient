@@ -21,6 +21,7 @@ function deferred<T>() {
 
 const status: VoiceNativeStatus = {
   state: "connected", room_name: "room", identity: "me", muted: false, deafened: false, mic_published: true,
+  screenshare_published: false, screenshare_audio_published: false,
 };
 function options() {
   return {

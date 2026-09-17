@@ -47,7 +47,6 @@ export function VoiceStatusPanel() {
         color: active
           ? accent ? 'var(--color-on-secondary-container)' : 'var(--color-error)'
           : 'var(--color-on-surface)',
-        transition: 'background 150ms',
       }}
     >{icon}{label}</button>
   );

@@ -469,13 +469,17 @@ mod tests {
         tap::enable();
         // 48 kHz (480 éch.) → 16 kHz (160 éch.), échelle i16 → -1..1.
         tap::forward(&[32768.0; 480]);
-        let frame = rx.recv_timeout(Duration::from_secs(1)).expect("trame 48 kHz");
+        let frame = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("trame 48 kHz");
         assert_eq!(frame.len(), 160);
         assert!((frame[0] - 1.0).abs() < 1e-3);
 
         // 16 kHz passe tel quel.
         tap::forward(&[16384.0; 160]);
-        let frame = rx.recv_timeout(Duration::from_secs(1)).expect("trame 16 kHz");
+        let frame = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("trame 16 kHz");
         assert_eq!(frame.len(), 160);
         assert!((frame[0] - 0.5).abs() < 1e-3);
 

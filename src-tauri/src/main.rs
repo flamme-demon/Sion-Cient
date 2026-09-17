@@ -24,6 +24,19 @@ fn main() {
         std::env::set_var("GDK_BACKEND", "x11");
     }
 
+    // Diagnostic uniquement : le renderer logiciel contourne certains pilotes
+    // DMA-BUF qui figent un enfant GtkOverlay, mais il ne doit surtout pas être
+    // le défaut. Mesuré sous KDE/Wayland : ~95 % d'un cœur WebKit au repos et
+    // toute l'interface retardée. Le marqueur de crash NVIDIA ci-dessous peut
+    // toujours activer ce repli automatiquement lorsqu'il est réellement
+    // nécessaire ; cette variable permet de le forcer pour un diagnostic.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("SION_NATIVE_VIDEO_SOFTWARE_COMPOSITING").is_some()
+        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+    {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     // ── Repli « page blanche NVIDIA » (2026-09-13) ─────────────────────────
     // Si le web process est déjà tombé une fois sur cette installation (pilote
     // NVIDIA, renderer DMA-BUF cassé), la variable doit être posée AVANT toute

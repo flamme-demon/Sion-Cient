@@ -408,4 +408,3 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 }
-

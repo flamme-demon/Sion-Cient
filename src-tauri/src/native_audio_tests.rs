@@ -123,6 +123,7 @@ fn native_audio_processing_rejects_invalid_mix_and_accepts_frontend_shape() {
 #[test]
 fn liste_des_encodeurs_video_disponibles() {
     use livekit::options::VideoEncoderBackend;
-    let backends: Vec<VideoEncoderBackend> = VideoEncoderBackend::list_available().into_iter().collect();
+    let backends: Vec<VideoEncoderBackend> =
+        VideoEncoderBackend::list_available().into_iter().collect();
     eprintln!("[test] encodeurs vidéo disponibles: {backends:?}");
 }

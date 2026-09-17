@@ -113,7 +113,13 @@ pub fn watch_web_process(app: &tauri::AppHandle, view: &webkit2gtk::WebView) {
     view.connect_web_process_terminated(move |_view, reason| {
         let crash = matches!(reason, WebProcessTerminationReason::Crashed);
         let uptime = started.elapsed();
-        if !should_relaunch(crash, armed(), env_set_externally(), nvidia_present(), uptime) {
+        if !should_relaunch(
+            crash,
+            armed(),
+            env_set_externally(),
+            nvidia_present(),
+            uptime,
+        ) {
             log::warn!(
                 "[Sion][gpu] web process terminé après {:.0?} (crash={}, nvidia={}, \
                  marqueur={}, variable posée={}) — pas de relance",
