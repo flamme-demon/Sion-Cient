@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstdlib>
 #include "livekit/desktop_capturer.h"
 
 #include <cstdio>
@@ -46,7 +47,24 @@ std::unique_ptr<DesktopCapturer> new_desktop_capturer(
     default:
       break;
   }
-  webrtc_options.set_allow_directx_capturer(true);
+  // Capturer DirectX (duplication DXGI) desactive par defaut : il abat le
+  // processus sur les machines multi-adaptateurs. Trace du crash du 17/09 sur
+  // un Windows 11 :
+  //   dxgi_adapter_duplicator.cc:116  Cannot initialize any DxgiOutputDuplicator
+  //   dxgi_duplicator_controller.cc:286 Failed to initialize ... on adapter 1
+  //   screen_capturer_win.cc:30       cree ScreenCapturerWinDirectx
+  //   <fin du journal, 0xC0000409>
+  // `ScreenCapturerWinDirectx::IsSupported()` repond vrai des qu'UN adaptateur
+  // s'initialise, meme si un autre a echoue : libwebrtc choisit alors le
+  // chemin DXGI sur une duplication a moitie morte. WGC (Win10 2004+) reste
+  // autorise et prioritaire ; sinon le repli GDI prend la main : plus lent,
+  // mais il ne tue pas l'application.
+  // `SION_ALLOW_DIRECTX_CAPTURER=1` le rearme pour comparer les performances.
+  const char* allow_dxgi = std::getenv("SION_ALLOW_DIRECTX_CAPTURER");
+  const bool dxgi_opt_in = allow_dxgi != nullptr && allow_dxgi[0] == '1';
+  webrtc_options.set_allow_directx_capturer(dxgi_opt_in);
+  std::fprintf(stderr, "[Sion][capture] allow_directx_capturer=%d\n",
+               dxgi_opt_in ? 1 : 0);
 #endif /* _WIN64 */
 #ifdef WEBRTC_USE_PIPEWIRE
   webrtc_options.set_allow_pipewire(true);
