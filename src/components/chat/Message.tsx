@@ -169,23 +169,24 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     return () => { cancelled = true; };
   }, [isLinuxWebm, resolvedUrl]);
 
-  // On DEMANDE au moteur ce qu'il sait lire, au lieu de le supposer. La règle
-  // précédente — « sous Linux, tout ce qui n'est pas WebM passe par ffmpeg » —
-  // convertissait des fichiers parfaitement lisibles : WebKitGTK délègue le
-  // décodage à GStreamer, et une machine qui a `avdec_h264` et `avdec_aac` lit
-  // un MP4 H.264/AAC sans aide. Une conversion inutile coûte plusieurs minutes
-  // de CPU et impose ffmpeg à quelqu'un qui n'en avait pas besoin.
+  // Sous Linux, la seule lecture native fiable est le WebM VP8/VP9. Tout le
+  // reste passe par ffmpeg.
   //
-  // `canPlayType` rend "probably", "maybe" ou "" ; seul "" est un refus ferme.
-  // Un "maybe" qui se révélerait faux retombe sur `onError`, donc sur la
-  // conversion — on ne perd que l'immédiateté, jamais la lecture.
-  const playableNatively = !isLinuxDesktop || attachment.mimeType.includes("webm")
-    || document.createElement("video").canPlayType(attachment.mimeType) !== "";
-  // Le cas WebM AV1/inconnu reste préventif : là, GStreamer ne rend pas une
-  // erreur mais tue le processus web par une assertion, et `onError` n'y peut
-  // rien.
+  // Cette règle a l'air grossière ; elle a été affinée le 17/09 puis rétablie,
+  // parce que `canPlayType()` n'est PAS exploitable ici. Il répond « oui » dès
+  // qu'un décodeur est enregistré dans GStreamer — `av1dec` pour l'AV1,
+  // `avdec_h264` pour le MP4 — et la lecture cale pourtant au bout de deux
+  // secondes. Le pire n'est pas l'échec : c'est qu'il est SILENCIEUX. Aucune
+  // erreur sur l'élément, donc `onError` ne part jamais et le repli vers la
+  // conversion non plus. Un fichier qu'on croyait lisible devient un lecteur
+  // mort, sans rien à quoi se raccrocher.
+  //
+  // Vérifié dans les deux sens : un MP4 H.264/AAC et un WebM AV1 déclarés
+  // lisibles s'arrêtent tous deux à ~2 s, alors que les mêmes fichiers
+  // convertis en VP9/Opus et servis par le serveur média local se lisent
+  // intégralement.
   const mustTranscodeBeforePlayback = isLinuxDesktop && (
-    (!attachment.mimeType.includes("webm") && !playableNatively)
+    !attachment.mimeType.includes("webm")
     || webmCodec === "av1"
     || webmCodec === "unknown"
   );
@@ -279,12 +280,32 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         inputPath: stagedPath,
         codec: target,
       });
-      // Les octets reviennent en binaire brut, pas en base64 ni par le
-      // protocole `asset` : voir `read_media` côté Rust pour les deux essais
-      // précédents et pourquoi ils ne tiennent pas.
-      const { readMediaBytes } = await import("../../services/videoPrepare");
-      const webm = await readMediaBytes(outPath, "converti pour la lecture");
-      setTranscodedUrl(URL.createObjectURL(new Blob([webm], { type: "video/webm" })));
+      // Le fichier converti est servi en HTTP local, avec requêtes par plage :
+      // c'est ce qu'un élément média sait consommer. Un `blob:` l'obligeait à
+      // tenir tout le média en mémoire, et au-delà de quelques mégaoctets la
+      // lecture s'arrêtait en route sous WebKitGTK — voir `media_server.rs`
+      // pour les mesures et les deux approches écartées avant celle-ci.
+      // Sans serveur (socket refusée), on retombe sur le blob : dégradé, mais
+      // fonctionnel sur les petits fichiers.
+      const port = await invoke<number>("media_server_port").catch(() => 0);
+      const name = outPath.split("/").pop() ?? "";
+      if (port > 0 && name) {
+        const mediaUrl = `http://127.0.0.1:${port}/${encodeURIComponent(name)}`;
+        // La webview atteint-elle le serveur ? Si `fetch` réussit là où la
+        // balise vidéo échoue, le problème est le chargeur média, pas le
+        // réseau — c'est le même schéma qu'avec le protocole `asset`.
+        const probe = await fetch(mediaUrl, { headers: { Range: "bytes=0-1" } })
+          .then((r) => `${r.status} ${r.headers.get("content-type") ?? "?"}`)
+          .catch((e) => `échec ${String(e)}`);
+        void import("@tauri-apps/plugin-log")
+          .then(({ info }) => info(`[Sion][vidéo] source HTTP ${mediaUrl} → ${probe}`))
+          .catch(() => { /* hors Tauri */ });
+        setTranscodedUrl(mediaUrl);
+      } else {
+        const { readMediaBytes } = await import("../../services/videoPrepare");
+        const webm = await readMediaBytes(outPath, "converti pour la lecture");
+        setTranscodedUrl(URL.createObjectURL(new Blob([webm], { type: "video/webm" })));
+      }
     } catch (err) {
       console.error("[Sion] Transcodage échoué:", err);
       // La console de la webview ne va pas dans le fichier de journal : sans
@@ -321,7 +342,16 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
 
   // Cleanup blob URL on unmount
   useEffect(() => {
-    return () => { if (transcodedUrl?.startsWith("blob:")) URL.revokeObjectURL(transcodedUrl); };
+    return () => {
+      if (!transcodedUrl?.startsWith("blob:")) return;
+      // Tracé : si cette révocation tombe pendant la lecture, la source meurt
+      // en cours de route et le lecteur rend `MEDIA_ERR_DECODE` — symptôme
+      // rigoureusement identique à un fichier corrompu.
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(`[Sion][vidéo] blob révoqué: ${transcodedUrl}`))
+        .catch(() => { /* hors Tauri */ });
+      URL.revokeObjectURL(transcodedUrl);
+    };
   }, [transcodedUrl]);
 
   // Non-WebM formats keep their existing compatibility transcode. On Linux,
@@ -505,6 +535,13 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
       <video
         key={videoSrc}
         ref={videoRef}
+        // Le fichier converti vient du serveur média local, donc d'une origine
+        // différente de la page. Sans cet attribut, la requête part en mode
+        // « no-cors » et WebKitGTK refuse la réponse pour un média : le
+        // serveur l'a bien servie en 200 video/webm, le lecteur l'a rejetée
+        // sans jamais atteindre `readyState=1`. Le serveur répond déjà
+        // `Access-Control-Allow-Origin: *`, la requête CORS aboutit donc.
+        crossOrigin={transcodedUrl?.startsWith("http") ? "anonymous" : undefined}
         controls
         playsInline
         autoPlay={playRequested && !!transcodedUrl}

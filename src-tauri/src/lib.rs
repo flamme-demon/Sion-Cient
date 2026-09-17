@@ -33,6 +33,7 @@ mod voice_native;
 #[cfg(all(test, feature = "native-voice"))]
 mod native_audio_tests;
 #[cfg(feature = "native-voice")]
+mod media_server;
 mod native_video_transport;
 #[cfg(feature = "native-voice")]
 mod voice_engine;
@@ -1506,7 +1507,7 @@ const VIDEO_SCALE_FILTER: &str =
 /// Dossier temporaire dédié aux médias. Isolé du `temp_dir` général pour que la
 /// portée du protocole `asset` (qui laisse la webview lire ces fichiers) puisse
 /// être restreinte à ce seul répertoire.
-fn sion_media_dir() -> std::path::PathBuf {
+pub(crate) fn sion_media_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join("sion-media");
     let _ = std::fs::create_dir_all(&dir);
     dir
@@ -1574,6 +1575,13 @@ fn read_media(path: String) -> Result<tauri::ipc::Response, String> {
     }
     let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Port du serveur média local. `0` = indisponible, l'appelant retombe alors
+/// sur une URL `blob:`.
+#[tauri::command]
+fn media_server_port() -> u16 {
+    media_server::port()
 }
 
 /// Dimensions et durée lues dans la sortie de `ffmpeg -i`.
@@ -3389,6 +3397,7 @@ pub fn run() {
         transcode_video,
         stage_media,
         read_media,
+        media_server_port,
         prepare_video_for_send,
         exit_app,
         persist_session,
@@ -3475,6 +3484,7 @@ pub fn run() {
         transcode_video,
         stage_media,
         read_media,
+        media_server_port,
         prepare_video_for_send,
         exit_app,
         persist_session,
