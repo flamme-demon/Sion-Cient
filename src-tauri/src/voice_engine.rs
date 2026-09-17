@@ -693,91 +693,138 @@ fn run_share_capture(
     let stop_cb = std::sync::Arc::clone(&stop);
     let capture_armed_outer = std::sync::Arc::clone(&capture_armed);
     let mut ready_tx = Some(ready_tx);
+    // Ce rappel est invoqué par libwebrtc, donc depuis C++ : une panique qui
+    // le traverse abandonne le processus entier (`__fastfail`, visible sous
+    // Windows comme 0xC0000409 dans `ucrtbase.dll`) au lieu de dérouler. Tout
+    // ce qui suit est donc gardé : une panique devient une panne de capture
+    // journalisée, le partage se dépublie proprement et l'application vit.
     capturer.start_capture(Some(source), move |result| {
-        let frame = match result {
-            Ok(f) => f,
-            Err(CaptureError::Temporary) => {
-                temp_errors += 1;
-                if temp_errors == 1 || temp_errors % 150 == 0 {
-                    log::info!(
-                        "[Sion][voix-native] capture écran en attente de première image ({} erreurs temporaires)",
-                        temp_errors
-                    );
-                }
-                return;
-            }
-            Err(CaptureError::Permanent) => {
-                log::warn!("[Sion][voix-native] capture écran en erreur permanente — arrêt");
-                capture_failed.store(true, std::sync::atomic::Ordering::Release);
-                stop_cb.store(true, std::sync::atomic::Ordering::Relaxed);
-                if let Some(tx) = ready_tx.take() {
-                    let _ = tx.send(Err(
-                        "KDE/Wayland n'a fourni aucune image (sélection annulée ou source invalide)"
-                            .to_string(),
-                    ));
-                } else if capture_armed.load(std::sync::atomic::Ordering::Acquire) {
-                    if let Some(app) = app.as_ref() {
-                        let _ = app.emit(
-                            "voice-native-local-share-failed",
-                            &serde_json::json!({
-                                "reason": "La capture d'écran s'est interrompue"
-                            }),
+        let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let frame = match result {
+                Ok(f) => f,
+                Err(CaptureError::Temporary) => {
+                    temp_errors += 1;
+                    if temp_errors == 1 || temp_errors % 150 == 0 {
+                        log::info!(
+                            "[Sion][voix-native] capture écran en attente de première image ({} erreurs temporaires)",
+                            temp_errors
                         );
                     }
+                    return;
                 }
+                Err(CaptureError::Permanent) => {
+                    log::warn!("[Sion][voix-native] capture écran en erreur permanente — arrêt");
+                    capture_failed.store(true, std::sync::atomic::Ordering::Release);
+                    stop_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(tx) = ready_tx.take() {
+                        let _ = tx.send(Err(
+                            "KDE/Wayland n'a fourni aucune image (sélection annulée ou source invalide)"
+                                .to_string(),
+                        ));
+                    } else if capture_armed.load(std::sync::atomic::Ordering::Acquire) {
+                        if let Some(app) = app.as_ref() {
+                            let _ = app.emit(
+                                "voice-native-local-share-failed",
+                                &serde_json::json!({
+                                    "reason": "La capture d'écran s'est interrompue"
+                                }),
+                            );
+                        }
+                    }
+                    return;
+                }
+            };
+            let (w, h) = (frame.width().max(0) as u32, frame.height().max(0) as u32);
+            if w < 2 || h < 2 {
                 return;
             }
-        };
-        let (w, h) = (frame.width().max(0) as u32, frame.height().max(0) as u32);
-        if w < 2 || h < 2 {
-            return;
-        }
-        // Le menu fixe le cadre maximal ; on conserve le ratio de la source.
-        // Les dimensions paires sont exigées par I420.
-        let (cw, ch) = fit_screenshare_dimensions(w, h, config);
-        let src_stride = frame.stride() as usize;
-        if frame.data().len() < (h as usize - 1) * src_stride + (w as usize) * 4 {
-            return;
-        }
-        let t0 = std::time::Instant::now();
-        let mut i420 = I420Buffer::with_strides(w, h, w, (w + 1) / 2, (w + 1) / 2);
-        let (sy, su, sv) = i420.strides();
-        let (dy, du, dv) = i420.data_mut();
-        livekit::webrtc::native::yuv_helper::argb_to_i420(
-            frame.data(),
-            src_stride as u32,
-            dy,
-            sy,
-            du,
-            su,
-            dv,
-            sv,
-            w as i32,
-            h as i32,
-        );
-        if cw != w || ch != h {
-            i420 = i420.scale(cw as i32, ch as i32);
-        }
-        let vf = VideoFrame::new(VideoRotation::VideoRotation0, i420);
-        video_source.capture_frame(&vf);
-        // Le SFU ne voit la piste qu'après cette preuve qu'une vraie image a
-        // été obtenue. Cela évite la piste noire quand le portail Wayland
-        // restaure une source périmée ou que l'utilisateur annule.
-        if let Some(tx) = ready_tx.take() {
-            let _ = tx.send(Ok(()));
-        }
-        captured += 1;
-        conv_ms_total += t0.elapsed().as_millis();
-        if stat_since.elapsed().as_secs() >= 30 {
-            let secs = stat_since.elapsed().as_secs_f64();
-            log::info!(
-                "[Sion][voix-native] partage local : {:.1} im/s capturées, conv {}ms",
-                captured as f64 / secs,
-                conv_ms_total / captured.max(1) as u128
+            // Le menu fixe le cadre maximal ; on conserve le ratio de la source.
+            // Les dimensions paires sont exigées par I420.
+            let (cw, ch) = fit_screenshare_dimensions(w, h, config);
+            // Le stride vient du capturer natif. Un stride absurde (négatif
+            // côté C++, donc énorme une fois converti) faisait déborder le
+            // calcul de taille minimale en release — où les dépassements
+            // d'entiers enroulent au lieu de paniquer : le garde-fou passait
+            // alors à tort et `argb_to_i420` lisait hors du tampon. Tout est
+            // vérifié, et un stride hors bornes fait simplement sauter l'image.
+            let raw_stride = frame.stride();
+            if raw_stride <= 0 {
+                return;
+            }
+            let src_stride = raw_stride as usize;
+            let Some(needed) = (h as usize)
+                .checked_sub(1)
+                .and_then(|rows| rows.checked_mul(src_stride))
+                .and_then(|base| (w as usize).checked_mul(4).and_then(|last| base.checked_add(last)))
+            else {
+                return;
+            };
+            if src_stride < (w as usize) * 4 || frame.data().len() < needed {
+                return;
+            }
+            let t0 = std::time::Instant::now();
+            let mut i420 = I420Buffer::with_strides(w, h, w, (w + 1) / 2, (w + 1) / 2);
+            let (sy, su, sv) = i420.strides();
+            let (dy, du, dv) = i420.data_mut();
+            livekit::webrtc::native::yuv_helper::argb_to_i420(
+                frame.data(),
+                src_stride as u32,
+                dy,
+                sy,
+                du,
+                su,
+                dv,
+                sv,
+                w as i32,
+                h as i32,
             );
-            captured = 0;
-            conv_ms_total = 0;
-            stat_since = std::time::Instant::now();
+            if cw != w || ch != h {
+                i420 = i420.scale(cw as i32, ch as i32);
+            }
+            let vf = VideoFrame::new(VideoRotation::VideoRotation0, i420);
+            video_source.capture_frame(&vf);
+            // Le SFU ne voit la piste qu'après cette preuve qu'une vraie image a
+            // été obtenue. Cela évite la piste noire quand le portail Wayland
+            // restaure une source périmée ou que l'utilisateur annule.
+            if let Some(tx) = ready_tx.take() {
+                let _ = tx.send(Ok(()));
+            }
+            captured += 1;
+            conv_ms_total += t0.elapsed().as_millis();
+            if stat_since.elapsed().as_secs() >= 30 {
+                let secs = stat_since.elapsed().as_secs_f64();
+                log::info!(
+                    "[Sion][voix-native] partage local : {:.1} im/s capturées, conv {}ms",
+                    captured as f64 / secs,
+                    conv_ms_total / captured.max(1) as u128
+                );
+                captured = 0;
+                conv_ms_total = 0;
+                stat_since = std::time::Instant::now();
+            }
+        }));
+        if let Err(payload) = guarded {
+            let cause = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panique sans message".to_string());
+            log::error!(
+                "[Sion][voix-native] panique dans la capture d'écran — partage interrompu : {}",
+                cause
+            );
+            capture_failed.store(true, std::sync::atomic::Ordering::Release);
+            stop_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+            if capture_armed.load(std::sync::atomic::Ordering::Acquire) {
+                if let Some(app) = app.as_ref() {
+                    let _ = app.emit(
+                        "voice-native-local-share-failed",
+                        &serde_json::json!({
+                            "reason": "La capture d'écran s'est interrompue"
+                        }),
+                    );
+                }
+            }
         }
     });
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
