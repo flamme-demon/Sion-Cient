@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import * as matrixService from "../../services/matrixService";
+import { plainPreview } from "../../utils/plainPreview";
 import type { PinnedSummary } from "../../services/matrixService";
 
 /**
@@ -31,10 +32,27 @@ export function PinnedListPanel({ onClose }: { onClose: () => void }) {
     return () => { annule = true; };
   }, [activeChannel, pinnedVersion]);
 
+  // Fermeture au clic extérieur, par écoute du document.
+  //
+  // La première version posait un voile `position: fixed; inset: 0` pour capter
+  // ce clic. Il recouvrait la vidéo du partage d'écran : la détection
+  // d'occultation en concluait que la surface native était masquée et la
+  // cachait — le partage devenait noir dès l'ouverture du panneau. Un
+  // écouteur ne recouvre rien.
+  const panneauRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const surEchap = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const surClic = (e: MouseEvent) => {
+      const cible = e.target as Node | null;
+      if (cible && panneauRef.current && !panneauRef.current.contains(cible)) onClose();
+    };
     window.addEventListener("keydown", surEchap);
-    return () => window.removeEventListener("keydown", surEchap);
+    // `capture` : certains parents arrêtent la propagation avant le document.
+    document.addEventListener("mousedown", surClic, true);
+    return () => {
+      window.removeEventListener("keydown", surEchap);
+      document.removeEventListener("mousedown", surClic, true);
+    };
   }, [onClose]);
 
   const dateCourte = (ts: number) => ts
@@ -43,12 +61,8 @@ export function PinnedListPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <>
-      {/* Voile de fermeture : un clic à côté referme, sans bloquer la vue. */}
       <div
-        onClick={onClose}
-        style={{ position: 'fixed', inset: 0, zIndex: 40 }}
-      />
-      <div
+        ref={panneauRef}
         onClick={(e) => e.stopPropagation()}
         style={{
           position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 41,
@@ -105,7 +119,7 @@ export function PinnedListPanel({ onClose }: { onClose: () => void }) {
               display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
               overflow: 'hidden',
             }}>
-              {pin.text || t("chat.attachedFile", { defaultValue: "Fichier joint" })}
+              {plainPreview(pin.text) || t("chat.attachedFile", { defaultValue: "Fichier joint" })}
             </div>
           </button>
         ))}

@@ -4,6 +4,7 @@ import { PinIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import * as matrixService from "../../services/matrixService";
+import { plainPreview } from "../../utils/plainPreview";
 import { PinnedListPanel } from "./PinnedListPanel";
 
 export function PinnedBar() {
@@ -78,6 +79,10 @@ export function PinnedBar() {
     <div
       onClick={handleClick}
       style={{
+        // Ancre du panneau de liste : sans `relative`, son `top: 100%` se
+        // calait sur le conteneur de toute la colonne de chat et le plaçait
+        // sous la zone visible.
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: 10,
@@ -139,7 +144,14 @@ export function PinnedBar() {
           whiteSpace: 'nowrap',
         }}>
           {currentPinned
-            ? (currentPinned.text || (currentPinned.attachments?.length ? "Fichier joint" : "..."))
+            ? (plainPreview(currentPinned.text)
+               // Un message sans texte est une pièce jointe : son nom est plus
+               // parlant qu'un libellé générique, et c'est ce que montre déjà
+               // la liste complète.
+               || currentPinned.attachments?.[0]?.name
+               || (currentPinned.attachments?.length
+                   ? t("chat.attachedFile", { defaultValue: "Fichier joint" })
+                   : "..."))
             : t("chat.pinnedCount", { defaultValue: "{{count}} épinglé(s) — cliquer pour voir la liste", count: pinnedIds.length })}
         </span>
       </div>
