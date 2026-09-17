@@ -3482,6 +3482,25 @@ pub fn run() {
                     .build(),
             )?;
 
+            // Le protocole `asset` sert les vidéos converties directement à la
+            // balise <video>, sans que leurs octets repassent par l'IPC. La
+            // portée est déclarée ici en plus de `tauri.conf.json` : le motif
+            // `$TEMP/sion-media/*` dépend de la résolution du jeton `$TEMP`,
+            // alors que ce chemin-ci est exactement celui que `sion_media_dir`
+            // vient de créer. Sans cette autorisation, la webview n'obtient
+            // rien et la vidéo s'affiche en rectangle noir muet.
+            #[cfg(not(target_os = "android"))]
+            {
+                use tauri::Manager as _;
+                let dir = sion_media_dir();
+                if let Err(err) = app.asset_protocol_scope().allow_directory(&dir, false) {
+                    log::warn!(
+                        "[Sion][vidéo] portée du protocole asset refusée pour {}: {err}",
+                        dir.display()
+                    );
+                }
+            }
+
             #[cfg(not(target_os = "android"))]
             install_window_state_resilience(app);
 

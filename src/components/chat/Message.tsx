@@ -124,6 +124,11 @@ async function sniffWebmVideoCodec(url: string): Promise<DetectedWebmVideoCodec>
   return "unknown";
 }
 
+/** Couleurs du lecteur : posées sur les pixels d'une vidéo, jamais sur une
+ *  surface de l'application — donc volontairement hors thème. */
+const MEDIA_MATTE = "#000"; // theme-exempt — cadre d'un lecteur vidéo
+const MEDIA_INK = "#fff"; // theme-exempt — contrôles posés sur le média
+
 function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachment: FileAttachment }) {
   const { t } = useTranslation();
   // WebKitGTK/GStreamer may start parsing a media source as soon as `src` is
@@ -180,6 +185,17 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     if (transcoding || transcodedUrl || error) return;
     if (!attachment.url) { setError("URL manquante"); return; }
     runTranscode();
+  };
+
+  // Le fichier converti existe mais la balise n'arrive pas à le lire. Sans ce
+  // gestionnaire l'erreur était avalée (`onError` valait `undefined` dès qu'une
+  // conversion avait réussi) et la carte affichait un rectangle noir sans
+  // contrôles, impossible à distinguer d'une vidéo vide.
+  const handleTranscodedError = () => {
+    if (error) return;
+    setError(t("chat.videoPlaybackFailed", {
+      defaultValue: "Fichier converti illisible par le lecteur",
+    }));
   };
 
   const runTranscode = async () => {
@@ -325,45 +341,43 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     );
   }
 
-  // Conversion nécessaire mais pas encore demandée : on affiche une carte avec
-  // un bouton plutôt que de lancer ffmpeg dans le dos de l'utilisateur.
+  // Conversion nécessaire mais pas encore demandée. On garde l'apparence d'un
+  // lecteur — un cadre sombre et un gros bouton de lecture — plutôt qu'une
+  // carte de fichier : le geste attendu reste « appuyer sur play », la
+  // conversion est un détail d'implémentation que l'utilisateur n'a pas à
+  // connaître. Elle n'est simplement plus lancée avant ce geste.
   if (mustTranscodeBeforePlayback && !transcodedUrl && !transcoding && webmCodec !== "pending") {
     return (
-      <div style={{
-        marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
-        padding: '16px 20px', width: 520, maxWidth: '100%',
-        display: 'flex', alignItems: 'center', gap: 14,
-      }}>
-        <div style={{
-          width: 48, height: 48, borderRadius: 12,
-          background: 'var(--color-primary-container)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3" />
-          </svg>
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {attachment.name}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
-            {formatFileSize(attachment.size)} — {t("chat.videoNeedsConvert", { defaultValue: "conversion nécessaire pour lire ce format" })}
-          </div>
-        </div>
+      <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
         <button
           type="button"
           onClick={() => setPlayRequested(true)}
+          title={t("chat.videoNeedsConvert", { defaultValue: "conversion nécessaire pour lire ce format" })}
           style={{
-            flexShrink: 0, padding: '8px 16px', borderRadius: 20, border: 'none',
-            background: 'var(--color-primary)', color: 'var(--color-on-primary)',
-            fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
-            whiteSpace: 'nowrap',
+            position: 'relative', display: 'block', width: '100%', border: 'none', padding: 0,
+            aspectRatio: '16 / 9', background: MEDIA_MATTE, cursor: 'pointer',
           }}
         >
-          {t("chat.videoConvertAndPlay", { defaultValue: "Convertir et lire" })}
+          <span style={{
+            position: 'absolute', inset: 0, display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <span style={{
+              width: 64, height: 64, borderRadius: '50%',
+              background: 'rgba(0,0,0,0.55)', border: `2px solid ${MEDIA_INK}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill={MEDIA_INK} aria-hidden="true">
+                <polygon points="6 4 20 12 6 20 6 4" />
+              </svg>
+            </span>
+          </span>
         </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {attachment.name} — {formatFileSize(attachment.size)}
+          </span>
+        </div>
       </div>
     );
   }
@@ -415,7 +429,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         preload={transcodedUrl ? "metadata" : "none"}
         src={videoSrc}
         style={{ width: '100%', maxHeight: 400, display: 'block' }}
-        onError={transcodedUrl ? undefined : handleError}
+        onError={transcodedUrl ? handleTranscodedError : handleError}
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

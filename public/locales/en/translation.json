@@ -160,7 +160,8 @@
     "videoNeedsConvert": "conversion needed to play this format",
     "videoConvertAndPlay": "Convert and play",
     "videoProbing": "Probing format…",
-    "videoConverting": "Converting…"
+    "videoConverting": "Converting…",
+    "videoPlaybackFailed": "Converted file cannot be played"
   },
   "poll": {
     "menuItem": "Poll",

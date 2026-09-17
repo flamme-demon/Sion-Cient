@@ -160,7 +160,8 @@
     "videoNeedsConvert": "conversion nécessaire pour lire ce format",
     "videoConvertAndPlay": "Convertir et lire",
     "videoProbing": "Analyse du format…",
-    "videoConverting": "Conversion en cours…"
+    "videoConverting": "Conversion en cours…",
+    "videoPlaybackFailed": "Fichier converti illisible par le lecteur"
   },
   "poll": {
     "menuItem": "Sondage",
