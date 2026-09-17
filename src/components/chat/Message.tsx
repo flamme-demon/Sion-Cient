@@ -193,11 +193,41 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // complètement son cache de ressources, donc toute lecture média s'arrêtait
   // après les deux secondes tenues en mémoire. Corrigé dans `lib.rs`.
   //
-  // Un codec INCONNU reste converti : `detectWebmVideoCodec` n'a rien reconnu,
-  // et un conteneur mal formé peut faire partir GStreamer en assertion qui tue
-  // le processus web, ce qu'aucun garde-fou côté page n'intercepte. Le chien de
-  // garde ci-dessous rattrape tout le reste.
-  const mustTranscodeBeforePlayback = isLinuxDesktop && webmCodec === "unknown";
+  // L'AV1 et les codecs inconnus restent convertis d'office, et ce n'est pas de
+  // la prudence de principe : essayé le 17/09, la lecture native d'un WebM AV1
+  // a tué le processus web en 43 s —
+  //
+  //   gst-plugins-good/gst/matroska/matroska-demux.c:2429:
+  //   gst_matroska_demux_search_cluster: assertion failed
+  //   Bail out!
+  //
+  // Ce n'est pas le décodeur qui lâche mais le démultiplexeur Matroska, et
+  // `Bail out!` abat le processus : aucun `onError`, aucun chien de garde,
+  // aucun garde-fou côté page n'intercepte ça. La seule protection est de ne
+  // jamais lui donner ce fichier à ouvrir.
+  //
+  // Tout le reste — H.264, VP8, VP9, y compris VP9 dans un conteneur MP4 — se
+  // lit nativement depuis que le cache de ressources de WebKit est rétabli
+  // (voir `lib.rs`), et le chien de garde ci-dessous rattrape les blocages
+  // silencieux.
+  // L'AV1 n'est converti que si le moteur ne sait pas le lire, c'est-à-dire si
+  // `gst-plugin-dav1d` manque. Le résultat est demandé une fois à Rust, qui
+  // cherche le greffon au lieu d'interroger `canPlayType()` — celui-ci a
+  // répondu faux dans les deux sens au cours des essais.
+  const [av1Native, setAv1Native] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isLinuxDesktop || webmCodec !== "av1") return;
+    let annule = false;
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<boolean>("av1_playable_natively"))
+      .then((ok) => { if (!annule) setAv1Native(ok); })
+      .catch(() => { if (!annule) setAv1Native(false); });
+    return () => { annule = true; };
+  }, [isLinuxDesktop, webmCodec]);
+  const mustTranscodeBeforePlayback = isLinuxDesktop && (
+    webmCodec === "unknown"
+    || (webmCodec === "av1" && av1Native === false)
+  );
   // Rien n'est converti tant que personne n'a demandé à lire. Une conversion
   // `libvpx-vp9` coûte plusieurs minutes de CPU : la lancer au défilement, pour
   // une vidéo que l'utilisateur ne regardera peut-être jamais, était du travail
@@ -422,13 +452,15 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // simplement refusée par la politique de démarrage automatique. On relève
   // l'état réel deux secondes après l'attachement de la source convertie.
   useEffect(() => {
-    if (!transcodedUrl) return;
+    const source = transcodedUrl ?? resolvedUrl;
+    if (!source) return;
     const timer = setTimeout(() => {
       const el = videoRef.current;
       if (!el) return;
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(
-          `[Sion][vidéo] état lecteur : readyState=${el.readyState} networkState=${el.networkState}`
+          `[Sion][vidéo] état lecteur (${transcodedUrl ? "converti" : "natif"})`
+          + ` readyState=${el.readyState} networkState=${el.networkState}`
           + ` duration=${el.duration} dims=${el.videoWidth}x${el.videoHeight}`
           + ` paused=${el.paused} currentTime=${el.currentTime}`
           + ` erreur=${el.error ? `${el.error.code}/${el.error.message}` : "aucune"}`,
@@ -436,7 +468,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         .catch(() => { /* hors Tauri */ });
     }, 2000);
     return () => clearTimeout(timer);
-  }, [transcodedUrl]);
+  }, [transcodedUrl, resolvedUrl]);
 
   if (error) {
     const handleDownload = () => {

@@ -39,7 +39,11 @@ function isTauriDesktop(): boolean {
 function alreadyCompatible(file: File, bytes: Uint8Array): boolean {
   if (!file.type.includes("webm")) return false;
   const codec = detectWebmVideoCodec(bytes);
-  return codec === "vp8" || codec === "vp9";
+  // L'AV1 est déjà le format cible : le réencoder ne ferait que perdre de la
+  // qualité pour rien. VP8 et VP9 restent acceptés tels quels — les réencoder
+  // en AV1 coûterait du temps pour un gain marginal sur des fichiers déjà
+  // compressés.
+  return codec === "vp8" || codec === "vp9" || codec === "av1";
 }
 
 /**
@@ -120,8 +124,11 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
   // essayé et ne tient pas sous WebKitGTK.
   const outBytes = await readMediaBytes(prepared.path, "préparé pour l'envoi");
   const blob = new Blob([outBytes], { type: prepared.mimetype });
+  // L'extension suit le type réellement produit : AV1/MP4 en temps normal,
+  // WebM si ffmpeg a dû se rabattre sur VP9.
+  const outExt = prepared.mimetype.includes("webm") ? "webm" : "mp4";
   const name = prepared.transcoded
-    ? `${file.name.replace(/\.[^.]+$/, "")}.webm`
+    ? `${file.name.replace(/\.[^.]+$/, "")}.${outExt}`
     : file.name;
   return {
     file: new File([blob], name, { type: prepared.mimetype }),

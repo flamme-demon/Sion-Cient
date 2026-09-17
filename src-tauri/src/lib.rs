@@ -1584,6 +1584,72 @@ fn media_server_port() -> u16 {
     media_server::port()
 }
 
+/// Le fichier produit est-il du Matroska/WebM ? Signature EBML `1A 45 DF A3`,
+/// par opposition au `ftyp` d'un MP4. Le repli VP9 écrit du WebM dans un
+/// fichier nommé `.mp4` : c'est la signature qui fait foi, pas l'extension.
+fn ffmpeg_a_produit_du_webm(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut tete = [0u8; 4];
+    f.read_exact(&mut tete).is_ok() && tete == [0x1A, 0x45, 0xDF, 0xA3]
+}
+
+/// L'AV1 est-il lisible nativement par le moteur web ?
+///
+/// WebKitGTK ne décode rien lui-même : il construit sa liste de formats à
+/// partir du registre GStreamer. Pour l'AV1 il lui faut `dav1ddec`, fourni par
+/// `gst-plugin-dav1d` — `av1dec` de libaom, de rang inférieur, ne suffit pas.
+/// Mesuré le 17/09 : sans le greffon, un WebM AV1 comme le même flux remis en
+/// MP4 donnent tous deux `MEDIA_ERR_SRC_NOT_SUPPORTED` et le démultiplexeur
+/// peut même partir en assertion qui tue le processus web. Greffon installé,
+/// les trois variantes se lisent intégralement.
+///
+/// On cherche donc le fichier du greffon plutôt que d'interroger le moteur :
+/// `canPlayType()` répond « oui » dès qu'un décodeur quelconque est enregistré,
+/// y compris quand la lecture cale ensuite — il a menti dans les deux sens au
+/// cours des essais.
+#[cfg(target_os = "linux")]
+fn dav1d_plugin_present() -> bool {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(paths) = std::env::var_os("GST_PLUGIN_PATH") {
+        dirs.extend(std::env::split_paths(&paths));
+    }
+    if let Some(paths) = std::env::var_os("GST_PLUGIN_SYSTEM_PATH") {
+        dirs.extend(std::env::split_paths(&paths));
+    }
+    for fixe in [
+        "/usr/lib/gstreamer-1.0",
+        "/usr/lib64/gstreamer-1.0",
+        "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
+        "/usr/local/lib/gstreamer-1.0",
+    ] {
+        dirs.push(std::path::PathBuf::from(fixe));
+    }
+    dirs.iter().any(|dir| dir.join("libgstdav1d.so").exists())
+}
+
+/// Vrai quand la lecture native de l'AV1 est sûre. Faux ailleurs : l'appelant
+/// convertit alors, comme avant.
+#[tauri::command]
+fn av1_playable_natively() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let present = dav1d_plugin_present();
+        log::info!(
+            "[Sion][vidéo] AV1 natif : {}",
+            if present { "oui (dav1ddec présent)" } else { "non (gst-plugin-dav1d absent)" }
+        );
+        present
+    }
+    // WebView2 et WKWebView embarquent leur propre décodeur AV1.
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 /// Dimensions et durée lues dans la sortie de `ffmpeg -i`.
 ///
 /// `ffprobe` serait plus propre, mais le téléchargement intégré n'installe que
@@ -1680,7 +1746,7 @@ async fn prepare_video_for_send(
     }
 
     let output = sion_media_dir().join(format!(
-        "sion_send_{}.webm",
+        "sion_send_{}.mp4",
         input
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -1691,42 +1757,70 @@ async fn prepare_video_for_send(
         .unwrap_or(0.0);
     let input_arg = input.to_string_lossy().into_owned();
     let output_arg = output.to_string_lossy().into_owned();
+    // AV1, CRF 32, preset 6. Mesuré le 17/09 sur une vidéo de 23,5 s en
+    // 1080x1920 : 12 s d'encodage pour 71 % du poids du même contenu en H.264.
+    // Le preset 8 encode deux fois plus vite mais rend un fichier plus gros, le
+    // preset 4 est deux fois plus lent ET plus gros ici — 6 est le point
+    // d'équilibre. Conteneur MP4 et audio AAC : la combinaison la plus
+    // largement lisible, de Chromium à WebKit en passant par les mobiles.
+    //
+    // `libsvtav1` d'abord, `libaom-av1` ensuite (beaucoup plus lent mais
+    // toujours présent), puis VP9 en dernier recours si aucun encodeur AV1
+    // n'est compilé dans le ffmpeg de la machine.
     // `-progress pipe:1` : `run_ffmpeg_encode` lit la progression sur stdout et
     // l'émet en `video-import-progress`, comme l'import par URL.
-    let args: Vec<&str> = vec![
-        "-y",
-        "-i",
-        &input_arg,
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "33",
-        "-b:v",
-        "0",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "4",
-        "-row-mt",
-        "1",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "128k",
-        VIDEO_SCALE_FILTER_FLAG,
-        VIDEO_SCALE_FILTER,
-        "-f",
-        "webm",
-        "-progress",
-        "pipe:1",
-        &output_arg,
+    let candidats: [Vec<&str>; 3] = [
+        vec![
+            "-y", "-i", &input_arg, "-c:v", "libsvtav1", "-crf", "32",
+            "-preset", "6", "-g", "240", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+            "-progress", "pipe:1", &output_arg,
+        ],
+        vec![
+            "-y", "-i", &input_arg, "-c:v", "libaom-av1", "-crf", "32",
+            "-b:v", "0", "-cpu-used", "6", "-row-mt", "1", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+            "-progress", "pipe:1", &output_arg,
+        ],
+        vec![
+            "-y", "-i", &input_arg, "-c:v", "libvpx-vp9", "-crf", "33",
+            "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1",
+            "-c:a", "libopus", "-b:a", "128k", "-f", "webm",
+            "-progress", "pipe:1", &output_arg,
+        ],
     ];
-    run_ffmpeg_encode(&app, &ffmpeg_bin, &args, duration_secs)?;
+    let mut derniere = String::new();
+    let mut encode = false;
+    for args in &candidats {
+        match run_ffmpeg_encode(&app, &ffmpeg_bin, args, duration_secs) {
+            Ok(()) => {
+                encode = true;
+                break;
+            }
+            Err(err) => {
+                log::warn!(
+                    "[Sion][vidéo] encodeur {} indisponible, essai suivant",
+                    args.get(4).copied().unwrap_or("?")
+                );
+                derniere = err;
+            }
+        }
+    }
+    if !encode {
+        return Err(derniere);
+    }
     let _ = std::fs::remove_file(&input);
     let (width, height, secs) = probe_video(&ffmpeg_bin, &output).unwrap_or((0, 0, duration_secs));
+    // Le dernier candidat de la liste produit du WebM : le type déclaré suit
+    // ce que ffmpeg a réellement écrit, pas ce qu'on espérait.
+    let mimetype = if ffmpeg_a_produit_du_webm(&output) {
+        "video/webm"
+    } else {
+        "video/mp4"
+    };
     Ok(PreparedVideo {
         path: output.to_string_lossy().into_owned(),
-        mimetype: "video/webm".to_string(),
+        mimetype: mimetype.to_string(),
         width,
         height,
         duration_ms: (secs * 1000.0) as u64,
@@ -2864,7 +2958,7 @@ async fn import_url_video(
             (Some(s), Some(e)) if e > s => e - s,
             _ => duration_sec.unwrap_or(0.0),
         };
-        let out = work.join("out.webm");
+        let out = work.join("out.mp4");
         let src_s = src.to_string_lossy().into_owned();
         let out_s = out.to_string_lossy().into_owned();
         let limit = max_bytes.unwrap_or(0);
@@ -2892,11 +2986,11 @@ async fn import_url_video(
         let fit = format!("{}k", fit_kbps);
         let tail = [
             "-c:a",
-            "libopus",
+            "aac",
             "-b:a",
             "128k",
-            "-f",
-            "webm",
+            "-movflags",
+            "+faststart",
             "-progress",
             "pipe:1",
             "-nostats",
@@ -2909,48 +3003,38 @@ async fn import_url_video(
                 .collect()
         };
 
-        // Keep the uploaded codec aligned with the format picker and the native
-        // webview compatibility contract: WebM is always VP9/Opus. AV1 VAAPI
-        // used to be preferred here, but those files can abort WebKitGTK's
-        // GStreamer Matroska demuxer before HTMLMediaElement reports an error.
+        // AV1, dans un conteneur MP4.
+        //
+        // L'AV1 avait déjà été préféré ici, puis retiré : ces fichiers
+        // faisaient partir le démultiplexeur Matroska de WebKitGTK en assertion
+        // avant que l'élément média ne signale quoi que ce soit. La cause a été
+        // trouvée le 17/09 et ce n'était pas l'AV1 : il manquait
+        // `gst-plugin-dav1d`. Sans lui, le moteur déclare l'AV1 non supporté et
+        // sonde quand même le fichier, ce qui déclenche l'assertion. Avec lui,
+        // les mêmes fichiers se lisent intégralement, en WebM comme en MP4.
+        //
+        // Le conteneur passe donc en MP4 avec audio AAC — la combinaison la
+        // plus largement lisible — et le repli final est du H.264 plutôt que du
+        // VP9 : si aucun encodeur AV1 n'est compilé dans le ffmpeg de la
+        // machine, autant produire le format que tout lit.
         let mut candidates: Vec<Vec<String>> = Vec::new();
         candidates.push(mk(&[
-            "-y",
-            "-i",
-            src_s.as_str(),
-            "-c:v",
-            "libvpx-vp9",
-            "-crf",
-            "33",
-            "-b:v",
-            "0",
-            "-deadline",
-            "good",
-            "-cpu-used",
-            "5",
-            "-row-mt",
-            "1",
-            "-threads",
-            "0",
+            "-y", "-i", src_s.as_str(), "-c:v", "libsvtav1", "-crf", "32",
+            "-preset", "6", "-g", "240", "-pix_fmt", "yuv420p",
         ]));
         candidates.push(mk(&[
-            "-y",
-            "-i",
-            src_s.as_str(),
-            "-c:v",
-            "libvpx-vp9",
-            "-crf",
-            "34",
-            "-b:v",
-            fit.as_str(),
-            "-deadline",
-            "good",
-            "-cpu-used",
-            "5",
-            "-row-mt",
-            "1",
-            "-threads",
-            "0",
+            "-y", "-i", src_s.as_str(), "-c:v", "libaom-av1", "-crf", "32",
+            "-b:v", "0", "-cpu-used", "6", "-row-mt", "1", "-pix_fmt", "yuv420p",
+        ]));
+        candidates.push(mk(&[
+            "-y", "-i", src_s.as_str(), "-c:v", "libx264", "-crf", "23",
+            "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        ]));
+        // Dernier recours quand une limite de taille serveur doit être tenue :
+        // même H.264 mais à débit contraint.
+        candidates.push(mk(&[
+            "-y", "-i", src_s.as_str(), "-c:v", "libx264", "-preset", "veryfast",
+            "-b:v", fit.as_str(), "-pix_fmt", "yuv420p",
         ]));
 
         let mut encoded = false;
@@ -3398,6 +3482,7 @@ pub fn run() {
         stage_media,
         read_media,
         media_server_port,
+        av1_playable_natively,
         prepare_video_for_send,
         exit_app,
         persist_session,
@@ -3485,6 +3570,7 @@ pub fn run() {
         stage_media,
         read_media,
         media_server_port,
+        av1_playable_natively,
         prepare_video_for_send,
         exit_app,
         persist_session,

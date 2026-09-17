@@ -55,6 +55,15 @@ jobs:
             libpango-1.0-0 libcairo2 libatk-bridge2.0-0 libatk1.0-0 \
             libgtk-3-0t64 libfuse2t64
 
+          # Decodeur AV1 pour le moteur web, installe a part et SANS bloquer :
+          # `apt-get install` echoue en bloc si un seul paquet manque, et le nom
+          # du paquet qui fournit `dav1ddec` varie selon la version d'Ubuntu.
+          # `build-appimage.sh` l'embarque s'il le trouve ; sinon l'AppImage part
+          # sans lui et l'application convertit l'AV1, comme avant.
+          sudo apt-get install -y gstreamer1.0-plugins-rs \
+            || sudo apt-get install -y gstreamer1.0-dav1d \
+            || echo "::warning::greffon dav1d introuvable — l'AV1 sera converti chez l'utilisateur"
+
       # NOTE `libva-dev` ci-dessus : VAAPI couvre Intel et AMD, soit la
       # grande majorité des machines Linux. Sans lui, webrtc-sys compile
       # « without hardware accelerated video codecs » et la demande explicite

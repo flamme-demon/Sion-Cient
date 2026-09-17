@@ -119,6 +119,35 @@ if [ "$ggml_count" -eq 0 ]; then
     echo "  ATTENTION: aucune variante ggml trouvee — la transcription ne demarrera pas"
 fi
 
+# Decodeur AV1 pour le moteur web.
+#
+# WebKitGTK ne decode rien lui-meme : il delegue a GStreamer et construit sa
+# liste de formats a partir du registre des greffons. Sans `dav1ddec`, un WebM
+# ou un MP4 en AV1 est declare non supporte, et le demultiplexeur peut meme
+# partir en assertion qui tue le processus web (mesure le 17/09). `av1dec` de
+# libaom, de rang inferieur, ne suffit pas a convaincre le moteur.
+#
+# On embarque donc le greffon et sa bibliotheque (2,3 Mo a eux deux). S'ils
+# manquent a la construction, l'AppImage se fait quand meme : l'application
+# detecte leur absence au demarrage et convertit l'AV1 comme avant.
+av1_count=0
+for f in /usr/lib/gstreamer-1.0/libgstdav1d.so          /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstdav1d.so; do
+    [ -f "$f" ] || continue
+    mkdir -p "$APPDIR/usr/lib/sion-client/gstreamer-1.0"
+    cp -P "$f" "$APPDIR/usr/lib/sion-client/gstreamer-1.0/"
+    av1_count=$((av1_count + 1))
+    break
+done
+for f in /usr/lib/libdav1d.so.* /usr/lib/x86_64-linux-gnu/libdav1d.so.*; do
+    [ -f "$f" ] || continue
+    cp -P "$f" "$APPDIR/usr/lib/sion-client/"
+done
+if [ "$av1_count" -eq 0 ]; then
+    echo "  ATTENTION: gst-plugin-dav1d absent — l'AV1 sera converti chez l'utilisateur"
+else
+    echo "  greffon AV1 (dav1d) embarque"
+fi
+
 # Copy icon
 cp "$PROJECT_DIR/src-tauri/icons/128x128.png" "$APPDIR/usr/share/icons/hicolor/128x128/apps/$APP_NAME.png"
 cp "$PROJECT_DIR/src-tauri/icons/128x128.png" "$APPDIR/$APP_NAME.png"
@@ -149,6 +178,14 @@ for old in "$(dirname "$SELF")"/Sion_Client-*-x86_64.AppImage; do
 done
 
 export LD_LIBRARY_PATH="$SELF_DIR/usr/lib/sion-client:${LD_LIBRARY_PATH}"
+# Greffon AV1 embarque : GStreamer ne regarde que les chemins qu'on lui donne.
+# Le chemin systeme reste prioritaire, pour qu'un greffon installe par la
+# distribution — forcement compile contre SON GStreamer — l'emporte sur le
+# notre. Si le notre refuse de se charger (ABI trop ancienne), GStreamer
+# l'ignore simplement et l'application convertit l'AV1 comme avant.
+if [ -d "$SELF_DIR/usr/lib/sion-client/gstreamer-1.0" ]; then
+    export GST_PLUGIN_PATH="${GST_PLUGIN_PATH:+$GST_PLUGIN_PATH:}$SELF_DIR/usr/lib/sion-client/gstreamer-1.0"
+fi
 exec "$SELF_DIR/usr/bin/sion-client" "$@"
 APPRUN
 

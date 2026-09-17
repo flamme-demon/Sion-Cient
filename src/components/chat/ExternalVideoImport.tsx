@@ -103,9 +103,11 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
         start: rangeActive ? start : undefined,
         end: rangeActive ? end : undefined,
         maxBytes: limit || undefined,
-        // Non-VP9 sources (H.264 etc.) → re-encode to WebM on the sender so
-        // recipients don't each have to transcode.
-        recodeWebm: !!opt && opt.codec !== "VP9",
+        // Tout ce qui n'est pas déjà de l'AV1 est réencodé en AV1 par
+        // l'expéditeur : meilleur rapport qualité/poids, et les destinataires
+        // n'ont plus rien à convertir. Une source déjà en AV1 part telle
+        // quelle — la réencoder ne ferait que perdre de la qualité.
+        recodeWebm: !!opt && opt.codec !== "AV1",
         title: info.title,
         durationSec: info.duration,
       }, (p) => setProgress(p));
