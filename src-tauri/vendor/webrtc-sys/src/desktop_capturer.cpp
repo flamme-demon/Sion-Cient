@@ -98,9 +98,16 @@ std::unique_ptr<DesktopCapturer> new_desktop_capturer(
     std::fprintf(stderr, "[Sion][capture] aucun capturer disponible\n");
     return nullptr;
   }
-  std::fprintf(stderr,
-               "[Sion][capture] backend=%s\n",
-               typeid(*capturer).name());
+  // Ici se trouvait un `typeid(*capturer).name()` de diagnostic. Il abattait le
+  // processus sous Windows : `typeid` sur un objet polymorphe exige le RTTI, or
+  // libwebrtc est fourni sans RTTI — configuration standard de Chromium —
+  // tandis que ce fichier est compile avec (defaut de MSVC). Lire dans la
+  // vtable une information qui n'y est pas se termine en `abort()`, vu le
+  // 17/09 comme un 0xC0000409 dans `ucrtbase.dll` des qu'un partage demarrait.
+  //
+  // La ligne etait de toute facon inutile : libwebrtc journalise lui-meme le
+  // type de capturer qu'il cree (`screen_capturer_win.cc`), et `stderr` n'a
+  // aucun lecteur dans une application sans console.
   return std::make_unique<DesktopCapturer>(std::move(capturer));
 }
 
