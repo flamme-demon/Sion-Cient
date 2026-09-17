@@ -63,7 +63,7 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
   if (!isTauriDesktop()) {
     return { file, width: 0, height: 0, durationMs: 0, transcoded: false };
   }
-  const { invoke, convertFileSrc } = await import("@tauri-apps/api/core");
+  const { invoke } = await import("@tauri-apps/api/core");
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
   const compatible = alreadyCompatible(file, bytes);
@@ -90,7 +90,10 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
     throw err;
   }
 
-  const blob = await (await fetch(convertFileSrc(prepared.path))).blob();
+  // Retour en binaire brut (`read_media`), jamais en base64 : le protocole
+  // `asset` a été essayé et ne tient pas sous WebKitGTK.
+  const outBytes = await invoke<ArrayBuffer>("read_media", { path: prepared.path });
+  const blob = new Blob([outBytes], { type: prepared.mimetype });
   const name = prepared.transcoded
     ? `${file.name.replace(/\.[^.]+$/, "")}.webm`
     : file.name;

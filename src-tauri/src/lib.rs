@@ -1539,6 +1539,37 @@ fn stage_media(request: tauri::ipc::Request<'_>) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Rend le contenu d'un fichier du dossier média en binaire brut.
+///
+/// Le protocole `asset` avait été essayé pour éviter toute copie : la balise
+/// vidéo aurait lu le fichier directement depuis le disque. Mesuré le 17/09,
+/// ça ne marche pas sous WebKitGTK — `asset://localhost/...` reste illisible
+/// pour le lecteur, sans la moindre erreur côté Rust (ni refus de portée, ni
+/// fichier introuvable), parce que le média passe par le `webkitwebsrc` de
+/// GStreamer et non par le gestionnaire de schéma de la webview.
+///
+/// On renvoie donc les octets, mais en binaire (`ipc::Response`), pas en
+/// base64 : c'est une copie, contre les trois de l'encodage texte, et c'est
+/// exactement ce que le chemin de lecture normal fait déjà pour toute vidéo.
+///
+/// Le chemin est canonicalisé et doit rester sous `sion_media_dir()` : une
+/// commande qui rend n'importe quel fichier du disque à la webview serait une
+/// primitive de lecture arbitraire.
+#[tauri::command]
+fn read_media(path: String) -> Result<tauri::ipc::Response, String> {
+    let dir = sion_media_dir()
+        .canonicalize()
+        .map_err(|e| format!("dossier média: {e}"))?;
+    let file = std::path::PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|e| format!("fichier introuvable: {e}"))?;
+    if !file.starts_with(&dir) {
+        return Err("chemin hors du dossier média".to_string());
+    }
+    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Dimensions et durée lues dans la sortie de `ffmpeg -i`.
 ///
 /// `ffprobe` serait plus propre, mais le téléchargement intégré n'installe que
@@ -3332,6 +3363,7 @@ pub fn run() {
         fetch_link_preview,
         transcode_video,
         stage_media,
+        read_media,
         prepare_video_for_send,
         exit_app,
         persist_session,
@@ -3417,6 +3449,7 @@ pub fn run() {
         fetch_link_preview,
         transcode_video,
         stage_media,
+        read_media,
         prepare_video_for_send,
         exit_app,
         persist_session,
@@ -3481,25 +3514,6 @@ pub fn run() {
                     ))
                     .build(),
             )?;
-
-            // Le protocole `asset` sert les vidéos converties directement à la
-            // balise <video>, sans que leurs octets repassent par l'IPC. La
-            // portée est déclarée ici en plus de `tauri.conf.json` : le motif
-            // `$TEMP/sion-media/*` dépend de la résolution du jeton `$TEMP`,
-            // alors que ce chemin-ci est exactement celui que `sion_media_dir`
-            // vient de créer. Sans cette autorisation, la webview n'obtient
-            // rien et la vidéo s'affiche en rectangle noir muet.
-            #[cfg(not(target_os = "android"))]
-            {
-                use tauri::Manager as _;
-                let dir = sion_media_dir();
-                if let Err(err) = app.asset_protocol_scope().allow_directory(&dir, false) {
-                    log::warn!(
-                        "[Sion][vidéo] portée du protocole asset refusée pour {}: {err}",
-                        dir.display()
-                    );
-                }
-            }
 
             #[cfg(not(target_os = "android"))]
             install_window_state_resilience(app);

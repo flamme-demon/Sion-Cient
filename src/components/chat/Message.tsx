@@ -193,6 +193,9 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // contrôles, impossible à distinguer d'une vidéo vide.
   const handleTranscodedError = () => {
     if (error) return;
+    void import("@tauri-apps/plugin-log")
+      .then(({ error: logError }) => logError(`[Sion][vidéo] source convertie illisible: ${transcodedUrl}`))
+      .catch(() => { /* hors Tauri */ });
     setError(t("chat.videoPlaybackFailed", {
       defaultValue: "Fichier converti illisible par le lecteur",
     }));
@@ -202,7 +205,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
     setError(null);
     setTranscoding(true);
     try {
-      const { invoke, convertFileSrc } = await import("@tauri-apps/api/core");
+      const { invoke } = await import("@tauri-apps/api/core");
       // Feed ffmpeg the bytes the renderer already resolved — resolvedUrl is a
       // blob that has gone through E2EE decryption + Matrix media auth. Letting
       // Rust re-download attachment.url would have neither (401 on authed media,
@@ -229,9 +232,19 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         ffmpegPath,
         inputPath: stagedPath,
       });
-      setTranscodedUrl(convertFileSrc(outPath));
+      // Les octets reviennent en binaire brut, pas en base64 ni par le
+      // protocole `asset` : voir `read_media` côté Rust pour les deux essais
+      // précédents et pourquoi ils ne tiennent pas.
+      const webm = await invoke<ArrayBuffer>("read_media", { path: outPath });
+      setTranscodedUrl(URL.createObjectURL(new Blob([webm], { type: "video/webm" })));
     } catch (err) {
       console.error("[Sion] Transcodage échoué:", err);
+      // La console de la webview ne va pas dans le fichier de journal : sans
+      // ça, un échec de lecture n'était diagnosticable que par-dessus l'épaule
+      // de l'utilisateur.
+      void import("@tauri-apps/plugin-log")
+        .then(({ error: logError }) => logError(`[Sion][vidéo] transcodage échoué: ${String(err)}`))
+        .catch(() => { /* hors Tauri */ });
       setError(String(err));
       // Surface an "install ffmpeg" affordance on the card if it's missing.
       try {
@@ -260,8 +273,6 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
 
   // Cleanup blob URL on unmount
   useEffect(() => {
-    // `transcodedUrl` est désormais une URL `asset:` servie depuis le disque :
-    // rien à révoquer, contrairement aux anciens blobs.
     return () => { if (transcodedUrl?.startsWith("blob:")) URL.revokeObjectURL(transcodedUrl); };
   }, [transcodedUrl]);
 
@@ -306,7 +317,7 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
           <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
             {ffmpegMissing
               ? `${formatFileSize(attachment.size)} — ffmpeg requis pour lire ce format`
-              : `${formatFileSize(attachment.size)} — Lecture impossible`}
+              : `${formatFileSize(attachment.size)} — ${error}`}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>

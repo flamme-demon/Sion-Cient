@@ -21,13 +21,7 @@
       }
     ],
     "security": {
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": [
-          "$TEMP/sion-media/*"
-        ]
-      }
+      "csp": null
     }
   },
   "bundle": {
