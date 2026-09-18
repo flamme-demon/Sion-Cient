@@ -36,7 +36,32 @@ function isTauriDesktop(): boolean {
 
 /** Vrai si le fichier peut partir tel quel : WebM dont la piste vidéo est en
  *  VP8 ou VP9, les deux codecs que tous les runtimes cibles savent lire. */
+/**
+ * L'AV1 dans un conteneur MP4 se reconnaît à l'entrée `av01` de sa table
+ * d'échantillons. On la cherche dans les premiers kilo-octets, où vit l'entête
+ * d'un MP4 préparé pour la diffusion.
+ */
+function mp4ContientAv1(bytes: Uint8Array): boolean {
+  const debut = bytes.subarray(0, Math.min(bytes.length, 64 * 1024));
+  const motif = [0x61, 0x76, 0x30, 0x31]; // "av01"
+  for (let i = 0; i + 3 < debut.length; i++) {
+    if (debut[i] === motif[0] && debut[i + 1] === motif[1]
+      && debut[i + 2] === motif[2] && debut[i + 3] === motif[3]) return true;
+  }
+  return false;
+}
+
 function alreadyCompatible(file: File, bytes: Uint8Array): boolean {
+  // MP4 contenant déjà de l'AV1 : c'est le format cible, dans un autre
+  // conteneur.
+  //
+  // La garde ne regardait que le WebM. Or l'import par lien rend un MP4 selon
+  // le format retenu chez la source : le fichier, déjà normalisé à l'import,
+  // était intégralement réencodé une seconde fois à l'envoi (18/09). Deux
+  // conversions longues pour un résultat identique.
+  if (file.type.includes("mp4") || file.name.toLowerCase().endsWith(".mp4")) {
+    return mp4ContientAv1(bytes);
+  }
   if (!file.type.includes("webm")) return false;
   const codec = detectWebmVideoCodec(bytes);
   // L'AV1 est déjà le format cible : le réencoder ne ferait que perdre de la
@@ -98,6 +123,16 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
   const bytes = new Uint8Array(buf);
   const compatible = alreadyCompatible(file, bytes);
   const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+  // Trace de la décision. Un fichier importé par lien, donc déjà normalisé,
+  // était réencodé une seconde fois à l'envoi (18/09) : sans cette ligne, rien
+  // ne distinguait « la garde n'a pas reconnu le format » de « le format
+  // n'était effectivement pas le bon ».
+  void import("@tauri-apps/plugin-log")
+    .then(({ info }) => info(
+      `[Sion][vidéo] envoi : ${file.name} (${file.type || "type inconnu"}, `
+      + `${(file.size / 1048576).toFixed(1)} Mo) — déjà compatible : ${compatible}`,
+    ))
+    .catch(() => { /* hors Tauri */ });
 
   // Les octets traversent l'IPC en binaire brut, jamais en base64.
   const stagedPath = await invoke<string>("stage_media", bytes, {

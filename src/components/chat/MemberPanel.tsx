@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useLayoutStore } from "../../stores/useLayoutStore";
-import { getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
+import { getMatrixClient, getMemberPowerLevel, getRoomClientVersions } from "../../services/matrixService";
 import { UserAvatar } from "../sidebar/UserAvatar";
 
 type Role = "admin" | "moderator" | "user";
@@ -14,6 +14,8 @@ interface Entry {
   avatarUrl: string | null;
   role: Role;
   pl: number;
+  /** Version du client annoncée par ce membre, absente s'il ne s'annonce pas. */
+  version: string | null;
 }
 
 function plToRole(pl: number): Role {
@@ -62,6 +64,14 @@ export function MemberPanel() {
     const room = client.getRoom(activeChannel);
     if (!room) return [];
     const members = room.getJoinedMembers();
+    // La version du client est une information d'exploitation : on ne la lit
+    // (et ne l'affiche) que pour un administrateur du salon.
+    const moi = client.getUserId();
+    const spectateurAdmin = !!moi && getMemberPowerLevel(activeChannel, moi) >= 100;
+    const versions: Record<string, string> = {};
+    if (spectateurAdmin) {
+      for (const v of getRoomClientVersions(activeChannel)) versions[v.userId] = v.version;
+    }
     const list: Entry[] = members.map((m) => {
       const pl = getMemberPowerLevel(activeChannel, m.userId);
       const avatarUrl = m.getAvatarUrl(client.baseUrl, 64, 64, "crop", true, false) || null;
@@ -71,6 +81,7 @@ export function MemberPanel() {
         avatarUrl,
         role: plToRole(pl),
         pl,
+        version: versions[m.userId] ?? null,
       };
     });
     list.sort((a, b) => {
@@ -160,6 +171,24 @@ export function MemberPanel() {
                 }}>
                   {e.displayName}
                 </span>
+                {/* Version du client, réservée aux administrateurs : c'est une
+                    information d'exploitation, sans intérêt pour les autres.
+                    Absente si le membre ne l'a jamais annoncée — client trop
+                    ancien, autre client Matrix, ou rang insuffisant pour
+                    écrire l'événement d'état. */}
+                {e.version && (
+                  <span
+                    title={t("members.clientVersion", { defaultValue: "Version du client" })}
+                    style={{
+                      fontSize: 10,
+                      color: 'var(--color-outline)',
+                      fontVariantNumeric: 'tabular-nums',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {e.version}
+                  </span>
+                )}
               </div>
             ))}
           </div>

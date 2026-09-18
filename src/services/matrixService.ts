@@ -58,7 +58,162 @@ function getDeviceDisplayName(): string {
   else if (ua.includes("Linux")) os = "Linux";
   else if (ua.includes("Android")) os = "Android";
   else if (ua.includes("iPhone") || ua.includes("iPad")) os = "iOS";
-  return `Sion Client (${os})`;
+  // La VERSION fait partie du nom d'appareil.
+  //
+  // C'est le seul endroit où le serveur conserve, par session, une information
+  // que l'administrateur peut relire sans que le client ait à publier quoi que
+  // ce soit : ni événement d'état dans chaque salon, ni trafic supplémentaire.
+  // Elle ne se lit que par l'API d'administration — la version reste donc une
+  // donnée d'exploitation, invisible des autres membres.
+  return `Sion Client ${__APP_VERSION__} (${os})`;
+}
+
+/** Type d'événement d'état portant la version du client d'un membre. */
+export const SION_VERSION_EVENT = "com.sion.client_version";
+
+export interface SionMemberVersion {
+  userId: string;
+  version: string;
+  os: string;
+  /** Horodatage de la dernière annonce, pour distinguer un client actif d'une
+   *  version laissée par une session éteinte depuis des mois. */
+  ts: number;
+}
+
+/**
+ * Annonce la version de ce client dans les salons rejoints.
+ *
+ * Pourquoi un événement d'état plutôt que le nom d'appareil : ce serveur
+ * n'expose aucune API d'administration permettant de lire les appareils d'un
+ * autre utilisateur — les routes compatibles Synapse répondent 404, et le bot
+ * d'administration n'a pas de commande pour les énumérer (vérifié le 18/09).
+ * L'état de salon, lui, est du Matrix standard : n'importe quel membre le lit.
+ *
+ * L'écriture est conditionnelle : on ne republie que si la version a changé.
+ * Un événement d'état identique serait accepté par le serveur mais polluerait
+ * l'historique à chaque démarrage.
+ */
+export async function publishClientVersion(): Promise<void> {
+  if (!matrixClient) return;
+  const userId = matrixClient.getUserId();
+  if (!userId) return;
+  const os = getDeviceDisplayName().replace(/^.*\(/, "").replace(/\)$/, "");
+  const contenu = { version: __APP_VERSION__, os, ts: Date.now() };
+
+  const salons = matrixClient
+    .getRooms()
+    .filter((r) => r.getMyMembership?.() === "join");
+  for (const room of salons) {
+    try {
+      const actuel = room.currentState
+        ?.getStateEvents(SION_VERSION_EVENT, userId)
+        ?.getContent?.() as { version?: string } | undefined;
+      if (actuel?.version === contenu.version) continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await matrixClient.sendStateEvent(room.roomId, SION_VERSION_EVENT as any, contenu, userId);
+    } catch {
+      // Niveau de pouvoir insuffisant, salon en lecture seule, serveur
+      // indisponible : sans conséquence. Une version manquante vaut mieux
+      // qu'un démarrage qui échoue.
+    }
+  }
+}
+
+/**
+ * Ouvre l'écriture de {@link SION_VERSION_EVENT} à tous les membres des salons
+ * déjà créés.
+ *
+ * Les salons antérieurs à cette fonctionnalité exigent `state_default` (50)
+ * pour tout événement d'état : seuls les modérateurs y annonçaient leur
+ * version, et la liste des membres restait vide pour tout le monde d'autre.
+ * On abaisse donc le seuil à 0 pour ce seul type d'événement. Le risque est
+ * nul : la clé d'état est l'identifiant de l'auteur, personne ne peut écrire
+ * la ligne d'un autre.
+ *
+ * Ne fait rien si le seuil est déjà bon, ou si l'on n'a pas le rang pour
+ * modifier les niveaux de pouvoir — la migration se fera au prochain
+ * démarrage d'un administrateur.
+ */
+export async function ouvrirDroitAnnonceVersion(): Promise<void> {
+  if (!matrixClient) return;
+  const moi = matrixClient.getUserId();
+  if (!moi) return;
+  const salons = matrixClient.getRooms().filter((r) => r.getMyMembership?.() === "join");
+  for (const room of salons) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const evt = room.currentState?.getStateEvents?.("m.room.power_levels" as any, "");
+      if (!evt) continue;
+      const contenu = (evt.getContent?.() || {}) as {
+        events?: Record<string, number>;
+        events_default?: number;
+        state_default?: number;
+        users?: Record<string, number>;
+        users_default?: number;
+      };
+      if ((contenu.events?.[SION_VERSION_EVENT] ?? null) === 0) continue;
+      // Modifier m.room.power_levels demande d'avoir au moins le niveau requis
+      // pour cet événement ; on ne tente rien sans, pour ne pas provoquer un
+      // 403 à chaque démarrage de chaque utilisateur.
+      const monNiveau = contenu.users?.[moi] ?? contenu.users_default ?? 0;
+      const requis = contenu.events?.["m.room.power_levels"] ?? contenu.state_default ?? 50;
+      if (monNiveau < requis) continue;
+      const nouveau = {
+        ...contenu,
+        events: { ...(contenu.events || {}), [SION_VERSION_EVENT]: 0 },
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await matrixClient.sendStateEvent(room.roomId, "m.room.power_levels" as any, nouveau, "");
+      console.info(`[Sion] annonce de version ouverte à tous dans ${room.roomId}`);
+    } catch (err) {
+      console.warn(`[Sion] ouverture du droit d'annonce impossible sur ${room.roomId}`, err);
+    }
+  }
+}
+
+/**
+ * Versions annoncées par les membres d'un salon, la plus récente d'abord.
+ * Les membres qui n'ont rien annoncé sont absents de la liste — un client
+ * ancien, ou un autre client Matrix, n'écrit pas cet événement.
+ */
+export function getRoomClientVersions(roomId: string): SionMemberVersion[] {
+  if (!matrixClient) return [];
+  const room = matrixClient.getRoom(roomId);
+  const evts = room?.currentState?.getStateEvents(SION_VERSION_EVENT) ?? [];
+  const liste: SionMemberVersion[] = [];
+  for (const evt of Array.isArray(evts) ? evts : [evts]) {
+    const userId = evt?.getStateKey?.();
+    const c = evt?.getContent?.() as { version?: string; os?: string; ts?: number } | undefined;
+    if (!userId || !c?.version) continue;
+    liste.push({ userId, version: c.version, os: c.os || "?", ts: Number(c.ts ?? 0) });
+  }
+  return liste.sort((a, b) => b.ts - a.ts);
+}
+
+/**
+ * Remet à jour le nom d'appareil de la session courante.
+ *
+ * `initial_device_display_name` n'est posé qu'à la CONNEXION : une session
+ * ouverte avant une mise à jour garderait indéfiniment l'ancienne version, et
+ * l'administrateur verrait un parc figé dans le passé. On le rafraîchit donc à
+ * chaque démarrage, et seulement s'il a changé — inutile d'écrire au serveur
+ * quand rien ne bouge.
+ */
+export async function refreshDeviceVersionLabel(): Promise<void> {
+  if (!matrixClient) return;
+  const deviceId = matrixClient.getDeviceId();
+  if (!deviceId) return;
+  const voulu = getDeviceDisplayName();
+  try {
+    const actuel = await matrixClient.getDevice(deviceId);
+    if (actuel?.display_name === voulu) return;
+    await matrixClient.setDeviceDetails(deviceId, { display_name: voulu });
+    console.info(`[Sion] nom d'appareil mis à jour : ${voulu}`);
+  } catch (err) {
+    // Sans conséquence : l'administrateur verra l'ancienne version, rien de
+    // plus. Ne jamais faire échouer un démarrage pour une étiquette.
+    console.warn("[Sion] nom d'appareil non mis à jour:", err);
+  }
 }
 
 export interface MatrixConfig {
@@ -1272,6 +1427,11 @@ export async function createChannel(name: string, isVoice: boolean, isPublic = t
       users: usersPowerLevels,
       events: {
         "org.matrix.msc3401.call.member": 0,
+        // Chaque membre annonce sa propre version : sans cette ligne l'écriture
+        // retombe sur `state_default` (50) et un utilisateur ordinaire n'y
+        // arrive pas. La clé d'état étant son propre identifiant, il ne peut
+        // écrire que sa ligne à lui.
+        [SION_VERSION_EVENT]: 0,
       },
     } as never,
   });

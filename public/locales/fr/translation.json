@@ -218,15 +218,16 @@
     "serverLimit": "Limite d'envoi du serveur : {{size}}",
     "rangeRequired": "Indique une plage horaire (début/fin) pour cette vidéo.",
     "native": "natif",
-    "recoded": "réencodé WebM",
+    "recoded": "réencodé AV1",
     "original": "Originale",
     "sizeUnknown": "taille inconnue",
     "phaseDownload": "Téléchargement",
-    "phaseConvert": "Conversion en WebM"
+    "phaseConvert": "Conversion en AV1"
   },
   "members": {
     "title": "Membres",
-    "close": "Fermer"
+    "close": "Fermer",
+    "clientVersion": "Version du client"
   },
   "screenShare": {
     "audioVolume": "Volume du partage",

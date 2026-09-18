@@ -3286,11 +3286,17 @@ async fn import_url_video(
         // machine, autant produire le format que tout lit.
         let mut candidates: Vec<Vec<String>> = Vec::new();
         candidates.push(mk(&[
-            "-y", "-i", src_s.as_str(), "-c:v", "libsvtav1", "-crf", "32",
+            // `crf 42` et non 32. Mesuré sur une source H.264 de 20 Mo
+            // (18/09) : à 32, l'AV1 rendait 25 Mo — PLUS GROS que l'original,
+            // donc rejeté par la limite de taille, et l'échelle retombait
+            // silencieusement sur H.264. Réencoder un fichier déjà compressé
+            // demande un réglage plus serré. À 42 : 15 Mo, un quart de moins
+            // que la source, pour le même temps d'encodage.
+            "-y", "-i", src_s.as_str(), "-c:v", "libsvtav1", "-crf", "42",
             "-preset", "6", "-g", "240", "-pix_fmt", "yuv420p",
         ]));
         candidates.push(mk(&[
-            "-y", "-i", src_s.as_str(), "-c:v", "libaom-av1", "-crf", "32",
+            "-y", "-i", src_s.as_str(), "-c:v", "libaom-av1", "-crf", "42",
             "-b:v", "0", "-cpu-used", "6", "-row-mt", "1", "-pix_fmt", "yuv420p",
         ]));
         candidates.push(mk(&[
@@ -3305,12 +3311,26 @@ async fn import_url_video(
         ]));
 
         let mut encoded = false;
+        // Encodeur RÉELLEMENT retenu, pour le journal.
+        //
+        // L'échelle tente l'AV1 puis retombe sur H.264, et cette retombée était
+        // muette : l'utilisateur, à qui l'on promet de l'AV1, obtenait du H.264
+        // sans explication, et son fichier repartait pour une seconde
+        // conversion à l'envoi (18/09).
+        let mut encodeur_retenu = "aucun";
         for args in &candidates {
             let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let nom = refs
+                .iter()
+                .position(|a| *a == "-c:v")
+                .and_then(|i| refs.get(i + 1))
+                .copied()
+                .unwrap_or("?");
             if run_ffmpeg_encode(&app, &ffmpeg_bin, &refs, eff).is_ok() {
                 let sz = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(u64::MAX);
                 if limit == 0 || sz <= limit {
                     encoded = true;
+                    encodeur_retenu = nom;
                     break;
                 }
             }
@@ -3326,7 +3346,15 @@ async fn import_url_video(
             serde_json::json!({ "phase": "convert", "pct": 100.0 }),
         );
         let _ = std::fs::remove_file(&src);
-        (out, "webm".to_string())
+        log::info!(
+            "[Sion][vidéo] import réencodé par {encodeur_retenu} → {} Mo",
+            std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0) / 1_048_576
+        );
+        // Extension RÉELLE. Elle était fixée à « webm » alors que la sortie est
+        // un `out.mp4` : le fichier arrivait étiqueté `video/webm` sans en être
+        // un, le détecteur de codec Matroska n'y trouvait évidemment rien, et
+        // l'envoi le réencodait une seconde fois (18/09).
+        (out, "mp4".to_string())
     } else {
         let ext = src
             .extension()

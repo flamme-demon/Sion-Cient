@@ -698,6 +698,21 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         // vocal soit parcouru : une horloge fausse casse la voix ET le SDK, et
         // l'utilisateur doit être prévenu avant d'essayer de parler.
         void publishClockSkew(client.getHomeserverUrl());
+        // Étiquette de version de cette session, pour que les administrateurs
+        // sachent quel parc ils administrent. Le nom d'appareil n'est fixé
+        // qu'à la connexion : sans ce rafraîchissement, une session ouverte
+        // avant une mise à jour resterait éternellement annoncée dans son
+        // ancienne version.
+        void matrixService.refreshDeviceVersionLabel();
+        // Version annoncée dans chaque salon rejoint : ce serveur n'offre
+        // aucun moyen de lire les appareils d'un autre utilisateur, l'état de
+        // salon est donc la seule voie pour qu'un administrateur voie le parc.
+        // L'ouverture du droit précède l'annonce : sur un salon ancien, un
+        // membre ordinaire ne peut pas écrire tant qu'un administrateur n'a pas
+        // abaissé le seuil de ce seul type d'événement.
+        void matrixService
+          .ouvrirDroitAnnonceVersion()
+          .finally(() => void matrixService.publishClientVersion());
         const rooms = getJoinedRooms(client);
         const channels = mapRoomsToChannels(rooms, client);
         if (channels.length === 0 && rooms.length > 0) {
