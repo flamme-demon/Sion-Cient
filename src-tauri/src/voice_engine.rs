@@ -220,7 +220,27 @@ pub fn platform_audio_snapshot() -> Result<
         name: name.to_string(),
         index,
     };
-    let recording = list_recording_devices(&audio)
+    // Énumération vide : on réveille l'ADM et on redemande.
+    //
+    // Tant que la capture n'a jamais été initialisée, l'ADM peut rendre une
+    // liste de dizaines d'entrées aux noms VIDES — toutes écartées par le
+    // filtre, si bien que les réglages n'affichaient plus que « Par défaut »
+    // (18/09, après un `init_recording failed` au démarrage). Rien ne la
+    // réparait ensuite : la liste restait cassée pour toute la session.
+    // `start_recording()` force l'initialisation, après quoi les noms
+    // apparaissent.
+    let mut recording_brut = list_recording_devices(&audio);
+    if recording_brut.is_empty() {
+        if let Err(e) = audio.start_recording() {
+            log::warn!("[Sion][voix-native] réveil de l'ADM pour l'énumération: {e}");
+        }
+        recording_brut = list_recording_devices(&audio);
+        log::info!(
+            "[Sion][voix-native] énumération vide puis réveil ADM : {} micro(s)",
+            recording_brut.len()
+        );
+    }
+    let recording = recording_brut
         .into_iter()
         .map(|d| to_native(d.id.as_str(), &d.name, d.index))
         .collect();
