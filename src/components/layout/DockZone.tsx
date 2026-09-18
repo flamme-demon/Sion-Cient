@@ -34,6 +34,9 @@ const MemberPanel = lazy(() =>
 const SoundboardPanel = lazy(() =>
   import("../chat/SoundboardPanel").then((m) => ({ default: m.SoundboardPanel })),
 );
+const PinnedPanel = lazy(() =>
+  import("../chat/PinnedListPanel").then((m) => ({ default: m.PinnedListPanel })),
+);
 const TranscriptPanel = lazy(() =>
   import("../chat/TranscriptPanel").then((m) => ({ default: m.TranscriptPanel })),
 );
@@ -57,6 +60,7 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   soundboard: "soundboard.title",
   transcript: "transcript.title",
   voice: "layout.voicePanelTitle",
+  pinned: "chat.pinnedList",
 };
 
 const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
@@ -64,6 +68,7 @@ const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
   voice: VoiceStatusPanel,
+  pinned: PinnedPanel,
 };
 
 /** Part de hauteur : 0 = hauteur naturelle (une barre, comme le bloc vocal),
@@ -73,6 +78,7 @@ const PANEL_FLEX: Record<DockPanelId, number> = {
   soundboard: 1,
   transcript: 1,
   voice: 0,
+  pinned: 1,
 };
 
 /** Cible de dépôt : une zone de la dock, ou « menu » (la carte d'origine du
@@ -120,7 +126,7 @@ function useDockAvailability(): Record<DockPanelId, boolean> {
   const hasSoundboard = useMatrixStore((s) => s.channels.some((c) => c.isSoundboard));
   const isDM = useMatrixStore((s) => s.channels.find((c) => c.id === activeChannel)?.isDM ?? false);
   return useMemo(
-    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: !!connectedVoice }),
+    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: !!connectedVoice, pinned: !!activeChannel }),
     [activeChannel, isDM, hasSoundboard, connectedVoice],
   );
 }
@@ -240,6 +246,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
     soundboard: usePanelBackgroundStyle("soundboard"),
     transcript: usePanelBackgroundStyle("transcript"),
     voice: usePanelBackgroundStyle("voice"),
+    pinned: usePanelBackgroundStyle("pinned"),
   };
 
   // Échap annule un drag en cours (comme les poignées de resize).

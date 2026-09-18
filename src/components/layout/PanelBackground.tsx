@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLayoutStore, type BackgroundScope } from "../../stores/useLayoutStore";
 import { pickPanelBackground, usePanelBackgroundUrl, bgAnchorCss } from "../../services/panelBackground";
@@ -13,6 +14,10 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
   const layoutEditing = useLayoutStore((s) => s.layoutEditing);
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const setPanelBackground = useLayoutStore((s) => s.setPanelBackground);
+  // Déclaré AVANT tout retour anticipé : un hook appelé conditionnellement
+  // casse l'ordre des hooks et vide l'écran au premier rendu où la condition
+  // change — c'est exactement ce qui s'est produit le 17/09.
+  const [enCours, setEnCours] = useState(false);
   if (!layoutEditing) return null;
 
   const hasImage = !!cfg;
@@ -26,17 +31,35 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
     }}>
       <button
         type="button"
-        onClick={() => void pickPanelBackground(scope)}
-        title={hasImage
-          ? t("layout.bgReplace", { defaultValue: "Remplacer l'image de fond" })
-          : t("layout.bgPick", { defaultValue: "Choisir une image de fond" })}
+        // Une vidéo est transcodée à l'import, ce qui prend de plusieurs
+        // secondes à une minute selon le fichier. Sans retour visuel, le clic
+        // paraissait sans effet et l'on recommençait (18/09).
+        disabled={enCours}
+        onClick={() => {
+          setEnCours(true);
+          void pickPanelBackground(scope).finally(() => setEnCours(false));
+        }}
+        title={enCours
+          ? t("layout.bgPreparing", { defaultValue: "Préparation du fond…" })
+          : hasImage
+            ? t("layout.bgReplace", { defaultValue: "Remplacer l'image de fond" })
+            : t("layout.bgPick", { defaultValue: "Choisir une image de fond" })}
         style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 2, display: 'flex', color: 'var(--color-on-surface-variant)' }}
       >
+        {enCours ? (
+          // Sablier animé par la même rotation que les autres attentes.
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56">
+              <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite" />
+            </path>
+          </svg>
+        ) : (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <circle cx="8.5" cy="8.5" r="1.5" />
           <path d="m21 15-5-5L5 21" />
         </svg>
+        )}
       </button>
       {hasImage && (
         <>
@@ -118,7 +141,9 @@ export function BackgroundControls({ scope }: { scope: BackgroundScope }) {
 export function PanelBackgroundLayer({ scope }: { scope: BackgroundScope }) {
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const url = usePanelBackgroundUrl(scope);
-  if (!cfg || !url || cfg.mode !== "blur") return null;
+  if (!cfg || !url) return null;
+
+  if (cfg.mode !== "blur") return null;
   const veil = `color-mix(in srgb, var(--color-surface-container-low) ${Math.round((1 - cfg.opacity) * 100)}%, transparent)`;
   return (
     <div

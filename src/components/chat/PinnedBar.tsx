@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { PinIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import * as matrixService from "../../services/matrixService";
 import { plainPreview } from "../../utils/plainPreview";
-import { PinnedListPanel } from "./PinnedListPanel";
 
 export function PinnedBar() {
   const { t } = useTranslation();
@@ -30,7 +30,6 @@ export function PinnedBar() {
     .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 
   const [activeIndex, setActiveIndex] = useState(0);
-  const [listOpen, setListOpen] = useState(false);
   const isPaused = useRef(false);
 
   // Reset index when channel or pinned messages change
@@ -61,7 +60,9 @@ export function PinnedBar() {
     : null;
 
   const handleClick = () => {
-    if (!currentPinned) { setListOpen(true); return; }
+    // Aucun épinglé chargé dans la rotation : on ouvre le panneau, qui va
+    // les chercher sur le serveur.
+    if (!currentPinned) { useLayoutStore.getState().openDockPanel("pinned"); return; }
     const eventId = currentPinned.eventId || String(currentPinned.id);
     setScrollToMessageId(eventId);
   };
@@ -165,16 +166,19 @@ export function PinnedBar() {
       {/* Liste complète : la rotation ne montre que les épinglés chargés. */}
       <button
         type="button"
-        onClick={(e) => { e.stopPropagation(); setListOpen((v) => !v); }}
+        // Ouvre le PANNEAU des épinglés au lieu d'une bulle ancrée : la vidéo
+        // d'un partage est une fenêtre native posée par-dessus la page, sous
+        // laquelle toute bulle disparaît (18/09). Un panneau se déplace.
+        onClick={(e) => { e.stopPropagation(); useLayoutStore.getState().toggleDockPanel("pinned"); }}
         title={t("chat.pinnedList", { defaultValue: "Messages épinglés" })}
         style={{
           width: 24, height: 24, borderRadius: 6, border: 'none', flexShrink: 0,
-          background: listOpen ? 'var(--color-secondary-container)' : 'transparent',
+          background: 'transparent',
           color: 'var(--color-on-surface-variant)', cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
         }}
         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
-        onMouseLeave={(e) => { if (!listOpen) e.currentTarget.style.background = 'transparent'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
           <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" />
@@ -182,7 +186,6 @@ export function PinnedBar() {
           <line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
         </svg>
       </button>
-      {listOpen && <PinnedListPanel onClose={() => setListOpen(false)} />}
 
       {/* Nav arrows for multiple pins */}
       {pinnedMessages.length > 1 && (

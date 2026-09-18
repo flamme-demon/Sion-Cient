@@ -35,7 +35,7 @@ const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
 // peut contenir plusieurs panneaux — ils deviennent alors des onglets, comme
 // dans un éditeur. Le chat reste épinglé au centre (jamais déplaçable).
 
-export type DockPanelId = "members" | "soundboard" | "transcript" | "voice";
+export type DockPanelId = "members" | "soundboard" | "transcript" | "voice" | "pinned";
 export type DockZoneId = "top" | "right" | "bottom";
 
 export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["top", "right", "bottom"];
@@ -48,6 +48,15 @@ export const DOCK_PANEL_DEFAULT_ZONE: Record<DockPanelId, DockZoneId> = {
   soundboard: "right",
   transcript: "right",
   voice: "bottom",
+  // Les épinglés s'ouvraient en bulle ancrée à leur bandeau : sous Windows et
+  // Wayland, la vidéo du partage est une fenêtre NATIVE posée par-dessus la
+  // page, qu'aucun `z-index` ne peut franchir — la liste passait dessous
+  // (18/09). En panneau, elle se déplace hors de la zone vidéo.
+  //
+  // Bandeau BAS par défaut : les épinglés se prêtent à une pellicule
+  // horizontale, où les vignettes se parcourent d'un coup d'œil, plutôt qu'à
+  // une colonne. La zone reste changeable par l'utilisateur.
+  pinned: "bottom",
 };
 
 /** Zone droite : même plage que l'ancienne largeur par panneau. */
@@ -166,6 +175,10 @@ export interface PanelBackgroundCfg {
   opacity: number;
   mode?: "veil" | "blur";
   anchor?: BgAnchor;
+  /** Fond animé : le chemin désigne une vidéo transcodée par
+   *  `prepare_background_video`, rendue par un `<video>` et non par une règle
+   *  CSS — une feuille de style ne sait pas afficher de vidéo en fond. */
+  video?: boolean;
 }
 
 interface LayoutState {

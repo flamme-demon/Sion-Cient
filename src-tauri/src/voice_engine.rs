@@ -458,6 +458,21 @@ pub fn screenshare_publish_options(
 
     TrackPublishOptions {
         source: TrackSource::Screenshare,
+        // Simulcast DÉSACTIVÉ pour le partage d'écran.
+        //
+        // Le simulcast publie plusieurs résolutions en parallèle et partage le
+        // budget de débit entre elles : la couche haute n'en reçoit qu'une
+        // fraction. Pour de la vidéo c'est un bon compromis — un viewer en
+        // connexion faible reçoit une version réduite plutôt que rien. Pour du
+        // texte, c'est l'inverse : la couche basse est de toute façon
+        // illisible, et l'amputation de la couche haute rend le partage inutile
+        // pour TOUT LE MONDE. Un partage de code à 0,08 bit par pixel était
+        // illisible malgré VP9 et 5 images par seconde (18/09).
+        //
+        // Une seule couche reçoit donc tout le débit. Le contrôle de congestion
+        // continue d'adapter ce débit à chaque réseau ; ce qui disparaît, c'est
+        // seulement le choix entre plusieurs résolutions.
+        simulcast: false,
         video_encoding: Some(VideoEncoding {
             max_bitrate,
             max_framerate: max_framerate as f64,
@@ -486,19 +501,34 @@ pub fn screenshare_config(resolution: &str, framerate: u32) -> Result<ScreenShar
         "1440p" => (2560, 1440),
         _ => return Err(format!("résolution de partage invalide: {resolution}")),
     };
+    // Plafonds de débit, révisés le 18/09.
+    //
+    // Les anciennes valeurs bridaient un partage à 2,5 Mb/s en 1080p/15 —
+    // sur une machine disposant de 10 Gb/s — et le texte d'un éditeur de code
+    // en ressortait illisible. Elles étaient calibrées comme s'il fallait
+    // protéger le réseau, alors que c'est le rôle du contrôle de congestion de
+    // WebRTC : un plafond élevé ne coûte rien à qui ne peut pas le soutenir,
+    // puisqu'il redescend de lui-même, mais il débloque la qualité pour qui le
+    // peut. Un plafond BAS, lui, est définitif.
+    //
+    // Pire, la table était incohérente : `1080p/60` à 6 Mb/s offrait 100 kbit
+    // par image quand `1080p/15` à 2,5 Mb/s en offrait 167 — monter en
+    // fluidité dégradait donc chaque image. Les valeurs ci-dessous gardent un
+    // budget par image à peu près constant d'une cadence à l'autre, autour de
+    // 0,1 bit par pixel, ce qu'il faut à H.264 pour du contenu d'écran.
     let max_bitrate = match (resolution, framerate) {
-        ("720p", 5) => 800_000,
-        ("720p", 15) => 1_500_000,
-        ("720p", 30) => 2_000_000,
-        ("720p", 60) => 3_500_000,
-        ("1080p", 5) => 1_200_000,
-        ("1080p", 15) => 2_500_000,
-        ("1080p", 30) => 5_000_000,
-        ("1080p", 60) => 6_000_000,
-        ("1440p", 5) => 2_000_000,
-        ("1440p", 15) => 5_000_000,
-        ("1440p", 30) => 8_000_000,
-        ("1440p", 60) => 14_000_000,
+        ("720p", 5) => 1_500_000,
+        ("720p", 15) => 3_000_000,
+        ("720p", 30) => 5_000_000,
+        ("720p", 60) => 8_000_000,
+        ("1080p", 5) => 3_000_000,
+        ("1080p", 15) => 6_000_000,
+        ("1080p", 30) => 10_000_000,
+        ("1080p", 60) => 16_000_000,
+        ("1440p", 5) => 5_000_000,
+        ("1440p", 15) => 10_000_000,
+        ("1440p", 30) => 16_000_000,
+        ("1440p", 60) => 25_000_000,
         (_, _) => return Err(format!("cadence de partage invalide: {framerate}")),
     };
     Ok(ScreenShareConfig {
@@ -2074,6 +2104,10 @@ impl LiveKitEngine {
             source.id(),
             source.title()
         );
+        // L'overlay des curseurs doit se borner à CET écran : les positions
+        // reçues y sont normalisées, et les étaler sur tout le bureau virtuel
+        // décalait la flèche des viewers (18/09).
+        crate::cursor_overlay::cursor_overlay_set_shared_screen(Some(source.id()));
         // Source vidéo "screencast" (le SFU optimise texte/partage plutôt
         // que caméra) ; la résolution suit les frames capturées.
         let video_source = livekit::webrtc::video_source::native::NativeVideoSource::new(
@@ -3492,10 +3526,10 @@ mod tests {
     #[test]
     fn screenshare_publish_options_marque_la_source() {
         // Sans source=Screenshare, les pairs trient la piste en caméra.
-        let opts = screenshare_publish_options(2_500_000, 15, "vp8");
+        let opts = screenshare_publish_options(6_000_000, 15, "vp8");
         assert_eq!(opts.source, TrackSource::Screenshare);
         let encoding = opts.video_encoding.expect("encodage explicite");
-        assert_eq!(encoding.max_bitrate, 2_500_000);
+        assert_eq!(encoding.max_bitrate, 6_000_000);
         assert_eq!(encoding.max_framerate, 15.0);
         assert_eq!(opts.video_codec, VideoCodec::VP8);
         // Défaut (nom inconnu) = VP9, le plus net.
@@ -3519,12 +3553,14 @@ mod tests {
         let hd = screenshare_config("1080p", 30).unwrap();
         assert_eq!(hd.max_width, 1920);
         assert_eq!(hd.max_height, 1080);
-        assert_eq!(hd.max_bitrate, 5_000_000);
+        // Plafonds relevés le 18/09 : voir le commentaire de la table. Un
+        // budget par image à peu près constant d'une cadence à l'autre.
+        assert_eq!(hd.max_bitrate, 10_000_000);
         assert_eq!(fit_screenshare_dimensions(2560, 1072, hd), (1920, 804));
 
         let qhd = screenshare_config("1440p", 60).unwrap();
         assert_eq!(fit_screenshare_dimensions(2560, 1440, qhd), (2560, 1440));
-        assert_eq!(qhd.max_bitrate, 14_000_000);
+        assert_eq!(qhd.max_bitrate, 25_000_000);
         assert!(screenshare_config("4k", 30).is_err());
         assert!(screenshare_config("1080p", 24).is_err());
     }

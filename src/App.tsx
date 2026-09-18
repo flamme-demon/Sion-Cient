@@ -93,6 +93,14 @@ export default function App() {
     if (!credentials) return;
     preloadHeavyScreens(300);
   }, [credentials]);
+
+  // Ménage des fonds transcodés, une fois au démarrage. Chaque essai de fond
+  // laissait sa sortie derrière lui, sans que rien ne la reprenne — 39 Mo
+  // pour quatre fichiers dont un seul servait (18/09). La configuration est
+  // restaurée à ce stade : on connaît donc l'ensemble des fonds référencés.
+  useEffect(() => {
+    void import("./services/panelBackground").then((m) => m.purgerFondsInutilises());
+  }, []);
   const connectionStatus = useMatrixStore((s) => s.connectionStatus);
   const fetchAdminData = useAdminStore((s) => s.fetchAdminData);
   const adminInitialized = useAdminStore((s) => s.initialized);

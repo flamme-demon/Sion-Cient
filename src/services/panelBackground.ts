@@ -26,7 +26,14 @@ async function resolveBackgroundUrl(path: string): Promise<string | null> {
       urlCache.set(path, url);
       return url;
     } catch (err) {
-      console.warn("[Sion][fond] lecture de l'image impossible:", err);
+      // Journalisé côté Rust, pas seulement dans la console du navigateur :
+      // un fond configuré dont le fichier a disparu ne s'affichait plus sans
+      // la moindre trace lisible (18/09, fichier écrit sous `/tmp` et effacé
+      // au redémarrage). Le chemin manquant est la seule information utile.
+      console.warn("[Sion][fond] lecture impossible:", err);
+      void import("@tauri-apps/plugin-log")
+        .then(({ warn }) => warn(`[Sion][fond] fichier illisible ou absent : ${path}`))
+        .catch(() => { /* hors Tauri */ });
       return null;
     } finally {
       inflight.delete(path);
@@ -37,10 +44,53 @@ async function resolveBackgroundUrl(path: string): Promise<string | null> {
 }
 
 /** Choisit une image et l'associe au panneau. `false` si on annule. */
+/**
+ * Efface les fonds transcodés que plus aucune configuration n'utilise.
+ *
+ * Chaque essai en laissait un derrière lui — 39 Mo pour quatre fichiers dont
+ * un seul servait (18/09). Appelée au démarrage, une fois la configuration
+ * restaurée : c'est le seul moment où l'on connaît avec certitude l'ensemble
+ * des fonds encore référencés.
+ */
+export async function purgerFondsInutilises(): Promise<void> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const cfgs = useLayoutStore.getState().panelBackgrounds;
+    const keep = Object.values(cfgs)
+      .map((c) => c?.path)
+      .filter((p): p is string => !!p);
+    await invoke("purge_background_files", { keep });
+  } catch {
+    /* hors Tauri, ou dossier inaccessible : sans conséquence */
+  }
+}
+
 export async function pickPanelBackground(scope: BackgroundScope): Promise<boolean> {
   const { invoke } = await import("@tauri-apps/api/core");
   const path = await invoke<string | null>("pick_image_file");
   if (!path) return false;
+
+  // Vidéo : transcodée avant d'être retenue. Le fichier d'origine tourne en
+  // continu derrière l'interface, et les exemples fournis pesaient jusqu'à
+  // 192 Mo en 4K (18/09) — impensable en fond. `prepare_background_video`
+  // en tire une boucle 720p sans audio, de quelques mégaoctets.
+  const estVideo = /\.(mp4|webm|mkv|mov)$/i.test(path);
+  if (estVideo) {
+    try {
+      const prepare = await invoke<string>("prepare_background_video", { path });
+      const courant = useLayoutStore.getState().panelBackgrounds[scope];
+      // Pas de drapeau `video` : la préparation rend un WebP ANIMÉ, donc une
+      // image. Elle emprunte le chemin CSS des fonds statiques, déjà éprouvé.
+      useLayoutStore.getState().setPanelBackground(scope, {
+        path: prepare,
+        opacity: courant?.opacity ?? 0.55,
+      });
+      return true;
+    } catch (err) {
+      console.error("[Sion] Transcodage du fond vidéo impossible:", err);
+      return false;
+    }
+  }
   const current = useLayoutStore.getState().panelBackgrounds[scope];
   useLayoutStore.getState().setPanelBackground(scope, { path, opacity: current?.opacity ?? 0.55 });
   return true;
@@ -54,6 +104,43 @@ export async function pickPanelBackground(scope: BackgroundScope): Promise<boole
  * texte ne dépend jamais de l'image. Si le moteur ne connaît pas `color-mix`,
  * la déclaration est ignorée — pas d'image, pas de casse.
  */
+/**
+ * URL d'un fond VIDÉO, servie par le serveur média local.
+ *
+ * Les autres fonds passent par une URL `blob:`, qui convient à une image mais
+ * pas à une vidéo : elle ne répond pas aux requêtes par plage, si bien que le
+ * lecteur ne peut ni chercher ni se recaler, et finissait par se figer
+ * (18/09). Le serveur média, lui, gère les plages — c'est déjà lui qui sert
+ * les vidéos du chat.
+ */
+export function useBackgroundVideoUrl(scope: BackgroundScope): string | null {
+  const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
+  const chemin = cfg?.video ? cfg.path : null;
+  // `resolu` retient le chemin AVEC son URL : sans quoi une URL périmée
+  // resterait affichée le temps que la suivante arrive. Le cas « pas de
+  // vidéo » est dérivé au rendu plutôt que posé par un `setState` dans
+  // l'effet, qui déclencherait un rendu en cascade.
+  const [resolu, setResolu] = useState<{ chemin: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!chemin) return;
+    let annule = false;
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const port = await invoke<number>("media_server_port");
+        const nom = chemin.split(/[\\/]/).pop() ?? "";
+        if (!annule && port > 0 && nom) {
+          setResolu({ chemin, url: `http://127.0.0.1:${port}/${encodeURIComponent(nom)}` });
+        }
+      } catch {
+        /* serveur média indisponible : pas de fond vidéo, on n'affiche rien */
+      }
+    })();
+    return () => { annule = true; };
+  }, [chemin]);
+  return chemin && resolu?.chemin === chemin ? resolu.url : null;
+}
+
 export function usePanelBackgroundUrl(scope: BackgroundScope): string | null {
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const path = cfg?.path ?? null;
@@ -92,6 +179,10 @@ export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties |
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const url = usePanelBackgroundUrl(scope);
   if (!cfg || !url) return undefined;
+  // Fond vidéo : rendu par `PanelBackgroundLayer`, pas par une règle CSS. Le
+  // conteneur doit devenir TRANSPARENT, sinon son fond opaque masquerait la
+  // couche vidéo, qui est placée derrière lui (`z-index: -1`).
+
   // Mode « flou » : l'image vit dans une couche dédiée floutée
   // (`PanelBackgroundLayer`) — le conteneur ne porte rien.
   if (cfg.mode === "blur") return undefined;

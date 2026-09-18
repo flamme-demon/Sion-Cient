@@ -126,9 +126,26 @@ fn register_class() -> Result<(), String> {
         .clone()
 }
 
-/// Géométrie du bureau virtuel : l'overlay couvre TOUS les écrans, comme
-/// l'hôte X11 couvre l'écran entier. Un partage peut concerner n'importe lequel.
+/// Géométrie de l'overlay : l'ÉCRAN PARTAGÉ quand on le connaît, le bureau
+/// virtuel sinon.
+///
+/// L'overlay couvrait auparavant tous les moniteurs réunis. Or les positions
+/// reçues sont normalisées sur le seul écran partagé : les étaler sur
+/// l'ensemble décalait la flèche et la faisait apparaître au mauvais endroit
+/// sur les écrans non partagés (18/09). Le suivi des bureaux virtuels, lui, ne
+/// dépend pas de la taille de la fenêtre — il reste acquis.
+///
+/// Le repli sur le bureau virtuel couvre le cas où l'écran partagé n'est pas
+/// déclaré : mieux vaut un curseur mal placé que pas de curseur du tout.
 fn virtual_screen() -> (i32, i32, i32, i32) {
+    if let Some(index) = crate::cursor_overlay::cursor_overlay_shared_screen() {
+        if let Some(rect) = moniteur_par_index(index) {
+            return rect;
+        }
+        log::warn!(
+            "[Sion][CursorOverlay] écran partagé {index} introuvable — repli sur le bureau virtuel"
+        );
+    }
     unsafe {
         (
             GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -137,6 +154,63 @@ fn virtual_screen() -> (i32, i32, i32, i32) {
             GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1),
         )
     }
+}
+
+/// Rectangle du n-ième moniteur, dans l'ordre d'énumération de Windows —
+/// celui-là même que suit libwebrtc pour numéroter ses sources d'écran.
+fn moniteur_par_index(index: u64) -> Option<(i32, i32, i32, i32)> {
+    use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
+    };
+
+    struct Collecte {
+        vise: u64,
+        vu: u64,
+        trouve: Option<(i32, i32, i32, i32)>,
+    }
+
+    unsafe extern "system" fn visiter(
+        moniteur: HMONITOR,
+        _dc: HDC,
+        _rect: *mut RECT,
+        param: LPARAM,
+    ) -> BOOL {
+        let collecte = &mut *(param.0 as *mut Collecte);
+        if collecte.vu == collecte.vise {
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(moniteur, &mut info).as_bool() {
+                let r = info.rcMonitor;
+                collecte.trouve = Some((
+                    r.left,
+                    r.top,
+                    (r.right - r.left).max(1),
+                    (r.bottom - r.top).max(1),
+                ));
+            }
+            return BOOL(0);
+        }
+        collecte.vu += 1;
+        BOOL(1)
+    }
+
+    let mut collecte = Collecte {
+        vise: index,
+        vu: 0,
+        trouve: None,
+    };
+    unsafe {
+        let _ = EnumDisplayMonitors(
+            None,
+            None,
+            Some(visiter),
+            LPARAM(&mut collecte as *mut _ as isize),
+        );
+    }
+    collecte.trouve
 }
 
 struct Surface {

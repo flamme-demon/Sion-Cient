@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -1040,6 +1040,25 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
     });
   };
 
+  // État d'épinglage, pour que le bouton dise ce qu'il fait.
+  //
+  // `pinMessage` bascule depuis toujours — elle retire l'épingle si le message
+  // y figure — mais l'icône restait identique dans les deux cas : rien
+  // n'indiquait qu'un message était déjà épinglé, ni qu'un second clic le
+  // désépinglerait (18/09). `pinnedVersion` force la relecture quand les
+  // épingles du salon changent, y compris depuis un autre client.
+  const pinnedVersion = useMatrixStore((s) => s.pinnedVersion);
+  const isPinned = useMemo(() => {
+    // Lecture explicite : `pinnedVersion` n'est qu'un compteur, mais c'est lui
+    // qui rend cette valeur périmée quand les épingles changent. Le laisser
+    // dans les seules dépendances en faisait une dépendance « inutile » aux
+    // yeux du lint, alors qu'elle est la seule raison de recalculer.
+    void pinnedVersion;
+    if (!activeChannel) return false;
+    const eventId = message.eventId || String(message.id);
+    return matrixService.getPinnedEventIds(activeChannel).includes(eventId);
+  }, [activeChannel, message.eventId, message.id, pinnedVersion]);
+
   const handlePin = async () => {
     const eventId = message.eventId || String(message.id);
     try {
@@ -1501,10 +1520,18 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
               onClick={handlePin}
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              style={actionButtonStyle}
-              title={t("chat.pinMessage")}
+              style={{
+                ...actionButtonStyle,
+                // Épinglé : couleur d'accent et icône pleine. L'action étant
+                // une bascule, l'état doit se lire avant le clic.
+                color: isPinned ? 'var(--color-primary)' : actionButtonStyle.color,
+              }}
+              title={isPinned
+                ? t("chat.unpinMessage", { defaultValue: "Désépingler" })
+                : t("chat.pinMessage")}
+              aria-pressed={isPinned}
             >
-              <PinIcon />
+              <PinIcon filled={isPinned} />
             </button>
           )}
           {canDelete && !showDeleteConfirm && (

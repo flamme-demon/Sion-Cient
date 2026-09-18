@@ -57,12 +57,39 @@ pub fn preferred_frame_dimensions(
         (Some(bounds), None) | (None, Some(bounds)) => Some(bounds),
         (None, None) => None,
     }?;
-    Some(fit_frame_dimensions(
-        source_width,
-        source_height,
-        bounds.0,
-        bounds.1,
-    ))
+    let cible = fit_frame_dimensions(source_width, source_height, bounds.0, bounds.1);
+
+    // Cible STABILISÉE d'une image à l'autre.
+    //
+    // L'émetteur fait varier sa résolution source de quelques pixels — encodage
+    // adaptatif — et notre cible suivait fidèlement : 496 puis 494, en boucle.
+    // Amortir le rectangle d'affichage ne suffisait pas, car étirer une frame de
+    // 494 puis de 496 dans le même rectangle ne donne pas le même facteur
+    // d'échelle : le cadre restait figé mais le CONTENU se dilatait et se
+    // contractait, et l'image « dansait » quand même (18/09).
+    //
+    // On garde donc la cible précédente tant que la nouvelle ne s'en écarte pas
+    // de plus de huit pixels. Un vrai changement — l'émetteur qui passe en 720p,
+    // une fenêtre redimensionnée — dépasse largement ce seuil.
+    {
+        static CIBLES: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<String, (u32, u32)>>,
+        > = std::sync::OnceLock::new();
+        let cibles =
+            CIBLES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut cibles = cibles.lock().unwrap_or_else(|err| err.into_inner());
+        match cibles.get(sender).copied() {
+            Some((pw, ph))
+                if pw.abs_diff(cible.0) <= 8 && ph.abs_diff(cible.1) <= 8 =>
+            {
+                return Some((pw, ph));
+            }
+            _ => {
+                cibles.insert(sender.to_owned(), cible);
+            }
+        }
+    }
+    Some(cible)
 }
 
 fn fit_frame_dimensions(sw: u32, sh: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -2755,7 +2782,7 @@ mod imp {
         RegisterClassExW, SetWindowLongPtrW, SetWindowPos, CREATESTRUCTW, GWLP_USERDATA,
         HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
         SWP_SHOWWINDOW, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY,
-        WM_MOUSEMOVE, WM_PAINT, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPSIBLINGS,
+        WM_LBUTTONDOWN, WM_PAINT, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPSIBLINGS,
         WS_VISIBLE,
     };
     use windows_core::w;
@@ -3373,6 +3400,13 @@ mod imp {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
                 return LRESULT(1);
             }
+            // Clic : publié comme onde chez le partageur. Le calque DOM s'en
+            // chargeait ; notre fenêtre recouvre le canvas et capte désormais
+            // ces clics, donc c'est à nous de les transmettre (18/09).
+            WM_LBUTTONDOWN => {
+                publier_clic(hwnd, lparam);
+                return LRESULT(0);
+            }
             // `HTTRANSPARENT` était renvoyé ici pour laisser la souris
             // atteindre la WebView2. Cela n'a jamais fonctionné — le DOM ne
             // recevait aucun `mousemove` et flammemob n'émettait plus sa
@@ -3468,6 +3502,16 @@ mod imp {
             .remove(&(hwnd.0 as isize));
     }
 
+    /// Dernier rectangle d'affichage et zone cliente associée, par fenêtre.
+    /// Sert à amortir le battement de résolution de l'émetteur sans figer les
+    /// vrais redimensionnements.
+    #[allow(clippy::type_complexity)]
+    fn derniers_dest() -> &'static Mutex<HashMap<isize, (i32, i32, i32, i32, i32, i32)>> {
+        static DESTS: OnceLock<Mutex<HashMap<isize, (i32, i32, i32, i32, i32, i32)>>> =
+            OnceLock::new();
+        DESTS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     /// Rectangle vidéo par fenêtre, renseigné à la peinture.
     fn rects_video() -> &'static Mutex<HashMap<isize, (i32, i32, i32, i32)>> {
         static RECTS: OnceLock<Mutex<HashMap<isize, (i32, i32, i32, i32)>>> = OnceLock::new();
@@ -3488,10 +3532,44 @@ mod imp {
     ///
     /// Les coordonnées sont normalisées sur l'image, pas sur la fenêtre : les
     /// bandes noires du letterbox n'en font pas partie.
+    /// Transmet un clic, normalisé sur l'image comme les positions.
+    unsafe fn publier_clic(hwnd: HWND, lparam: LPARAM) {
+        let brut = lparam.0 as u32;
+        let px = (brut & 0xFFFF) as i16 as i32;
+        let py = ((brut >> 16) & 0xFFFF) as i16 as i32;
+        let Some((dx, dy, dw, dh)) = rects_video()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(&(hwnd.0 as isize))
+            .copied()
+        else {
+            return;
+        };
+        if dw <= 0 || dh <= 0 {
+            return;
+        }
+        let x = (px - dx) as f32 / dw as f32;
+        let y = (py - dy) as f32 / dh as f32;
+        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+            return;
+        }
+        let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowContext;
+        if context.is_null() {
+            return;
+        }
+        let sender = (*context).sender.clone();
+        if let Some(app) = APP.get() {
+            #[cfg(feature = "native-voice")]
+            crate::voice_native::publier_clic_local(app, &sender, x, y);
+            #[cfg(not(feature = "native-voice"))]
+            let _ = (app, &sender);
+        }
+    }
+
     fn demarrer_echantillonnage_pointeur() {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::Graphics::Gdi::ScreenToClient;
-        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
 
         static DEMARRE: AtomicBool = AtomicBool::new(false);
         if DEMARRE.swap(true, Ordering::AcqRel) {
@@ -3518,8 +3596,20 @@ mod imp {
                 if unsafe { GetCursorPos(&mut point) }.is_err() {
                     continue;
                 }
+                // La fenêtre RÉELLEMENT sous le pointeur.
+                //
+                // On interroge la position globale de la souris : sans cette
+                // vérification, un partageur dont Sion est masqué par une autre
+                // fenêtre voyait quand même son curseur diffusé dès qu'il
+                // survolait la zone où Sion se trouve EN DESSOUS (18/09).
+                // L'ancien chemin par le DOM ne pouvait pas avoir ce défaut,
+                // puisqu'il n'était notifié que d'un survol réel.
+                let dessus = unsafe { WindowFromPoint(point) };
                 for (brut, sender) in fenetres {
                     let hwnd = HWND(brut as *mut _);
+                    if dessus != hwnd {
+                        continue;
+                    }
                     let mut local = point;
                     if !unsafe { ScreenToClient(hwnd, &mut local) }.as_bool() {
                         continue;
@@ -3628,6 +3718,57 @@ mod imp {
                     .min(client_height as f64 / frame.height as f64);
                 let dest_width = (frame.width as f64 * scale).round().max(1.0) as i32;
                 let dest_height = (frame.height as f64 * scale).round().max(1.0) as i32;
+                let mut dest_width = dest_width;
+                let mut dest_height = dest_height;
+                // Amortissement du rectangle d'affichage.
+                //
+                // L'émetteur fait varier sa résolution source de quelques
+                // pixels — encodage adaptatif — et notre mise à l'échelle suit
+                // fidèlement : l'image peinte alternait entre 880x496 et
+                // 880x494 dans une zone cliente pourtant figée, et « vibrait »
+                // (18/09, partage de narkow). La fenêtre n'y était pour rien,
+                // elle n'avait pas bougé depuis deux minutes.
+                //
+                // On garde donc le rectangle précédent tant que le nouveau ne
+                // s'en écarte pas de plus de deux pixels. Un vrai changement de
+                // résolution dépasse toujours ce seuil.
+                // Seuil de 8 px, et seulement à zone cliente INCHANGÉE.
+                //
+                // Un seuil de 2 ne mordait pas : la frame alternant entre 494 et
+                // 496 de haut, le rectangle d'affichage bougeait de 3 px — juste
+                // au-dessus. Le conditionner à une zone cliente identique permet
+                // d'élargir le seuil sans rendre les redimensionnements
+                // approximatifs : dès que la fenêtre change de taille, le
+                // rectangle est recalculé exactement.
+                if let Some((_, _, pw, ph, pcw, pch)) = derniers_dest()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .get(&(hwnd.0 as isize))
+                    .copied()
+                {
+                    if pcw == client_width
+                        && pch == client_height
+                        && (pw - dest_width).abs() <= 8
+                        && (ph - dest_height).abs() <= 8
+                    {
+                        dest_width = pw;
+                        dest_height = ph;
+                    }
+                }
+                derniers_dest()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(
+                        hwnd.0 as isize,
+                        (0, 0, dest_width, dest_height, client_width, client_height),
+                    );
+                if tracer {
+                    log::info!(
+                        "[Sion][partage-natif] rendu {dest_width}x{dest_height} (amorti) pour une frame {}x{}",
+                        frame.width,
+                        frame.height
+                    );
+                }
                 let dest_x = (client_width - dest_width) / 2;
                 let dest_y = (client_height - dest_height) / 2;
                 let info = BITMAPINFO {

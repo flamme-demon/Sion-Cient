@@ -1723,6 +1723,13 @@ export interface PinnedSummary {
   /** Faux quand l'événement a dû être récupéré sur le serveur : il n'est pas
    *  dans le fil chargé, donc le rejoindre demandera de paginer. */
   loaded: boolean;
+  /** Nature du média joint, pour que la liste ne dise plus « Fichier joint »
+   *  sans préciser quoi. `null` = message texte. */
+  media: "image" | "video" | "audio" | "file" | null;
+  /** URL http du média, quand il est lisible sans déchiffrement. Les salons
+   *  chiffrés stockent le fichier dans `content.file` : la vignette y est
+   *  omise plutôt que d'embarquer tout le déchiffrement dans une liste. */
+  mediaUrl: string | null;
 }
 
 /**
@@ -1736,6 +1743,32 @@ export interface PinnedSummary {
  * Les échecs sont silencieux et l'entrée est omise : un épinglé supprimé ou
  * illisible ne doit pas faire échouer la liste entière.
  */
+/** Nature du média d'un événement, d'après son `msgtype` Matrix. */
+/** URL affichable d'un média épinglé : vignette si le serveur en propose une,
+ *  sinon le média lui-même. */
+function pinnedMediaUrl(contenu: unknown): string | null {
+  const c = contenu as
+    | { url?: string; info?: { thumbnail_url?: string } }
+    | undefined;
+  const mxc = c?.info?.thumbnail_url || c?.url;
+  return mxc ? mxcToHttp(mxc) : null;
+}
+
+function pinnedMediaKind(msgtype: unknown): PinnedSummary["media"] {
+  switch (msgtype) {
+    case "m.image":
+      return "image";
+    case "m.video":
+      return "video";
+    case "m.audio":
+      return "audio";
+    case "m.file":
+      return "file";
+    default:
+      return null;
+  }
+}
+
 export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[]> {
   if (!matrixClient) return [];
   const room = matrixClient.getRoom(roomId);
@@ -1744,7 +1777,9 @@ export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[
   for (const eventId of ids) {
     const local = room?.findEventById?.(eventId);
     if (local) {
-      const contenu = local.getContent?.() as { body?: string } | undefined;
+      const contenu = local.getContent?.() as
+        | { body?: string; msgtype?: string }
+        | undefined;
       resultats.push({
         eventId,
         sender: room?.getMember?.(local.getSender() ?? "")?.name
@@ -1752,18 +1787,24 @@ export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[
           || "",
         ts: local.getTs?.() ?? 0,
         text: String(contenu?.body ?? ""),
+        media: pinnedMediaKind(contenu?.msgtype),
+        mediaUrl: pinnedMediaUrl(contenu),
         loaded: true,
       });
       continue;
     }
     try {
       const distant = await matrixClient.fetchRoomEvent(roomId, eventId);
-      const contenu = distant.content as { body?: string } | undefined;
+      const contenu = distant.content as
+        | { body?: string; msgtype?: string }
+        | undefined;
       resultats.push({
         eventId,
         sender: room?.getMember?.(distant.sender ?? "")?.name || distant.sender || "",
         ts: Number(distant.origin_server_ts ?? 0),
         text: String(contenu?.body ?? ""),
+        media: pinnedMediaKind(contenu?.msgtype),
+        mediaUrl: pinnedMediaUrl(contenu),
         loaded: false,
       });
     } catch {

@@ -19,6 +19,9 @@ const MemberPanel = lazy(() =>
 const SoundboardPanel = lazy(() =>
   import("../chat/SoundboardPanel").then((m) => ({ default: m.SoundboardPanel })),
 );
+const PinnedPanel = lazy(() =>
+  import("../chat/PinnedListPanel").then((m) => ({ default: m.PinnedListPanel })),
+);
 const TranscriptPanel = lazy(() =>
   import("../chat/TranscriptPanel").then((m) => ({ default: m.TranscriptPanel })),
 );
@@ -38,6 +41,7 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   soundboard: "soundboard.title",
   transcript: "transcript.title",
   voice: "layout.voicePanelTitle",
+  pinned: "chat.pinnedList",
 };
 
 const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
@@ -45,6 +49,7 @@ const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
   soundboard: SoundboardPanel,
   transcript: TranscriptPanel,
   voice: VoiceStatusPanel,
+  pinned: PinnedPanel,
 };
 
 /** Panneau visible pour le contexte courant ? (mêmes règles que la dock) */
@@ -54,7 +59,7 @@ function useDockAvailability(): Record<DockPanelId, boolean> {
   const hasSoundboard = useMatrixStore((s) => s.channels.some((c) => c.isSoundboard));
   const isDM = useMatrixStore((s) => s.channels.find((c) => c.id === activeChannel)?.isDM ?? false);
   return useMemo(
-    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: false }),
+    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: false, pinned: !!activeChannel }),
     [activeChannel, isDM, hasSoundboard, connectedVoice],
   );
 }

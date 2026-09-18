@@ -965,6 +965,59 @@ pub fn publier_curseur_local(
     );
 }
 
+/// Publie un CLIC de notre curseur, depuis le Rust.
+///
+/// Les positions étaient publiées mais pas les clics : l'onde qui les signale
+/// chez le partageur avait disparu sous Windows (18/09). Le calque DOM s'en
+/// chargeait via l'événement `click` du canvas, que notre fenêtre native
+/// recouvre désormais.
+#[cfg(all(feature = "native-voice", not(target_os = "android")))]
+pub fn publier_clic_local(
+    app: &tauri::AppHandle<TauriRuntime>,
+    cible: &str,
+    x: f32,
+    y: f32,
+) {
+    let identity = manager()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .identity
+        .clone();
+    let Some(identity) = identity else { return };
+    let nom = participants_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&identity)
+        .map(|p| p.name.clone());
+    let charge = serde_json::json!({
+        "x": x,
+        "y": y,
+        "t": cible,
+        "n": nom,
+        "click": true,
+        "ts": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    });
+    let Ok(octets) = serde_json::to_vec(&charge) else {
+        return;
+    };
+    let _ = with_engine_shared(app, "clic natif", |e| {
+        e.publish_data(TOPIC_CURSOR_CLICK, octets.clone(), true)
+    });
+    let nom_affiche = cursor_display_name(charge["n"].as_str(), None, &identity);
+    crate::native_video_surface::on_viewer_cursor_packet(
+        cible,
+        &identity,
+        &nom_affiche,
+        true,
+        x,
+        y,
+        false,
+    );
+}
+
 #[cfg(all(feature = "native-voice", not(target_os = "android")))]
 fn cursor_display_name(
     payload_name: Option<&str>,

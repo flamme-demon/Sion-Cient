@@ -17,6 +17,7 @@
   "layout": {
     "bgOpacity": "Background opacity",
     "bgPick": "Choose a background image",
+    "bgPreparing": "Preparing background…",
     "bgRemove": "Remove background",
     "bgReplace": "Replace the background image",
     "editSidebarHint": "Drag the menu to the opposite edge",
@@ -137,6 +138,7 @@
     "reply": "Reply",
     "react": "React",
     "pinMessage": "Pin",
+    "unpinMessage": "Unpin",
     "replyingTo": "Replying to",
     "sendDM": "Send a direct message",
     "searchEmoji": "Search emoji...",

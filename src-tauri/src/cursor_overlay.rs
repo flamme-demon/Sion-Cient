@@ -457,6 +457,28 @@ pub(crate) mod draw {
 
 // ── Tauri commands ──────────────────────────────────────────────────────
 
+/// Index de l'écran réellement partagé, ou `-1` si inconnu.
+///
+/// L'overlay Windows couvrait tout le bureau virtuel — tous les moniteurs
+/// réunis — alors que les positions reçues sont normalisées sur le SEUL écran
+/// partagé. La flèche d'un viewer apparaissait donc décalée, et se dédoublait
+/// visuellement d'un écran à l'autre (18/09). Connaître l'écran visé permet de
+/// borner l'overlay dessus.
+static ECRAN_PARTAGE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
+/// Déclare l'écran partagé, avant l'ouverture de l'overlay.
+pub fn cursor_overlay_set_shared_screen(index: Option<u64>) {
+    let valeur = index.map(|v| v as i64).unwrap_or(-1);
+    ECRAN_PARTAGE.store(valeur, Ordering::Release);
+    log::info!("[Sion][CursorOverlay] écran partagé déclaré : {valeur}");
+}
+
+/// Index de l'écran partagé, si connu.
+pub fn cursor_overlay_shared_screen() -> Option<u64> {
+    let v = ECRAN_PARTAGE.load(Ordering::Acquire);
+    (v >= 0).then_some(v as u64)
+}
+
 #[tauri::command]
 pub fn cursor_overlay_open() -> bool {
     let Some(handle) = get_or_start_handle() else {

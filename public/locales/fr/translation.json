@@ -17,6 +17,7 @@
   "layout": {
     "bgOpacity": "Opacité du fond",
     "bgPick": "Choisir une image de fond",
+    "bgPreparing": "Préparation du fond…",
     "bgRemove": "Retirer le fond",
     "bgReplace": "Remplacer l'image de fond",
     "editSidebarHint": "Glisser le menu vers le bord opposé",
@@ -137,6 +138,7 @@
     "reply": "Répondre",
     "react": "Réagir",
     "pinMessage": "Épingler",
+    "unpinMessage": "Désépingler",
     "replyingTo": "Réponse à",
     "sendDM": "Envoyer un message privé",
     "searchEmoji": "Rechercher un emoji...",

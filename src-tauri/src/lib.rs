@@ -1290,7 +1290,11 @@ async fn pick_image_file() -> Option<String> {
         .set_title("Sélectionner une image")
         .add_filter(
             "Images",
-            &["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"],
+            // Vidéos acceptées aussi : elles sont transcodées à l'import par
+            // `prepare_background_video`, jamais utilisées telles quelles.
+            &[
+                "png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "mp4", "webm", "mkv", "mov",
+            ],
         )
         .pick_file()
         .await
@@ -2028,6 +2032,180 @@ async fn remux_video_mp4(
     }
     log::info!("[Sion][vidéo] remux MP4 (flux vidéo copié) → {output_path:?}");
     Ok(output_path.to_string_lossy().into_owned())
+}
+
+/// Prépare une vidéo pour servir de FOND de panneau.
+///
+/// Un fond tourne en continu derrière l'interface : le fichier d'origine ne
+/// convient jamais. Les exemples fournis le montrent — 3840x2160 à 77 Mb/s pour
+/// vingt secondes, soit 192 Mo (18/09). Décoder cela en permanence, pendant un
+/// partage d'écran qui encode et décode déjà, annulerait le gain de performance
+/// visé par la 2.0.
+///
+/// On produit donc une boucle sobre : 1280x720 au plus, 24 images par seconde,
+/// **sans piste audio** (un fond ne sonne pas), en H.264 — décodé en matériel
+/// par les deux webviews. `-movflags +faststart` place l'index en tête pour que
+/// la lecture démarre sans lire tout le fichier.
+#[tauri::command]
+async fn prepare_background_video(
+    app: tauri::AppHandle<TauriRuntime>,
+    path: String,
+    ffmpeg_path: Option<String>,
+) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    #[cfg(target_os = "android")]
+    let managed: Option<String> = None;
+    let _ = &app;
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed.as_deref());
+
+    let entree = std::path::PathBuf::from(&path);
+    if !entree.exists() {
+        return Err(format!("fichier introuvable: {path}"));
+    }
+    // Version du PROFIL dans la clé de cache.
+    //
+    // Elle était absente : re-choisir le même fichier après avoir corrigé le
+    // profil rendait l'ancien résultat, et la correction paraissait sans effet
+    // (18/09). À incrémenter à chaque changement des réglages ci-dessous.
+    const PROFIL: u32 = 6;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    PROFIL.hash(&mut hasher);
+    path.hash(&mut hasher);
+    entree
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    // Dossier DURABLE, et non le répertoire temporaire des médias.
+    //
+    // La sortie atterrissait dans `sion_media_dir()`, c'est-à-dire sous `/tmp`
+    // sur Linux : au premier redémarrage, le fichier disparaissait et le fond
+    // configuré ne s'affichait plus, sans le moindre message (18/09). Un fond
+    // est une préférence qui doit survivre à la machine, pas un intermédiaire
+    // de conversion.
+    let dossier = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("dossier de données inaccessible: {e}"))?
+        .join("fonds");
+    std::fs::create_dir_all(&dossier)
+        .map_err(|e| format!("création du dossier des fonds: {e}"))?;
+    let sortie = dossier.join(format!("sion_fond_{:x}.webp", hasher.finish()));
+    // Cache : on ne fait confiance qu'à un fichier NON VIDE.
+    //
+    // Un transcodage interrompu — l'application tuée en cours de préparation —
+    // laisse un fichier de zéro octet portant un nom parfaitement valide. Il
+    // serait alors pris pour un cache légitime, et le fond resterait vide sans
+    // la moindre explication (constaté le 18/09 dans le dossier des fonds).
+    if sortie.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(sortie.to_string_lossy().into_owned());
+    }
+    let _ = std::fs::remove_file(&sortie);
+
+    let output = hidden_command(&ffmpeg_bin)
+        .args(["-y", "-i"])
+        .arg(&entree)
+        .args([
+            "-an",
+            // 960 de large, 30 images par seconde.
+            //
+            // Les deux axes sont découplés, contrairement à l'intuition. La
+            // LARGEUR décide de la netteté : des traits fins réduits de 1920 à
+            // 512 sont perdus définitivement, aucune cadence ne les rattrape.
+            // La CADENCE décide de la fluidité : à vingt images, un défilement
+            // vertical rapide saccade encore.
+            //
+            // Or ajouter des images ne coûte presque rien ici — mesuré sur une
+            // pluie de caractères, 960 à 20 i/s pèse 15 Mo et à 30 i/s 16 Mo
+            // (18/09). Le WebP encode les différences, et des images plus
+            // rapprochées se ressemblent davantage. Il n'y avait donc pas
+            // d'arbitrage à faire entre netteté et fluidité : on prend les deux.
+            "-vf",
+            "scale='min(960,iw)':-2:flags=lanczos,fps=30",
+            // WebP ANIMÉ, et non un conteneur vidéo.
+            //
+            // Un `<video>` s'est révélé inexploitable pour un fond dans cette
+            // version de WebKit : refusé en HTTP local (`code=4`), artefacts
+            // sans images-clés rapprochées, puis décrochage silencieux du
+            // décodeur en pleine lecture — trois échecs différents en trois
+            // tentatives (18/09). Une image animée emprunte le chemin CSS déjà
+            // éprouvé des fonds statiques : ni élément vidéo, ni décodeur média,
+            // ni couche d'empilement dédiée. Elle compresse moins bien, mais
+            // elle s'affiche.
+            "-c:v",
+            "libwebp_anim",
+            "-lossless",
+            "0",
+            "-q:v",
+            "55",
+            "-compression_level",
+            "5",
+            "-loop",
+            "0",
+            "-f",
+            "webp",
+        ])
+        .arg(&sortie)
+        .output()
+        .map_err(|e| format!("ffmpeg introuvable: {e}"))?;
+
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&sortie);
+        return Err(format!(
+            "transcodage du fond impossible: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let poids = std::fs::metadata(&sortie).map(|m| m.len()).unwrap_or(0);
+    log::info!(
+        "[Sion][fond] vidéo préparée : {} → {:.1} Mo",
+        sortie.display(),
+        poids as f64 / 1_048_576.0
+    );
+    Ok(sortie.to_string_lossy().into_owned())
+}
+
+/// Supprime les fonds transcodés qui ne servent plus.
+///
+/// Chaque essai de fond — un autre fichier, ou le même après un changement de
+/// profil — laisse une sortie derrière lui. Le dossier atteignait 39 Mo pour
+/// quatre fichiers dont un seul servait (18/09). L'appelant fournit les
+/// chemins encore référencés par la configuration ; tout le reste est effacé.
+///
+/// Les fichiers vides sont emportés dans la foulée : ce sont des transcodages
+/// interrompus, jamais des fonds valides.
+#[tauri::command]
+fn purge_background_files(
+    app: tauri::AppHandle<TauriRuntime>,
+    keep: Vec<String>,
+) -> Result<u32, String> {
+    let dossier = match app.path().app_data_dir() {
+        Ok(d) => d.join("fonds"),
+        Err(_) => return Ok(0),
+    };
+    let Ok(entrees) = std::fs::read_dir(&dossier) else {
+        return Ok(0);
+    };
+    let gardes: std::collections::HashSet<std::path::PathBuf> =
+        keep.iter().map(std::path::PathBuf::from).collect();
+    let mut effaces = 0u32;
+    for entree in entrees.flatten() {
+        let chemin = entree.path();
+        if gardes.contains(&chemin) {
+            continue;
+        }
+        if std::fs::remove_file(&chemin).is_ok() {
+            effaces += 1;
+        }
+    }
+    if effaces > 0 {
+        log::info!("[Sion][fond] {effaces} fond(s) inutilisé(s) supprimé(s)");
+    }
+    Ok(effaces)
 }
 
 /// Path where the in-app "Installer ffmpeg" button stores the downloaded
@@ -3569,6 +3747,8 @@ pub fn run() {
         fetch_link_preview,
         transcode_video,
         remux_video_mp4,
+        prepare_background_video,
+        purge_background_files,
         stage_media,
         read_media,
         media_server_port,
@@ -3658,6 +3838,8 @@ pub fn run() {
         fetch_link_preview,
         transcode_video,
         remux_video_mp4,
+        prepare_background_video,
+        purge_background_files,
         stage_media,
         read_media,
         media_server_port,
