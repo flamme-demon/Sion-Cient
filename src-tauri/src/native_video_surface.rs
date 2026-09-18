@@ -69,6 +69,20 @@ fn fit_frame_dimensions(sw: u32, sh: u32, max_width: u32, max_height: u32) -> (u
     if sw < 2 || sh < 2 || max_width < 2 || max_height < 2 {
         return (sw, sh);
     }
+    // Les BORNES sont quantifiées sur 16 avant tout calcul.
+    //
+    // La borne publiée par la surface bouge de quelques pixels au gré de la
+    // mise en page. Avec un simple arrondi au pair du résultat, l'image peinte
+    // alternait entre 1648 et 1654 de large dans une zone cliente pourtant
+    // stable : elle « dansait » à l'écran (18/09).
+    //
+    // Quantifier le RÉSULTAT ne suffit pas, et le test le prouve : un
+    // frémissement de la borne fait basculer la dimension limitante, et le
+    // facteur d'échelle change alors assez pour franchir un palier. Quantifier
+    // la BORNE rend le facteur lui-même insensible à ce frémissement.
+    let quantifie = |v: u32| (v.max(16)) & !15;
+    let max_width = quantifie(max_width);
+    let max_height = quantifie(max_height);
     let scale = (max_width as f64 / sw as f64)
         .min(max_height as f64 / sh as f64)
         .min(1.0);
@@ -106,7 +120,16 @@ mod dimension_tests {
 
     #[test]
     fn adapte_la_frame_au_rectangle_sans_deformer() {
-        assert_eq!(fit_frame_dimensions(1920, 1080, 520, 300), (520, 292));
+        // Réduction : le résultat est aligné sur 16. La borne publiée par la
+        // surface bouge de quelques pixels au gré de la mise en page, et un
+        // arrondi au pair laissait alterner l'image entre deux largeurs — elle
+        // « dansait » dans un cadre pourtant stable (18/09).
+        assert_eq!(fit_frame_dimensions(1920, 1080, 520, 300), (512, 288));
+        // Une borne qui varie de quelques pixels doit donner la MÊME taille.
+        assert_eq!(
+            fit_frame_dimensions(1920, 1080, 1654, 930),
+            fit_frame_dimensions(1920, 1080, 1648, 930)
+        );
         assert_eq!(fit_frame_dimensions(1920, 1080, 2560, 1440), (1920, 1080));
         assert_eq!(fit_frame_dimensions(2560, 1440, 768, 432), (768, 432));
     }
@@ -520,10 +543,30 @@ mod imp {
         let Some(shared) = egl() else {
             // Sans renderer EGL, seul le chemin BGRA sait peindre : la pompe
             // aurait dû interroger `prefers_planar` avant d'arriver ici.
+            //
+            // Ce retour était muet. Un partage a tourné à 25 im/s « reçues,
+            // converties, surface native » sans qu'une seule image ne soit
+            // présentée (17/09) : de l'extérieur, rien ne distinguait un
+            // renderer éteint d'un problème de rendu. On le dit — une fois
+            // par salve, pour ne pas écrire 25 lignes par seconde.
+            signaler_rejet("renderer EGL absent ou éteint");
             return;
         };
         if !wants_planar_sender(&sender) {
+            signaler_rejet("expéditeur hors de la sous-surface unique");
             return;
+        }
+        // Compteur des soumissions, en regard des présentations.
+        //
+        // Un retour de PIP a laissé l'écran noir (17/09) : le fil de rendu
+        // était vivant, aucune image n'était rejetée, et pourtant plus rien
+        // n'était présenté. Impossible de dire si la pompe avait cessé
+        // d'envoyer ou si le fil avait cessé de peindre — les deux donnent le
+        // même silence. Ces deux compteurs se lisent l'un contre l'autre.
+        static SOUMISES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SOUMISES.fetch_add(1, Ordering::Relaxed) + 1;
+        if n == 1 || n % 300 == 0 {
+            log::info!("[Sion][partage-natif] image soumise au fil EGL #{n}");
         }
         let _ = shared.submit(wayland_surface::Payload::Planar(frame));
     }
@@ -531,6 +574,25 @@ mod imp {
     /// Ce partage est-il celui que la sous-surface unique présente ? La
     /// mosaïque reste sur le chemin GtkGLArea tant qu'il n'y a qu'une
     /// sous-surface.
+    /// Signale un rejet d'image, au plus une fois toutes les cinq secondes.
+    /// Le débit d'images rendrait un log par occurrence illisible, mais le
+    /// silence total nous a coûté une soirée de diagnostic.
+    fn signaler_rejet(raison: &str) {
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+        static DERNIER: Mutex<Option<Instant>> = Mutex::new(None);
+        let mut dernier = DERNIER.lock().unwrap_or_else(|err| err.into_inner());
+        let maintenant = Instant::now();
+        let a_crier = match *dernier {
+            Some(t) => maintenant.duration_since(t) >= Duration::from_secs(5),
+            None => true,
+        };
+        if a_crier {
+            *dernier = Some(maintenant);
+            log::warn!("[Sion][partage-natif] image ignorée : {raison}");
+        }
+    }
+
     fn wants_planar_sender(sender: &str) -> bool {
         let active = active_senders()
             .lock()
@@ -2182,7 +2244,22 @@ mod imp {
                     .map_err(|err| format!("eglMakeCurrent: {err}"))?;
                 // Cadencement par le compositeur : `eglSwapBuffers` bloque sur
                 // le vsync, ce qui est sans danger hors du thread d'interface.
-                let _ = instance.swap_interval(display, 1);
+                // Échange NON synchronisé sur le compositeur.
+                //
+                // Avec un intervalle de 1, `eglSwapBuffers` attend le « frame
+                // callback » de la surface. Or notre sous-surface est démappée
+                // dès que le partage disparaît de l'écran — passage en PIP,
+                // arrêt du partage, onglet quitté : `attach(None)` puis commit.
+                // Le compositeur n'a alors plus aucune raison d'envoyer ce
+                // rappel, et le premier échange suivant BLOQUE le fil de rendu
+                // définitivement. C'est l'écran noir au retour du PIP constaté
+                // le 17/09 : images toujours soumises (#600), plus aucune
+                // présentée (#300), fil vivant mais figé dans un `poll`.
+                //
+                // Rien ne justifiait cette synchronisation : la cadence est
+                // déjà donnée par les images reçues du réseau, pas par la
+                // boucle de rendu, et nous ne dessinons que sur image nouvelle.
+                let _ = instance.swap_interval(display, 0);
                 let program = create_program()?;
                 log::info!("[Sion][partage-natif] contexte EGL {major}.{minor} / GL 3.2 core prêt");
                 Ok((instance, display, egl_surface, context, egl_window, program))
@@ -2336,6 +2413,12 @@ mod imp {
                 }
             }
 
+            // Sortie du fil : jusqu'ici muette. Or `live=false` fait rejeter
+            // toutes les images suivantes en amont — le partage devient noir
+            // sans qu'aucune ligne n'explique pourquoi.
+            log::warn!(
+                "[Sion][partage-natif] fil de rendu EGL terminé après {presented} image(s) —                  les images suivantes seront ignorées"
+            );
             shared.live.store(false, Ordering::Release);
             // Les objets GL appartiennent au contexte : les libérer après
             // `eglMakeCurrent(NULL)` reviendrait à appeler `glDelete*` sans
@@ -2383,6 +2466,44 @@ mod imp {
         log::info!("[Sion][partage-natif] overlay rendu traversant (région d'entrée vide)");
     }
 
+    /// Relève la WebView quand son processus web meurt.
+    ///
+    /// Un WebM tordu a fait échouer une assertion de `matroskademux` (17/09) ;
+    /// le `SIGABRT` a emporté le processus web, et donc TOUTE l'interface :
+    /// fenêtre figée, session perdue, alors que le moteur Rust continuait de
+    /// tourner et de journaliser. Le défaut appartient à GStreamer et nous ne
+    /// pouvons pas l'empêcher — mais rien ne nous oblige à en mourir avec lui.
+    ///
+    /// Le rechargement ramène l'incident au rang de clignotement. Il est borné :
+    /// une page qui planterait à chaque chargement boucherait sinon la machine
+    /// en rechargements perpétuels, ce qui serait pire que la fenêtre figée.
+    fn surveiller_processus_web(view: &webkit2gtk::WebView) {
+        use webkit2gtk::WebViewExt as _;
+        const MAX_RELEVES: u32 = 3;
+        const FENETRE: Duration = Duration::from_secs(60);
+        let historique: std::rc::Rc<RefCell<Vec<Instant>>> =
+            std::rc::Rc::new(RefCell::new(Vec::new()));
+        view.connect_web_process_terminated(move |vue, raison| {
+            let maintenant = Instant::now();
+            let mut essais = historique.borrow_mut();
+            essais.retain(|t| maintenant.duration_since(*t) < FENETRE);
+            if essais.len() as u32 >= MAX_RELEVES {
+                log::error!(
+                    "[Sion][webkit] processus web mort ({raison:?}) — {MAX_RELEVES} relèves en \
+                     moins d'une minute, on renonce : l'interface restera figée"
+                );
+                return;
+            }
+            essais.push(maintenant);
+            let rang = essais.len();
+            drop(essais);
+            log::error!(
+                "[Sion][webkit] processus web mort ({raison:?}) — rechargement {rang}/{MAX_RELEVES}"
+            );
+            vue.reload();
+        });
+    }
+
     pub fn attach(
         app: &tauri::AppHandle<crate::TauriRuntime>,
         view: &webkit2gtk::WebView,
@@ -2394,6 +2515,8 @@ mod imp {
             .parent()
             .and_then(|parent| parent.downcast::<gtk::Overlay>().ok())
             .ok_or_else(|| "la WebView n'a pas été créée dans le GtkOverlay natif".to_owned())?;
+
+        surveiller_processus_web(view);
 
         let display = view.display();
         log::info!(
@@ -2621,15 +2744,19 @@ mod imp {
     use windows::Win32::Foundation::{BOOL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
         BeginPaint, EndPaint, InvalidateRect, PatBlt, SetStretchBltMode, StretchDIBits, BITMAPINFO,
-        BITMAPINFOHEADER, BI_RGB, BLACKNESS, DIB_RGB_COLORS, HALFTONE, PAINTSTRUCT, SRCCOPY,
+        BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, DIB_RGB_COLORS, PAINTSTRUCT, SRCCOPY,
+    };
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, SelectObject,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
         RegisterClassExW, SetWindowLongPtrW, SetWindowPos, CREATESTRUCTW, GWLP_USERDATA,
-        HTTRANSPARENT, HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
-        SWP_SHOWWINDOW, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY, WM_NCHITTEST,
-        WM_PAINT, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPSIBLINGS, WS_VISIBLE,
+        HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+        SWP_SHOWWINDOW, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY,
+        WM_MOUSEMOVE, WM_PAINT, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPSIBLINGS,
+        WS_VISIBLE,
     };
     use windows_core::w;
 
@@ -2724,21 +2851,215 @@ mod imp {
     }
 
     pub fn viewer_targets() -> Option<HashSet<String>> {
-        // Les curseurs restent temporairement peints par le DOM sous Windows.
-        // `None` maintient leur émission JS tant que le calque GDI dédié n'est
-        // pas installé ; les pixels vidéo, eux, sont déjà 100 % natifs.
-        None
+        // Les curseurs sont désormais peints par le calque GDI, dans la même
+        // passe que la vidéo. Le DOM ne peut plus s'en charger : notre fenêtre
+        // enfant recouvre la zone, et ses curseurs se retrouvaient DERRIÈRE la
+        // vidéo — invisibles dès que la surface native est devenue visible
+        // (17/09). Déclarer nos cibles coupe leur émission côté JS.
+        if !available() {
+            return None;
+        }
+        Some(
+            windows()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .values()
+                .map(|window| window.sender.clone())
+                .collect(),
+        )
     }
 
+    /// Curseur d'un viewer tel qu'il sera peint.
+    struct CurseurViewer {
+        nom: String,
+        x: f32,
+        y: f32,
+        expire_a: std::time::Instant,
+    }
+
+    /// Curseurs par partage, puis par identité.
+    fn curseurs() -> &'static Mutex<HashMap<String, HashMap<String, CurseurViewer>>> {
+        static CURSEURS: OnceLock<Mutex<HashMap<String, HashMap<String, CurseurViewer>>>> =
+            OnceLock::new();
+        CURSEURS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Durée de vie d'une position sans nouvelle. Le partageur cesse parfois
+    /// d'émettre sans envoyer de masquage (fenêtre quittée, réseau coupé) : la
+    /// flèche resterait figée à l'écran.
+    const CURSEUR_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
     pub fn on_viewer_cursor_packet(
-        _target: &str,
-        _identity: &str,
-        _name: &str,
+        target: &str,
+        identity: &str,
+        name: &str,
         _click: bool,
-        _x: f32,
-        _y: f32,
-        _expire: bool,
+        x: f32,
+        y: f32,
+        expire: bool,
     ) {
+        {
+            let mut tout = curseurs().lock().unwrap_or_else(|err| err.into_inner());
+            let par_cible = tout.entry(target.to_owned()).or_default();
+            if expire {
+                par_cible.remove(identity);
+            } else {
+                par_cible.insert(
+                    identity.to_owned(),
+                    CurseurViewer {
+                        nom: name.to_owned(),
+                        x,
+                        y,
+                        expire_a: std::time::Instant::now() + CURSEUR_TTL,
+                    },
+                );
+            }
+        }
+        // Repeindre la ou les fenêtres de ce partage.
+        let hwnds = windows()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .values()
+            .filter(|window| window.sender == target)
+            .map(|window| window.hwnd)
+            .collect::<Vec<_>>();
+        // Les paquets arrivaient (près de 6/s) sans qu'aucun curseur
+        // n'apparaisse (17/09) : reste à savoir si la cible du paquet
+        // correspond à une fenêtre affichée. Zéro fenêtre ici = le curseur est
+        // rangé pour un partage que nous ne montrons pas, et il ne sera jamais
+        // peint.
+        {
+            static RECUS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = RECUS.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n % 60 == 0 {
+                log::info!(
+                    "[Sion][partage-natif/windows] curseur #{n} de {identity} visant {target} — \
+                     {} fenêtre(s) concernée(s)",
+                    hwnds.len()
+                );
+            }
+        }
+        // Repeindre au plus 30 fois par seconde pour les curseurs.
+        //
+        // Chaque position reçue déclenchait une peinture PLEIN CADRE. Avec 48
+        // positions par seconde émises et autant reçues, on atteignait 80
+        // peintures par seconde pour une vidéo qui n'en produit que 27 — soit
+        // environ 240 Mo/s de recopie sur le fil d'interface, qui ajoutaient
+        // précisément la latence qu'on cherchait à supprimer (18/09).
+        //
+        // La vidéo repeint de toute façon la surface à sa propre cadence ; ce
+        // rafraîchissement supplémentaire ne sert qu'aux moments où l'image est
+        // fixe et où seul le curseur bouge.
+        {
+            static DERNIERE_PEINTURE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+            const PERIODE: std::time::Duration = std::time::Duration::from_millis(33);
+            let mut derniere = DERNIERE_PEINTURE
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            let maintenant = std::time::Instant::now();
+            match *derniere {
+                Some(t) if maintenant.duration_since(t) < PERIODE => return,
+                _ => *derniere = Some(maintenant),
+            }
+        }
+        for hwnd in hwnds {
+            unsafe {
+                let _ = InvalidateRect(HWND(hwnd as _), None, BOOL(0));
+            }
+        }
+    }
+
+    /// Peint les curseurs des viewers par-dessus l'image, dans le tampon hors
+    /// écran : ils sont donc déposés en même temps qu'elle, sans scintillement.
+    /// `dest_*` est le rectangle réellement occupé par la vidéo (letterbox
+    /// compris) — les coordonnées reçues sont normalisées par rapport à lui.
+    unsafe fn peindre_curseurs(
+        hdc: windows::Win32::Graphics::Gdi::HDC,
+        sender: &str,
+        dest_x: i32,
+        dest_y: i32,
+        dest_width: i32,
+        dest_height: i32,
+    ) {
+        use windows::Win32::Foundation::{COLORREF, POINT};
+        use windows::Win32::Graphics::Gdi::{
+            CreatePen, CreateSolidBrush, FillRect, Polygon, SetBkMode, SetTextColor, TextOutW,
+            PS_SOLID, TRANSPARENT,
+        };
+
+        let maintenant = std::time::Instant::now();
+        let a_peindre: Vec<(String, String, f32, f32)> = {
+            let mut tout = curseurs().lock().unwrap_or_else(|err| err.into_inner());
+            let Some(par_cible) = tout.get_mut(sender) else {
+                return;
+            };
+            par_cible.retain(|_, c| c.expire_a > maintenant);
+            par_cible
+                .iter()
+                .map(|(identite, c)| (identite.clone(), c.nom.clone(), c.x, c.y))
+                .collect()
+        };
+        {
+            static PASSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = PASSES.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n % 120 == 0 {
+                log::info!(
+                    "[Sion][partage-natif/windows] passe curseurs #{n} pour {sender} : {} à peindre",
+                    a_peindre.len()
+                );
+            }
+        }
+        if a_peindre.is_empty() {
+            return;
+        }
+
+        SetBkMode(hdc, TRANSPARENT);
+        for (identite, nom, nx, ny) in a_peindre {
+            let (r, g, b) = crate::cursor_overlay::draw::identity_color_rgba8(&identite);
+            let couleur = COLORREF(r as u32 | ((g as u32) << 8) | ((b as u32) << 16));
+            let blanc = COLORREF(0x00FF_FFFF);
+            let px = dest_x + (nx.clamp(0.0, 1.0) * dest_width as f32) as i32;
+            let py = dest_y + (ny.clamp(0.0, 1.0) * dest_height as f32) as i32;
+
+            // Même silhouette que le calque Cairo de Linux et que l'overlay du
+            // partageur : une seule flèche reconnaissable partout.
+            let points = [
+                POINT { x: px, y: py },
+                POINT { x: px, y: py + 14 },
+                POINT { x: px + 4, y: py + 11 },
+                POINT { x: px + 6, y: py + 16 },
+                POINT { x: px + 8, y: py + 15 },
+                POINT { x: px + 5, y: py + 10 },
+                POINT { x: px + 10, y: py + 10 },
+            ];
+            let stylo = CreatePen(PS_SOLID, 1, blanc);
+            let brosse = CreateSolidBrush(couleur);
+            let ancien_stylo = SelectObject(hdc, stylo);
+            let ancienne_brosse = SelectObject(hdc, brosse);
+            let _ = Polygon(hdc, &points);
+            SelectObject(hdc, ancien_stylo);
+            SelectObject(hdc, ancienne_brosse);
+            let _ = DeleteObject(stylo);
+            let _ = DeleteObject(brosse);
+
+            if !nom.is_empty() {
+                let texte: Vec<u16> = nom.encode_utf16().collect();
+                // Largeur estimée : une police système ~7 px par caractère. Le
+                // fond n'a pas besoin d'être au pixel près, seulement lisible.
+                let largeur = (texte.len() as i32 * 7) + 8;
+                let fond = windows::Win32::Foundation::RECT {
+                    left: px + 12,
+                    top: py + 12,
+                    right: px + 12 + largeur,
+                    bottom: py + 30,
+                };
+                let brosse_fond = CreateSolidBrush(couleur);
+                FillRect(hdc, &fond, brosse_fond);
+                let _ = DeleteObject(brosse_fond);
+                SetTextColor(hdc, blanc);
+                let _ = TextOutW(hdc, px + 16, py + 14, &texte);
+            }
+        }
     }
 
     fn valid_surface(spec: NativeVideoSurfaceSpec) -> Option<Surface> {
@@ -2808,6 +3129,18 @@ mod imp {
         true
     }
 
+    /// Dernier rectangle appliqué à chaque surface, pour ne journaliser que
+    /// les changements réels.
+    #[allow(clippy::type_complexity)]
+    fn derniers_rects(
+    ) -> &'static Mutex<HashMap<isize, ((i32, i32, i32, i32), Option<(i32, i32, i32, i32)>)>> {
+        #[allow(clippy::type_complexity)]
+        static RECTS: OnceLock<
+            Mutex<HashMap<isize, ((i32, i32, i32, i32), Option<(i32, i32, i32, i32)>)>>,
+        > = OnceLock::new();
+        RECTS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     fn register_window_class() -> Result<(), String> {
         static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
         REGISTERED
@@ -2842,6 +3175,11 @@ mod imp {
         let module = unsafe { GetModuleHandleW(None) }.map_err(|err| err.to_string())?;
         let hwnd = unsafe {
             CreateWindowExW(
+                // `WS_EX_TRANSPARENT` a été essayé ici puis retiré (18/09) :
+                // il change l'ordre de peinture des fenêtres enfants et rendait
+                // la surface entièrement noire, sans pour autant rétablir la
+                // souris. On garde donc une fenêtre ordinaire, qui REÇOIT les
+                // messages souris et les relaie au front — voir `WM_MOUSEMOVE`.
                 WINDOW_EX_STYLE::default(),
                 w!("SION_NATIVE_VIDEO_SURFACE"),
                 w!("Sion native video"),
@@ -2937,6 +3275,66 @@ mod imp {
             let y = (surface.y * scale).round() as i32;
             let width = (surface.width * scale).round().max(1.0) as i32;
             let height = (surface.height * scale).round().max(1.0) as i32;
+            // Amortisseur contre la boucle de rétroaction de mise en page.
+            //
+            // Le rectangle publié par le front dérive de la taille rendue, qui
+            // dérive de la fenêtre, qui dérive du rectangle. Deux pixels
+            // d'écart suffisent à entretenir le cycle : la surface oscillait
+            // entre 464 et 466 pixels de haut, 1851 déplacements en quelques
+            // secondes — l'image « dansait » à l'écran (17/09).
+            //
+            // On ignore donc les variations d'au plus deux pixels. Elles sont
+            // invisibles, et le cycle n'a plus de quoi se relancer ; un vrai
+            // redimensionnement, lui, dépasse toujours ce seuil. Le remède
+            // appartient idéalement au calcul du rectangle côté front, mais un
+            // consommateur qui amortit reste une protection légitime.
+            // Un seuil seul ne suffisait pas : l'oscillation résiduelle
+            // atteignait 3 px en hauteur et 5 px en largeur (18/09), donc elle
+            // le franchissait. L'élargir aurait fini par ignorer de vrais
+            // redimensionnements.
+            //
+            // On reconnaît donc le cycle lui-même : un rectangle qui revient
+            // EXACTEMENT à l'avant-dernier est un aller-retour, pas un
+            // mouvement. Le plafond garde la porte ouverte aux vraies
+            // variations — un redimensionnement de fenêtre dépasse toujours
+            // largement quelques pixels.
+            //
+            // Le remède de fond appartient au calcul du rectangle côté front,
+            // qui dérive d'une taille rendue dépendant elle-même de ce
+            // rectangle ; amortir au point de consommation reste une
+            // protection légitime en attendant.
+            const SEUIL: i32 = 2;
+            const AMPLITUDE_CYCLE: i32 = 16;
+            let candidat = (x, y, width, height);
+            let ecart = |a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)| {
+                (a.0 - b.0)
+                    .abs()
+                    .max((a.1 - b.1).abs())
+                    .max((a.2 - b.2).abs())
+                    .max((a.3 - b.3).abs())
+            };
+            {
+                let mut derniers = derniers_rects()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner());
+                if let Some((dernier, precedent)) = derniers.get(&window.hwnd).copied() {
+                    let immobile = ecart(dernier, candidat) <= SEUIL;
+                    let cycle = precedent == Some(candidat)
+                        && ecart(dernier, candidat) <= AMPLITUDE_CYCLE;
+                    if immobile || cycle {
+                        continue;
+                    }
+                    log::info!(
+                        "[Sion][partage-natif/windows] surface déplacée en {x},{y} {width}x{height} (avant {dernier:?})"
+                    );
+                    derniers.insert(window.hwnd, (candidat, Some(dernier)));
+                } else {
+                    log::info!(
+                        "[Sion][partage-natif/windows] surface placée en {x},{y} {width}x{height}"
+                    );
+                    derniers.insert(window.hwnd, (candidat, None));
+                }
+            }
             let _ = unsafe {
                 SetWindowPos(
                     HWND(window.hwnd as _),
@@ -2975,7 +3373,16 @@ mod imp {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
                 return LRESULT(1);
             }
-            WM_NCHITTEST => return LRESULT(HTTRANSPARENT as isize),
+            // `HTTRANSPARENT` était renvoyé ici pour laisser la souris
+            // atteindre la WebView2. Cela n'a jamais fonctionné — le DOM ne
+            // recevait aucun `mousemove` et flammemob n'émettait plus sa
+            // position (`curseurs tx 0/s`, 18/09) — et cela nous privait des
+            // messages souris. On les accepte donc, et on relaie la position.
+            // `WM_MOUSEMOVE` était traité ici. Windows FUSIONNE ces messages :
+            // il n'en poste un nouveau que lorsque l'application vide sa file.
+            // Ce fil peignant 27 images par seconde, la souris se retrouvait
+            // cadencée par la peinture — 13 positions par seconde au lieu de 60
+            // (18/09). Elle est désormais échantillonnée par un fil dédié.
             WM_ERASEBKGND => return LRESULT(1),
             WM_PAINT => {
                 paint(hwnd);
@@ -2983,28 +3390,237 @@ mod imp {
             }
             WM_NCDESTROY => {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                liberer_tampon(hwnd);
             }
             _ => {}
         }
         DefWindowProcW(hwnd, message, wparam, lparam)
     }
 
+    /// Tampon hors écran conservé par fenêtre : (DC, bitmap, largeur, hauteur).
+    /// Les poignées GDI ne traversent pas les fils ; elles ne sont utilisées
+    /// que depuis le fil d'interface, seul à peindre. On les range en `isize`
+    /// pour pouvoir les garder dans un statique.
+    fn tampons() -> &'static Mutex<HashMap<isize, (isize, isize, i32, i32)>> {
+        static TAMPONS: OnceLock<Mutex<HashMap<isize, (isize, isize, i32, i32)>>> = OnceLock::new();
+        TAMPONS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Rend le tampon de cette fenêtre, en le recréant si la taille a changé.
+    /// `None` en second membre = création impossible : l'appelant peint alors
+    /// directement à l'écran, quitte à scintiller, plutôt que de ne rien
+    /// afficher.
+    unsafe fn tampon_de(
+        hdc_ecran: windows::Win32::Graphics::Gdi::HDC,
+        hwnd: HWND,
+        width: i32,
+        height: i32,
+    ) -> (
+        windows::Win32::Graphics::Gdi::HDC,
+        Option<windows::Win32::Graphics::Gdi::HBITMAP>,
+    ) {
+        use windows::Win32::Graphics::Gdi::{HBITMAP, HDC};
+        let mut tampons = tampons().lock().unwrap_or_else(|err| err.into_inner());
+        let cle = hwnd.0 as isize;
+        if let Some(&(dc, bmp, w, h)) = tampons.get(&cle) {
+            if w == width && h == height {
+                return (HDC(dc as *mut _), Some(HBITMAP(bmp as *mut _)));
+            }
+            // Taille changée : on jette l'ancien avant d'en refaire un.
+            let _ = DeleteDC(HDC(dc as *mut _));
+            let _ = DeleteObject(HBITMAP(bmp as *mut _));
+            tampons.remove(&cle);
+        }
+        let memoire = CreateCompatibleDC(hdc_ecran);
+        if memoire.is_invalid() {
+            return (hdc_ecran, None);
+        }
+        let bitmap = CreateCompatibleBitmap(hdc_ecran, width, height);
+        if bitmap.is_invalid() {
+            let _ = DeleteDC(memoire);
+            return (hdc_ecran, None);
+        }
+        // Le bitmap reste sélectionné dans le DC pour toute sa vie : c'est ce
+        // qui permet de ne plus rien allouer aux peintures suivantes.
+        SelectObject(memoire, bitmap);
+        tampons.insert(
+            cle,
+            (memoire.0 as isize, bitmap.0 as isize, width, height),
+        );
+        (memoire, Some(bitmap))
+    }
+
+    /// Libère le tampon d'une fenêtre détruite. Sans cela, chaque partage
+    /// affiché puis refermé laisserait derrière lui un DC et un bitmap.
+    unsafe fn liberer_tampon(hwnd: HWND) {
+        use windows::Win32::Graphics::Gdi::{HBITMAP, HDC};
+        if let Some((dc, bmp, _, _)) = tampons()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&(hwnd.0 as isize))
+        {
+            let _ = DeleteDC(HDC(dc as *mut _));
+            let _ = DeleteObject(HBITMAP(bmp as *mut _));
+        }
+        rects_video()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&(hwnd.0 as isize));
+    }
+
+    /// Rectangle vidéo par fenêtre, renseigné à la peinture.
+    fn rects_video() -> &'static Mutex<HashMap<isize, (i32, i32, i32, i32)>> {
+        static RECTS: OnceLock<Mutex<HashMap<isize, (i32, i32, i32, i32)>>> = OnceLock::new();
+        RECTS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Relaie la position du pointeur au front.
+    ///
+    /// La surface native recouvre la WebView2, et c'est le DOM qui capte la
+    /// souris pour diffuser le curseur aux autres participants. Tant que la
+    /// fenêtre interceptait ces messages sans rien en faire, flammemob
+    /// n'émettait plus rien (`curseurs tx 0/s`, 18/09) et sa flèche colorée
+    /// n'apparaissait chez personne. Les tentatives pour rendre la fenêtre
+    /// traversante ont échoué : `HTTRANSPARENT` ne délivrait rien au DOM, et
+    /// `WS_EX_TRANSPARENT` noircissait la surface. On prend donc le chemin
+    /// inverse — la fenêtre reçoit la souris et transmet la position, que le
+    /// front diffuse comme il le faisait depuis le canvas.
+    ///
+    /// Les coordonnées sont normalisées sur l'image, pas sur la fenêtre : les
+    /// bandes noires du letterbox n'en font pas partie.
+    fn demarrer_echantillonnage_pointeur() {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::ScreenToClient;
+        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        static DEMARRE: AtomicBool = AtomicBool::new(false);
+        if DEMARRE.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let _ = std::thread::Builder::new()
+            .name("sion-surface-pointeur".into())
+            .spawn(|| loop {
+                // Au repos — aucun partage affiché — on se contente d'un
+                // réveil paresseux : ce fil ne doit rien coûter hors partage.
+                let fenetres: Vec<(isize, String)> = windows()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .values()
+                    .map(|f| (f.hwnd, f.sender.clone()))
+                    .collect();
+                if fenetres.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    continue;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+
+                let mut point = POINT::default();
+                if unsafe { GetCursorPos(&mut point) }.is_err() {
+                    continue;
+                }
+                for (brut, sender) in fenetres {
+                    let hwnd = HWND(brut as *mut _);
+                    let mut local = point;
+                    if !unsafe { ScreenToClient(hwnd, &mut local) }.as_bool() {
+                        continue;
+                    }
+                    let Some((dx, dy, dw, dh)) = rects_video()
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .get(&brut)
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    if dw <= 0 || dh <= 0 {
+                        continue;
+                    }
+                    let x = (local.x - dx) as f32 / dw as f32;
+                    let y = (local.y - dy) as f32 / dh as f32;
+                    // Hors de l'image : rien à publier. La flèche s'efface
+                    // d'elle-même par expiration chez les autres.
+                    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+                        continue;
+                    }
+                    if let Some(app) = APP.get() {
+                        #[cfg(feature = "native-voice")]
+                        crate::voice_native::publier_curseur_local(app, &sender, x, y);
+                        #[cfg(not(feature = "native-voice"))]
+                        let _ = (app, &sender);
+                    }
+                    break;
+                }
+            });
+    }
+
+    /// Compteur de peintures, pour n'en tracer qu'une sur 120.
+    static PEINTURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     unsafe fn paint(hwnd: HWND) {
         let mut paint = PAINTSTRUCT::default();
-        let hdc = BeginPaint(hwnd, &mut paint);
+        let hdc_ecran = BeginPaint(hwnd, &mut paint);
         let mut client = windows::Win32::Foundation::RECT::default();
         let _ = GetClientRect(hwnd, &mut client);
         let width = (client.right - client.left).max(1);
         let height = (client.bottom - client.top).max(1);
+
+        // Double tampon.
+        //
+        // La peinture se faisait directement sur le DC de l'écran : remplissage
+        // noir de toute la zone, PUIS dessin de l'image par-dessus. Entre les
+        // deux, l'écran affichait du noir — d'où le scintillement constaté dès
+        // que la surface native a enfin été visible (17/09). On compose donc
+        // hors écran et on dépose le résultat en un seul `BitBlt` : l'écran ne
+        // voit jamais l'état intermédiaire.
+        //
+        // Si la création du tampon échoue (ressources GDI épuisées), on peint
+        // directement comme avant : scintillant, mais visible.
+        // Le tampon est CONSERVÉ entre deux peintures, et refait seulement
+        // quand la taille change.
+        //
+        // Il était alloué puis détruit à chaque image : un bitmap de trois
+        // méga-octets, vingt-cinq fois par seconde, sur le fil qui traite
+        // aussi les messages souris. Ce fil n'en délivrait plus que quatre par
+        // seconde et le curseur des viewers traînait très visiblement (18/09).
+        let (memoire, bitmap) = tampon_de(hdc_ecran, hwnd, width, height);
+        let hdc = if bitmap.is_some() { memoire } else { hdc_ecran };
         let _ = PatBlt(hdc, 0, 0, width, height, BLACKNESS);
 
         let context = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowContext;
+        // Compte-rendu de peinture, une fois sur 120 (~5 s à 25 im/s).
+        //
+        // La surface native de Windows reste optionnelle à cause d'un écran
+        // noir jamais expliqué. `paint` noircit puis dessine l'image SI elle
+        // existe : de l'extérieur, « aucune image pour cet expéditeur » et
+        // « image dessinée mais fenêtre invisible » donnent le même écran noir.
+        // Cette trace les sépare — sans elle, on en est réduit aux hypothèses.
+        PEINTURES.fetch_add(1, Ordering::Relaxed);
+        let tracer = PEINTURES.load(Ordering::Relaxed) % 120 == 1;
+        if context.is_null() {
+            if tracer {
+                log::warn!("[Sion][partage-natif] peinture sans contexte (fenêtre orpheline)");
+            }
+        }
         if !context.is_null() {
             let frame = frames()
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
                 .get(&(*context).sender)
                 .cloned();
+            if tracer {
+                match &frame {
+                    Some(f) => log::info!(
+                        "[Sion][partage-natif] peinture {}x{} dans une zone cliente {width}x{height} (expéditeur {})",
+                        f.width,
+                        f.height,
+                        (*context).sender
+                    ),
+                    None => log::warn!(
+                        "[Sion][partage-natif] peinture SANS image pour {} — écran noir",
+                        (*context).sender
+                    ),
+                }
+            }
             if let Some(frame) = frame {
                 let client_width = width;
                 let client_height = height;
@@ -3028,7 +3644,21 @@ mod imp {
                     },
                     ..Default::default()
                 };
-                let _ = SetStretchBltMode(hdc, HALFTONE);
+                // Rectangle réellement occupé par l'image, letterbox comprise.
+                // Le relais de la souris en a besoin pour normaliser la
+                // position : sans lui, le curseur transmis serait décalé de
+                // toute la bande noire.
+                rects_video()
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(hwnd.0 as isize, (dest_x, dest_y, dest_width, dest_height));
+                // `HALFTONE` rééchantillonne en haute qualité sur le
+                // processeur, et c'est le mode le plus lent. Il ne sert à rien
+                // ici : la pompe a déjà mis l'image à la taille visée avec
+                // libyuv, donc `StretchDIBits` ne fait pratiquement plus de
+                // mise à l'échelle. Ce coût était payé vingt-cinq fois par
+                // seconde sur le fil qui délivre aussi la souris.
+                let _ = SetStretchBltMode(hdc, COLORONCOLOR);
                 StretchDIBits(
                     hdc,
                     dest_x,
@@ -3044,7 +3674,14 @@ mod imp {
                     DIB_RGB_COLORS,
                     SRCCOPY,
                 );
+                // Les curseurs se posent SUR l'image, dans le même tampon :
+                // une seule composition, donc aucun scintillement entre la
+                // vidéo et les flèches.
+                peindre_curseurs(hdc, &(*context).sender, dest_x, dest_y, dest_width, dest_height);
             }
+        }
+        if bitmap.is_some() {
+            let _ = BitBlt(hdc_ecran, 0, 0, width, height, hdc, 0, 0, SRCCOPY);
         }
         EndPaint(hwnd, &paint);
     }
@@ -3101,7 +3738,7 @@ mod imp {
             .collect::<Vec<_>>();
         for hwnd in hwnds {
             unsafe {
-                InvalidateRect(HWND(hwnd as _), None, BOOL(0));
+                let _ = InvalidateRect(HWND(hwnd as _), None, BOOL(0));
             }
         }
         recycled
@@ -3127,11 +3764,66 @@ mod imp {
         PARENT.store(parent, Ordering::Release);
         SCALE_BITS.store(scale_factor.max(0.5).to_bits(), Ordering::Release);
         AVAILABLE.store(true, Ordering::Release);
+        clipper_les_soeurs(HWND(parent as _));
+        demarrer_echantillonnage_pointeur();
         log::info!(
             "[Sion][partage-natif/windows] surfaces HWND prêtes (échelle {:.2})",
             scale_factor
         );
         Ok(())
+    }
+
+    /// Fait respecter notre fenêtre par ses sœurs.
+    ///
+    /// La surface vidéo native peignait bien — trace « peinture 1648x464 dans
+    /// une zone cliente 1654x466 » à l'appui — et restait pourtant invisible
+    /// (17/09) : la fenêtre de la WebView2 est une SŒUR de la nôtre, et sans le
+    /// style `WS_CLIPSIBLINGS` elle repeint toute sa surface, la nôtre
+    /// comprise, quel que soit notre rang dans la pile. `HWND_TOP` ne protège
+    /// de rien tant que la sœur ne s'interdit pas d'empiéter.
+    ///
+    /// On ajoute donc le style à chaque enfant du toplevel. Il est sans effet
+    /// pour celles qui ne chevauchent personne, et la classe de la fenêtre est
+    /// journalisée : si la WebView2 n'y figurait pas, l'hypothèse tomberait et
+    /// il faudrait chercher du côté de la composition DirectComposition.
+    fn clipper_les_soeurs(parent: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumChildWindows, GetClassNameW, GetWindowLongPtrW, SetWindowLongPtrW, GWL_STYLE,
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+
+        unsafe extern "system" fn visiter(hwnd: HWND, _param: LPARAM) -> BOOL {
+            let mut classe = [0u16; 128];
+            let n = GetClassNameW(hwnd, &mut classe);
+            let nom = String::from_utf16_lossy(&classe[..n.max(0) as usize]);
+            // Ne pas se clipper soi-même : nos propres surfaces l'ont déjà.
+            if nom == "SION_NATIVE_VIDEO_SURFACE" {
+                return BOOL(1);
+            }
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+            let deja = style & WS_CLIPSIBLINGS.0 as isize != 0;
+            if !deja {
+                SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CLIPSIBLINGS.0 as isize);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND(std::ptr::null_mut()),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+            }
+            log::info!(
+                "[Sion][partage-natif/windows] sœur « {nom} » : WS_CLIPSIBLINGS {}",
+                if deja { "déjà posé" } else { "ajouté" }
+            );
+            BOOL(1)
+        }
+
+        unsafe {
+            let _ = EnumChildWindows(parent, Some(visiter), LPARAM(0));
+        }
     }
 }
 

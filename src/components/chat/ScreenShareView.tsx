@@ -1291,6 +1291,10 @@ export function ScreenShareView() {
     // Fenêtre minimisée / autre bureau virtuel : traité comme quitter l'app.
     const onVisibility = () => { if (document.hidden) onAppAway(); };
 
+    // Le relais depuis la surface native est passé côté Rust : il publiait
+    // par événement Tauri, ce qui coûtait deux allers-retours IPC par position
+    // et plafonnait la cadence à 6 par seconde (18/09). Rust publie désormais
+    // directement, et alimente aussi son propre calque.
     video.addEventListener("mousemove", onMove as EventListener);
     video.addEventListener("pointermove", onMove as EventListener);
     video.addEventListener("mouseleave", onLeave);

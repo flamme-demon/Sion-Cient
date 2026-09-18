@@ -426,6 +426,16 @@ pub fn screenshare_publish_options(
         "vp8" => (VideoCodec::VP8, VideoEncoderBackend::Auto),
         _ => (VideoCodec::VP9, VideoEncoderBackend::Auto),
     };
+    // Trace du couple codec/backend. Valider l'encodage matériel — l'objectif
+    // de la 2.0 — supposait jusqu'ici de croire la demande sur parole : rien
+    // ne disait quels backends la fabrique avait réellement à offrir. On les
+    // nomme, ce qui distingue « NVENC absent du binaire » de « NVENC présent
+    // mais écarté par le pilote ».
+    let backends: Vec<_> = VideoEncoderBackend::list_available().into_iter().collect();
+    log::info!(
+        "[Sion][partage] codec={codec} backend demandé={video_encoder:?} disponibles={backends:?}"
+    );
+
     TrackPublishOptions {
         source: TrackSource::Screenshare,
         video_encoding: Some(VideoEncoding {
@@ -1712,8 +1722,33 @@ impl LiveKitEngine {
                         {
                             std::thread::sleep(std::time::Duration::from_millis(200));
                         }
-                        (Err(e), _) => return Err(format!("sélection micro: {e}")),
-                        (_, Err(e)) => return Err(format!("sélection sortie: {e}")),
+                        // Périphérique introuvable APRÈS le délai de grâce :
+                        // on continue avec celui que l'ADM utilise par défaut.
+                        //
+                        // Débrancher puis rebrancher un casque lui fait changer
+                        // d'identifiant ; l'ancien, mémorisé, ne résout plus et
+                        // la connexion au salon échouait purement et simplement
+                        // (18/09, « echec connect: sélection micro: Device not
+                        // found »). Perdre son micro préféré est sans commune
+                        // mesure avec ne pas pouvoir rejoindre.
+                        (Err(e), _) => {
+                            log::warn!(
+                                "[Sion][voix-native] micro « {} » introuvable ({e}) — \
+                                 poursuite avec le périphérique par défaut",
+                                input.name
+                            );
+                            selected.0.clear();
+                            break;
+                        }
+                        (_, Err(e)) => {
+                            log::warn!(
+                                "[Sion][voix-native] sortie « {} » introuvable ({e}) — \
+                                 poursuite avec le périphérique par défaut",
+                                output.name
+                            );
+                            selected.1.clear();
+                            break;
+                        }
                     }
                 } else if std::time::Instant::now() >= deadline {
                     return Err(

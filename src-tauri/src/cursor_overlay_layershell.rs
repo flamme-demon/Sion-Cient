@@ -125,8 +125,16 @@ struct Host {
     pool: Option<(WlShmPool, std::fs::File, usize)>,
     buffer: Option<WlBuffer>,
     pixmap: Option<Pixmap>,
+    /// Tampon de conversion RGBA→BGRA, conservé entre les images. Il était
+    /// alloué à chaque redessin : quinze méga-octets par image pour une
+    /// surface plein écran.
+    octets: Vec<u8>,
     need_redraw: bool,
     redraw_at: Option<Instant>,
+    /// Instant du dernier redessin, pour en limiter la cadence.
+    dernier_rendu: Option<Instant>,
+    /// Bande de lignes peinte au tour précédent, à effacer au suivant.
+    bande_precedente: Option<(u32, u32)>,
 }
 
 impl Host {
@@ -155,8 +163,11 @@ impl Host {
             pool: None,
             buffer: None,
             pixmap: None,
+            octets: Vec::new(),
             need_redraw: false,
             redraw_at: None,
+            dernier_rendu: None,
+            bande_precedente: None,
         })
     }
 
@@ -255,17 +266,60 @@ impl Host {
         let Some(pixmap) = self.pixmap.as_mut() else {
             return;
         };
-        pixmap.fill(tiny_skia::Color::TRANSPARENT);
-
         let now = Instant::now();
-        let (anime, prochain) = {
+        let (anime, prochain, zone) = {
             let mut s = match state.lock() {
                 Ok(s) => s,
                 Err(poisoned) => poisoned.into_inner(),
             };
             s.cursors.retain(|_, c| c.expires_at > now);
             s.clicks.retain(|c| c.expires_at > now);
+            // Bande utile : les lignes où se trouve réellement quelque chose.
+            //
+            // Tout l'écran était effacé, converti puis réécrit à chaque image —
+            // quinze méga-octets pour une flèche de vingt pixels. On ne touche
+            // plus qu'aux lignes concernées, réunies avec celles du tour
+            // précédent pour effacer la trace laissée par un curseur qui a
+            // bougé. La marge couvre le pseudo et l'onde de clic.
+            const MARGE: f32 = 180.0;
+            let mut haut = f32::INFINITY;
+            let mut bas = f32::NEG_INFINITY;
+            for c in s.cursors.values() {
+                let cy = c.y.clamp(0.0, 1.0) * h as f32;
+                haut = haut.min(cy - MARGE);
+                bas = bas.max(cy + MARGE);
+            }
+            for c in &s.clicks {
+                let cy = c.y.clamp(0.0, 1.0) * h as f32;
+                haut = haut.min(cy - MARGE);
+                bas = bas.max(cy + MARGE);
+            }
+            let bande = if haut.is_finite() {
+                Some((
+                    haut.max(0.0) as u32,
+                    (bas.max(0.0) as u32 + 1).min(h),
+                ))
+            } else {
+                None
+            };
+            // Réunion avec la bande précédente : sans elle, la flèche resterait
+            // peinte à son ancienne place.
+            let a_nettoyer = match (bande, self.bande_precedente) {
+                (Some((a, b)), Some((c, d))) => Some((a.min(c), b.max(d))),
+                (Some(v), None) | (None, Some(v)) => Some(v),
+                (None, None) => None,
+            };
+            if let Some((y0, y1)) = a_nettoyer {
+                let ligne = w as usize * 4;
+                let debut = y0 as usize * ligne;
+                let fin = (y1 as usize * ligne).min(pixmap.data().len());
+                if debut < fin {
+                    pixmap.data_mut()[debut..fin].fill(0);
+                }
+            }
+            self.bande_precedente = bande;
             super::draw::draw(pixmap, w as f32, h as f32, &s, now);
+            let zone = a_nettoyer;
             let mut prochain: Option<Instant> = None;
             for c in s.cursors.values() {
                 prochain = Some(prochain.map_or(c.expires_at, |t: Instant| t.min(c.expires_at)));
@@ -273,7 +327,7 @@ impl Host {
             for c in &s.clicks {
                 prochain = Some(prochain.map_or(c.expires_at, |t: Instant| t.min(c.expires_at)));
             }
-            (!s.clicks.is_empty(), prochain)
+            (!s.clicks.is_empty(), prochain, zone)
         };
 
         if let Err(err) = self.pool_pour(taille) {
@@ -286,11 +340,49 @@ impl Host {
         let Some((pool, fichier, _)) = self.pool.as_mut() else {
             return;
         };
-        let mut octets = Vec::with_capacity(taille);
-        for px in self.pixmap.as_ref().unwrap().data().chunks_exact(4) {
-            octets.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+        // Conversion RGBA→BGRA dans un tampon RÉUTILISÉ.
+        //
+        // Il était alloué à chaque image — quinze méga-octets pour un écran
+        // 2560x1440 — et rempli par un `extend_from_slice` de quatre octets par
+        // pixel, soit 3,7 millions d'appels. Tant que les curseurs distants
+        // n'arrivaient qu'à 4 par seconde, ce coût passait inaperçu ; à 41 par
+        // seconde il écroulait l'overlay et le curseur traînait visiblement
+        // (18/09). On écrit désormais en place, dans un tampon gardé d'une
+        // image à l'autre.
+        if self.octets.len() != taille {
+            self.octets.resize(taille, 0);
         }
-        if fichier.seek(SeekFrom::Start(0)).is_err() || fichier.write_all(&octets).is_err() {
+        // Conversion et écriture limitées à la bande utile. Rien à peindre =
+        // rien à écrire : l'écran reste tel quel.
+        let ligne = w as usize * 4;
+        let (y0, y1) = match zone {
+            Some(v) => v,
+            None => {
+                self.need_redraw = false;
+                self.redraw_at = prochain;
+                return;
+            }
+        };
+        let debut = y0 as usize * ligne;
+        let fin = (y1 as usize * ligne).min(taille);
+        if debut >= fin {
+            self.need_redraw = false;
+            self.redraw_at = prochain;
+            return;
+        }
+        let source = self.pixmap.as_ref().unwrap().data();
+        for (dst, px) in self.octets[debut..fin]
+            .chunks_exact_mut(4)
+            .zip(source[debut..fin].chunks_exact(4))
+        {
+            dst[0] = px[2];
+            dst[1] = px[1];
+            dst[2] = px[0];
+            dst[3] = px[3];
+        }
+        if fichier.seek(SeekFrom::Start(debut as u64)).is_err()
+            || fichier.write_all(&self.octets[debut..fin]).is_err()
+        {
             log::warn!("[Sion][CursorOverlay] écriture du tampon partagé impossible");
             return;
         }
@@ -310,7 +402,7 @@ impl Host {
         };
         if let Some(buffer) = self.buffer.as_ref() {
             surface.attach(Some(buffer), 0, 0);
-            surface.damage_buffer(0, 0, w as i32, h as i32);
+            surface.damage_buffer(0, y0 as i32, w as i32, (y1 - y0) as i32);
             surface.commit();
             self.etat.occupe = true;
         }
@@ -339,9 +431,30 @@ impl Host {
             }
 
             // 2) Peindre si nécessaire.
-            let du = self.need_redraw || self.redraw_at.is_some_and(|t| Instant::now() >= t);
+            // Un redessin au plus toutes les 33 ms.
+            //
+            // Chaque position reçue en demandait un, et une surface plein écran
+            // coûte plusieurs méga-octets à rastériser puis à recopier. À 41
+            // positions par seconde, l'overlay n'arrivait plus à suivre et le
+            // curseur traînait (18/09). Trente images par seconde suffisent
+            // amplement à un pointeur, et les positions intermédiaires ne sont
+            // pas perdues : elles sont déjà dans l'état partagé, le prochain
+            // redessin les peindra.
+            const PERIODE_MIN: Duration = Duration::from_millis(33);
+            let maintenant = Instant::now();
+            let du = self.need_redraw || self.redraw_at.is_some_and(|t| maintenant >= t);
             if du && self.surfaces.is_some() {
-                self.redraw(state);
+                let assez_tot = self
+                    .dernier_rendu
+                    .is_none_or(|t| maintenant.duration_since(t) >= PERIODE_MIN);
+                if assez_tot {
+                    self.dernier_rendu = Some(maintenant);
+                    self.redraw(state);
+                } else if self.redraw_at.is_none() {
+                    // Trop tôt : on se recale sur la prochaine échéance plutôt
+                    // que de perdre la demande.
+                    self.redraw_at = self.dernier_rendu.map(|t| t + PERIODE_MIN);
+                }
             }
 
             // 3) Attendre une commande, ou l'échéance du prochain rendu.

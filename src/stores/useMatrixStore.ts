@@ -1429,14 +1429,28 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
       // Skip all notifications for the admin room — actions from other admins
       // (open admin menu, run commands) generate messages we don't want to ping on.
       // The message is still added to the store below, just no notification.
-      const isAdminRoomNotif = room.roomId === findAdminRoom();
+      // Salle d'administration : reconnue par la PRÉSENCE DU BOT, pas par
+      // `findAdminRoom()` seul.
+      //
+      // `findAdminRoom()` élit une salle unique par score. Il peut rendre
+      // `null` — au démarrage, avant que la liste des salons ne soit peuplée —
+      // ou désigner le DM avec le bot plutôt que la salle elle-même. Dans les
+      // deux cas l'exclusion tombait et les actions des autres administrateurs
+      // déclenchaient des notifications système (18/09). La présence du bot,
+      // elle, se lit directement sur la salle du message et ne dépend d'aucun
+      // classement.
+      const botAdminId = `@conduit:${client.getDomain()}`;
+      const botDansLaSalle = room
+        .getJoinedMembers()
+        .some((m) => m.userId === botAdminId);
+      const isAdminRoomNotif = botDansLaSalle || room.roomId === findAdminRoom();
       // Le bot d'administration est une MACHINE : ses messages sont des
       // réponses de commande (`!admin users list-users`…), jamais des messages
       // à notifier. On filtre aussi sur l'expéditeur, pas seulement sur la
       // salle — deux salles peuvent contenir le bot (la salle admin ET un DM
       // avec lui), et la détection de salle ne désigne qu'une des deux, d'où
       // la notification « Found 10 local user account(s) » au démarrage.
-      const isAdminBot = senderId === `@conduit:${client.getDomain()}`;
+      const isAdminBot = senderId === botAdminId;
       if (senderId !== currentUserId && !isAdminRoomNotif && !isAdminBot) {
         const isPoke = msgtype === "m.poke";
         const isDM = !!room.getDMInviter?.() || (() => {

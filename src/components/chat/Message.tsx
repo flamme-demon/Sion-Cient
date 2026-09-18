@@ -210,24 +210,21 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // lit nativement depuis que le cache de ressources de WebKit est rétabli
   // (voir `lib.rs`), et le chien de garde ci-dessous rattrape les blocages
   // silencieux.
-  // L'AV1 n'est converti que si le moteur ne sait pas le lire, c'est-à-dire si
-  // `gst-plugin-dav1d` manque. Le résultat est demandé une fois à Rust, qui
-  // cherche le greffon au lieu d'interroger `canPlayType()` — celui-ci a
-  // répondu faux dans les deux sens au cours des essais.
-  const [av1Native, setAv1Native] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!isLinuxDesktop || webmCodec !== "av1") return;
-    let annule = false;
-    void import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke<boolean>("av1_playable_natively"))
-      .then((ok) => { if (!annule) setAv1Native(ok); })
-      .catch(() => { if (!annule) setAv1Native(false); });
-    return () => { annule = true; };
-  }, [isLinuxDesktop, webmCodec]);
-  const mustTranscodeBeforePlayback = isLinuxDesktop && (
-    webmCodec === "unknown"
-    || (webmCodec === "av1" && av1Native === false)
-  );
+  // La présence de dav1d était interrogée ici pour décider de lire l'AV1
+  // directement. La question n'a plus d'objet : le risque ne venait pas du
+  // décodeur mais du conteneur, et il se pose pour tout WebM. dav1d reste
+  // embarqué et utile — c'est lui qui décode l'AV1 une fois le fichier remuxé
+  // en MP4, et nos propres envois sont déjà dans ce conteneur.
+  // Tout WebM est normalisé avant lecture sous Linux — mais par un simple
+  // changement de conteneur, pas par un réencodage (voir `remux_video_mp4`).
+  //
+  // La lecture directe d'un WebM passe par `matroskademux`, dont une assertion
+  // a emporté le processus web de WebKit et figé toute l'interface (17/09).
+  // Rien, avant d'ouvrir un fichier, ne distingue celui qui se lira de celui
+  // qui abattra l'application ; et comme le remux ne coûte ni qualité ni temps
+  // notable, il n'y a pas de raison de prendre le risque au cas par cas.
+  // L'AV1 reste de l'AV1, ce qui était la demande.
+  const mustTranscodeBeforePlayback = isLinuxDesktop && webmCodec !== "pending";
   // Rien n'est converti tant que personne n'a demandé à lire. Une conversion
   // `libvpx-vp9` coûte plusieurs minutes de CPU : la lancer au défilement, pour
   // une vidéo que l'utilisateur ne regardera peut-être jamais, était du travail
@@ -312,12 +309,30 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
       } catch (e) {
         console.warn("[Sion] Mise en tampon pour transcodage échouée, fallback download:", e);
       }
-      const outPath: string = await invoke("transcode_video", {
-        url: attachment.url,
-        ffmpegPath,
-        inputPath: stagedPath,
-        codec: target,
-      });
+      // Remux d'abord : le conteneur change, les flux vidéo sont copiés bit
+      // pour bit. C'est ce qui écarte `matroskademux` — dont une assertion a
+      // abattu le processus web et gelé toute l'interface (17/09) — pour une
+      // seconde de travail au lieu des minutes d'un réencodage, et sans
+      // toucher à la qualité. Le transcodage complet reste le filet : le MP4
+      // n'accepte pas tous les flux, VP8 notamment.
+      let outPath: string;
+      try {
+        outPath = await invoke<string>("remux_video_mp4", {
+          url: attachment.url,
+          ffmpegPath,
+          inputPath: stagedPath,
+        });
+      } catch (e) {
+        void import("@tauri-apps/plugin-log")
+          .then(({ info }) => info(`[Sion][vidéo] remux refusé (${String(e)}) — réencodage`))
+          .catch(() => { /* hors Tauri */ });
+        outPath = await invoke<string>("transcode_video", {
+          url: attachment.url,
+          ffmpegPath,
+          inputPath: stagedPath,
+          codec: target,
+        });
+      }
       // Le fichier converti est servi en HTTP local, avec requêtes par plage :
       // c'est ce qu'un élément média sait consommer. Un `blob:` l'obligeait à
       // tenir tout le média en mémoire, et au-delà de quelques mégaoctets la

@@ -168,9 +168,21 @@ Write-Host ""
 # CI en definit une depuis CUDA_PATH ; un build local Windows, lui, heritait du
 # chemin Linux et webrtc-sys compilait sans NVENC en affichant un message
 # trompeur : "cuda.h not found under /opt/cuda". Constate le 17/09.
-if ($env:CUDA_PATH -and (Test-Path "$env:CUDA_PATH\include\cuda.h")) {
-    $env:CUDA_HOME = $env:CUDA_PATH
-    Write-Host "  CUDA detecte ($env:CUDA_PATH) - NVENC compile" -ForegroundColor Green
+# CUDA_PATH peut etre absent de l'environnement courant alors que le Toolkit est
+# bien installe : une variable posee par un installeur n'atteint pas les shells
+# deja ouverts, ni les services demarres avant elle. On consulte donc le
+# registre en secours, la ou l'installeur l'a reellement ecrite.
+$cudaPath = $env:CUDA_PATH
+if (-not $cudaPath) {
+    $cudaPath = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" -ErrorAction SilentlyContinue).CUDA_PATH
+}
+if (-not $cudaPath) {
+    $cudaPath = (Get-ItemProperty "HKCU:\Environment" -ErrorAction SilentlyContinue).CUDA_PATH
+}
+if ($cudaPath -and (Test-Path "$cudaPath\include\cuda.h")) {
+    $env:CUDA_PATH = $cudaPath
+    $env:CUDA_HOME = $cudaPath
+    Write-Host "  CUDA detecte ($cudaPath) - NVENC compile" -ForegroundColor Green
 } else {
     # Chemin Windows inexistant mais explicite : webrtc-sys compile sans NVENC,
     # et le message nomme la vraie raison au lieu d'un chemin Unix.

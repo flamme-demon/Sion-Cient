@@ -907,6 +907,64 @@ struct NativeCursorPayload {
     n: Option<String>,
 }
 
+/// Publie NOTRE position de curseur, depuis le Rust, sans passer par le front.
+///
+/// La surface vidéo native recouvre la WebView2 : c'est elle qui reçoit la
+/// souris, et elle relayait la position au front pour que celui-ci la diffuse
+/// comme il le faisait depuis le canvas. Ce détour coûte deux allers-retours
+/// IPC par position — Rust vers événement, puis `invoke` vers Rust — et la
+/// cadence plafonnait à 6 positions par seconde, avec un curseur nettement
+/// mou (18/09). Le chemin direct n'en coûte aucun.
+///
+/// Alimente aussi le calque local : le data-channel ne renvoie pas nos propres
+/// paquets, donc sans cela on voit le curseur de tous les autres sauf le sien.
+#[cfg(all(feature = "native-voice", not(target_os = "android")))]
+pub fn publier_curseur_local(
+    app: &tauri::AppHandle<TauriRuntime>,
+    cible: &str,
+    x: f32,
+    y: f32,
+) {
+    let identity = manager()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .identity
+        .clone();
+    let Some(identity) = identity else { return };
+    let nom = participants_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&identity)
+        .map(|p| p.name.clone());
+    let charge = serde_json::json!({
+        "x": x,
+        "y": y,
+        "t": cible,
+        "n": nom,
+        "ts": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+    });
+    let Ok(octets) = serde_json::to_vec(&charge) else {
+        return;
+    };
+    let _ = with_engine_shared(app, "curseur natif", |e| {
+        e.publish_data(TOPIC_CURSOR, octets.clone(), false)
+    });
+    // Notre propre flèche, que personne ne nous renverra.
+    let nom_affiche = cursor_display_name(charge["n"].as_str(), None, &identity);
+    crate::native_video_surface::on_viewer_cursor_packet(
+        cible,
+        &identity,
+        &nom_affiche,
+        false,
+        x,
+        y,
+        false,
+    );
+}
+
 #[cfg(all(feature = "native-voice", not(target_os = "android")))]
 fn cursor_display_name(
     payload_name: Option<&str>,
@@ -948,11 +1006,12 @@ fn forward_cursor_to_viewer_surface(topic: Option<&str>, payload_b64: &str, send
         .unwrap_or_else(|e| e.into_inner())
         .identity
         .clone();
-    if sender == self_identity.as_deref().unwrap_or("") {
-        // Notre propre curseur : déjà géré côté DOM (capture et broadcast) ;
-        // le peindre ici ferait un doublon à l'écran.
-        return;
-    }
+    // Notre propre curseur n'est plus écarté ici. Il l'était parce que le
+    // calque DOM le dessinait ; ce calque est masqué par la surface native, et
+    // l'écarter revenait à ne jamais le montrer. Il n'arrive de toute façon
+    // pas par le data-channel — LiveKit ne renvoie pas ses propres paquets —
+    // mais par l'écho local posé dans `voice_native_publish_data`.
+    let _ = &self_identity;
     let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(payload_b64) else {
         return;
     };
@@ -2510,6 +2569,27 @@ pub fn voice_native_publish_data(
         // Badge local (miroir du `setPlayingSound` sur soi-même côté JS) :
         // le data-channel ne revient pas vers l'expéditeur, sans ça on ne
         // voit jamais son propre badge quand on déclenche un son.
+        // Écho local du curseur, même raison que le badge soundboard : le
+        // data-channel ne revient pas vers l'expéditeur.
+        //
+        // Tant que le calque DOM peignait par-dessus la vidéo, notre propre
+        // flèche colorée était dessinée côté JS et cet écho aurait fait un
+        // doublon. La surface native recouvre désormais ce calque : sans écho,
+        // on voit le curseur de tous les autres viewers mais jamais le sien
+        // (18/09). `forward_cursor_to_viewer_surface` s'arrête d'elle-même si
+        // aucune surface native n'est affichée, donc le repli JPEG reste servi
+        // par le DOM comme avant.
+        #[cfg(not(target_os = "android"))]
+        if res.is_ok() && (topic == TOPIC_CURSOR || topic == TOPIC_CURSOR_CLICK) {
+            let identity = manager()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .identity
+                .clone();
+            if let Some(identity) = identity {
+                forward_cursor_to_viewer_surface(Some(&topic), &payload_b64, Some(&identity));
+            }
+        }
         if res.is_ok() && topic == TOPIC_SOUNDBOARD {
             let identity = manager()
                 .lock()

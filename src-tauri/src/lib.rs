@@ -1943,6 +1943,93 @@ async fn transcode_video(
     Ok(output_path.to_string_lossy().into_owned())
 }
 
+/// Réécrit une vidéo dans un conteneur MP4 **sans retoucher les flux vidéo**.
+///
+/// Pourquoi : la lecture d'un WebM passe par `matroskademux`, dont une
+/// assertion a abattu le processus web de WebKit — et avec lui toute
+/// l'interface (17/09). Le décodeur n'était pas en cause, le conteneur si.
+/// Un MP4 est ouvert par `qtdemux`, qui n'a pas ce défaut.
+///
+/// Le flux vidéo est copié bit pour bit : l'AV1 reste de l'AV1, sans perte ni
+/// réencodage, en une seconde au lieu des minutes d'un transcodage complet.
+/// Seul l'audio est réencodé en AAC : l'Opus dans un MP4 est légal mais
+/// inégalement supporté selon les piles GStreamer, et ce réencodage-là ne
+/// coûte presque rien.
+///
+/// Échoue sur les flux que le MP4 n'accepte pas (VP8 notamment) : l'appelant
+/// retombe alors sur `transcode_video`.
+#[tauri::command]
+async fn remux_video_mp4(
+    app: tauri::AppHandle<TauriRuntime>,
+    url: String,
+    ffmpeg_path: Option<String>,
+    input_path: Option<String>,
+) -> Result<String, String> {
+    #[cfg(not(target_os = "android"))]
+    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    #[cfg(target_os = "android")]
+    let managed: Option<String> = None;
+    let _ = &app;
+    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed.as_deref());
+
+    cleanup_old_transcodes();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut hasher);
+    let hash = hasher.finish();
+    let tmp_dir = sion_media_dir();
+    let output_path = tmp_dir.join(format!("sion_mux_{hash:x}.mp4"));
+    if output_path.exists() {
+        return Ok(output_path.to_string_lossy().into_owned());
+    }
+
+    let input_path = match input_path.filter(|s| !s.is_empty()) {
+        Some(staged) => std::path::PathBuf::from(staged),
+        None => {
+            let downloaded = tmp_dir.join(format!("sion_in_{hash:x}.bin"));
+            let client = build_client().map_err(|e| e.to_string())?;
+            let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+            std::fs::write(&downloaded, &bytes).map_err(|e| e.to_string())?;
+            downloaded
+        }
+    };
+
+    let output = hidden_command(&ffmpeg_bin)
+        .args(["-y", "-i"])
+        .arg(&input_path)
+        .args([
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            // L'index en tête : le lecteur peut commencer sans lire tout le
+            // fichier, et le serveur média répond aux requêtes `Range`.
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
+        ])
+        .arg(&output_path)
+        .output()
+        .map_err(|e| format!("ffmpeg introuvable: {e}"))?;
+
+    let _ = std::fs::remove_file(&input_path);
+
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&output_path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("remux impossible: {stderr}"));
+    }
+    log::info!("[Sion][vidéo] remux MP4 (flux vidéo copié) → {output_path:?}");
+    Ok(output_path.to_string_lossy().into_owned())
+}
+
 /// Path where the in-app "Installer ffmpeg" button stores the downloaded
 /// binary: `<app-data>/bin/ffmpeg[.exe]`. Survit aux mises à jour de
 /// l'application (app-data est hors du profil webview). None if the app-data
@@ -3481,6 +3568,7 @@ pub fn run() {
         show_in_folder,
         fetch_link_preview,
         transcode_video,
+        remux_video_mp4,
         stage_media,
         read_media,
         media_server_port,
@@ -3569,6 +3657,7 @@ pub fn run() {
         show_in_folder,
         fetch_link_preview,
         transcode_video,
+        remux_video_mp4,
         stage_media,
         read_media,
         media_server_port,
@@ -3632,6 +3721,16 @@ pub fn run() {
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Info)
+                    // Taille du fichier : 40 Ko par défaut, puis l'ancien est
+                    // SUPPRIMÉ. libwebrtc à lui seul écrit plusieurs dizaines
+                    // de lignes par seconde pendant un partage : le journal se
+                    // vidait toutes les vingt secondes. Le 17/09, plusieurs
+                    // diagnostics ont été conduits à l'aveugle — « aucune trace
+                    // de X, donc X n'a pas eu lieu » alors que la trace avait
+                    // simplement été effacée entre deux lectures. Un journal
+                    // qu'on ne peut pas relire ne sert à rien.
+                    .max_file_size(20 * 1024 * 1024)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
                     .target(tauri_plugin_log::Target::new(
                         tauri_plugin_log::TargetKind::Webview,
                     ))
@@ -3718,21 +3817,26 @@ pub fn run() {
             // sont des enfants frères, placés exactement sur les canvas DOM :
             // les frames BGRA restent hors de JavaScript et les hit-tests
             // traversent vers la WebView.
-            // Sous Windows la surface native est OPT-IN, contrairement à Linux.
+            // Surface native ACTIVE par défaut sous Windows, comme sous Linux.
             //
-            // Elle se déclare disponible et le moteur lui envoie les frames —
-            // « frames vidéo … en surface native (sans JPEG ni ticker) » — mais
-            // l'image reste noire chez le viewer (alpha 5, 17/09, partage VP8
-            // 1920x1080 reçu). Elle n'a jamais été validée en session réelle ;
-            // la feuille de route le note comme critère de sortie non atteint.
+            // Elle est restée optionnelle le temps d'un écran noir inexpliqué
+            // (alpha 5) : elle recevait bien les frames et les peignait — trace
+            // « peinture 1648x464 dans une zone cliente 1654x466 » — mais la
+            // fenêtre de la WebView2, sœur de la nôtre et dépourvue de
+            // `WS_CLIPSIBLINGS`, repeignait par-dessus. Ce style posé, l'image
+            // est apparue, et la session du 18/09 a validé le reste : plus de
+            // scintillement (double tampon), plus d'oscillation de géométrie,
+            // curseurs des viewers peints en GDI, souris relayée au partageur.
             //
-            // Tant que ce n'est pas diagnostiqué sur une vraie machine, le
-            // chemin JPEG — celui d'alpha 4, fonctionnel — reprend la main.
-            // `SION_NATIVE_VIDEO_SURFACE=1` la réactive pour le diagnostic.
+            // Ce qu'on y gagne est l'objet même de la 2.0 : le chemin JPEG
+            // réencodait chaque image décodée par NVDEC pour la faire redécoder
+            // par la webview, soit 7,2 Mo/s d'IPC et un fil principal saturé —
+            // il ne délivrait plus que 4 positions de souris par seconde.
+            //
+            // `SION_DISABLE_NATIVE_VIDEO_SURFACE=1` rend la main au chemin JPEG
+            // si une machine se comporte autrement.
             #[cfg(target_os = "windows")]
-            if std::env::var_os("SION_NATIVE_VIDEO_SURFACE").is_some()
-                && std::env::var_os("SION_DISABLE_NATIVE_VIDEO_SURFACE").is_none()
-            {
+            if std::env::var_os("SION_DISABLE_NATIVE_VIDEO_SURFACE").is_none() {
                 if let Some(window) = app.get_webview_window("main") {
                     match (window.hwnd(), window.scale_factor()) {
                         (Ok(hwnd), Ok(scale_factor)) => {
