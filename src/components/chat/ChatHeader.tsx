@@ -118,6 +118,20 @@ export function ChatHeader() {
   const [editTopic, setEditTopic] = useState("");
   const [saving, setSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  // URL d'objet de l'aperçu, hors de l'état React : la révocation est un effet
+  // de bord, et une fonction de mise à jour est invoquée deux fois en mode
+  // strict — elle y créerait une URL de trop à chaque choix de fichier.
+  const avatarPreviewUrl = useRef<string | null>(null);
+  const remplacerApercuAvatar = (fichier: File | null) => {
+    if (avatarPreviewUrl.current) URL.revokeObjectURL(avatarPreviewUrl.current);
+    avatarPreviewUrl.current = fichier ? URL.createObjectURL(fichier) : null;
+    setAvatarPreview(avatarPreviewUrl.current);
+  };
+  // Le dernier aperçu vit jusqu'au démontage : sans cela il retenait le
+  // fichier entier pour le reste de la session.
+  useEffect(() => () => {
+    if (avatarPreviewUrl.current) URL.revokeObjectURL(avatarPreviewUrl.current);
+  }, []);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [editJoinRule, setEditJoinRule] = useState<"public" | "invite">("public");
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -145,7 +159,7 @@ export function ChatHeader() {
   const openEditModal = () => {
     setEditName(channel?.name || "");
     setEditTopic(channel?.topic || "");
-    setAvatarPreview(null);
+    remplacerApercuAvatar(null);
     // Lire le join_rule actuel
     if (activeChannel) {
       const client = getMatrixClient();
@@ -159,12 +173,12 @@ export function ChatHeader() {
 
   const handleAvatarPick = async (file: File) => {
     if (!activeChannel) return;
-    setAvatarPreview(URL.createObjectURL(file));
+    remplacerApercuAvatar(file);
     try {
       await matrixService.setRoomAvatar(activeChannel, file);
     } catch (err) {
       console.error("[Sion] Failed to set avatar:", err);
-      setAvatarPreview(null);
+      remplacerApercuAvatar(null);
     }
   };
 

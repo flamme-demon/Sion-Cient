@@ -3500,6 +3500,14 @@ mod imp {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .remove(&(hwnd.0 as isize));
+        // L'amortisseur de rectangle d'affichage est lui aussi indexé par
+        // fenêtre. Sans cette purge, il gardait une entrée par partage fermé —
+        // et surtout, Windows recyclant les poignées, une fenêtre neuve
+        // pouvait hériter du rectangle d'une défunte.
+        derniers_dest()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&(hwnd.0 as isize));
     }
 
     /// Dernier rectangle d'affichage et zone cliente associée, par fenêtre.

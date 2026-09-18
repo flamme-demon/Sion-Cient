@@ -58,19 +58,3 @@ export function playMessageReceived() {
   playTone(800, 0.08, 0.08, "sine");
   setTimeout(() => playTone(1000, 0.06, 0.06, "sine"), 50);
 }
-
-/** Son de connexion vocale — accord montant */
-export function playVoiceJoin() {
-  if (isDeafened()) return;
-  playTone(440, 0.12, 0.1);
-  setTimeout(() => playTone(554, 0.12, 0.1), 80);
-  setTimeout(() => playTone(659, 0.15, 0.1), 160);
-}
-
-/** Son de déconnexion vocale — accord descendant */
-export function playVoiceLeave() {
-  if (isDeafened()) return;
-  playTone(659, 0.12, 0.1);
-  setTimeout(() => playTone(554, 0.12, 0.1), 80);
-  setTimeout(() => playTone(440, 0.15, 0.1), 160);
-}

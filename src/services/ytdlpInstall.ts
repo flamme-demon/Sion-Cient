@@ -20,9 +20,3 @@ export async function detectYtdlp(): Promise<string | null> {
   const { invoke } = await import("@tauri-apps/api/core");
   return (await invoke<string | null>("detect_ytdlp")) ?? null;
 }
-
-/** Native picker for a custom yt-dlp binary; null if cancelled. */
-export async function pickYtdlpPath(): Promise<string | null> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return (await invoke<string | null>("pick_ytdlp_path")) ?? null;
-}

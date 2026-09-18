@@ -1,11 +1,13 @@
 /**
  * Push notification service using ntfy + Matrix pushers.
  *
- * Flow:
- * 1. Generate a unique topic for this device
- * 2. Register a Matrix HTTP pusher pointing to ntfy topic URL
- * 3. Subscribe to ntfy topic via EventSource (SSE)
- * 4. Parse incoming Matrix push notifications and display them
+ * Marche à suivre :
+ * 1. fabriquer un sujet unique pour cet appareil ;
+ * 2. déclarer auprès de Matrix un pusher HTTP pointant vers l'URL de ce sujet.
+ *
+ * L'application ne reçoit pas les notifications elle-même : c'est ntfy qui les
+ * livre au système. L'abonnement SSE qui vivait ici était mort — plus personne
+ * ne l'appelait depuis le passage au pusher serveur.
  */
 
 import { getMatrixClient } from "./matrixService";
@@ -129,103 +131,4 @@ export async function unregisterPusher(): Promise<void> {
       pushkey: topicUrl,
     });
   } catch { /* ignore */ }
-}
-
-/** Subscribe to ntfy topic and handle incoming notifications */
-let eventSource: EventSource | null = null;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let reconnectAttempt = 0;
-let cancelled = false;
-
-export function subscribeToPush(
-  onNotification: (data: { roomId?: string; eventId?: string; sender?: string; body?: string }) => void,
-): () => void {
-  cancelled = false;
-  reconnectAttempt = 0;
-  open(onNotification);
-  return () => {
-    cancelled = true;
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-  };
-}
-
-function open(
-  onNotification: (data: { roomId?: string; eventId?: string; sender?: string; body?: string }) => void,
-): void {
-  if (cancelled) return;
-  const topicId = getTopicId();
-  if (!topicId) return;
-
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
-  }
-
-  const url = `${NTFY_BASE_URL}/${topicId}/sse`;
-  eventSource = new EventSource(url);
-
-  eventSource.addEventListener("open", () => {
-    // Reset backoff once we've successfully reconnected.
-    reconnectAttempt = 0;
-  });
-
-  eventSource.addEventListener("message", (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      // ntfy wraps the message in its own format
-      const message = data.message || "";
-
-      // Try to parse the Matrix push notification payload
-      let pushData: Record<string, unknown> = {};
-      try {
-        pushData = JSON.parse(message);
-      } catch {
-        // Not JSON — might be a plain text notification from ntfy
-        if (message) {
-          onNotification({ body: message });
-        }
-        return;
-      }
-
-      // Extract Matrix notification fields
-      const notification = (pushData as { notification?: Record<string, unknown> }).notification;
-      if (notification) {
-        onNotification({
-          roomId: notification.room_id as string,
-          eventId: notification.event_id as string,
-          sender: notification.sender as string,
-          body: (notification.content as Record<string, string>)?.body,
-        });
-      }
-    } catch (err) {
-      console.warn("[Sion] Push parse error:", err);
-    }
-  });
-
-  eventSource.onerror = () => {
-    if (cancelled) return;
-    // The browser keeps EventSource alive in the background and retries on
-    // its own, but it doesn't back off — under repeated server failure
-    // it'll hammer at 1 Hz. Force-close it and use our own backoff so we
-    // don't burn the server (and our laptop battery) on a sustained outage.
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-    reconnectAttempt += 1;
-    const delay = Math.min(60_000, 1000 * 2 ** Math.min(reconnectAttempt - 1, 6));
-    console.warn(`[Sion] Push SSE error — reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      open(onNotification);
-    }, delay);
-  };
 }

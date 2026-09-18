@@ -630,6 +630,7 @@ const TRACKED_CLIENT_EVENTS: ReadonlyArray<string> = [
   ClientEvent.Sync,
   ClientEvent.Room,
   RoomEvent.Timeline,
+  RoomEvent.LocalEchoUpdated,
   RoomStateEvent.Events,
   RoomMemberEvent.Membership,
   CryptoEvent.KeyBackupDecryptionKeyCached,

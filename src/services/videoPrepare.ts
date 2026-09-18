@@ -34,8 +34,6 @@ function isTauriDesktop(): boolean {
     && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
-/** Vrai si le fichier peut partir tel quel : WebM dont la piste vidéo est en
- *  VP8 ou VP9, les deux codecs que tous les runtimes cibles savent lire. */
 /**
  * L'AV1 dans un conteneur MP4 se reconnaît à l'entrée `av01` de sa table
  * d'échantillons. On la cherche dans les premiers kilo-octets, où vit l'entête
@@ -51,6 +49,8 @@ function mp4ContientAv1(bytes: Uint8Array): boolean {
   return false;
 }
 
+/** Vrai si le fichier peut partir tel quel : un WebM en VP8/VP9 ou AV1, ou un
+ *  MP4 déjà en AV1 — les formats que tous les runtimes cibles savent lire. */
 function alreadyCompatible(file: File, bytes: Uint8Array): boolean {
   // MP4 contenant déjà de l'AV1 : c'est le format cible, dans un autre
   // conteneur.

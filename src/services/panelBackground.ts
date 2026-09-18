@@ -43,7 +43,6 @@ async function resolveBackgroundUrl(path: string): Promise<string | null> {
   return task;
 }
 
-/** Choisit une image et l'associe au panneau. `false` si on annule. */
 /**
  * Efface les fonds transcodés que plus aucune configuration n'utilise.
  *
@@ -96,51 +95,6 @@ export async function pickPanelBackground(scope: BackgroundScope): Promise<boole
   return true;
 }
 
-/**
- * Style de fond à étaler sur le conteneur du panneau (ou `undefined`).
- *
- * L'image est posée **dans la pile de fond** du conteneur, surmontée d'un
- * voile de la couleur de surface du thème (`color-mix`) : le contraste du
- * texte ne dépend jamais de l'image. Si le moteur ne connaît pas `color-mix`,
- * la déclaration est ignorée — pas d'image, pas de casse.
- */
-/**
- * URL d'un fond VIDÉO, servie par le serveur média local.
- *
- * Les autres fonds passent par une URL `blob:`, qui convient à une image mais
- * pas à une vidéo : elle ne répond pas aux requêtes par plage, si bien que le
- * lecteur ne peut ni chercher ni se recaler, et finissait par se figer
- * (18/09). Le serveur média, lui, gère les plages — c'est déjà lui qui sert
- * les vidéos du chat.
- */
-export function useBackgroundVideoUrl(scope: BackgroundScope): string | null {
-  const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
-  const chemin = cfg?.video ? cfg.path : null;
-  // `resolu` retient le chemin AVEC son URL : sans quoi une URL périmée
-  // resterait affichée le temps que la suivante arrive. Le cas « pas de
-  // vidéo » est dérivé au rendu plutôt que posé par un `setState` dans
-  // l'effet, qui déclencherait un rendu en cascade.
-  const [resolu, setResolu] = useState<{ chemin: string; url: string } | null>(null);
-  useEffect(() => {
-    if (!chemin) return;
-    let annule = false;
-    void (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const port = await invoke<number>("media_server_port");
-        const nom = chemin.split(/[\\/]/).pop() ?? "";
-        if (!annule && port > 0 && nom) {
-          setResolu({ chemin, url: `http://127.0.0.1:${port}/${encodeURIComponent(nom)}` });
-        }
-      } catch {
-        /* serveur média indisponible : pas de fond vidéo, on n'affiche rien */
-      }
-    })();
-    return () => { annule = true; };
-  }, [chemin]);
-  return chemin && resolu?.chemin === chemin ? resolu.url : null;
-}
-
 export function usePanelBackgroundUrl(scope: BackgroundScope): string | null {
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const path = cfg?.path ?? null;
@@ -175,6 +129,14 @@ export function bgAnchorCss(anchor?: BgAnchor): string {
   return ANCHOR_CSS[anchor ?? "mc"] ?? "center center";
 }
 
+/**
+ * Style de fond à étaler sur le conteneur du panneau (ou `undefined`).
+ *
+ * L'image est posée **dans la pile de fond** du conteneur, surmontée d'un
+ * voile de la couleur de surface du thème (`color-mix`) : le contraste du
+ * texte ne dépend jamais de l'image. Si le moteur ne connaît pas `color-mix`,
+ * la déclaration est ignorée — pas d'image, pas de casse.
+ */
 export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties | undefined {
   const cfg = useLayoutStore((s) => s.panelBackgrounds[scope]);
   const url = usePanelBackgroundUrl(scope);

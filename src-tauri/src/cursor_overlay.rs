@@ -474,6 +474,9 @@ pub fn cursor_overlay_set_shared_screen(index: Option<u64>) {
 }
 
 /// Index de l'écran partagé, si connu.
+// Lue par l'hôte Win32 de l'overlay pour borner le dessin au moniteur partagé.
+// Sous Linux le layer-shell se borne autrement, d'où l'exemption ciblée.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn cursor_overlay_shared_screen() -> Option<u64> {
     let v = ECRAN_PARTAGE.load(Ordering::Acquire);
     (v >= 0).then_some(v as u64)

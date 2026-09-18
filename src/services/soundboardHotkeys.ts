@@ -54,11 +54,6 @@ export function pruneHotkeys(knownEventIds: Set<string>) {
   }
 }
 
-/** Returns the combo currently used for a given sound, or null. */
-export function getHotkey(eventId: string): string | null {
-  return loadHotkeys()[eventId] ?? null;
-}
-
 /** Returns the eventId currently bound to a combo, or null. */
 export function findConflict(combo: string, excludeEventId: string | null = null): string | null {
   const map = loadHotkeys();

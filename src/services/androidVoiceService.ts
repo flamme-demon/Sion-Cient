@@ -84,17 +84,3 @@ export function updateVoiceService(channelName: string, isMuted: boolean, isDeaf
     }
   }
 }
-
-/** Check for pending actions from notification (called when app resumes) */
-export function consumePendingActions(onAction: (action: string) => void) {
-  if (!isAndroid || !serviceStarted) return;
-  const bridge = getBridge();
-  if (!bridge) return;
-  try {
-    let action = bridge.getPendingAction();
-    while (action) {
-      onAction(action);
-      action = bridge.getPendingAction();
-    }
-  } catch { /* ignore */ }
-}

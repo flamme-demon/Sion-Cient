@@ -487,13 +487,12 @@ function clampGain(v: number): number {
   return Math.max(SOUND_GAIN_MIN, Math.min(SOUND_GAIN_MAX, v));
 }
 
-/** Decode a browser-supported sound and convert it once to the native render
- * format. Linear resampling is sufficient here: clips are limited to 20 s and
- * WebRTC receives the final 48 kHz mono PCM without a realtime IPC stream.
- * Retourne aussi la durée réellement décodée (ms) : c'est la seule vérité
- * disponible quand la métadonnée Matrix du son est absente ou fausse. */
-/** Décodage PCM 48 kHz mono pour le chemin natif. Exporté pour que les cues de
- *  retour d'action (micro) empruntent exactement le même chemin que la
+/** Décodage PCM 48 kHz mono pour le chemin natif, converti une fois pour
+ *  toutes au format de rendu. Le rééchantillonnage linéaire suffit : les clips
+ *  sont bornés à 20 s et WebRTC reçoit le PCM final sans flux IPC temps réel.
+ *  Retourne aussi la durée réellement décodée (ms), seule vérité disponible
+ *  quand la métadonnée Matrix du son est absente ou fausse. Exporté pour que
+ *  les cues de retour d'action (micro) empruntent le même chemin que la
  *  soundboard en appel. */
 export async function decodeNativeSoundboardPcm(url: string): Promise<{ pcmB64: string; durationMs: number | null }> {
   const response = await fetch(url);
@@ -615,21 +614,6 @@ export async function playSoundLocal(mxcUrl: string, gain: number = 1.0): Promis
   audio.preload = "auto";
   document.body.appendChild(audio);
   return playElementWithGain(audio, gain);
-}
-
-/** Preview a sound from a local File (during upload) with the given gain.
- *  Used by the upload modal so the user can audition the effect of the
- *  gain slider before committing the upload. The blob URL is revoked on
- *  cleanup so we don't accumulate revoked-but-referenced blobs. */
-export async function previewSoundFile(file: File, gain: number = 1.0): Promise<void> {
-  if (useAppStore.getState().isDeafened) return;
-  const url = URL.createObjectURL(file);
-  const audio = document.createElement("audio");
-  audio.src = url;
-  audio.style.display = "none";
-  audio.preload = "auto";
-  document.body.appendChild(audio);
-  await playElementWithGain(audio, gain, () => URL.revokeObjectURL(url));
 }
 
 const afkEncoder = new TextEncoder();

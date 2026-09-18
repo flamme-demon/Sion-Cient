@@ -1588,11 +1588,6 @@ export async function banUser(roomId: string, userId: string, reason?: string): 
   await matrixClient.ban(roomId, userId, reason);
 }
 
-export async function unbanUser(roomId: string, userId: string): Promise<void> {
-  if (!matrixClient) throw new Error("Matrix client not initialized");
-  await matrixClient.unban(roomId, userId);
-}
-
 export async function setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setPowerLevel(roomId, userId, level);
@@ -1903,7 +1898,6 @@ export interface PinnedSummary {
  * Les échecs sont silencieux et l'entrée est omise : un épinglé supprimé ou
  * illisible ne doit pas faire échouer la liste entière.
  */
-/** Nature du média d'un événement, d'après son `msgtype` Matrix. */
 /** URL affichable d'un média épinglé : vignette si le serveur en propose une,
  *  sinon le média lui-même. */
 function pinnedMediaUrl(contenu: unknown): string | null {
@@ -1914,6 +1908,7 @@ function pinnedMediaUrl(contenu: unknown): string | null {
   return mxc ? mxcToHttp(mxc) : null;
 }
 
+/** Nature du média d'un événement, d'après son `msgtype` Matrix. */
 function pinnedMediaKind(msgtype: unknown): PinnedSummary["media"] {
   switch (msgtype) {
     case "m.image":
@@ -2050,25 +2045,6 @@ export async function endPoll(roomId: string, pollStartId: string): Promise<void
     "m.text": "Sondage terminé",
     "m.relates_to": { rel_type: "m.reference", event_id: target },
   });
-}
-
-export function getReactions(roomId: string, eventId: string): { emoji: string; count: number; userIds: string[] }[] {
-  if (!matrixClient) return [];
-  const room = matrixClient.getRoom(roomId);
-  if (!room) return [];
-  const timeline = room.getLiveTimeline().getEvents();
-  const reactionMap = new Map<string, string[]>();
-  for (const evt of timeline) {
-    if (evt.getType?.() !== "m.reaction") continue;
-    const rel = evt.getContent?.()?.["m.relates_to"];
-    if (rel?.rel_type !== "m.annotation" || rel?.event_id !== eventId) continue;
-    const key = rel.key;
-    if (!key) continue;
-    const senderId = evt.getSender?.() || "";
-    if (!reactionMap.has(key)) reactionMap.set(key, []);
-    reactionMap.get(key)!.push(senderId);
-  }
-  return Array.from(reactionMap.entries()).map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds }));
 }
 
 /** Mark a room as read — sends read receipt for the latest event */
