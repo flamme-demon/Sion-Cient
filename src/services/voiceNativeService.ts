@@ -100,8 +100,14 @@ export function voiceNativePublishData(topic: string, payloadB64: string, reliab
 /** Envoie un clip déjà décodé (PCM i16 mono, 48 kHz) au mixeur de rendu
  * WebRTC. Le clip traverse l'IPC une fois puis le callback audio le consomme
  * nativement par tranches de 10 ms. */
-export function playVoiceNativeSoundboard(pcmB64: string, gain: number): Promise<void> {
-  return tauriInvoke<void>("voice_native_play_soundboard", { pcmB64, gain });
+export function playVoiceNativeSoundboard(
+  pcmB64: string,
+  gain: number,
+  /** Retour d'action de l'utilisateur lui-même : joué malgré la sourdine, qui
+   *  n'est censée faire taire que les pairs. */
+  localFeedback = false,
+): Promise<void> {
+  return tauriInvoke<void>("voice_native_play_soundboard", { pcmB64, gain, localFeedback });
 }
 
 /** Repousse l'échéance du rond soundboard d'un expéditeur (`sender` = son

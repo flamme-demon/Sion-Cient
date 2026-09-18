@@ -225,6 +225,17 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
     expect(invokeMock).toHaveBeenCalledWith("voice_native_play_soundboard", {
       pcmB64: "AQD//w==",
       gain: 0.35,
+      localFeedback: false,
+    });
+  });
+
+  it("playVoiceNativeSoundboard marque les retours d'action, seuls admis en sourdine", async () => {
+    invokeMock.mockResolvedValue(undefined);
+    await playVoiceNativeSoundboard("AQD//w==", 0.35, true);
+    expect(invokeMock).toHaveBeenCalledWith("voice_native_play_soundboard", {
+      pcmB64: "AQD//w==",
+      gain: 0.35,
+      localFeedback: true,
     });
   });
 

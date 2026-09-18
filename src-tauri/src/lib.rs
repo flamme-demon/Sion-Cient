@@ -35,6 +35,7 @@ mod native_audio_tests;
 #[cfg(feature = "native-voice")]
 #[cfg(target_os = "windows")]
 mod virtual_desktop;
+mod cue_playback;
 mod media_server;
 mod native_video_transport;
 #[cfg(feature = "native-voice")]

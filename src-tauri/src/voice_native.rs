@@ -2160,10 +2160,13 @@ pub fn voice_native_play_soundboard(
     app: tauri::AppHandle<TauriRuntime>,
     pcm_b64: String,
     gain: f32,
+    // `local_feedback` : retour d'action de l'utilisateur lui-même (micro,
+    // sourdine), par opposition à un son de soundboard reçu d'un pair.
+    local_feedback: Option<bool>,
 ) -> Result<(), String> {
     #[cfg(not(feature = "native-voice"))]
     {
-        let _ = (app, pcm_b64, gain);
+        let _ = (app, pcm_b64, gain, local_feedback);
         return Err("Voix native non compilée".into());
     }
     #[cfg(feature = "native-voice")]
@@ -2176,11 +2179,15 @@ pub fn voice_native_play_soundboard(
         if pcm_b64.len() > MAX_B64_LEN {
             return Err("clip soundboard trop long".into());
         }
-        // Inutile de distinguer les retours d'action : ce chemin alimente le
-        // rendu WebRTC, que la sourdine rend justement silencieux. Un cue de
-        // sourdine joué ici serait accepté puis inaudible (constaté le 16/09) —
-        // il reste donc sur le chemin DOM, seul à contourner ce rendu.
-        if manager().lock().unwrap_or_else(|e| e.into_inner()).deafened {
+        // La sourdine jette les sons des pairs — c'est tout son objet. Elle ne
+        // doit pas jeter le retour d'action de l'utilisateur lui-même : le son
+        // qui confirme la mise en sourdine est joué à l'instant précis où elle
+        // s'applique. Renvoyé sur le chemin DOM, il arrivait deux à trois
+        // secondes plus tard, quand l'ADM natif tient le périphérique — donc
+        // jamais à temps, et coupé par le clic suivant (18/09).
+        let feedback_local = local_feedback.unwrap_or(false);
+        let sourdine = manager().lock().unwrap_or_else(|e| e.into_inner()).deafened;
+        if sourdine && !feedback_local {
             return Ok(());
         }
         let bytes = base64::engine::general_purpose::STANDARD
@@ -2193,6 +2200,15 @@ pub fn voice_native_play_soundboard(
             .chunks_exact(2)
             .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
             .collect();
+        // En sourdine, le rendu WebRTC ne sort plus rien : plus aucune piste
+        // n'est abonnée, donc le traitement de rendu — où ce clip est mixé —
+        // n'est plus invoqué. Le retour d'action emprunte alors sa propre
+        // sortie. Le micro étant coupé par la sourdine, se passer de la
+        // référence d'annulation d'écho ne coûte rien ici.
+        if sourdine {
+            crate::cue_playback::jouer_clip_local(samples, gain);
+            return Ok(());
+        }
         with_engine(&app, "soundboard native", |_| {
             if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
                 Ok(())

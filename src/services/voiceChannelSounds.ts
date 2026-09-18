@@ -284,14 +284,6 @@ const GATED: ReadonlySet<Cue> = new Set<Cue>(["join", "leave", "timeout"]);
 // "deafen" confirmation itself would be swallowed the instant you deafen.
 const ACTION_FEEDBACK: ReadonlySet<Cue> = new Set<Cue>(["mute", "unmute", "deafen", "undeafen"]);
 
-/** Cues que le moteur natif ne peut pas servir, quoi qu'il arrive.
- *
- *  `deafen` alimente le rendu WebRTC, que la sourdine rend justement silencieux
- *  à l'instant même où ce cue est joué : le clip y est accepté puis inaudible
- *  (constaté le 16/09). Il garde le chemin DOM, seul à contourner ce rendu, au
- *  prix de la latence de sortie de WebKit. */
-const NEVER_NATIVE: ReadonlySet<Cue> = new Set<Cue>(["deafen"]);
-
 /** Le chemin natif est-il utilisable pour ce cue, ici et maintenant ?
  *
  *  Hors appel, il n'existe pas. En sourdine, le moteur jette tout clip reçu —
@@ -300,9 +292,14 @@ const NEVER_NATIVE: ReadonlySet<Cue> = new Set<Cue>(["deafen"]);
  *  continuer d'entendre les arrivées et départs en sourdine. On repasse donc
  *  par le DOM dans ce cas, qui applique ce réglage correctement. */
 function nativePathUsable(cue: Cue): boolean {
-  if (NEVER_NATIVE.has(cue)) return false;
   const app = useAppStore.getState();
-  return !!app.connectedVoiceChannel && !app.isDeafened;
+  if (!app.connectedVoiceChannel) return false;
+  // Le retour d'action confirme un geste de l'utilisateur : il passe même en
+  // sourdine, le moteur le reconnaissant comme local. C'est indispensable pour
+  // le cue de MISE en sourdine, joué à l'instant même où elle s'applique — le
+  // chemin DOM le rendait deux à trois secondes plus tard, donc jamais (18/09).
+  if (ACTION_FEEDBACK.has(cue)) return true;
+  return !app.isDeafened;
 }
 
 /** PCM déjà décodé, par cue : la lecture se réduit alors à un appel IPC. */
@@ -335,7 +332,7 @@ async function playNativeAction(cue: Cue): Promise<boolean> {
     const pcm = await nativePcmFor(cue);
     if (!pcm) return false;
     const { playVoiceNativeSoundboard } = await import("./voiceNativeService");
-    await playVoiceNativeSoundboard(pcm, FILE_VOLUME);
+    await playVoiceNativeSoundboard(pcm, FILE_VOLUME, ACTION_FEEDBACK.has(cue));
     return true;
   } catch (error) {
     console.warn(`[Sion][cue] chemin natif refusé pour ${cue}`, error);
@@ -486,8 +483,9 @@ export async function primeActionCues(): Promise<void> {
       const url = fileFor(cue);
       if (url) await primeCue(url);
       // Décodage PCM du chemin natif, pour que le premier mute en appel
-      // n'attende pas non plus.
-      if (!NEVER_NATIVE.has(cue)) await nativePcmFor(cue).catch(() => null);
+      // n'attende pas non plus. Tous les retours d'action l'empruntent
+      // désormais, sourdine comprise.
+      await nativePcmFor(cue).catch(() => null);
     }),
   );
 }
