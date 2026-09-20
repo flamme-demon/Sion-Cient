@@ -767,6 +767,8 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   }, [isVideo]);
   const resolvedUrl = useResolvedUrl(attachment, isVideo ? videoVisible : true);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  // Vrai si la vignette du serveur n'a pas pu être chargée.
+  const [vignetteEchouee, setVignetteEchouee] = useState(false);
   // Hoisted above any early return: the downstream image/audio/video
   // branches used to return before this line, and the plain-file branch
   // called it conditionally. React's hook-call rule requires identical
@@ -789,8 +791,21 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
     return (
       <>
         <img
-          src={resolvedUrl}
+          // Vignette dans le fil, original seulement dans la visionneuse.
+          //
+          // Une image est décodée à sa taille réelle : la photo de 4032×3024
+          // affichée ici dans 300×200 occupait 48 Mo de mémoire. 41 images du
+          // fil en retenaient 161 à elles seules (20/09). Le serveur sait
+          // servir une vignette ; quand il ne le peut pas — média chiffré —
+          // on retombe sur l'original, faute de mieux.
+          src={vignetteEchouee || attachment.encryptedFile || !attachment.thumbnailUrl
+            ? resolvedUrl
+            : attachment.thumbnailUrl}
           alt={attachment.name}
+          // Un serveur qui ne sait pas produire de vignette ne doit pas coûter
+          // l'image : on retombe sur l'original plutôt que d'afficher un cadre
+          // vide.
+          onError={() => setVignetteEchouee(true)}
           onClick={() => setLightboxOpen(true)}
           style={{ maxWidth: 300, maxHeight: 200, borderRadius: 16, objectFit: 'cover' as const, cursor: 'zoom-in', marginTop: 6, display: 'block' }}
         />

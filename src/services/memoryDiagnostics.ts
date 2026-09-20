@@ -113,7 +113,27 @@ export function installMemoryDiagnostics(): void {
           }
         }
       } catch { /* client pas prêt */ }
-      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
+      // Images DÉCODÉES : le poste le plus lourd et le moins visible.
+      //
+      // Un fichier de 200 Ko occupe sa surface en mémoire une fois décodé —
+      // quatre octets par pixel. Le compteur de nœuds ne le montre pas, la
+      // taille du fichier non plus. Mesuré le 20/09, en cherchant d'où
+      // venaient les 276 Mo que l'application ajoute au moteur de rendu.
+      const images = Array.from(document.images);
+      const imagesMb = Math.round(
+        images.reduce((sum, i) => sum + (i.naturalWidth || 0) * (i.naturalHeight || 0) * 4, 0)
+          / (1024 * 1024),
+      );
+      // Poids SÉRIALISÉ des données Matrix retenues par l'application. Ce
+      // n'est pas leur empreinte réelle — un objet JavaScript coûte plusieurs
+      // fois sa forme JSON — mais l'ordre de grandeur répond à la question
+      // « les données pèsent-elles des mégaoctets ou des centaines ? ».
+      let donneesMo = "?";
+      try {
+        donneesMo = String(Math.round(JSON.stringify(messages).length / (1024 * 1024)));
+      } catch { /* structure cyclique ou trop grosse */ }
+
+      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · images=${images.length} (~${imagesMb} Mo décodés) · données=${donneesMo} Mo · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
       console.info(line);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(line))

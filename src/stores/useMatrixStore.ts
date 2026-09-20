@@ -280,6 +280,25 @@ function getJoinedRooms(client: MatrixClient): ReturnType<MatrixClient["getRooms
     });
 }
 
+/**
+ * Vignette d'affichage d'un média, ou `undefined` s'il n'y en a pas.
+ *
+ * Le fil montre les images dans 300×200 : charger l'original y est du pur
+ * gaspillage (161 Mo pour 41 images, mesuré le 20/09). On demande donc une
+ * vignette au serveur — sauf pour un média chiffré, que le serveur ne peut pas
+ * redimensionner. Dans ce cas on prend celle que l'émetteur a jointe, quand
+ * elle existe et qu'elle n'est pas chiffrée elle-même.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function vignetteDe(mxcUrl: string, info: Record<string, any>, chiffre: boolean): string | undefined {
+  if (!chiffre) return matrixService.mxcToThumbnail(mxcUrl) ?? undefined;
+  const miniature = info.thumbnail_url;
+  if (typeof miniature === "string" && !info.thumbnail_file) {
+    return matrixService.mxcToHttp(miniature) ?? undefined;
+  }
+  return undefined;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channel {
   const topic = room.currentState?.getStateEvents?.("m.room.topic", "")?.getContent?.()?.topic || "";
@@ -567,6 +586,7 @@ export function extractMessagesFromEvents(events: any[], room: any, client: any)
         size: info.size || 0,
         mimeType,
         url: httpUrl,
+        thumbnailUrl: msgtype === "m.image" ? vignetteDe(mxcUrl, info, !!content.file) : undefined,
         width: info.w,
         height: info.h,
         // Si chiffré E2EE (content.file présent), stocker les clés pour décryption au rendu
@@ -1430,6 +1450,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
           size: info.size || 0,
           mimeType,
           url: httpUrl,
+          thumbnailUrl: msgtype === "m.image" ? vignetteDe(mxcUrl, info, !!content.file) : undefined,
           width: info.w,
           height: info.h,
           encryptedFile: content.file ? { ...content.file } : undefined,

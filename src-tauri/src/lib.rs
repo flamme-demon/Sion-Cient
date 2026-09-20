@@ -2069,7 +2069,7 @@ async fn prepare_background_video(
     // Elle était absente : re-choisir le même fichier après avoir corrigé le
     // profil rendait l'ancien résultat, et la correction paraissait sans effet
     // (18/09). À incrémenter à chaque changement des réglages ci-dessous.
-    const PROFIL: u32 = 6;
+    const PROFIL: u32 = 7;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     PROFIL.hash(&mut hasher);
     path.hash(&mut hasher);
@@ -2112,6 +2112,17 @@ async fn prepare_background_video(
         .arg(&entree)
         .args([
             "-an",
+            // Durée bornée : une boucle, pas le film.
+            //
+            // Un fond n'est pas une vidéo qu'on regarde, c'est une texture qui
+            // tourne derrière du texte. La durée de la source y passait telle
+            // quelle : un extrait de 52 s a donné 1 549 images. Le moteur de
+            // rendu met en cache les images DÉCODÉES d'une animation — deux
+            // mégaoctets pièce en 960×540 — et le processus de rendu tenait
+            // 881 Mo après 34 h (20/09). Douze secondes suffisent à ce qu'une
+            // boucle ne se remarque pas, et divisent le cache par quatre.
+            "-t",
+            "12",
             // 960 de large, 30 images par seconde.
             //
             // Les deux axes sont découplés, contrairement à l'intuition. La
@@ -2125,8 +2136,15 @@ async fn prepare_background_video(
             // (18/09). Le WebP encode les différences, et des images plus
             // rapprochées se ressemblent davantage. Il n'y avait donc pas
             // d'arbitrage à faire entre netteté et fluidité : on prend les deux.
+            // 720 de large, et non 960.
+            //
+            // La mémoire d'une image décodée croît avec la SURFACE : 960×540
+            // coûte 2,0 Mo, 720×405 en coûte 1,1 — presque moitié moins pour
+            // un quart de largeur en moins. Un fond vit derrière un voile de
+            // la couleur du thème, souvent dans un panneau étroit : la finesse
+            // qu'on y perd ne se voit pas, la mémoire qu'on y gagne se mesure.
             "-vf",
-            "scale='min(960,iw)':-2:flags=lanczos,fps=30",
+            "scale='min(720,iw)':-2:flags=lanczos,fps=30",
             // WebP ANIMÉ, et non un conteneur vidéo.
             //
             // Un `<video>` s'est révélé inexploitable pour un fond dans cette

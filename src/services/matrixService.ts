@@ -367,6 +367,31 @@ export function mxcToHttp(mxcUrl: string): string | null {
   return matrixClient.mxcUrlToHttp(mxcUrl) || null;
 }
 
+/**
+ * Vignette servie par le serveur, pour l'affichage dans le fil.
+ *
+ * Une image est décodée à sa taille RÉELLE, pas à sa taille d'affichage : une
+ * photo de téléphone de 4032×3024 occupe 48 Mo en mémoire pour s'afficher dans
+ * un carré de 300 pixels. Mesuré le 20/09 : 41 images du fil retenaient 161 Mo,
+ * soit près de six fois ce que pèsent toutes les autres données de
+ * l'application réunies.
+ *
+ * Les dimensions demandées couvrent le double de la taille d'affichage, pour
+ * rester net sur un écran à forte densité. `scale` préserve les proportions —
+ * `crop` rognerait.
+ *
+ * Renvoie `null` pour un média chiffré : le serveur ne peut pas redimensionner
+ * ce qu'il ne peut pas lire. L'émetteur fournit alors sa propre vignette,
+ * traitée à part.
+ */
+export function mxcToThumbnail(mxcUrl: string, width = 600, height = 400): string | null {
+  if (!matrixClient || !mxcUrl) return null;
+  // Mêmes options que `mxcToHttp` : une URL AUTHENTIFIÉE exige un en-tête que
+  // `<img src>` ne sait pas envoyer, et l'image ne s'affiche pas du tout
+  // (constaté le 20/09). Seules les dimensions changent.
+  return matrixClient.mxcUrlToHttp(mxcUrl, width, height, "scale") || null;
+}
+
 export async function getAvatarUrl(userId: string): Promise<string | null> {
   if (!matrixClient) return null;
   try {
