@@ -13,7 +13,9 @@ import {
   etatLecteurVideo,
   fermerLecteurVideo,
   ouvrirLecteurVideo,
+  pauseLecteurVideo,
   registerNativeVideoSurface,
+  volumeLecteurVideo,
   type EtatLecteurVideo,
 } from "../../services/voiceNativeService";
 
@@ -34,6 +36,7 @@ export function NativeVideoPlayer({ source, titre, onClose }: Props) {
   const surfaceRef = useRef<HTMLCanvasElement>(null);
   const [etat, setEtat] = useState<EtatLecteurVideo | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
+  const [volume, setVolume] = useState(1);
 
   // La surface doit être déclarée AVANT d'ouvrir le fichier : les premières
   // images arrivent dès l'ouverture, et sans rectangle publié elles tombent.
@@ -69,8 +72,14 @@ export function NativeVideoPlayer({ source, titre, onClose }: Props) {
   useEffect(() => {
     if (!etat?.actif) return;
     const timer = window.setInterval(() => {
-      void etatLecteurVideo().then((e) => setEtat((ancien) => (e.actif ? { ...e, largeur: ancien?.largeur ?? 0, hauteur: ancien?.hauteur ?? 0 } : e)));
-    }, 1000);
+      void etatLecteurVideo().then((e) =>
+        setEtat((ancien) =>
+          e.actif ? { ...e, largeur: ancien?.largeur ?? 0, hauteur: ancien?.hauteur ?? 0 } : e,
+        ),
+      );
+      // Quatre fois par seconde : assez pour une barre qui avance sans
+      // saccade, assez peu pour ne pas encombrer le pont avec Rust.
+    }, 250);
     return () => window.clearInterval(timer);
   }, [etat?.actif]);
 
@@ -131,10 +140,61 @@ export function NativeVideoPlayer({ source, titre, onClose }: Props) {
         style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--color-on-surface)', fontSize: 12 }}
       >
         {titre && <span style={{ opacity: 0.75, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{titre}</span>}
+        {etat?.actif && (
+          <button
+            onClick={() => {
+              const versPause = !etat.en_pause;
+              void pauseLecteurVideo(versPause);
+              setEtat({ ...etat, en_pause: versPause });
+            }}
+            title={etat.en_pause ? t("chat.play", { defaultValue: "Lire" }) : t("chat.pause", { defaultValue: "Pause" })}
+            style={{
+              width: 30, height: 30, borderRadius: 15, border: 'none', cursor: 'pointer',
+              background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)',
+              fontSize: 13, fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {etat.en_pause ? "▶" : "❚❚"}
+          </button>
+        )}
         {etat && etat.duree_ms > 0 && (
           <span style={{ fontVariantNumeric: 'tabular-nums', opacity: 0.75 }}>
             {mmss(etat.position_ms)} / {mmss(etat.duree_ms)}
           </span>
+        )}
+        {/* Barre de progression en lecture seule : se déplacer dans le film
+            demande de relancer ffmpeg avec `-ss`, ce n'est pas encore fait. */}
+        {etat && etat.duree_ms > 0 && (
+          <div
+            title={t("chat.seekUnavailable", { defaultValue: "Déplacement pas encore disponible" })}
+            style={{
+              width: 200, height: 4, borderRadius: 2, overflow: 'hidden',
+              background: 'var(--color-surface-container-highest)',
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.min(100, (etat.position_ms / etat.duree_ms) * 100)}%`,
+                height: '100%',
+                background: 'var(--color-primary)',
+              }}
+            />
+          </div>
+        )}
+        {etat?.a_du_son && (
+          <input
+            type="range"
+            min={0}
+            max={150}
+            value={Math.round(volume * 100)}
+            onChange={(e) => {
+              const v = Number(e.target.value) / 100;
+              setVolume(v);
+              void volumeLecteurVideo(v);
+            }}
+            title={t("chat.volume", { defaultValue: "Volume" })}
+            style={{ width: 90, accentColor: 'var(--color-primary)' }}
+          />
         )}
         <button
           onClick={onClose}

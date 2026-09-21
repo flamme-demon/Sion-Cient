@@ -860,6 +860,9 @@ export interface EtatLecteurVideo {
   hauteur: number;
   duree_ms: number;
   position_ms: number;
+  en_pause: boolean;
+  /** Faux si le média est muet, ou si la machine n'a pas de sortie utilisable. */
+  a_du_son: boolean;
 }
 
 /** Identifiant de flux du lecteur dans la surface native. Doit rester
@@ -891,4 +894,14 @@ export function fermerLecteurVideo(): Promise<void> {
 /** Position et durée courantes, pour la barre de progression. */
 export function etatLecteurVideo(): Promise<EtatLecteurVideo> {
   return tauriInvoke<EtatLecteurVideo>("lecteur_video_etat");
+}
+
+/** Met la lecture en pause, ou la reprend. */
+export function pauseLecteurVideo(enPause: boolean): Promise<void> {
+  return tauriInvoke<void>("lecteur_video_pause", { enPause });
+}
+
+/** Volume, de 0 à 1,5 — au-delà de 1 le son est amplifié. */
+export function volumeLecteurVideo(valeur: number): Promise<void> {
+  return tauriInvoke<void>("lecteur_video_volume", { valeur });
 }

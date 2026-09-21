@@ -79,6 +79,11 @@ struct Lecture {
     enfant: Arc<Mutex<Option<std::process::Child>>>,
     position_ms: Arc<AtomicU64>,
     duree_ms: u64,
+    /// Absente si le média est muet ou si aucune sortie n'est disponible.
+    audio: Option<crate::lecteur_audio::Audio>,
+    /// En pause, le fil vidéo cesse de consommer le tube : ffmpeg se bloque
+    /// de lui-même, et rien ne s'accumule en mémoire.
+    pause: Arc<AtomicBool>,
 }
 
 fn lecture() -> &'static Mutex<Option<Lecture>> {
@@ -94,6 +99,8 @@ pub struct EtatLecteur {
     pub hauteur: u32,
     pub duree_ms: u64,
     pub position_ms: u64,
+    pub en_pause: bool,
+    pub a_du_son: bool,
 }
 
 /// Taille d'une image I420, en octets : un plan de luminance pleine
@@ -181,6 +188,13 @@ pub fn lecteur_video_ouvrir(
     let arret = Arc::new(AtomicBool::new(false));
     let position_ms = Arc::new(AtomicU64::new(0));
     let enfant = Arc::new(Mutex::new(Some(enfant)));
+    let pause = Arc::new(AtomicBool::new(false));
+
+    // La piste sonore a son propre processus ffmpeg. Un média muet, ou une
+    // machine sans sortie audio, rend simplement `None` : mieux vaut une
+    // vidéo silencieuse qu'une vidéo qui refuse de partir.
+    let audio = crate::lecteur_audio::demarrer(&ffmpeg, &chemin);
+    let a_du_son = audio.is_some();
 
     // Les plaintes de ffmpeg dans notre journal : sans cela, un échec de
     // lecture serait totalement muet.
@@ -199,6 +213,7 @@ pub fn lecteur_video_ouvrir(
     let arret_fil = Arc::clone(&arret);
     let position_fil = Arc::clone(&position_ms);
     let enfant_fil = Arc::clone(&enfant);
+    let pause_fil = Arc::clone(&pause);
     let octets = taille_image(largeur, hauteur);
 
     std::thread::Builder::new()
@@ -209,6 +224,14 @@ pub fn lecteur_video_ouvrir(
             let mut images = 0u64;
 
             while !arret_fil.load(Ordering::Relaxed) {
+                // En pause, on cesse simplement de lire : le tube se remplit,
+                // ffmpeg s'arrête tout seul, et rien ne s'accumule chez nous.
+                while pause_fil.load(Ordering::Relaxed) && !arret_fil.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                }
+                if arret_fil.load(Ordering::Relaxed) {
+                    break;
+                }
                 // Une lecture incomplète signe la fin du flux : ffmpeg a
                 // terminé, ou il a été arrêté.
                 if sortie.read_exact(&mut tampon).is_err() {
@@ -251,6 +274,8 @@ pub fn lecteur_video_ouvrir(
         enfant,
         position_ms,
         duree_ms,
+        audio,
+        pause,
     });
 
     Ok(EtatLecteur {
@@ -259,6 +284,8 @@ pub fn lecteur_video_ouvrir(
         hauteur,
         duree_ms,
         position_ms: 0,
+        en_pause: false,
+        a_du_son,
     })
 }
 
@@ -269,6 +296,9 @@ pub fn lecteur_video_fermer() {
     let precedente = lecture().lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(l) = precedente {
         l.arret.store(true, Ordering::Relaxed);
+        if let Some(audio) = l.audio.as_ref() {
+            audio.arreter();
+        }
         // Tuer le processus débloque le fil, qui attend sur le tube : sans
         // cela il resterait figé jusqu'à la fin du média.
         if let Some(mut proc) = l.enfant.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -289,7 +319,15 @@ pub fn lecteur_video_etat() -> EtatLecteur {
             largeur: 0,
             hauteur: 0,
             duree_ms: l.duree_ms,
-            position_ms: l.position_ms.load(Ordering::Relaxed),
+            // La carte son est la meilleure horloge : elle compte ce qui a
+            // réellement été joué. L'horloge système ne sert que pour un
+            // média muet.
+            position_ms: l
+                .audio
+                .as_ref()
+                .map_or_else(|| l.position_ms.load(Ordering::Relaxed), |a| a.position_ms()),
+            en_pause: l.pause.load(Ordering::Relaxed),
+            a_du_son: l.audio.is_some(),
         },
         None => EtatLecteur {
             actif: false,
@@ -297,7 +335,30 @@ pub fn lecteur_video_etat() -> EtatLecteur {
             hauteur: 0,
             duree_ms: 0,
             position_ms: 0,
+            en_pause: false,
+            a_du_son: false,
         },
+    }
+}
+
+/// Met la lecture en pause, ou la reprend.
+#[tauri::command]
+pub fn lecteur_video_pause(en_pause: bool) {
+    let garde = lecture().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(l) = garde.as_ref() {
+        l.pause.store(en_pause, Ordering::Relaxed);
+        if let Some(audio) = l.audio.as_ref() {
+            audio.pause(en_pause);
+        }
+    }
+}
+
+/// Règle le volume, de 0 à 1,5 — au-delà de 1 le son est amplifié.
+#[tauri::command]
+pub fn lecteur_video_volume(valeur: f32) {
+    let garde = lecture().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(audio) = garde.as_ref().and_then(|l| l.audio.as_ref()) {
+        audio.regler_volume(valeur);
     }
 }
 

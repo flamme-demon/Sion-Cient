@@ -157,7 +157,11 @@
     "attachedFile": "Attached file",
     "playNative": "Play (native)",
     "videoPlayFailed": "Playback failed",
-    "close": "Close"
+    "close": "Close",
+    "play": "Play",
+    "pause": "Pause",
+    "volume": "Volume",
+    "seekUnavailable": "Seeking not available yet"
   },
   "poll": {
     "menuItem": "Poll",

@@ -5,7 +5,6 @@ import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PollMessage } from "./PollMessage";
 import { LinkPreview as LinkPreviewInner } from "./LinkPreview";
-import { useSettingsStore } from "../../stores/useSettingsStore";
 
 // Lazy-load link previews: only fetch/render when visible in viewport
 function LinkPreview({ url }: { url: string }) {
@@ -29,7 +28,6 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
-import { detectWebmVideoCodec, type WebmVideoCodec as DetectedWebmVideoCodec } from "../../utils/webmCodec";
 // Lecteur hors moteur web (voir docs/lecteur-video-natif.md). Chargé à la
 // demande : il ne sert qu'au clic, inutile de l'embarquer au démarrage.
 const NativeVideoPlayer = lazy(() =>
@@ -113,601 +111,8 @@ function useResolvedUrl(attachment: FileAttachment, enabled: boolean = true): st
   return resolvedUrl;
 }
 
-type WebmVideoCodec = DetectedWebmVideoCodec | "pending" | "not-needed";
 
-/** Read the Matroska CodecID without involving the browser media stack. */
-async function sniffWebmVideoCodec(url: string): Promise<DetectedWebmVideoCodec> {
-  try {
-    // Track metadata is near the start. A bounded range avoids copying a whole
-    // video just to decide whether it is safe to give to GStreamer.
-    const response = await fetch(url, { headers: { Range: "bytes=0-524287" } });
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    return detectWebmVideoCodec(bytes);
-  } catch (err) {
-    console.warn("[Sion] Détection du codec WebM échouée:", err);
-  }
-  return "unknown";
-}
 
-/** Couleurs du lecteur : posées sur les pixels d'une vidéo, jamais sur une
- *  surface de l'application — donc volontairement hors thème. */
-const MEDIA_MATTE = "#000"; // theme-exempt — cadre d'un lecteur vidéo
-const MEDIA_INK = "#fff"; // theme-exempt — contrôles posés sur le média
-
-function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachment: FileAttachment }) {
-  const { t } = useTranslation();
-  // WebKitGTK/GStreamer may start parsing a media source as soon as `src` is
-  // attached, even with preload="none".  Some valid-enough WebM files make
-  // gst-plugins-good hit a process-wide assertion instead of reporting a
-  // media error, so `onError` cannot protect the web process. On Linux/Tauri,
-  // inspect the WebM CodecID without the media stack and route AV1/unknown
-  // inputs through the existing VP9/Opus compatibility transcode first.
-  const isTauriDesktop = typeof window !== "undefined"
-    && !!window.__TAURI_INTERNALS__
-    && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  // Le transcodage préventif n'existe QUE pour contourner GStreamer sous
-  // WebKitGTK. Ailleurs il coûte sans rien apporter : WebView2 est un Chromium
-  // complet et lit nativement H.264/AAC, donc un MP4 parfaitement lisible se
-  // retrouvait bloqué derrière une conversion — et derrière une installation
-  // d'ffmpeg quand elle manquait. Sous Windows et macOS on tente la lecture
-  // native et `onError` déclenche la conversion en secours.
-  const isLinuxDesktop = isTauriDesktop && /Linux/i.test(navigator.userAgent);
-  const isLinuxWebm = isLinuxDesktop && attachment.mimeType.includes("webm");
-  const [webmProbe, setWebmProbe] = useState<{ url: string; codec: DetectedWebmVideoCodec } | null>(null);
-  const webmCodec: WebmVideoCodec = !isLinuxWebm
-    ? "not-needed"
-    : webmProbe?.url === resolvedUrl ? webmProbe.codec : "pending";
-  const [transcodedUrl, setTranscodedUrl] = useState<string | null>(null);
-  const [transcoding, setTranscoding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // true when the transcode failed because ffmpeg isn't installed → offer to
-  // install it right from the card. number = install progress %.
-  const [ffmpegMissing, setFfmpegMissing] = useState(false);
-  // Lecteur natif ouvert par-dessus le fil.
-  const [lecteurNatifOuvert, setLecteurNatifOuvert] = useState(false);
-  const [installing, setInstalling] = useState<number | null>(null);
-  const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
-  useEffect(() => {
-    if (!isLinuxWebm) return;
-    let cancelled = false;
-    sniffWebmVideoCodec(resolvedUrl).then((codec) => {
-      if (!cancelled) setWebmProbe({ url: resolvedUrl, codec });
-    });
-    return () => { cancelled = true; };
-  }, [isLinuxWebm, resolvedUrl]);
-
-  // Sous Linux, la seule lecture native fiable est le WebM VP8/VP9. Tout le
-  // reste passe par ffmpeg.
-  //
-  // Cette règle a l'air grossière ; elle a été affinée le 17/09 puis rétablie,
-  // parce que `canPlayType()` n'est PAS exploitable ici. Il répond « oui » dès
-  // qu'un décodeur est enregistré dans GStreamer — `av1dec` pour l'AV1,
-  // `avdec_h264` pour le MP4 — et la lecture cale pourtant au bout de deux
-  // secondes. Le pire n'est pas l'échec : c'est qu'il est SILENCIEUX. Aucune
-  // erreur sur l'élément, donc `onError` ne part jamais et le repli vers la
-  // conversion non plus. Un fichier qu'on croyait lisible devient un lecteur
-  // mort, sans rien à quoi se raccrocher.
-  //
-  // Vérifié dans les deux sens : un MP4 H.264/AAC et un WebM AV1 déclarés
-  // lisibles s'arrêtent tous deux à ~2 s, alors que les mêmes fichiers
-  // convertis en VP9/Opus et servis par le serveur média local se lisent
-  // intégralement.
-  // Plus rien n'est converti d'office, sauf un codec dont on ignore tout.
-  //
-  // La cause des blocages n'était aucun de ceux qu'on a soupçonnés — ni le
-  // codec, ni le conteneur, ni la résolution, ni le transport : le modèle de
-  // cache `DocumentViewer` que l'application imposait à WebKit désactivait
-  // complètement son cache de ressources, donc toute lecture média s'arrêtait
-  // après les deux secondes tenues en mémoire. Corrigé dans `lib.rs`.
-  //
-  // L'AV1 et les codecs inconnus restent convertis d'office, et ce n'est pas de
-  // la prudence de principe : essayé le 17/09, la lecture native d'un WebM AV1
-  // a tué le processus web en 43 s —
-  //
-  //   gst-plugins-good/gst/matroska/matroska-demux.c:2429:
-  //   gst_matroska_demux_search_cluster: assertion failed
-  //   Bail out!
-  //
-  // Ce n'est pas le décodeur qui lâche mais le démultiplexeur Matroska, et
-  // `Bail out!` abat le processus : aucun `onError`, aucun chien de garde,
-  // aucun garde-fou côté page n'intercepte ça. La seule protection est de ne
-  // jamais lui donner ce fichier à ouvrir.
-  //
-  // Tout le reste — H.264, VP8, VP9, y compris VP9 dans un conteneur MP4 — se
-  // lit nativement depuis que le cache de ressources de WebKit est rétabli
-  // (voir `lib.rs`), et le chien de garde ci-dessous rattrape les blocages
-  // silencieux.
-  // La présence de dav1d était interrogée ici pour décider de lire l'AV1
-  // directement. La question n'a plus d'objet : le risque ne venait pas du
-  // décodeur mais du conteneur, et il se pose pour tout WebM. dav1d reste
-  // embarqué et utile — c'est lui qui décode l'AV1 une fois le fichier remuxé
-  // en MP4, et nos propres envois sont déjà dans ce conteneur.
-  // Tout WebM est normalisé avant lecture sous Linux — mais par un simple
-  // changement de conteneur, pas par un réencodage (voir `remux_video_mp4`).
-  //
-  // La lecture directe d'un WebM passe par `matroskademux`, dont une assertion
-  // a emporté le processus web de WebKit et figé toute l'interface (17/09).
-  // Rien, avant d'ouvrir un fichier, ne distingue celui qui se lira de celui
-  // qui abattra l'application ; et comme le remux ne coûte ni qualité ni temps
-  // notable, il n'y a pas de raison de prendre le risque au cas par cas.
-  // L'AV1 reste de l'AV1, ce qui était la demande.
-  const mustTranscodeBeforePlayback = isLinuxDesktop && webmCodec !== "pending";
-  // Rien n'est converti tant que personne n'a demandé à lire. Une conversion
-  // `libvpx-vp9` coûte plusieurs minutes de CPU : la lancer au défilement, pour
-  // une vidéo que l'utilisateur ne regardera peut-être jamais, était du travail
-  // pur perte — et plusieurs cartes visibles en même temps les lançaient toutes.
-  const [playRequested, setPlayRequested] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  // Codec visé par la conversion. VP9 d'abord ; VP8 seulement après un échec de
-  // décodage, voir `handleTranscodedError`.
-  const [codec, setCodec] = useState<"vp9" | "vp8">("vp9");
-
-  const handleError = () => {
-    // Native playback failed — transcode to WebM via ffmpeg
-    if (transcoding || transcodedUrl || error) return;
-    if (!attachment.url) { setError("URL manquante"); return; }
-    runTranscode();
-  };
-
-  // Le fichier converti existe mais la balise n'arrive pas à le lire. Sans ce
-  // gestionnaire l'erreur était avalée (`onError` valait `undefined` dès qu'une
-  // conversion avait réussi) et la carte affichait un rectangle noir sans
-  // contrôles, impossible à distinguer d'une vidéo vide.
-  const handleTranscodedError = (ev?: React.SyntheticEvent<HTMLVideoElement>) => {
-    if (error) return;
-    // Relevé au moment exact de l'échec : la sonde différée arrive trop tard,
-    // l'élément est déjà démonté. Le code distingue les cas qui n'appellent pas
-    // le même correctif — 3 = décodage (flux illisible en cours de route),
-    // 4 = source/format refusé d'emblée.
-    const el = ev?.currentTarget;
-    const detail = el?.error
-      ? `code=${el.error.code} message=${el.error.message || "(vide)"}`
-      : "aucune erreur exposée";
-    const state = el
-      ? ` readyState=${el.readyState} networkState=${el.networkState} duration=${el.duration}`
-        + ` dims=${el.videoWidth}x${el.videoHeight} t=${el.currentTime}`
-      : "";
-    void import("@tauri-apps/plugin-log")
-      .then(({ error: logError }) => logError(
-        `[Sion][vidéo] source convertie illisible (codec=${codec}): ${detail}${state}`,
-      ))
-      .catch(() => { /* hors Tauri */ });
-    // Échec de DÉCODAGE sur une conversion VP9 : le conteneur et les
-    // métadonnées étaient bons, c'est le décodeur qui a lâché. On retente une
-    // fois en VP8 avant d'abandonner — mesuré sous WebKitGTK, un VP9 portrait
-    // 1080x1920 échoue dès la première image alors que le fichier est valide.
-    if (el?.error?.code === 2 /* MEDIA_ERR_NETWORK */ || el?.error?.code === 3) {
-      if (codec === "vp9") {
-        setCodec("vp8");
-        setTranscodedUrl(null);
-        void runTranscode("vp8");
-        return;
-      }
-    }
-    setError(t("chat.videoPlaybackFailed", {
-      defaultValue: "Fichier converti illisible par le lecteur",
-    }));
-  };
-
-  const runTranscode = async (forceCodec?: "vp9" | "vp8") => {
-    const target = forceCodec ?? codec;
-    setError(null);
-    setTranscoding(true);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      // Feed ffmpeg the bytes the renderer already resolved — resolvedUrl is a
-      // blob that has gone through E2EE decryption + Matrix media auth. Letting
-      // Rust re-download attachment.url would have neither (401 on authed media,
-      // ciphertext on encrypted channels). Fall back to URL download if the
-      // blob can't be read for some reason.
-      //
-      // Les octets partent en binaire brut (`ArrayBuffer`), plus en base64 : la
-      // version précédente transformait une vidéo de 200 Mo en une chaîne de
-      // ~270 Mo dans le processus web, à l'aller comme au retour. Rust rend un
-      // chemin, que le protocole `asset` sert directement à la balise vidéo —
-      // aucun octet ne retraverse l'IPC.
-      let stagedPath: string | undefined;
-      try {
-        const buf = await (await fetch(resolvedUrl)).arrayBuffer();
-        const ext = (attachment.name?.split(".").pop() || "bin").toLowerCase();
-        stagedPath = await invoke<string>("stage_media", new Uint8Array(buf), {
-          headers: { "x-sion-ext": ext },
-        });
-      } catch (e) {
-        console.warn("[Sion] Mise en tampon pour transcodage échouée, fallback download:", e);
-      }
-      // Remux d'abord : le conteneur change, les flux vidéo sont copiés bit
-      // pour bit. C'est ce qui écarte `matroskademux` — dont une assertion a
-      // abattu le processus web et gelé toute l'interface (17/09) — pour une
-      // seconde de travail au lieu des minutes d'un réencodage, et sans
-      // toucher à la qualité. Le transcodage complet reste le filet : le MP4
-      // n'accepte pas tous les flux, VP8 notamment.
-      let outPath: string;
-      try {
-        outPath = await invoke<string>("remux_video_mp4", {
-          url: attachment.url,
-          ffmpegPath,
-          inputPath: stagedPath,
-        });
-      } catch (e) {
-        void import("@tauri-apps/plugin-log")
-          .then(({ info }) => info(`[Sion][vidéo] remux refusé (${String(e)}) — réencodage`))
-          .catch(() => { /* hors Tauri */ });
-        outPath = await invoke<string>("transcode_video", {
-          url: attachment.url,
-          ffmpegPath,
-          inputPath: stagedPath,
-          codec: target,
-        });
-      }
-      // Le fichier converti est servi en HTTP local, avec requêtes par plage :
-      // c'est ce qu'un élément média sait consommer. Un `blob:` l'obligeait à
-      // tenir tout le média en mémoire, et au-delà de quelques mégaoctets la
-      // lecture s'arrêtait en route sous WebKitGTK — voir `media_server.rs`
-      // pour les mesures et les deux approches écartées avant celle-ci.
-      // Sans serveur (socket refusée), on retombe sur le blob : dégradé, mais
-      // fonctionnel sur les petits fichiers.
-      const port = await invoke<number>("media_server_port").catch(() => 0);
-      const name = outPath.split("/").pop() ?? "";
-      if (port > 0 && name) {
-        const mediaUrl = `http://127.0.0.1:${port}/${encodeURIComponent(name)}`;
-        // La webview atteint-elle le serveur ? Si `fetch` réussit là où la
-        // balise vidéo échoue, le problème est le chargeur média, pas le
-        // réseau — c'est le même schéma qu'avec le protocole `asset`.
-        const probe = await fetch(mediaUrl, { headers: { Range: "bytes=0-1" } })
-          .then((r) => `${r.status} ${r.headers.get("content-type") ?? "?"}`)
-          .catch((e) => `échec ${String(e)}`);
-        void import("@tauri-apps/plugin-log")
-          .then(({ info }) => info(`[Sion][vidéo] source HTTP ${mediaUrl} → ${probe}`))
-          .catch(() => { /* hors Tauri */ });
-        setTranscodedUrl(mediaUrl);
-      } else {
-        const { readMediaBytes } = await import("../../services/videoPrepare");
-        const webm = await readMediaBytes(outPath, "converti pour la lecture");
-        setTranscodedUrl(URL.createObjectURL(new Blob([webm], { type: "video/webm" })));
-      }
-    } catch (err) {
-      console.error("[Sion] Transcodage échoué:", err);
-      // La console de la webview ne va pas dans le fichier de journal : sans
-      // ça, un échec de lecture n'était diagnosticable que par-dessus l'épaule
-      // de l'utilisateur.
-      void import("@tauri-apps/plugin-log")
-        .then(({ error: logError }) => logError(`[Sion][vidéo] transcodage échoué: ${String(err)}`))
-        .catch(() => { /* hors Tauri */ });
-      setError(String(err));
-      // Surface an "install ffmpeg" affordance on the card if it's missing.
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const p = await invoke<string | null>("detect_ffmpeg");
-        setFfmpegMissing(!p);
-      } catch { /* not in Tauri */ }
-    } finally {
-      setTranscoding(false);
-    }
-  };
-
-  const handleInstallFfmpeg = async () => {
-    setInstalling(0);
-    try {
-      const { installFfmpeg } = await import("../../services/ffmpegInstall");
-      await installFfmpeg((pct) => setInstalling(pct));
-      setInstalling(null);
-      setFfmpegMissing(false);
-      runTranscode(); // retry now that ffmpeg is available
-    } catch (err) {
-      console.error("[Sion] Installation ffmpeg échouée:", err);
-      setInstalling(null);
-    }
-  };
-
-  // Cleanup blob URL on unmount
-  useEffect(() => {
-    return () => {
-      if (!transcodedUrl?.startsWith("blob:")) return;
-      // Tracé : si cette révocation tombe pendant la lecture, la source meurt
-      // en cours de route et le lecteur rend `MEDIA_ERR_DECODE` — symptôme
-      // rigoureusement identique à un fichier corrompu.
-      void import("@tauri-apps/plugin-log")
-        .then(({ info }) => info(`[Sion][vidéo] blob révoqué: ${transcodedUrl}`))
-        .catch(() => { /* hors Tauri */ });
-      URL.revokeObjectURL(transcodedUrl);
-    };
-  }, [transcodedUrl]);
-
-  // Non-WebM formats keep their existing compatibility transcode. On Linux,
-  // only legacy AV1/unknown WebMs are normalized; VP8/VP9 keeps direct,
-  // immediate playback.
-  useEffect(() => {
-    if (webmCodec === "pending" || !resolvedUrl || transcodedUrl || transcoding || error) return;
-    if (mustTranscodeBeforePlayback && playRequested) {
-      runTranscode();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolvedUrl, webmCodec, playRequested]);
-
-  // Chien de garde de la lecture native.
-  //
-  // Sous WebKitGTK, une lecture peut s'arrêter au bout de deux secondes SANS
-  // émettre la moindre erreur : `onError` ne part pas, `canPlayType` avait
-  // répondu « oui », et l'utilisateur se retrouve devant un lecteur mort. Vu le
-  // 17/09 sur un MP4 H.264/AAC comme sur un WebM AV1 — alors que d'autres MP4
-  // se lisent intégralement. Aucun critère ne permet de prédire lequel passera,
-  // donc on ne prédit plus : on essaie, et on surveille.
-  //
-  // Un lecteur qui cale reste reconnaissable : la position n'avance plus alors
-  // qu'il n'est ni en pause ni terminé. Trois secondes de position figée
-  // déclenchent la conversion, celle-là même qui n'aurait pas dû être imposée
-  // aux fichiers qui marchent.
-  useEffect(() => {
-    if (!isLinuxDesktop || transcodedUrl || transcoding || error) return;
-    let last = -1;
-    let frozen = 0;
-    const timer = setInterval(() => {
-      const el = videoRef.current;
-      if (!el || el.paused || el.ended || el.readyState < 2) {
-        frozen = 0;
-        return;
-      }
-      if (el.currentTime === last) {
-        frozen += 1;
-        if (frozen >= 3) {
-          clearInterval(timer);
-          void import("@tauri-apps/plugin-log")
-            .then(({ warn }) => warn(
-              `[Sion][vidéo] lecture native figée à ${el.currentTime}s sans erreur — conversion`,
-            ))
-            .catch(() => { /* hors Tauri */ });
-          void runTranscode();
-        }
-        return;
-      }
-      frozen = 0;
-      last = el.currentTime;
-    }, 1000);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLinuxDesktop, transcodedUrl, transcoding, error, resolvedUrl]);
-
-  // Sonde d'état du lecteur. Une vidéo « bloquée à 0:00 » ne dit rien par
-  // elle-même : selon le cas, les métadonnées ne sont pas arrivées
-  // (`readyState` 0), la source est en erreur (`error.code`), ou la lecture est
-  // simplement refusée par la politique de démarrage automatique. On relève
-  // l'état réel deux secondes après l'attachement de la source convertie.
-  useEffect(() => {
-    const source = transcodedUrl ?? resolvedUrl;
-    if (!source) return;
-    const timer = setTimeout(() => {
-      const el = videoRef.current;
-      if (!el) return;
-      void import("@tauri-apps/plugin-log")
-        .then(({ info }) => info(
-          `[Sion][vidéo] état lecteur (${transcodedUrl ? "converti" : "natif"})`
-          + ` readyState=${el.readyState} networkState=${el.networkState}`
-          + ` duration=${el.duration} dims=${el.videoWidth}x${el.videoHeight}`
-          + ` paused=${el.paused} currentTime=${el.currentTime}`
-          + ` erreur=${el.error ? `${el.error.code}/${el.error.message}` : "aucune"}`,
-        ))
-        .catch(() => { /* hors Tauri */ });
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [transcodedUrl, resolvedUrl]);
-
-  if (error) {
-    const handleDownload = () => {
-      const a = document.createElement("a");
-      a.href = resolvedUrl;
-      a.download = attachment.name || "video.mp4";
-      a.click();
-    };
-    return (
-      <div style={{
-        marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
-        padding: '16px 20px', width: 520, maxWidth: '100%',
-        display: 'flex', alignItems: 'center', gap: 14,
-      }}>
-        <div style={{
-          width: 48, height: 48, borderRadius: 12,
-          background: 'var(--color-primary-container)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3" />
-          </svg>
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {attachment.name}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
-            {ffmpegMissing
-              ? `${formatFileSize(attachment.size)} — ffmpeg requis pour lire ce format`
-              : `${formatFileSize(attachment.size)} — ${error}`}
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-          {ffmpegMissing && (
-            <button
-              onClick={handleInstallFfmpeg}
-              disabled={installing !== null}
-              style={{
-                padding: '8px 16px', borderRadius: 20, border: 'none',
-                background: 'var(--color-primary)', color: 'var(--color-on-primary)',
-                fontSize: 12, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
-                cursor: installing !== null ? 'default' : 'pointer',
-                opacity: installing !== null ? 0.6 : 1,
-              }}
-            >
-              {installing !== null ? `Installation… ${installing}%` : "Installer ffmpeg (~80 Mo)"}
-            </button>
-          )}
-          <button
-            onClick={handleDownload}
-            style={{
-              padding: '8px 16px', borderRadius: 20, border: 'none', fontFamily: 'inherit',
-              fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', cursor: 'pointer',
-              background: ffmpegMissing ? 'var(--color-surface-container-highest)' : 'var(--color-primary)',
-              color: ffmpegMissing ? 'var(--color-on-surface)' : 'var(--color-on-primary)',
-            }}
-          >
-            Télécharger
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Conversion nécessaire mais pas encore demandée. On garde l'apparence d'un
-  // lecteur — un cadre sombre et un gros bouton de lecture — plutôt qu'une
-  // carte de fichier : le geste attendu reste « appuyer sur play », la
-  // conversion est un détail d'implémentation que l'utilisateur n'a pas à
-  // connaître. Elle n'est simplement plus lancée avant ce geste.
-  if (mustTranscodeBeforePlayback && !transcodedUrl && !transcoding) {
-    return (
-      <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
-        <button
-          type="button"
-          onClick={() => setPlayRequested(true)}
-          title={t("chat.videoNeedsConvert", { defaultValue: "conversion nécessaire pour lire ce format" })}
-          style={{
-            position: 'relative', display: 'block', width: '100%', border: 'none', padding: 0,
-            aspectRatio: '16 / 9', background: MEDIA_MATTE, cursor: 'pointer',
-          }}
-        >
-          <span style={{
-            position: 'absolute', inset: 0, display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{
-              width: 64, height: 64, borderRadius: '50%',
-              background: 'rgba(0,0,0,0.55)', border: `2px solid ${MEDIA_INK}`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <svg width="28" height="28" viewBox="0 0 24 24" fill={MEDIA_INK} aria-hidden="true">
-                <polygon points="6 4 20 12 6 20 6 4" />
-              </svg>
-            </span>
-          </span>
-        </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {attachment.name} — {formatFileSize(attachment.size)}
-          </span>
-        </div>
-      </div>
-    );
-  }
-
-  // The synchronous guard prevents even a one-frame mount of an AV1/unknown
-  // source while codec probing or the effect-triggered transcode is pending.
-  if (webmCodec === "pending" || transcoding || (mustTranscodeBeforePlayback && !transcodedUrl)) {
-    return (
-      <div style={{
-        marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16,
-        padding: '16px 20px', width: 520, maxWidth: '100%',
-        display: 'flex', alignItems: 'center', gap: 14,
-      }}>
-        <div style={{
-          width: 48, height: 48, borderRadius: 12,
-          background: 'var(--color-primary-container)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-        }}>
-          <div style={{
-            width: 20, height: 20, border: '2px solid var(--color-primary)',
-            borderTopColor: 'transparent', borderRadius: '50%',
-            animation: 'spin 1s linear infinite',
-          }} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-on-surface)' }}>
-            {attachment.name}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>
-            {webmCodec === "pending"
-              ? t("chat.videoProbing", { defaultValue: "Analyse du format…" })
-              : t("chat.videoConverting", { defaultValue: "Conversion en cours…" })}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const videoSrc = transcodedUrl || resolvedUrl;
-
-  return (
-    <div style={{ marginTop: 6, background: 'var(--color-surface-container-high)', borderRadius: 16, overflow: 'hidden', width: 520, maxWidth: '100%' }}>
-      <video
-        key={videoSrc}
-        ref={videoRef}
-        // Le fichier converti vient du serveur média local, donc d'une origine
-        // différente de la page. Sans cet attribut, la requête part en mode
-        // « no-cors » et WebKitGTK refuse la réponse pour un média : le
-        // serveur l'a bien servie en 200 video/webm, le lecteur l'a rejetée
-        // sans jamais atteindre `readyState=1`. Le serveur répond déjà
-        // `Access-Control-Allow-Origin: *`, la requête CORS aboutit donc.
-        crossOrigin={transcodedUrl?.startsWith("http") ? "anonymous" : undefined}
-        controls
-        playsInline
-        autoPlay={playRequested && !!transcodedUrl}
-        preload={transcodedUrl ? "metadata" : "none"}
-        src={videoSrc}
-        style={{ width: '100%', maxHeight: 400, display: 'block' }}
-        onError={transcodedUrl ? handleTranscodedError : handleError}
-      />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, color: 'var(--color-outline)' }}>
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {attachment.name} — {formatFileSize(attachment.size)}
-        </span>
-        {/* Lecture par le décodeur natif : le moteur web n'y touche pas.
-            Proposé à côté de l'ancien chemin le temps de le valider chez tous
-            les utilisateurs ; il deviendra le seul (étape 6 du document). */}
-        {attachment.url && !attachment.encryptedFile && (
-          <button
-            type="button"
-            onClick={() => setLecteurNatifOuvert(true)}
-            title={t("chat.playNative", { defaultValue: "Lire avec le décodeur natif" })}
-            style={{
-              flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
-              border: '1px solid var(--color-outline-variant)', background: 'transparent',
-              color: 'var(--color-on-surface-variant)', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-            }}
-          >
-            {t("chat.playNative", { defaultValue: "Lire (natif)" })}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={async () => {
-            if (!attachment.url) return;
-            const savedPath = await downloadFileToDownloads(attachment.url, attachment.name);
-            if (savedPath) {
-              useAppStore.getState().markAsDownloaded(attachment.url);
-              useAppStore.getState().showDownloadNotification(attachment.name, savedPath);
-            }
-          }}
-          title={t("chat.download", { defaultValue: "Télécharger la vidéo" })}
-          style={{
-            flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
-            border: '1px solid var(--color-outline-variant)', background: 'transparent',
-            color: 'var(--color-on-surface-variant)', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-          }}
-        >
-          {t("chat.download", { defaultValue: "Télécharger" })}
-        </button>
-      </div>
-      {lecteurNatifOuvert && attachment.url && (
-        <Suspense fallback={null}>
-          <NativeVideoPlayer
-            source={attachment.url}
-            titre={attachment.name}
-            onClose={() => setLecteurNatifOuvert(false)}
-          />
-        </Suspense>
-      )}
-    </div>
-  );
-}
 
 /** Encre des contrôles du visualiseur plein écran : posée sur les pixels de
  *  l'image, jamais sur une surface de l'app — donc volontairement neutre et
@@ -777,6 +182,130 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
   );
 }
 
+/**
+ * Carte vidéo du fil : une affiche cliquable, jamais de balise `<video>`.
+ *
+ * Le moteur web ne décode plus rien ici — c'est précisément ce qui a valu
+ * quatre jours de contournements, et un utilisateur qui ne voyait qu'un cadre
+ * vert sur une vidéo pourtant décodée. Le clic ouvre le lecteur natif, dont
+ * l'image passe par la surface du partage d'écran. Voir
+ * docs/lecteur-video-natif.md.
+ */
+function VideoCard({ resolvedUrl, attachment }: { resolvedUrl: string | null; attachment: FileAttachment }) {
+  const { t } = useTranslation();
+  const [source, setSource] = useState<string | null>(null);
+  const [preparation, setPreparation] = useState(false);
+  const isDownloaded = useAppStore((s) => (attachment.url ? s.downloadedFiles.has(attachment.url) : false));
+
+  /**
+   * Ce que ffmpeg doit ouvrir.
+   *
+   * Surtout pas l'URL `blob:` que le navigateur fabrique : elle n'existe que
+   * dans le moteur web, et ffmpeg répond « format illisible » (21/09). Un
+   * média en clair se lit directement par son URL HTTP. Un média chiffré, lui,
+   * doit d'abord être déchiffré ici puis déposé dans un fichier temporaire —
+   * le serveur ne sert que des octets illisibles.
+   */
+  const preparerSource = async (): Promise<string | null> => {
+    if (!attachment.encryptedFile) return attachment.url || null;
+    if (!resolvedUrl) return null;
+    setPreparation(true);
+    try {
+      const octets = new Uint8Array(await (await fetch(resolvedUrl)).arrayBuffer());
+      const { invoke } = await import("@tauri-apps/api/core");
+      const ext = (attachment.name.split(".").pop() || "mp4").toLowerCase();
+      return await invoke<string>("stage_media", octets, { headers: { "x-sion-ext": ext } });
+    } catch (err) {
+      console.error("[Sion][lecteur] préparation du média chiffré impossible", err);
+      return null;
+    } finally {
+      setPreparation(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 6, maxWidth: 420 }}>
+      <div
+        onClick={() => { void preparerSource().then(setSource); }}
+        style={{
+          position: 'relative',
+          borderRadius: 16,
+          overflow: 'hidden',
+          cursor: 'pointer',
+          background: 'var(--color-surface-container-high)',
+          aspectRatio: attachment.width && attachment.height ? `${attachment.width} / ${attachment.height}` : '16 / 9',
+          maxHeight: 240,
+        }}
+      >
+        {/* L'affiche vient du serveur quand l'émetteur en a joint une ; sinon
+            la carte reste sobre, avec juste le bouton de lecture. */}
+        {attachment.thumbnailUrl && (
+          <img
+            src={attachment.thumbnailUrl}
+            alt={attachment.name}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        )}
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 26,
+            background: 'var(--color-primary)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            {preparation ? (
+              <span style={{ color: 'var(--color-on-primary)', fontSize: 11 }}>…</span>
+            ) : (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--color-on-primary)">
+                <polygon points="6 4 20 12 6 20" />
+              </svg>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-outline)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {attachment.name} — {formatFileSize(attachment.size)}
+        </span>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!attachment.url) return;
+            const savedPath = await downloadFileToDownloads(attachment.url, attachment.name);
+            if (savedPath) {
+              useAppStore.getState().markAsDownloaded(attachment.url);
+              useAppStore.getState().showDownloadNotification(attachment.name, savedPath);
+            }
+          }}
+          title={isDownloaded ? t("download.alreadySaved") : t("chat.download", { defaultValue: "Télécharger la vidéo" })}
+          style={{
+            flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+            border: '1px solid var(--color-outline-variant)', background: 'transparent',
+            color: isDownloaded ? 'var(--color-success)' : 'var(--color-on-surface-variant)',
+            fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+          }}
+        >
+          {t("chat.download", { defaultValue: "Télécharger" })}
+        </button>
+      </div>
+
+      {source && (
+        <Suspense fallback={null}>
+          <NativeVideoPlayer
+            source={source}
+            titre={attachment.name}
+            onClose={() => setSource(null)}
+          />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
+
 function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   const { t } = useTranslation();
   const isImage = attachment.mimeType.startsWith("image/");
@@ -798,7 +327,12 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
     io.observe(el);
     return () => io.disconnect();
   }, [isVideo]);
-  const resolvedUrl = useResolvedUrl(attachment, isVideo ? videoVisible : true);
+  // Une vidéo en clair n'est plus téléchargée par le webview : ffmpeg lit
+  // l'URL. Seul un média chiffré doit encore passer ici, pour être déchiffré.
+  const resolvedUrl = useResolvedUrl(
+    attachment,
+    isVideo ? videoVisible && !!attachment.encryptedFile : true,
+  );
   const [lightboxOpen, setLightboxOpen] = useState(false);
   // Vrai si la vignette du serveur n'a pas pu être chargée.
   const [vignetteEchouee, setVignetteEchouee] = useState(false);
@@ -862,14 +396,7 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   }
 
   if (isVideo) {
-    if (!resolvedUrl) {
-      return (
-        <div ref={videoRef} style={{ marginTop: 6, padding: '8px 12px', borderRadius: 12, background: 'var(--color-surface-container-high)', color: 'var(--color-outline)', fontSize: 12 }}>
-          {videoVisible ? "Chargement de la vidéo…" : `🎥 ${attachment.name} — ${formatFileSize(attachment.size)}`}
-        </div>
-      );
-    }
-    return <VideoPlayer resolvedUrl={resolvedUrl} attachment={attachment} />;
+    return <VideoCard resolvedUrl={resolvedUrl} attachment={attachment} />;
   }
 
   const handleOpen = (e: React.MouseEvent) => {

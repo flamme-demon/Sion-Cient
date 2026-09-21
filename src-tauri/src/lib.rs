@@ -37,6 +37,7 @@ mod native_audio_tests;
 mod virtual_desktop;
 mod cue_playback;
 #[cfg(not(target_os = "android"))]
+mod lecteur_audio;
 mod lecteur_video;
 mod media_server;
 mod native_video_transport;
@@ -3805,6 +3806,8 @@ pub fn run() {
         lecteur_video::lecteur_video_ouvrir,
         lecteur_video::lecteur_video_fermer,
         lecteur_video::lecteur_video_etat,
+        lecteur_video::lecteur_video_pause,
+        lecteur_video::lecteur_video_volume,
         prepare_video_for_send,
         exit_app,
         persist_session,

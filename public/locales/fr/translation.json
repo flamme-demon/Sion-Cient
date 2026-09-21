@@ -157,7 +157,11 @@
     "attachedFile": "Fichier joint",
     "playNative": "Lire (natif)",
     "videoPlayFailed": "Lecture impossible",
-    "close": "Fermer"
+    "close": "Fermer",
+    "play": "Lire",
+    "pause": "Pause",
+    "volume": "Volume",
+    "seekUnavailable": "Déplacement pas encore disponible"
   },
   "poll": {
     "menuItem": "Sondage",
