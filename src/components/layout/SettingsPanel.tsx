@@ -670,6 +670,7 @@ export function SettingsPanel() {
         {/* === ADVANCED === */}
         {activeTab === "advanced" && (
           <div style={{ padding: '8px 0' }}>
+
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 13, color: 'var(--color-on-surface)', marginBottom: 4 }}>Chemin ffmpeg (optionnel)</div>
               <div style={{ display: 'flex', gap: 8 }}>

@@ -119,6 +119,23 @@ if [ "$ggml_count" -eq 0 ]; then
     echo "  ATTENTION: aucune variante ggml trouvee — la transcription ne demarrera pas"
 fi
 
+# ffmpeg, livre avec l'application.
+#
+# Le lecteur video, l'affiche des videos du fil et la conversion a l'envoi en
+# dependent tous les trois. Compter sur celui du systeme laissait ces
+# fonctions muettes chez qui ne l'a pas, et le telechargement au premier usage
+# ne sert a rien hors ligne. Le binaire statique ajoute ~22 Mo compresses.
+#
+# `resolve_ffmpeg` (lib.rs) le cherche a cet emplacement precis.
+if [ ! -x "$PROJECT_DIR/src-tauri/resources/ffmpeg" ]; then
+    echo "  ffmpeg absent, recuperation..."
+    "$PROJECT_DIR/build-scripts/fetch-ffmpeg.sh" >/dev/null
+fi
+mkdir -p "$APPDIR/usr/lib/sion-client/resources"
+cp "$PROJECT_DIR/src-tauri/resources/ffmpeg" "$APPDIR/usr/lib/sion-client/resources/"
+chmod +x "$APPDIR/usr/lib/sion-client/resources/ffmpeg"
+echo "  ffmpeg embarque ($(du -h "$APPDIR/usr/lib/sion-client/resources/ffmpeg" | cut -f1))"
+
 # Decodeur AV1 pour le moteur web.
 #
 # WebKitGTK ne decode rien lui-meme : il delegue a GStreamer et construit sa

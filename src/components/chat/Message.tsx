@@ -28,6 +28,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
+import { definirLecteurActif, libererLecteurActif, useEstLecteurActif } from "../../services/lecteurActif";
 // Lecteur hors moteur web (voir docs/lecteur-video-natif.md). Chargé à la
 // demande : il ne sert qu'au clic, inutile de l'embarquer au démarrage.
 const NativeVideoPlayer = lazy(() =>
@@ -195,6 +196,26 @@ function VideoCard({ resolvedUrl, attachment }: { resolvedUrl: string | null; at
   const { t } = useTranslation();
   const [source, setSource] = useState<string | null>(null);
   const [preparation, setPreparation] = useState(false);
+  // Une seule vidéo joue à la fois : la surface native est unique. Si une
+  // autre carte prend la main, celle-ci doit revenir à son affiche — sinon
+  // elle montrerait un cadre vide en prétendant lire.
+  const estActive = useEstLecteurActif(attachment.id);
+  // Affiche extraite localement : le serveur ne sait pas en fabriquer pour
+  // une vidéo. Générée une seule fois puis gardée en cache côté Rust.
+  const [affiche, setAffiche] = useState<string | null>(attachment.thumbnailUrl ?? null);
+  useEffect(() => {
+    if (affiche || !attachment.url || attachment.encryptedFile) return;
+    let vivant = true;
+    void import("../../services/voiceNativeService")
+      .then((m) => m.afficheLecteurVideo(attachment.url))
+      .then((data) => { if (vivant) setAffiche(data); })
+      .catch(() => { /* ffmpeg absent, ou format sans image */ });
+    return () => { vivant = false; };
+  }, [affiche, attachment.url, attachment.encryptedFile]);
+  useEffect(() => {
+    if (!estActive && source) setSource(null);
+  }, [estActive, source]);
+  useEffect(() => () => libererLecteurActif(attachment.id), [attachment.id]);
   const isDownloaded = useAppStore((s) => (attachment.url ? s.downloadedFiles.has(attachment.url) : false));
 
   /**
@@ -223,86 +244,168 @@ function VideoCard({ resolvedUrl, attachment }: { resolvedUrl: string | null; at
     }
   };
 
-  return (
-    <div style={{ marginTop: 6, maxWidth: 420 }}>
-      <div
-        onClick={() => { void preparerSource().then(setSource); }}
-        style={{
-          position: 'relative',
-          borderRadius: 16,
-          overflow: 'hidden',
-          cursor: 'pointer',
-          background: 'var(--color-surface-container-high)',
-          aspectRatio: attachment.width && attachment.height ? `${attachment.width} / ${attachment.height}` : '16 / 9',
-          maxHeight: 240,
-        }}
-      >
-        {/* L'affiche vient du serveur quand l'émetteur en a joint une ; sinon
-            la carte reste sobre, avec juste le bouton de lecture. */}
-        {attachment.thumbnailUrl && (
-          <img
-            src={attachment.thumbnailUrl}
-            alt={attachment.name}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-          />
-        )}
-        <div style={{
-          position: 'absolute', inset: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div style={{
-            width: 52, height: 52, borderRadius: 26,
-            background: 'var(--color-primary)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            {preparation ? (
-              <span style={{ color: 'var(--color-on-primary)', fontSize: 11 }}>…</span>
-            ) : (
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--color-on-primary)">
-                <polygon points="6 4 20 12 6 20" />
-              </svg>
-            )}
-          </div>
-        </div>
-      </div>
+  const ratio =
+    attachment.width && attachment.height ? `${attachment.width} / ${attachment.height}` : '16 / 9';
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-        <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-outline)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {attachment.name} — {formatFileSize(attachment.size)}
-        </span>
-        <button
-          type="button"
-          onClick={async () => {
-            if (!attachment.url) return;
-            const savedPath = await downloadFileToDownloads(attachment.url, attachment.name);
-            if (savedPath) {
-              useAppStore.getState().markAsDownloaded(attachment.url);
-              useAppStore.getState().showDownloadNotification(attachment.name, savedPath);
-            }
-          }}
-          title={isDownloaded ? t("download.alreadySaved") : t("chat.download", { defaultValue: "Télécharger la vidéo" })}
-          style={{
-            flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
-            border: '1px solid var(--color-outline-variant)', background: 'transparent',
-            color: isDownloaded ? 'var(--color-success)' : 'var(--color-on-surface-variant)',
-            fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
-          }}
-        >
-          {t("chat.download", { defaultValue: "Télécharger" })}
-        </button>
-      </div>
+  /**
+   * Largeur de la carte, dictée par l'AFFICHE et par elle seule.
+   *
+   * En `fit-content`, c'était le nom du fichier qui décidait : une vidéo
+   * verticale nommée « Colonel Lee Hervay 666 - Une copine… » étalait sa bulle
+   * sur 420 pixels avec l'image tassée à gauche, quand la même vidéo au nom
+   * court restait serrée (21/09). La légende se tronque, elle n'impose rien.
+   */
+  const LECTEUR_HAUTEUR_MAX = 340;
+  const largeurCarte = Math.round(
+    Math.min(
+      420,
+      LECTEUR_HAUTEUR_MAX
+        * (attachment.width && attachment.height ? attachment.width / attachment.height : 16 / 9),
+    ),
+  );
 
-      {source && (
-        <Suspense fallback={null}>
-          <NativeVideoPlayer
-            source={source}
-            titre={attachment.name}
-            onClose={() => setSource(null)}
-          />
-        </Suspense>
+  const lancer = () => {
+    void preparerSource().then((s) => {
+      if (!s) return;
+      definirLecteurActif(attachment.id);
+      setSource(s);
+    });
+  };
+
+  const pastille = (taille: number) => (
+    <div style={{
+      width: taille, height: taille, borderRadius: taille / 2,
+      background: 'var(--color-primary)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0,
+    }}>
+      {preparation ? (
+        <span style={{ color: 'var(--color-on-primary)', fontSize: taille * 0.3 }}>…</span>
+      ) : (
+        <svg width={taille * 0.42} height={taille * 0.42} viewBox="0 0 24 24" fill="var(--color-on-primary)">
+          <polygon points="6 4 20 12 6 20" />
+        </svg>
       )}
     </div>
   );
+
+  const telecharger = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!attachment.url) return;
+    const savedPath = await downloadFileToDownloads(attachment.url, attachment.name);
+    if (savedPath) {
+      useAppStore.getState().markAsDownloaded(attachment.url);
+      useAppStore.getState().showDownloadNotification(attachment.name, savedPath);
+    }
+  };
+
+  const boutonTelecharger = (
+    <button
+      type="button"
+      onClick={telecharger}
+      title={isDownloaded ? t("download.alreadySaved") : t("chat.download", { defaultValue: "Télécharger la vidéo" })}
+      style={{
+        flexShrink: 0, padding: 6, borderRadius: 999, cursor: 'pointer',
+        border: 'none', background: 'transparent', display: 'flex',
+        color: isDownloaded ? 'var(--color-success)' : 'var(--color-outline)',
+      }}
+    >
+      <DownloadIcon />
+    </button>
+  );
+
+  // Sans affiche NI lecture en cours, pas de grand rectangle vide : une ligne
+  // compacte, comme pour un fichier. L'aperçu ne vaut que s'il montre
+  // quelque chose.
+  if (!affiche && !(source && estActive)) {
+    return (
+      <div
+        onClick={lancer}
+        style={{
+          marginTop: 6, maxWidth: 420, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 12px', borderRadius: 14,
+          background: 'var(--color-surface-container-high)',
+        }}
+      >
+        {pastille(38)}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {attachment.name}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--color-outline)' }}>
+            {formatFileSize(attachment.size)}
+          </div>
+        </div>
+        {boutonTelecharger}
+      </div>
+    );
+  }
+
+  // UNE seule structure, que l'on lise ou non : même conteneur, même cadre,
+  // même légende. Rendre un arbre distinct pendant la lecture faisait
+  // démonter la carte entière — la hauteur passait par zéro et toute la liste
+  // sursautait au démarrage (21/09).
+  return (
+    <div style={{ marginTop: 6, width: largeurCarte, maxWidth: '100%' }}>
+      <div
+        onClick={source && estActive ? undefined : lancer}
+        style={{
+          position: 'relative',
+          borderRadius: 14,
+          overflow: 'hidden',
+          cursor: source && estActive ? 'default' : 'pointer',
+          background: 'var(--color-surface-container-high)',
+          aspectRatio: ratio,
+          maxHeight: LECTEUR_HAUTEUR_MAX,
+        }}
+      >
+        {source && estActive ? (
+          <Suspense fallback={null}>
+            <NativeVideoPlayer
+              source={source}
+              ratio={ratio}
+              onClose={() => {
+                setSource(null);
+                libererLecteurActif(attachment.id);
+              }}
+            />
+          </Suspense>
+        ) : (
+          <>
+            <img
+              src={affiche ?? undefined}
+              alt={attachment.name}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {pastille(52)}
+            </div>
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+        {source && estActive ? (
+          <button
+            type="button"
+            onClick={() => { setSource(null); libererLecteurActif(attachment.id); }}
+            style={{
+              flexShrink: 0, border: 'none', cursor: 'pointer', padding: 0,
+              background: 'transparent', color: 'var(--color-outline)',
+              fontSize: 11, fontFamily: 'inherit',
+            }}
+          >
+            ✕ {t("chat.stop", { defaultValue: "Arrêter" })}
+          </button>
+        ) : null}
+        <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-outline)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {attachment.name} — {formatFileSize(attachment.size)}
+        </span>
+        {boutonTelecharger}
+      </div>
+    </div>
+  );
+
 }
 
 

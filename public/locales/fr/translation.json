@@ -161,7 +161,10 @@
     "play": "Lire",
     "pause": "Pause",
     "volume": "Volume",
-    "seekUnavailable": "Déplacement pas encore disponible"
+    "seek": "Aller à cette position",
+    "clickToPause": "Cliquer pour mettre en pause",
+    "stop": "Arrêter la lecture",
+    "fullscreen": "Plein écran"
   },
   "poll": {
     "menuItem": "Sondage",

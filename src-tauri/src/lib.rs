@@ -37,6 +37,7 @@ mod native_audio_tests;
 mod virtual_desktop;
 mod cue_playback;
 #[cfg(not(target_os = "android"))]
+mod incrustation_lecteur;
 mod lecteur_audio;
 mod lecteur_video;
 mod media_server;
@@ -1517,6 +1518,33 @@ const VIDEO_SCALE_FILTER: &str =
 /// Dossier temporaire dédié aux médias. Isolé du `temp_dir` général pour que la
 /// portée du protocole `asset` (qui laisse la webview lire ces fichiers) puisse
 /// être restreinte à ce seul répertoire.
+/// Chemin du ffmpeg livré dans le paquet, s'il s'y trouve.
+///
+/// Tauri dépose les ressources à côté de l'exécutable sous Windows, et dans
+/// `usr/lib/<app>/resources` dans une AppImage. On sonde les deux plutôt que
+/// de dépendre d'un `AppHandle`, cette fonction étant appelée depuis des
+/// chemins qui n'en ont pas.
+fn ffmpeg_livre() -> Option<String> {
+    let nom = if cfg!(target_os = "windows") {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let exe = std::env::current_exe().ok()?;
+    let dossier = exe.parent()?;
+    for candidat in [
+        dossier.join("resources").join(nom),
+        // AppImage : l'exécutable vit dans usr/bin, les ressources à côté.
+        dossier.join("../lib/sion-client/resources").join(nom),
+        dossier.join("../resources").join(nom),
+    ] {
+        if candidat.is_file() {
+            return Some(candidat.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 pub(crate) fn sion_media_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join("sion-media");
     let _ = std::fs::create_dir_all(&dir);
@@ -2249,12 +2277,24 @@ pub(crate) fn managed_ffmpeg_path(app: &tauri::AppHandle<TauriRuntime>) -> Optio
 /// app-managed download (`<app-data>/bin/ffmpeg`); otherwise probe common
 /// install locations (so it works without PATH, the usual Windows case);
 /// finally fall back to bare `ffmpeg` (PATH lookup).
+///
+/// Ordre : chemin choisi par l'utilisateur, binaire LIVRÉ avec l'application,
+/// téléchargement géré, voisin de l'exécutable, emplacements usuels, PATH.
 pub(crate) fn resolve_ffmpeg(configured: Option<&str>, managed: Option<&str>) -> String {
     if let Some(p) = configured {
         let p = p.trim();
         if !p.is_empty() {
             return p.to_string();
         }
+    }
+    // Celui qu'on LIVRE, juste après le choix explicite de l'utilisateur.
+    //
+    // Sion ne peut ni lire une vidéo, ni en extraire l'affiche, ni convertir
+    // un envoi trop lourd sans ffmpeg. Compter sur celui du système laissait
+    // ces fonctions muettes chez qui ne l'a pas, et le téléchargement au
+    // premier usage ne sert à rien hors ligne. Il est donc dans le paquet.
+    if let Some(p) = ffmpeg_livre() {
+        return p;
     }
     if let Some(p) = managed {
         if !p.is_empty() && std::path::Path::new(p).exists() {
@@ -3807,7 +3847,11 @@ pub fn run() {
         lecteur_video::lecteur_video_fermer,
         lecteur_video::lecteur_video_etat,
         lecteur_video::lecteur_video_pause,
+        lecteur_video::lecteur_video_seek,
+        lecteur_video::lecteur_video_zones,
+        lecteur_video::lecteur_video_affiche,
         lecteur_video::lecteur_video_volume,
+        lecteur_video::lecteur_video_apercu,
         prepare_video_for_send,
         exit_app,
         persist_session,

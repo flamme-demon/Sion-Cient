@@ -84,7 +84,7 @@ impl Audio {
 ///
 /// Renvoie `None` si le média n'a pas de son, ou si aucune sortie audio n'est
 /// disponible : une vidéo muette vaut mieux qu'une vidéo qui refuse de partir.
-pub fn demarrer(ffmpeg: &str, source: &str) -> Option<Audio> {
+pub fn demarrer(ffmpeg: &str, source: &str, depart_ms: u64) -> Option<Audio> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let hote = cpal::default_host();
@@ -104,8 +104,14 @@ pub fn demarrer(ffmpeg: &str, source: &str) -> Option<Audio> {
     // rééchantillonnage ni remixage à écrire de notre côté, et surtout rien de
     // tout cela dans le rappel audio, où le moindre retard s'entend.
     let mut commande = crate::hidden_command(ffmpeg);
+    commande.args(["-hide_banner", "-loglevel", "error"]);
+    // `-ss` AVANT `-i` : ffmpeg saute alors directement à l'image clé, au lieu
+    // de décoder tout ce qui précède pour le jeter.
+    if depart_ms > 0 {
+        commande.args(["-ss", &format!("{:.3}", depart_ms as f64 / 1000.0)]);
+    }
     commande
-        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg("-i")
         .arg(source)
         .args([
             "-vn",

@@ -535,7 +535,17 @@ function nativeSurfaceLoop() {
     // Intersect every ancestor that establishes an overflow clip before
     // handing the rectangle to Rust.
     let visible = element.getBoundingClientRect();
+    // Le rognage s'arrête à l'élément affiché en plein écran.
+    //
+    // Un élément plein écran sort de la composition normale : ses ancêtres ne
+    // le contiennent plus visuellement, même s'ils restent ses parents dans
+    // le DOM. Sans cette borne, le lecteur passé en plein écran se voyait
+    // intersecté avec la liste des messages qui le contient, et sa surface
+    // tombait à 1076×61 au milieu d'un écran de 5120×1440 (21/09).
+    const plein = document.fullscreenElement;
+    const sousPlein = plein?.contains(element) ?? false;
     for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      if (sousPlein && (ancestor === plein || !plein!.contains(ancestor))) break;
       const ancestorStyle = getComputedStyle(ancestor);
       const clipsX = ancestorStyle.overflowX !== "visible";
       const clipsY = ancestorStyle.overflowY !== "visible";
@@ -904,4 +914,73 @@ export function pauseLecteurVideo(enPause: boolean): Promise<void> {
 /** Volume, de 0 à 1,5 — au-delà de 1 le son est amplifié. */
 export function volumeLecteurVideo(valeur: number): Promise<void> {
   return tauriInvoke<void>("lecteur_video_volume", { valeur });
+}
+
+/** Se déplace dans le film. Relance ffmpeg à la position demandée : compter
+ *  quelques dixièmes de seconde avant la reprise. */
+export function seekLecteurVideo(positionMs: number): Promise<EtatLecteurVideo> {
+  return tauriInvoke<EtatLecteurVideo>("lecteur_video_seek", { positionMs: Math.max(0, Math.round(positionMs)) });
+}
+
+/** Découpe du bandeau incrusté, en pixels du média. Rust dessine, la page
+ *  pose ses zones de clic aux mêmes endroits. */
+export interface ZonesLecteur {
+  bandeau_y: number;
+  bandeau_h: number;
+  barre_h: number;
+  bouton_x: number;
+  bouton_l: number;
+  barre_x: number;
+  barre_l: number;
+  volume_x: number;
+  volume_l: number;
+  compteur_x: number;
+  /** "complet" | "court" | "aucun" */
+  compteur: string;
+  plein_x: number;
+  plein_l: number;
+  rangee_y: number;
+  taille: number;
+  avec_jauge: boolean;
+}
+
+/**
+ * Découpe du bandeau, et déclaration de l'échelle d'affichage.
+ *
+ * `echelle` vaut « pixels d'écran par pixel de média ». Rust s'en sert pour
+ * dimensionner le bandeau afin qu'il reste lisible APRÈS réduction : sans
+ * elle, une vidéo verticale affichée au tiers de sa taille donnait des
+ * contrôles minuscules.
+ */
+export function zonesLecteurVideo(
+  largeur: number,
+  hauteur: number,
+  echelle: number,
+): Promise<ZonesLecteur> {
+  return tauriInvoke<ZonesLecteur>("lecteur_video_zones", { largeur, hauteur, echelle });
+}
+
+/**
+ * Affiche d'une vidéo, en JPEG encodé en base64.
+ *
+ * Le serveur n'en produit pas — interrogé sur la route des vignettes, il
+ * renvoie la vidéo entière — donc ffmpeg extrait une image, mise en cache sur
+ * disque. À n'appeler que pour une carte réellement visible.
+ */
+export async function afficheLecteurVideo(source: string): Promise<string> {
+  const { useSettingsStore } = await import("../stores/useSettingsStore");
+  const b64 = await tauriInvoke<string>("lecteur_video_affiche", {
+    chemin: source,
+    ffmpegPath: useSettingsStore.getState().ffmpegPath || undefined,
+  });
+  return `data:image/jpeg;base64,${b64}`;
+}
+
+/** Position visée pendant un glissement sur la barre, ou `null` à la fin du
+ *  geste. Seule la pastille bouge — le déplacement réel attend le
+ *  relâchement. */
+export function apercuLecteurVideo(positionMs: number | null): Promise<void> {
+  return tauriInvoke<void>("lecteur_video_apercu", {
+    positionMs: positionMs === null ? null : Math.max(0, Math.round(positionMs)),
+  });
 }

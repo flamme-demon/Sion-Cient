@@ -121,16 +121,33 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
   const { invoke } = await import("@tauri-apps/api/core");
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const compatible = alreadyCompatible(file, bytes);
   const ext = (file.name.split(".").pop() || "bin").toLowerCase();
-  // Trace de la décision. Un fichier importé par lien, donc déjà normalisé,
-  // était réencodé une seconde fois à l'envoi (18/09) : sans cette ligne, rien
-  // ne distinguait « la garde n'a pas reconnu le format » de « le format
-  // n'était effectivement pas le bon ».
+
+  /**
+   * Réencoder ou non : **seule la taille décide**.
+   *
+   * Le critère était le codec, pour garantir que le destinataire puisse lire.
+   * Ça n'a jamais marché — on réencodait en AV1 et la lecture échouait quand
+   * même chez qui n'avait pas le bon greffon — et ça n'a plus lieu d'être :
+   * le lecteur décode lui-même, hors du moteur web (voir
+   * docs/lecteur-video-natif.md). Reste la seule contrainte réelle : le
+   * serveur refuse au-delà de sa limite d'envoi.
+   *
+   * Un clip qui tient dans la limite part donc tel quel, quel que soit son
+   * format — plus d'attente de conversion pour rien.
+   */
+  const { getMaxUploadSize } = await import("./matrixService");
+  const limite = await getMaxUploadSize().catch(() => 0);
+  // Marge : le conteneur et les métadonnées s'ajoutent à l'envoi, et un
+  // fichier refusé au dernier moment aurait coûté tout le téléversement.
+  const tientDansLaLimite = limite > 0 && file.size <= limite * 0.95;
+  const compatible = tientDansLaLimite || alreadyCompatible(file, bytes);
+
   void import("@tauri-apps/plugin-log")
     .then(({ info }) => info(
       `[Sion][vidéo] envoi : ${file.name} (${file.type || "type inconnu"}, `
-      + `${(file.size / 1048576).toFixed(1)} Mo) — déjà compatible : ${compatible}`,
+      + `${(file.size / 1048576).toFixed(1)} Mo) — limite ${(limite / 1048576).toFixed(0)} Mo, `
+      + `réencodage ${compatible ? "inutile" : "nécessaire"}`,
     ))
     .catch(() => { /* hors Tauri */ });
 

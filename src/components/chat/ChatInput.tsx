@@ -4,6 +4,7 @@ import { SendIcon, CloseIcon, EmojiIcon, DisconnectIcon } from "../icons";
 import { AttachButton } from "./AttachButton";
 import { FilePreview } from "./FilePreview";
 import { UserAvatar } from "../sidebar/UserAvatar";
+import { FfmpegMissingError } from "../../services/videoPrepare";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -13,7 +14,6 @@ import { EMOJI_DATA } from "../../utils/emojiData";
 import { readClipboardImageFile } from "../../utils/clipboardImage";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { LargeMessageModal } from "./LargeMessageModal";
-import { FfmpegMissingError } from "../../services/videoPrepare";
 
 // Klipy GIF API — Tenor was shut down by Google on 2026-06-30. The key is
 // injected at build time via VITE_KLIPY_API_KEY: `.env.local` in dev, GitHub

@@ -161,7 +161,10 @@
     "play": "Play",
     "pause": "Pause",
     "volume": "Volume",
-    "seekUnavailable": "Seeking not available yet"
+    "seek": "Jump to this position",
+    "clickToPause": "Click to pause",
+    "stop": "Stop playback",
+    "fullscreen": "Fullscreen"
   },
   "poll": {
     "menuItem": "Poll",
