@@ -36,6 +36,8 @@ mod native_audio_tests;
 #[cfg(target_os = "windows")]
 mod virtual_desktop;
 mod cue_playback;
+#[cfg(not(target_os = "android"))]
+mod lecteur_video;
 mod media_server;
 mod native_video_transport;
 #[cfg(feature = "native-voice")]
@@ -1662,7 +1664,7 @@ fn av1_playable_natively() -> bool {
 /// `ffprobe` serait plus propre, mais le téléchargement intégré n'installe que
 /// `ffmpeg` : dépendre de `ffprobe` ferait échouer la préparation exactement
 /// chez les utilisateurs pour qui le bouton d'installation a été écrit.
-fn probe_video(ffmpeg_bin: &str, path: &std::path::Path) -> Option<(u32, u32, f64)> {
+pub(crate) fn probe_video(ffmpeg_bin: &str, path: &std::path::Path) -> Option<(u32, u32, f64)> {
     let out = hidden_command(ffmpeg_bin).arg("-i").arg(path).output().ok()?;
     let text = String::from_utf8_lossy(&out.stderr);
     let mut dims = None;
@@ -2232,7 +2234,7 @@ fn purge_background_files(
 /// l'application (app-data est hors du profil webview). None if the app-data
 /// dir can't be resolved.
 #[cfg(not(target_os = "android"))]
-fn managed_ffmpeg_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
+pub(crate) fn managed_ffmpeg_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path::PathBuf> {
     let dir = app.path().app_data_dir().ok()?;
     let name = if cfg!(target_os = "windows") {
         "ffmpeg.exe"
@@ -2246,7 +2248,7 @@ fn managed_ffmpeg_path(app: &tauri::AppHandle<TauriRuntime>) -> Option<std::path
 /// app-managed download (`<app-data>/bin/ffmpeg`); otherwise probe common
 /// install locations (so it works without PATH, the usual Windows case);
 /// finally fall back to bare `ffmpeg` (PATH lookup).
-fn resolve_ffmpeg(configured: Option<&str>, managed: Option<&str>) -> String {
+pub(crate) fn resolve_ffmpeg(configured: Option<&str>, managed: Option<&str>) -> String {
     if let Some(p) = configured {
         let p = p.trim();
         if !p.is_empty() {
@@ -3800,6 +3802,9 @@ pub fn run() {
         read_media,
         media_server_port,
         av1_playable_natively,
+        lecteur_video::lecteur_video_ouvrir,
+        lecteur_video::lecteur_video_fermer,
+        lecteur_video::lecteur_video_etat,
         prepare_video_for_send,
         exit_app,
         persist_session,

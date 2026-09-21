@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -30,6 +30,11 @@ import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { detectWebmVideoCodec, type WebmVideoCodec as DetectedWebmVideoCodec } from "../../utils/webmCodec";
+// Lecteur hors moteur web (voir docs/lecteur-video-natif.md). Chargé à la
+// demande : il ne sert qu'au clic, inutile de l'embarquer au démarrage.
+const NativeVideoPlayer = lazy(() =>
+  import("./NativeVideoPlayer").then((m) => ({ default: m.NativeVideoPlayer })),
+);
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -158,6 +163,8 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
   // true when the transcode failed because ffmpeg isn't installed → offer to
   // install it right from the card. number = install progress %.
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
+  // Lecteur natif ouvert par-dessus le fil.
+  const [lecteurNatifOuvert, setLecteurNatifOuvert] = useState(false);
   const [installing, setInstalling] = useState<number | null>(null);
   const ffmpegPath = useSettingsStore((s) => s.ffmpegPath);
   useEffect(() => {
@@ -652,6 +659,23 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {attachment.name} — {formatFileSize(attachment.size)}
         </span>
+        {/* Lecture par le décodeur natif : le moteur web n'y touche pas.
+            Proposé à côté de l'ancien chemin le temps de le valider chez tous
+            les utilisateurs ; il deviendra le seul (étape 6 du document). */}
+        {attachment.url && !attachment.encryptedFile && (
+          <button
+            type="button"
+            onClick={() => setLecteurNatifOuvert(true)}
+            title={t("chat.playNative", { defaultValue: "Lire avec le décodeur natif" })}
+            style={{
+              flexShrink: 0, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+              border: '1px solid var(--color-outline-variant)', background: 'transparent',
+              color: 'var(--color-on-surface-variant)', fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+            }}
+          >
+            {t("chat.playNative", { defaultValue: "Lire (natif)" })}
+          </button>
+        )}
         <button
           type="button"
           onClick={async () => {
@@ -672,6 +696,15 @@ function VideoPlayer({ resolvedUrl, attachment }: { resolvedUrl: string; attachm
           {t("chat.download", { defaultValue: "Télécharger" })}
         </button>
       </div>
+      {lecteurNatifOuvert && attachment.url && (
+        <Suspense fallback={null}>
+          <NativeVideoPlayer
+            source={attachment.url}
+            titre={attachment.name}
+            onClose={() => setLecteurNatifOuvert(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

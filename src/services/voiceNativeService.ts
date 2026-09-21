@@ -852,3 +852,43 @@ export async function pipNativeStatus(): Promise<boolean> {
     return false;
   }
 }
+
+/** État du lecteur vidéo natif, tel que le rapporte Rust. */
+export interface EtatLecteurVideo {
+  actif: boolean;
+  largeur: number;
+  hauteur: number;
+  duree_ms: number;
+  position_ms: number;
+}
+
+/** Identifiant de flux du lecteur dans la surface native. Doit rester
+ *  identique à `SENDER_LECTEUR` côté Rust. */
+export const SENDER_LECTEUR = "sion:lecteur";
+
+/**
+ * Ouvre une vidéo dans le lecteur natif.
+ *
+ * `source` peut être un chemin local ou une URL HTTP : ffmpeg lit les deux, ce
+ * qui évite de télécharger le fichier avant de le regarder. Le décodage se
+ * fait hors du moteur web et les images sont peintes dans la surface native —
+ * voir docs/lecteur-video-natif.md pour la raison de ce détour.
+ */
+export async function ouvrirLecteurVideo(source: string): Promise<EtatLecteurVideo> {
+  const { useSettingsStore } = await import("../stores/useSettingsStore");
+  return tauriInvoke<EtatLecteurVideo>("lecteur_video_ouvrir", {
+    chemin: source,
+    ffmpegPath: useSettingsStore.getState().ffmpegPath || undefined,
+  });
+}
+
+/** Arrête la lecture et libère la surface. Sans effet s'il n'y a rien à
+ *  arrêter : appelable à chaque fermeture sans condition. */
+export function fermerLecteurVideo(): Promise<void> {
+  return tauriInvoke<void>("lecteur_video_fermer");
+}
+
+/** Position et durée courantes, pour la barre de progression. */
+export function etatLecteurVideo(): Promise<EtatLecteurVideo> {
+  return tauriInvoke<EtatLecteurVideo>("lecteur_video_etat");
+}

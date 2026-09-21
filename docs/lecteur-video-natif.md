@@ -53,8 +53,11 @@ quelque chose. C'est la seule pièce à déplacer.
 2. **Au clic** : un lecteur natif, une seule vidéo à la fois, dans une fenêtre
    dédiée ou en plein écran — comme le partage d'écran aujourd'hui. Cela évite
    l'enfer du positionnement de surfaces natives au fil du défilement.
-3. **Décodage** : `ffmpeg` en **bibliothèque** (crate `ffmpeg-next`), pas en
-   sous-processus. Les plans I420 partent dans la surface native existante.
+3. **Décodage** : `ffmpeg` en **processus séparé**, et surtout pas en
+   bibliothèque — voir l'avertissement ci-dessous. Il débite du `rawvideo
+   yuv420p` sur un tube, découpé en plans I420 et poussé dans la surface
+   native existante. Le drapeau `-re` le fait débiter à la vitesse réelle du
+   média : c'est lui qui cadence, il n'y a pas d'horloge à tenir.
 4. **Audio** : la même bibliothèque décode la piste audio en PCM, rendu par
    `cpal` — déjà présent dans `cue_playback.rs`.
 5. **Synchronisation** : horloge audio maîtresse, présentation des images sur
@@ -107,12 +110,12 @@ démultiplexeur MP4 et un décodeur AAC pour lire l'historique du salon.
 |---|---|
 | 0. Faisabilité du décodage (Linux) | **fait** — voir les mesures ci-dessus |
 | 1. Compilation de `ffmpeg-sys` sous Windows | **fait** — voir ci-dessous |
-| 2. Décodage → surface native, sans audio | à faire |
+| 2. Décodage → surface native, sans audio | **fait** — validé à l'écran le 21/09 |
 | 3. Audio + synchronisation | à faire |
 | 4. Contrôles : lecture, pause, position, volume | à faire |
 | 5. Aperçu dans le fil (`info.thumbnail_url` à l'envoi) | à faire |
 | 6. Suppression de la machinerie webview | à faire |
-| 7. Embarquer les bibliothèques ffmpeg (AppImage + installeur) | à faire |
+| 7. Embarquer **le binaire** ffmpeg (AppImage + installeur) | à faire |
 
 ### Étape 1 — résultat (21/09/2026)
 
@@ -140,11 +143,48 @@ Prérequis, dans l'ordre où ils ont été découverts :
    de licence de Sion.
 3. `FFMPEG_DIR` pointant sur la racine extraite (celle qui contient `include\`
    et `lib\`).
-4. À l'exécution, les DLL de `bin\` doivent être trouvables — donc à embarquer
-   dans l'installeur (étape 7).
+4. À l'exécution, les DLL de `bin\` doivent être trouvables.
 
 Inutile d'installer le SDK CUDA : une tentative a été faite dans cette
 direction, elle n'était pas la bonne piste.
+
+**Ces prérequis ne servent plus au lecteur**, puisqu'il appelle le binaire
+ffmpeg et non la bibliothèque. Ils sont conservés ici : ils restent exacts, et
+serviront si un jour le conflit de symboles disparaît.
+
+### L'écueil qui a coûté le plus cher : ffmpeg EN BIBLIOTHÈQUE EST INUTILISABLE ICI
+
+`libwebrtc.a`, que Sion lie pour la voix et le partage, **embarque sa propre
+copie de ffmpeg** — 1 684 symboles `av_*`, dont `av_probe_input_format` et
+`ffurl_get_protocols`. À l'édition de liens, ces symboles l'emportent sur ceux
+de la bibliothèque système, et la copie interne est amputée :
+
+```text
+[Sion][lecteur] libavformat 62.17.100 — 0 protocole(s) en entrée :
+```
+
+La version système est 63.1.101, et la copie interne n'a **aucun protocole** :
+ni `https`, ni même `file`. Une URL donne « Protocol not found », un chemin
+local ne marcherait pas davantage.
+
+Aucun ordre de liaison ne corrige cela proprement : un symbole défini dans une
+archive statique gagne, et cette archive vient d'une build pré-compilée de
+LiveKit. D'où le processus séparé, qui a son propre espace de symboles.
+
+**Leçon de méthode** : le prototype isolé décodait à 600 images/s et validait
+« la faisabilité » — il ne liait simplement pas libwebrtc. Toute preuve de
+faisabilité d'une bibliothèque native doit être faite **dans le binaire de
+Sion**, pas à côté.
+
+### L'autre piège : une surface sans dimensions
+
+Le canvas passé à `registerNativeVideoSurface` ne porte aucun pixel : son
+tampon reste à 1×1, c'est la surface native qui peint par-dessus. Il lui faut
+donc une **largeur CSS explicite**, sinon la mise en page le réduit à sa taille
+intrinsèque. Constaté le 21/09 : une sous-surface de `2x52` pixels, invisible,
+alors que les images arrivaient normalement. Poser aussi
+`--sion-share-max-height`, dont le service se sert pour borner la largeur
+d'après le ratio de la source.
 
 ### Étape 7 — pourquoi elle n'est pas optionnelle
 

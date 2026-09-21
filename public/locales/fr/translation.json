@@ -154,7 +154,10 @@
     "pinnedList": "Messages épinglés",
     "pinnedNone": "Aucun message épinglé",
     "pinnedCount": "{{count}} épinglé(s) — cliquer pour voir la liste",
-    "attachedFile": "Fichier joint"
+    "attachedFile": "Fichier joint",
+    "playNative": "Lire (natif)",
+    "videoPlayFailed": "Lecture impossible",
+    "close": "Fermer"
   },
   "poll": {
     "menuItem": "Sondage",
