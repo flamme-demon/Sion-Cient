@@ -2369,98 +2369,6 @@ async fn detect_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<Option<Str
 /// ffmpeg binary via the system `tar` (bsdtar on Win10+, GNU tar on Linux —
 /// both auto-detect zip/tar.xz), and marks it executable. Returns the path.
 #[cfg(not(target_os = "android"))]
-#[tauri::command]
-async fn download_ffmpeg(app: tauri::AppHandle<TauriRuntime>) -> Result<String, String> {
-    use std::io::Write;
-    use tauri::Emitter;
-
-    let dest = managed_ffmpeg_path(&app).ok_or("app-data introuvable")?;
-    let bin_dir = dest.parent().ok_or("chemin invalide")?.to_path_buf();
-    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
-
-    // Reputable static-build hosts, stable "latest release" URLs.
-    #[cfg(target_os = "windows")]
-    let url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-    #[cfg(target_os = "macos")]
-    let url = "https://evermeet.cx/ffmpeg/getrelease/zip";
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
-
-    let _ = app.emit("ffmpeg-install-progress", 0u64);
-
-    // Stream download to a temp archive, reporting progress. Dedicated client
-    // with a generous timeout — the archive is ~80 MB and the shared
-    // build_client() caps at 10 s total, which aborts the body mid-download on
-    // any normal link ("error decoding response body").
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(600))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent("Mozilla/5.0 (Sion ffmpeg installer)")
-        .build()
-        .map_err(|e| e.to_string())?;
-    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let total = resp.content_length();
-    let tmp_dir = std::env::temp_dir();
-    let archive = tmp_dir.join("sion_ffmpeg_dl");
-    let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
-    let mut downloaded: u64 = 0;
-    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
-        file.write_all(&chunk).map_err(|e| e.to_string())?;
-        downloaded += chunk.len() as u64;
-        if let Some(t) = total {
-            if t > 0 {
-                let _ = app.emit("ffmpeg-install-progress", downloaded * 95 / t);
-            }
-        }
-    }
-    drop(file);
-    let _ = app.emit("ffmpeg-install-progress", 96u64);
-
-    // Extract via system tar (auto-detects .zip / .tar.xz) into a temp dir.
-    let ext_dir = tmp_dir.join("sion_ffmpeg_ext");
-    let _ = std::fs::remove_dir_all(&ext_dir);
-    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
-    let out = hidden_command("tar")
-        .arg("-xf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&ext_dir)
-        .output()
-        .map_err(|e| format!("tar introuvable: {}", e))?;
-    if !out.status.success() {
-        return Err(format!(
-            "extraction échouée: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-
-    // Locate the ffmpeg binary in the extracted tree.
-    let bin_name = if cfg!(target_os = "windows") {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    let found = find_file(&ext_dir, bin_name).ok_or("binaire ffmpeg absent de l'archive")?;
-    std::fs::copy(&found, &dest).map_err(|e| e.to_string())?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest)
-            .map_err(|e| e.to_string())?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms).map_err(|e| e.to_string())?;
-    }
-
-    let _ = std::fs::remove_file(&archive);
-    let _ = std::fs::remove_dir_all(&ext_dir);
-    let _ = app.emit("ffmpeg-install-progress", 100u64);
-    Ok(dest.to_string_lossy().into_owned())
-}
 
 /// Map a user-facing ASR model key to its GGUF source: (HF repo under
 /// handy-computer, file). Q5_K_M quants — the size/quality sweet spot.
@@ -2542,7 +2450,7 @@ async fn download_asr_model(
     let _ = app.emit("asr-model-progress", 0u64);
 
     // Dedicated client: models are 60–540 MB, the shared client's timeout
-    // would abort mid-body (same rationale as download_ffmpeg).
+    // would abort mid-body (same rationale as the yt-dlp download).
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3600))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -3864,7 +3772,6 @@ pub fn run() {
         read_clipboard_image,
         read_dropped_file,
         detect_ffmpeg,
-        download_ffmpeg,
         detect_ytdlp,
         download_ytdlp,
         pick_ytdlp_path,

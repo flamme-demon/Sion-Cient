@@ -4,7 +4,6 @@ import { SendIcon, CloseIcon, EmojiIcon, DisconnectIcon } from "../icons";
 import { AttachButton } from "./AttachButton";
 import { FilePreview } from "./FilePreview";
 import { UserAvatar } from "../sidebar/UserAvatar";
-import { FfmpegMissingError } from "../../services/videoPrepare";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -41,11 +40,9 @@ export function ChatInput() {
   // Holds the size (KB) of an oversized draft awaiting the user's choice to
   // send it as a .txt attachment. null = no modal shown.
   const [largeMessageKb, setLargeMessageKb] = useState<number | null>(null);
-  // Conversion d'une vidéo avant envoi : progression, et le cas « ffmpeg
-  // absent » qui se répare d'un clic au lieu d'afficher une erreur technique.
+  // Conversion d'une vidéo avant envoi : la progression seule. ffmpeg est
+  // livré avec l'application, il n'y a plus d'absence à réparer.
   const [convertPct, setConvertPct] = useState<number | null>(null);
-  const [ffmpegNeeded, setFfmpegNeeded] = useState(false);
-  const [installingFfmpeg, setInstallingFfmpeg] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeChannel = useAppStore((s) => s.activeChannel);
   const sendMessage = useMatrixStore((s) => s.sendMessage);
@@ -250,8 +247,7 @@ export function ChatInput() {
       }
     } catch (err) {
       setConvertPct(null);
-      if (err instanceof FfmpegMissingError) setFfmpegNeeded(true);
-      else useAppStore.getState().setFileError(String(err));
+      useAppStore.getState().setFileError(String(err));
       return;
     } finally {
       unlisten?.();
@@ -485,47 +481,6 @@ export function ChatInput() {
           color: 'var(--color-on-surface-variant)', fontSize: 12, fontWeight: 500,
         }}>
           {t("chat.videoPreparing", { defaultValue: "Préparation de la vidéo…" })} {convertPct}%
-        </div>
-      )}
-      {/* ffmpeg requis pour envoyer une vidéo */}
-      {ffmpegNeeded && (
-        <div style={{
-          padding: '8px 16px', marginBottom: 4, borderRadius: 12,
-          background: 'var(--color-error-container)', color: 'var(--color-on-error-container)',
-          fontSize: 12, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <span style={{ flex: 1 }}>
-            {t("chat.videoNeedsFfmpeg", {
-              defaultValue: "ffmpeg est requis pour envoyer une vidéo : elle est convertie une fois ici plutôt que chez chaque destinataire.",
-            })}
-          </span>
-          <button
-            type="button"
-            disabled={installingFfmpeg !== null}
-            onClick={async () => {
-              setInstallingFfmpeg(0);
-              try {
-                const { installFfmpeg } = await import("../../services/ffmpegInstall");
-                await installFfmpeg((pct) => setInstallingFfmpeg(pct));
-                setFfmpegNeeded(false);
-              } catch (e) {
-                console.error("[Sion] Installation ffmpeg échouée:", e);
-              } finally {
-                setInstallingFfmpeg(null);
-              }
-            }}
-            style={{
-              flexShrink: 0, padding: '6px 14px', borderRadius: 20, border: 'none',
-              background: 'var(--color-primary)', color: 'var(--color-on-primary)',
-              fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-              cursor: installingFfmpeg !== null ? 'default' : 'pointer',
-              opacity: installingFfmpeg !== null ? 0.6 : 1,
-            }}
-          >
-            {installingFfmpeg !== null
-              ? t("chat.installingPct", { defaultValue: "Installation… {{pct}}%", pct: installingFfmpeg })
-              : t("chat.installFfmpeg", { defaultValue: "Installer ffmpeg (~80 Mo)" })}
-          </button>
         </div>
       )}
       {/* File error banner (auto-dismiss) */}

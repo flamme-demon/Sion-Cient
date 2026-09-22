@@ -3,13 +3,6 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 
 /** Levée quand ffmpeg manque : l'appelant propose alors de l'installer plutôt
  *  que d'afficher une erreur technique. */
-export class FfmpegMissingError extends Error {
-  constructor() {
-    super("ffmpeg est requis pour envoyer une vidéo");
-    this.name = "FfmpegMissingError";
-  }
-}
-
 export interface PreparedVideo {
   file: File;
   width: number;
@@ -158,18 +151,12 @@ export async function prepareVideoForSend(file: File): Promise<PreparedVideo> {
 
   const ffmpegPath = useSettingsStore.getState().ffmpegPath;
   let prepared: RustPreparedVideo;
-  try {
+  {
     prepared = await invoke<RustPreparedVideo>("prepare_video_for_send", {
       inputPath: stagedPath,
       ffmpegPath,
       alreadyCompatible: compatible,
     });
-  } catch (err) {
-    // Distinguer « ffmpeg absent » d'un vrai échec d'encodage : seul le premier
-    // se répare d'un clic.
-    const found = await invoke<string | null>("detect_ffmpeg").catch(() => null);
-    if (!found) throw new FfmpegMissingError();
-    throw err;
   }
 
   // Retour en binaire brut, jamais en base64 : le protocole `asset` a été
