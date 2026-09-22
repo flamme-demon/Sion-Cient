@@ -1055,10 +1055,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dossier);
         std::fs::create_dir_all(&dossier).unwrap();
 
-        // Écrits dans l'ordre, avec une pause : leurs dates diffèrent.
-        for nom in ["vieux", "moyen", "recent"] {
-            std::fs::write(dossier.join(nom), vec![0u8; 100]).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(20));
+        // Dates POSÉES, pas attendues : les faire différer par une pause
+        // dépendrait de la résolution des horodatages du système de
+        // fichiers, et deux fichiers de même date rendraient l'ordre de
+        // suppression arbitraire — un test qui échoue une fois sur dix.
+        let origine = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        for (rang, nom) in ["vieux", "moyen", "recent"].iter().enumerate() {
+            let chemin = dossier.join(nom);
+            std::fs::write(&chemin, vec![0u8; 100]).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&chemin)
+                .unwrap()
+                .set_modified(origine + std::time::Duration::from_secs(rang as u64 * 60))
+                .unwrap();
         }
 
         // Sous le plafond : on ne touche à rien.
