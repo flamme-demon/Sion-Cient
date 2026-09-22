@@ -28,6 +28,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
+import { ImageDuFil } from "./ImageDuFil";
 import { definirLecteurActif, libererLecteurActif, useEstLecteurActif } from "../../services/lecteurActif";
 // Lecteur hors moteur web (voir docs/lecteur-video-natif.md). Chargé à la
 // demande : il ne sert qu'au clic, inutile de l'embarquer au démarrage.
@@ -373,10 +374,10 @@ function VideoCard({ resolvedUrl, attachment }: { resolvedUrl: string | null; at
           </Suspense>
         ) : (
           <>
-            <img
-              src={affiche ?? undefined}
+            <ImageDuFil
+              src={affiche}
               alt={attachment.name}
-              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              style={{ width: '100%', height: '100%' }}
             />
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {pastille(52)}
@@ -408,6 +409,23 @@ function VideoCard({ resolvedUrl, attachment }: { resolvedUrl: string | null; at
 
 }
 
+
+/**
+ * Place réservée à une vignette du fil, en pixels.
+ *
+ * Tient dans 300×200 sans jamais agrandir — c'est exactement le comportement
+ * de `maxWidth`/`maxHeight`, mais exprimé en dimensions fixes : une boîte qui
+ * se calcule seulement une fois l'image chargée ne réserverait rien, et le
+ * défilement sauterait au déchargement.
+ *
+ * Sans dimensions déclarées, on ne peut pas connaître le rapport avant
+ * chargement : la boîte pleine, avec recadrage, est le moindre mal.
+ */
+function boiteVignette(largeur?: number, hauteur?: number) {
+  if (!largeur || !hauteur) return { width: 300, height: 200 };
+  const echelle = Math.min(300 / largeur, 200 / hauteur, 1);
+  return { width: Math.round(largeur * echelle), height: Math.round(hauteur * echelle) };
+}
 
 function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   const { t } = useTranslation();
@@ -460,24 +478,26 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
     }
     return (
       <>
-        <img
-          // Vignette dans le fil, original seulement dans la visionneuse.
-          //
-          // Une image est décodée à sa taille réelle : la photo de 4032×3024
-          // affichée ici dans 300×200 occupait 48 Mo de mémoire. 41 images du
-          // fil en retenaient 161 à elles seules (20/09). Le serveur sait
-          // servir une vignette ; quand il ne le peut pas — média chiffré —
-          // on retombe sur l'original, faute de mieux.
+        {/* Vignette dans le fil, original seulement dans la visionneuse — et
+            déchargée quand elle sort de la vue, ce qui est ce qui limitait la
+            remontée dans l'historique (voir ImageDuFil). */}
+        <ImageDuFil
           src={vignetteEchouee || attachment.encryptedFile || !attachment.thumbnailUrl
             ? resolvedUrl
             : attachment.thumbnailUrl}
           alt={attachment.name}
-          // Un serveur qui ne sait pas produire de vignette ne doit pas coûter
-          // l'image : on retombe sur l'original plutôt que d'afficher un cadre
-          // vide.
           onError={() => setVignetteEchouee(true)}
           onClick={() => setLightboxOpen(true)}
-          style={{ maxWidth: 300, maxHeight: 200, borderRadius: 16, objectFit: 'cover' as const, cursor: 'zoom-in', marginTop: 6, display: 'block' }}
+          style={{
+            // La place doit être RÉSERVÉE, sinon le fil sursaute chaque fois
+            // qu'une image se décharge. On reproduit donc ce que faisait
+            // `maxWidth: 300, maxHeight: 200` — dont un agrandissement des
+            // petites images, que ce couple n'autorisait pas.
+            ...boiteVignette(attachment.width, attachment.height),
+            borderRadius: 16,
+            cursor: 'zoom-in',
+            marginTop: 6,
+          }}
         />
         {lightboxOpen && (
           <ImageLightbox src={resolvedUrl} alt={attachment.name} onClose={() => setLightboxOpen(false)} />
