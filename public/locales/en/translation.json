@@ -215,12 +215,12 @@
     "overLimit": "too large",
     "serverLimit": "Server upload limit: {{size}}",
     "rangeRequired": "Set a time range (start/end) for this video.",
-    "native": "native",
-    "recoded": "re-encoded to AV1",
     "original": "Original",
     "sizeUnknown": "unknown size",
     "phaseDownload": "Downloading",
-    "phaseConvert": "Converting to AV1"
+    "phaseConvert": "Converting to AV1",
+    "asIs": "as-is",
+    "recodeHint": "Re-encoded to AV1 only if the downloaded file exceeds this limit."
   },
   "members": {
     "title": "Members",

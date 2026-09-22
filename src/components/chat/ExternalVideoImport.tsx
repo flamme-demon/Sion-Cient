@@ -178,7 +178,15 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
                       <input type="radio" name="vidres" disabled={over} checked={selected}
                         onChange={() => setHeight(o.height)} style={{ accentColor: 'var(--color-primary)' }} />
                       <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-on-surface)', minWidth: 52 }}>{o.height > 0 ? `${o.height}p` : t("extVideo.original")}</span>
-                      <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>{o.codec !== "?" ? `${o.codec} · ` : ""}{o.codec === "VP9" ? t("extVideo.native") : t("extVideo.recoded")}</span>
+                      {/* Le codec n'entraîne plus rien : ce qui tient dans la
+                          limite part tel quel, quel qu'il soit. L'étiquette
+                          annonçait « réencodé AV1 » sur tout ce qui n'était
+                          pas du VP9, y compris sur des vidéos de trois cents
+                          kilo-octets qui ne sont pas réencodées du tout. */}
+                      <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
+                        {o.codec !== "?" ? o.codec : ""}
+                        {!over ? `${o.codec !== "?" ? " · " : ""}${t("extVideo.asIs", { defaultValue: "tel quel" })}` : ""}
+                      </span>
                       <span style={{ flex: 1 }} />
                       <span style={{ fontSize: 12, color: over ? 'var(--color-error)' : 'var(--color-on-surface-variant)' }}>
                         {o.size > 0 ? `~${fmtSize(o.size)}` : t("extVideo.sizeUnknown")}{over ? ` · ${t("extVideo.overLimit")}` : ""}
@@ -187,7 +195,15 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
                   );
                 })}
                 {limit != null && (
-                  <span style={{ fontSize: 10, color: 'var(--color-outline)' }}>{t("extVideo.serverLimit", { size: fmtSize(limit) })}</span>
+                  <>
+                    <span style={{ fontSize: 10, color: 'var(--color-outline)' }}>{t("extVideo.serverLimit", { size: fmtSize(limit) })}</span>
+                    {/* Le filet : la décision se prend sur le fichier réel,
+                        et yt-dlp rend souvent autre chose que la taille
+                        annoncée au-dessus. */}
+                    <span style={{ fontSize: 10, color: 'var(--color-outline)' }}>
+                      {t("extVideo.recodeHint", { defaultValue: "Réencodée en AV1 seulement si le fichier téléchargé dépasse cette limite." })}
+                    </span>
+                  </>
                 )}
               </div>
             )}

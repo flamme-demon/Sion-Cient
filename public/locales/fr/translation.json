@@ -215,12 +215,12 @@
     "overLimit": "trop lourd",
     "serverLimit": "Limite d'envoi du serveur : {{size}}",
     "rangeRequired": "Indique une plage horaire (début/fin) pour cette vidéo.",
-    "native": "natif",
-    "recoded": "réencodé AV1",
     "original": "Originale",
     "sizeUnknown": "taille inconnue",
     "phaseDownload": "Téléchargement",
-    "phaseConvert": "Conversion en AV1"
+    "phaseConvert": "Conversion en AV1",
+    "asIs": "tel quel",
+    "recodeHint": "Réencodée en AV1 seulement si le fichier téléchargé dépasse cette limite."
   },
   "members": {
     "title": "Membres",
