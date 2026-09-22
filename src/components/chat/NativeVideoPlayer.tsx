@@ -20,6 +20,7 @@ import {
   etatLecteurVideo,
   fermerLecteurVideo,
   ouvrirLecteurVideo,
+  rejouerLecteurVideo,
   precharcherVideo,
   type ProgresVideo,
   pauseLecteurVideo,
@@ -69,6 +70,12 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   const basculerPause = useCallback(() => {
     setEtat((precedent) => {
       if (!precedent?.actif) return precedent;
+      // Après la dernière image, la pause n'a plus de sens : le fil garde
+      // l'écran mais son ffmpeg est mort. Le bouton relance le film.
+      if (precedent.termine) {
+        void rejouerLecteurVideo().then(setEtat).catch(() => { /* lecteur fermé */ });
+        return precedent;
+      }
       const versPause = !precedent.en_pause;
       void pauseLecteurVideo(versPause);
       return { ...precedent, en_pause: versPause };
@@ -379,7 +386,13 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
         {styleBouton && (
           <div
             onClick={(e) => { e.stopPropagation(); basculerPause(); }}
-            title={etat?.en_pause ? t("chat.play", { defaultValue: "Lire" }) : t("chat.pause", { defaultValue: "Pause" })}
+            title={
+              etat?.termine
+                ? t("chat.replay", { defaultValue: "Revoir" })
+                : etat?.en_pause
+                  ? t("chat.play", { defaultValue: "Lire" })
+                  : t("chat.pause", { defaultValue: "Pause" })
+            }
             style={styleBouton}
           />
         )}

@@ -84,6 +84,9 @@ struct Lecture {
     /// En pause, le fil vidéo cesse de consommer le tube : ffmpeg se bloque
     /// de lui-même, et rien ne s'accumule en mémoire.
     pause: Arc<AtomicBool>,
+    /// Le film est allé jusqu'au bout. Le fil vit encore — il garde l'image
+    /// à l'écran — mais seul `lecteur_video_rejouer` rendra des images.
+    termine: Arc<AtomicBool>,
     /// De quoi relancer ailleurs dans le film : se déplacer revient à tuer
     /// les deux processus et à les relancer avec `-ss`.
     source: String,
@@ -125,6 +128,8 @@ pub struct EtatLecteur {
     pub position_ms: u64,
     pub en_pause: bool,
     pub a_du_son: bool,
+    /// Le film est allé au bout : seul un redémarrage rendra une image.
+    pub termine: bool,
 }
 
 /// Largeur de la toile de rendu — celle de la vidéo, arrondie au pair.
@@ -201,9 +206,17 @@ fn presenter(
     #[cfg(feature = "native-voice")]
     {
         let taille = largeur as usize * hauteur as usize * 4;
-        let mut bgra = recyclage.take().unwrap_or_default();
-        bgra.clear();
-        bgra.resize(taille, 0);
+        // `vec![0; n]` passe par `alloc_zeroed` : le noyau remet des pages
+        // déjà nulles, sans rien écrire. Un `Vec` vide qu'on redimensionne
+        // écrit au contraire les onze mégaoctets un par un — 54 ms par image
+        // sur du 1536x1920, quand la conversion elle-même en prend UNE
+        // (mesuré le 22/09). Et cela se produisait à chaque image : la
+        // surface draine ses images avant qu'on en repousse une, donc elle
+        // ne rend presque jamais de tampon à recycler.
+        let mut bgra = match recyclage.take() {
+            Some(tampon) if tampon.len() == taille => tampon,
+            _ => vec![0u8; taille],
+        };
         let demi = largeur.div_ceil(2);
         livekit::webrtc::native::yuv_helper::i420_to_argb(
             &y,
@@ -591,6 +604,7 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
     let position_ms = Arc::new(AtomicU64::new(0));
     let enfant = Arc::new(Mutex::new(Some(enfant)));
     let pause = Arc::new(AtomicBool::new(false));
+    let termine = Arc::new(AtomicBool::new(false));
 
     // La piste sonore a son propre processus ffmpeg. Un média muet, ou une
     // machine sans sortie audio, rend simplement `None` : mieux vaut une
@@ -604,6 +618,7 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
         en_pause: false,
         volume: 1.0,
         apercu_ms: None,
+        termine: false,
     }));
 
     // Les plaintes de ffmpeg dans notre journal : sans cela, un échec de
@@ -624,6 +639,7 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
     let position_fil = Arc::clone(&position_ms);
     let enfant_fil = Arc::clone(&enfant);
     let pause_fil = Arc::clone(&pause);
+    let termine_fil = Arc::clone(&termine);
     let incrustation_fil = Arc::clone(&incrustation);
     let octets = taille_image(toile_l, toile_h);
 
@@ -636,17 +652,19 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
             // Tampon BGRA réutilisé d'une image à l'autre : le chemin non
             // planaire alloue sinon quatre octets par pixel à chaque frame.
             let mut recyclage: Option<Vec<u8>> = None;
-            let mut calque: Option<tiny_skia::Pixmap> = None;
+            let mut calque: Option<crate::incrustation_lecteur::Calque> = None;
             // L'échelle fait partie de la clé : changer la taille du lecteur
             // doit redessiner le bandeau, pas seulement le remettre tel quel.
             let mut calque_etat: Option<(crate::incrustation_lecteur::EtatIncrustation, u32)> =
                 None;
 
-            // Derniers plans décodés, AVANT incrustation. À l'arrêt, plus
-            // aucune image n'arrive : sans cette copie, le bandeau resterait
-            // figé sur l'icône d'avant la pause, et le bouton paraissait
-            // déconnecté de la vidéo (21/09).
-            let mut derniere: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = None;
+            // À l'arrêt, plus aucune image n'arrive : il faut pouvoir
+            // repeindre la dernière, sinon le bandeau resterait figé sur
+            // l'icône d'avant la pause et le bouton paraîtrait déconnecté de
+            // la vidéo (21/09). `tampon` contient encore cette image — la
+            // recopier à chaque tour, pour un cas qui survient une fois par
+            // pause, revenait à déplacer 4,4 Mo soixante fois par seconde.
+            let mut a_une_image = false;
 
             while !arret_fil.load(Ordering::Relaxed) {
                 // En pause, on cesse de lire : le tube se remplit, ffmpeg
@@ -660,12 +678,15 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
                         calque =
                             crate::incrustation_lecteur::dessiner(toile_l, toile_h, echelle, &voulu);
                         calque_etat = Some((voulu, echelle.to_bits()));
-                        if let (Some(c), Some((y0, u0, v0))) = (calque.as_ref(), derniere.as_ref()) {
-                            let (mut y, mut u, mut v) = (y0.clone(), u0.clone(), v0.clone());
-                            crate::incrustation_lecteur::composer_sur_i420(
-                                c, &mut y, &mut u, &mut v, toile_l, toile_h,
-                            );
-                            presenter(toile_l, toile_h, y, u, v, &mut recyclage);
+                        if let (Some(c), true) = (calque.as_ref(), a_une_image) {
+                            if let Some((mut y, mut u, mut v)) =
+                                decouper_plans(&tampon, toile_l, toile_h)
+                            {
+                                crate::incrustation_lecteur::composer_sur_i420(
+                                    c, &mut y, &mut u, &mut v, toile_l, toile_h,
+                                );
+                                presenter(toile_l, toile_h, y, u, v, &mut recyclage);
+                            }
                         }
                     }
                     std::thread::sleep(std::time::Duration::from_millis(30));
@@ -676,13 +697,30 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
                 // Une lecture incomplète signe la fin du flux : ffmpeg a
                 // terminé, ou il a été arrêté.
                 if sortie.read_exact(&mut tampon).is_err() {
-                    break;
+                    if arret_fil.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    // Le film est allé au bout. On ne démonte RIEN : la
+                    // dernière image reste affichée et le fil passe en pause,
+                    // ce qui le laisse repeindre le bandeau. Tout détruire
+                    // ici — surface retirée, `lecture()` remise à None —
+                    // rendait les boutons inertes dès la dernière image,
+                    // sans rien pour relancer (signalé le 22/09).
+                    termine_fil.store(true, Ordering::Relaxed);
+                    pause_fil.store(true, Ordering::Relaxed);
+                    {
+                        let mut etat =
+                            incrustation_fil.lock().unwrap_or_else(|e| e.into_inner());
+                        etat.en_pause = true;
+                        etat.termine = true;
+                        etat.position_ms = depart_ms + duree_ms;
+                    }
+                    continue;
                 }
                 let Some((mut y, mut u, mut v)) = decouper_plans(&tampon, toile_l, toile_h) else {
                     break;
                 };
-                // Copie conservée pour pouvoir repeindre à l'arrêt.
-                derniere = Some((y.clone(), u.clone(), v.clone()));
+                a_une_image = true;
 
                 // Les contrôles sont peints DANS l'image : rien du DOM ne peut
                 // s'afficher devant la surface native. Le calque n'est
@@ -701,7 +739,6 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
                         c, &mut y, &mut u, &mut v, toile_l, toile_h,
                     );
                 }
-
                 presenter(toile_l, toile_h, y, u, v, &mut recyclage);
                 images += 1;
                 // La position vient de l'horloge : `-re` garantit que le débit
@@ -734,6 +771,7 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
         duree_ms,
         audio,
         pause,
+        termine,
         source: chemin.clone(),
         ffmpeg: ffmpeg.clone(),
         largeur: toile_l,
@@ -744,6 +782,7 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
 
     Ok(EtatLecteur {
         actif: true,
+        termine: false,
         // Dimensions de la TOILE : c'est elle que la surface affiche, et
         // c'est sur elle que le front calcule ses zones de clic.
         largeur: toile_l,
@@ -788,15 +827,24 @@ pub fn lecteur_video_etat() -> EtatLecteur {
             // La carte son est la meilleure horloge : elle compte ce qui a
             // réellement été joué. L'horloge système ne sert que pour un
             // média muet.
-            position_ms: l.depart_ms
-                + l.audio
-                    .as_ref()
-                    .map_or_else(|| l.position_ms.load(Ordering::Relaxed), |a| a.position_ms()),
+            // Au bout du film, l'horloge audio s'est tue sur la dernière
+            // valeur lue : on rend la durée, sinon la barre s'arrêterait un
+            // peu avant la fin.
+            position_ms: if l.termine.load(Ordering::Relaxed) {
+                l.duree_ms
+            } else {
+                l.depart_ms
+                    + l.audio
+                        .as_ref()
+                        .map_or_else(|| l.position_ms.load(Ordering::Relaxed), |a| a.position_ms())
+            },
             en_pause: l.pause.load(Ordering::Relaxed),
             a_du_son: l.audio.is_some(),
+            termine: l.termine.load(Ordering::Relaxed),
         },
         None => EtatLecteur {
             actif: false,
+            termine: false,
             largeur: 0,
             hauteur: 0,
             duree_ms: 0,
@@ -955,6 +1003,23 @@ pub fn lecteur_video_pause(en_pause: bool) {
     }
 }
 
+/// Reprend le film depuis le début, après la dernière image.
+///
+/// Le fil de lecture survit à la fin du média pour garder l'image à l'écran,
+/// mais son ffmpeg est mort et rien ne peut plus en sortir : relancer est la
+/// seule issue. Le même chemin que le déplacement, à zéro.
+#[tauri::command]
+pub fn lecteur_video_rejouer() -> Result<EtatLecteur, String> {
+    let (source, ffmpeg) = {
+        let garde = lecture().lock().unwrap_or_else(|e| e.into_inner());
+        let l = garde.as_ref().ok_or_else(|| "aucune lecture".to_string())?;
+        (l.source.clone(), l.ffmpeg.clone())
+        // Le verrou tombe ici : `demarrer` ferme la lecture courante, ce qui
+        // le reprend.
+    };
+    demarrer(&ffmpeg, &source, 0)
+}
+
 /// Se déplace dans le film.
 ///
 /// ffmpeg écrit dans un tube : il n'y a rien à rembobiner, on tue les deux
@@ -1084,3 +1149,4 @@ mod tests {
         std::fs::remove_dir_all(&dossier).unwrap();
     }
 }
+

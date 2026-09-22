@@ -873,6 +873,8 @@ export interface EtatLecteurVideo {
   en_pause: boolean;
   /** Faux si le média est muet, ou si la machine n'a pas de sortie utilisable. */
   a_du_son: boolean;
+  /** Le film est allé au bout : le bouton devient une flèche de relecture. */
+  termine: boolean;
 }
 
 /** Identifiant de flux du lecteur dans la surface native. Doit rester
@@ -939,6 +941,16 @@ export function fermerLecteurVideo(): Promise<void> {
 /** Position et durée courantes, pour la barre de progression. */
 export function etatLecteurVideo(): Promise<EtatLecteurVideo> {
   return tauriInvoke<EtatLecteurVideo>("lecteur_video_etat");
+}
+
+/**
+ * Reprend le film depuis le début, après la dernière image.
+ *
+ * À la fin du média, le fil de lecture garde l'image à l'écran mais son
+ * ffmpeg est mort : la pause ne sert plus à rien, il faut relancer.
+ */
+export function rejouerLecteurVideo(): Promise<EtatLecteurVideo> {
+  return tauriInvoke<EtatLecteurVideo>("lecteur_video_rejouer");
 }
 
 /** Met la lecture en pause, ou la reprend. */

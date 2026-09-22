@@ -3777,6 +3777,7 @@ pub fn run() {
         lecteur_video::lecteur_video_etat,
         lecteur_video::lecteur_video_pause,
         lecteur_video::lecteur_video_seek,
+        lecteur_video::lecteur_video_rejouer,
         lecteur_video::lecteur_video_zones,
         lecteur_video::lecteur_video_affiche,
         lecteur_video::lecteur_video_volume,

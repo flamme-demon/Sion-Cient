@@ -36,6 +36,10 @@ pub struct EtatIncrustation {
     /// chaque pixel serait intenable — mais la pastille doit suivre la souris
     /// entre-temps, sans quoi le geste paraît sans effet.
     pub apercu_ms: Option<u64>,
+    /// Le film est allé jusqu'au bout. Le bouton devient une flèche de
+    /// relecture : le fil de lecture est arrêté, seul un redémarrage peut
+    /// donner une image de plus.
+    pub termine: bool,
 }
 
 /// Hauteur du bandeau, en pixels de l'IMAGE, pour qu'il occupe
@@ -256,15 +260,35 @@ fn rectangle(pixmap: &mut Pixmap, x: f32, y: f32, l: f32, h: f32, couleur: Color
 }
 
 /// Dessine le bandeau sur un calque transparent, de la taille de l'image.
+/// Le bandeau peint, et l'endroit où le poser dans l'image.
+///
+/// Seule une bande est rendue, pas toute la toile : le bandeau est collé en
+/// bas et ne fait que quelques dizaines de pixels de haut. Peindre la toile
+/// entière coûtait, sur une vidéo 1536x1920, onze mégaoctets alloués puis
+/// effacés et deux millions neuf cent mille pixels parcourus PAR IMAGE — et
+/// comme le compteur avance, le calque est refait à chaque image. Le lecteur
+/// plafonnait à 4,5 images par seconde sur une vidéo à 60 (mesuré le 22/09).
+pub struct Calque {
+    pub pixmap: Pixmap,
+    /// Ligne de l'image où commence le calque.
+    pub origine_y: u32,
+}
+
 pub fn dessiner(
     largeur: u32,
     hauteur: u32,
     echelle: f32,
     etat: &EtatIncrustation,
-) -> Option<Pixmap> {
-    let mut pixmap = Pixmap::new(largeur, hauteur)?;
+) -> Option<Calque> {
     let z = zones(largeur, hauteur, echelle);
-    let y0 = z.bandeau_y as f32;
+    // La pastille de progression déborde au-dessus du bandeau — son halo
+    // monte à 4,6 fois la hauteur de la barre. La bande doit l'englober,
+    // sinon elle serait tranchée net.
+    let marge = (z.barre_h * 5).max(z.taille);
+    let origine_y = z.bandeau_y.saturating_sub(marge);
+    let mut pixmap = Pixmap::new(largeur, hauteur.saturating_sub(origine_y).max(1))?;
+    // Tout le dessin qui suit est relatif à la bande, pas à l'image.
+    let y0 = (z.bandeau_y - origine_y) as f32;
     let blanc = Color::from_rgba8(245, 245, 245, 255);
     let accent = Color::from_rgba8(120, 170, 255, 255);
 
@@ -324,7 +348,50 @@ pub fn dessiner(
 
     // Lecture / pause.
     let bx = z.bouton_x as f32;
-    if etat.en_pause {
+    if etat.termine {
+        // Flèche circulaire : un anneau ouvert sur la droite, et une pointe
+        // au bout. Dit « recommencer » sans texte, à n'importe quelle taille.
+        let cx = bx + cote / 2.0;
+        let cy = milieu;
+        let r = cote * 0.32;
+        let ep = (cote * 0.14).max(1.0);
+        let mut anneau = PathBuilder::new();
+        // L'ouverture est en haut à droite, là où se pose la pointe.
+        let depart = -0.35f32;
+        let arc = std::f32::consts::PI * 1.75;
+        let pas = 28;
+        for i in 0..=pas {
+            let a = depart + arc * i as f32 / pas as f32;
+            let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+            if i == 0 {
+                anneau.move_to(x, y);
+            } else {
+                anneau.line_to(x, y);
+            }
+        }
+        if let Some(chemin) = anneau.finish() {
+            let mut peinture = Paint::default();
+            peinture.set_color(blanc);
+            peinture.anti_alias = true;
+            let trait_ = tiny_skia::Stroke {
+                width: ep,
+                ..Default::default()
+            };
+            pixmap.stroke_path(&chemin, &peinture, &trait_, Transform::identity(), None);
+        }
+        let mut pointe = PathBuilder::new();
+        let (px0, py0) = (cx + r * depart.cos(), cy + r * depart.sin());
+        pointe.move_to(px0 - ep * 1.4, py0 - ep * 0.2);
+        pointe.line_to(px0 + ep * 1.4, py0 - ep * 0.2);
+        pointe.line_to(px0, py0 + ep * 1.8);
+        pointe.close();
+        if let Some(chemin) = pointe.finish() {
+            let mut peinture = Paint::default();
+            peinture.set_color(blanc);
+            peinture.anti_alias = true;
+            pixmap.fill_path(&chemin, &peinture, FillRule::Winding, Transform::identity(), None);
+        }
+    } else if etat.en_pause {
         let mut chemin = PathBuilder::new();
         chemin.move_to(bx + cote * 0.2, ry + cote * 0.12);
         chemin.line_to(bx + cote * 0.85, milieu);
@@ -412,7 +479,7 @@ pub fn dessiner(
     rectangle(&mut pixmap, px + cote - br, ry + cote - ep, br, ep, blanc);
     rectangle(&mut pixmap, px + cote - ep, ry + cote - br, ep, br, blanc);
 
-    Some(pixmap)
+    Some(Calque { pixmap, origine_y })
 }
 
 /// Compose un calque RGBA sur des plans I420, en place.
@@ -422,7 +489,7 @@ pub fn dessiner(
 /// gauche. L'approximation ne se voit pas sur des formes aussi simples, et
 /// elle divise le travail par quatre sur les deux plans de couleur.
 pub fn composer_sur_i420(
-    calque: &Pixmap,
+    calque: &Calque,
     y: &mut [u8],
     u: &mut [u8],
     v: &mut [u8],
@@ -432,11 +499,19 @@ pub fn composer_sur_i420(
     let l = largeur as usize;
     let h = hauteur as usize;
     let demi = l.div_ceil(2);
-    let pixels = calque.pixels();
+    let pixels = calque.pixmap.pixels();
+    let origine = calque.origine_y as usize;
 
-    for ligne in 0..h {
+    // Seules les lignes du calque sont parcourues. Les indices chroma
+    // restent calculés sur la ligne ABSOLUE : l'échantillonnage 4:2:0 est
+    // aligné sur l'image, pas sur la bande.
+    for ligne_calque in 0..calque.pixmap.height() as usize {
+        let ligne = origine + ligne_calque;
+        if ligne >= h {
+            break;
+        }
         for colonne in 0..l {
-            let p = pixels[ligne * l + colonne];
+            let p = pixels[ligne_calque * l + colonne];
             let a = p.alpha() as u32;
             if a == 0 {
                 continue;
@@ -579,10 +654,19 @@ mod tests {
             en_pause: false,
             volume: 1.0,
             apercu_ms: None,
+            termine: false,
         };
         let calque = dessiner(l, h, 1.0, &etat).expect("calque");
-        let opaques = calque.pixels().iter().filter(|p| p.alpha() > 0).count();
+        let opaques = calque.pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(opaques > 0, "le calque doit contenir des pixels peints");
+        // Le calque ne couvre QUE sa bande : c'est ce qui fait tenir la
+        // cadence. Peindre toute la toile ramenait une vidéo 1536x1920 à
+        // 4,5 images par seconde.
+        assert!(
+            calque.pixmap.height() < h,
+            "le calque doit être une bande, pas toute l'image",
+        );
+        assert_eq!(calque.origine_y + calque.pixmap.height(), h);
         composer_sur_i420(&calque, &mut y, &mut u, &mut v, l, h);
         // Le haut de l'image n'est pas touché…
         assert_eq!(y[0], 10);

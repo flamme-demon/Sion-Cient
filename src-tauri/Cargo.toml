@@ -248,6 +248,14 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.ab_glyph]
 opt-level = 3
+# Notre propre code chaud : la composition du bandeau sur les plans I420
+# parcourt cent mille pixels par image, et le lecteur en veut soixante par
+# seconde. À l'opt 0, cette boucle seule prend 15 ms par image et la vidéo
+# passe au ralenti dans le binaire de développement — le paquet livré, lui,
+# est déjà optimisé. Le coût est une compilation plus lente à chaque
+# itération ; en échange le lecteur est regardable en dev.
+[profile.dev.package.sion-client]
+opt-level = 3
 
 # Patches crates-io pour le build desktop
 # Pour build Android: utiliser ./build-scripts/build-android.sh qui désactive
