@@ -879,11 +879,46 @@ export interface EtatLecteurVideo {
  *  identique à `SENDER_LECTEUR` côté Rust. */
 export const SENDER_LECTEUR = "sion:lecteur";
 
+/** Avancement d'un téléchargement du lecteur. `total` vaut 0 quand le serveur
+ *  n'annonce pas la taille. */
+export interface ProgresVideo {
+  source: string;
+  recus: number;
+  total: number;
+}
+
+/**
+ * Ramène la vidéo sur le disque avant de l'ouvrir, en signalant l'avancement.
+ *
+ * Indispensable, et pas seulement confortable : le ffmpeg que nous livrons
+ * est lié statiquement à la glibc, sa résolution DNS est cassée, et il
+ * s'effondre sur la moindre URL. C'est donc Rust qui va chercher le fichier.
+ * L'appel est asynchrone côté Rust pour ne pas figer l'interface pendant le
+ * transfert, et le résultat est mis en cache : revoir une vidéo ne la
+ * retélécharge pas.
+ */
+export async function precharcherVideo(
+  source: string,
+  onProgres?: (p: ProgresVideo) => void,
+): Promise<string> {
+  if (!onProgres) return tauriInvoke<string>("lecteur_video_precharger", { chemin: source });
+  const { listen } = await import("@tauri-apps/api/event");
+  const stop = await listen<ProgresVideo>("lecteur-video-progres", (e) => {
+    if (e.payload.source === source) onProgres(e.payload);
+  });
+  try {
+    return await tauriInvoke<string>("lecteur_video_precharger", { chemin: source });
+  } finally {
+    stop();
+  }
+}
+
 /**
  * Ouvre une vidéo dans le lecteur natif.
  *
- * `source` peut être un chemin local ou une URL HTTP : ffmpeg lit les deux, ce
- * qui évite de télécharger le fichier avant de le regarder. Le décodage se
+ * `source` peut être un chemin local ou une URL : dans ce dernier cas le
+ * fichier est d'abord ramené sur le disque. Appeler `precharcherVideo` avant
+ * rend la main tout de suite ici, le cache étant déjà chaud. Le décodage se
  * fait hors du moteur web et les images sont peintes dans la surface native —
  * voir docs/lecteur-video-natif.md pour la raison de ce détour.
  */

@@ -194,6 +194,38 @@ sur le runner Ubuntu, et il se contente d'un `::warning::` que personne n'a lu
 pendant quatre jours. Ne jamais reproduire ce motif : une dépendance de lecture
 absente doit **faire échouer la construction**, pas émettre un avertissement.
 
+## Le ffmpeg livré ne sait pas aller sur le réseau (22/09/2026)
+
+Le binaire statique que nous embarquons — johnvansickle 7.0.2, lié
+statiquement à la glibc — **s'effondre sur la moindre URL**, y compris un
+simple `http://example.com/x.mp4` : vidage mémoire immédiat. C'est la
+résolution DNS, qui dans une glibc statique exige les greffons NSS du système.
+Un fichier local, lui, se lit parfaitement, AV1 compris (dav1d est dedans).
+
+Comme `resolve_ffmpeg` donne désormais la priorité au binaire livré, cela a
+rendu **toutes** les vidéos illisibles dans l'alpha 8, avec un message
+trompeur : « format illisible, ou ffmpeg absent ».
+
+Correction : **Rust télécharge, ffmpeg décode.** `ramener_en_local` recopie la
+source dans `~/.cache/sion/medias` au fil de l'eau et rend un chemin local.
+Quatre points s'y jouent :
+
+- **Au fil de l'eau.** Passer le corps par un `Vec<u8>` ferait transiter une
+  vidéo d'un gigaoctet par la RAM.
+- **Pas dans `/tmp`.** C'est un tmpfs sur Manjaro : le cache y serait en
+  mémoire, et perdu à chaque redémarrage.
+- **Hors du fil principal.** `lecteur_video_ouvrir` est synchrone, donc
+  exécutée sur le fil qui dessine ; y télécharger cent mégaoctets figerait la
+  fenêtre. D'où `lecteur_video_precharger`, asynchrone, qui publie son
+  avancement sur `lecteur-video-progres`.
+- **Pas le film entier pour une vignette.** `ramener_tete` n'en demande que
+  les douze premiers mégaoctets. Le serveur peut ignorer l'en-tête `Range` —
+  Continuwuity le fait — auquel cas on coupe nous-mêmes la réception. Repli
+  sur le fichier complet quand l'index est en fin de fichier.
+
+Le cache est élagué au-delà de quatre gigaoctets, du plus ancien au plus
+récent.
+
 ## Invariants à ne pas casser
 
 - La surface native est partagée avec le partage d'écran. Le lecteur doit
@@ -203,3 +235,5 @@ absente doit **faire échouer la construction**, pas émettre un avertissement.
   intermédiaire annule le bénéfice.
 - Ne jamais conclure qu'une vidéo « se lit » sur la foi d'un `readyState` ou
   d'un code de retour. Regarder l'image.
+- **Ne jamais passer une URL à ffmpeg.** Le binaire livré n'a pas de réseau
+  utilisable ; c'est Rust qui rapatrie. Voir la section précédente.

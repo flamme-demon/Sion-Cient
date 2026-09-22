@@ -3772,6 +3772,7 @@ pub fn run() {
         media_server_port,
         av1_playable_natively,
         lecteur_video::lecteur_video_ouvrir,
+        lecteur_video::lecteur_video_precharger,
         lecteur_video::lecteur_video_fermer,
         lecteur_video::lecteur_video_etat,
         lecteur_video::lecteur_video_pause,

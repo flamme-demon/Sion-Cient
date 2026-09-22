@@ -34,7 +34,9 @@ log = "0.4"
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-log = "2"
 open = "5"
-reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json"], default-features = false }
+# `blocking` : le lecteur télécharge le média avant de le passer à ffmpeg,
+# depuis une commande synchrone (voir `ramener_en_local`).
+reqwest = { version = "0.12", features = ["rustls-tls", "cookies", "json", "blocking"], default-features = false }
 urlencoding = "2"
 scraper = "0.22"
 base64 = "0.22"

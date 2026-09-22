@@ -230,11 +230,250 @@ fn presenter(
     }
 }
 
+/// Où sont gardés les médias ramenés du réseau.
+///
+/// Surtout pas `sion_media_dir()` : il pointe sur `/tmp`, qui est un tmpfs
+/// sur Manjaro comme sur la plupart des distributions récentes. Une vidéo
+/// d'un gigaoctet y tiendrait en RAM — exactement ce qu'on cherche à éviter —
+/// et disparaîtrait au redémarrage. Le cache va donc sur le disque.
+fn dossier_cache() -> std::path::PathBuf {
+    let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
+    let dossier = base.join("sion").join("medias");
+    let _ = std::fs::create_dir_all(&dossier);
+    dossier
+}
+
+/// Taille au-delà de laquelle le cache est élagué, en octets.
+const PLAFOND_CACHE: u64 = 4 * 1024 * 1024 * 1024;
+
+fn empreinte(source: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut h);
+    format!("{:x}", h.finish())
+}
+
+/// Progression d'un téléchargement, envoyée à la page pendant l'attente.
+#[derive(Clone, serde::Serialize)]
+struct ProgresTelechargement {
+    source: String,
+    recus: u64,
+    /// Zéro si le serveur n'annonce pas la taille : la page affiche alors les
+    /// mégaoctets reçus plutôt qu'un pourcentage.
+    total: u64,
+}
+
+/// Élague le cache tant qu'il dépasse son plafond, du plus ancien au plus
+/// récent.
+///
+/// L'ordre est celui du téléchargement, pas celui du dernier visionnage :
+/// rafraîchir la date à chaque lecture demanderait de réécrire le fichier.
+/// Pour un cache de quatre gigaoctets, la différence est sans conséquence.
+///
+/// Supprimer un fichier en cours de lecture ne gêne pas ffmpeg sous Linux —
+/// l'inode survit tant qu'il le tient ouvert — et échoue sous Windows, où
+/// l'erreur est simplement ignorée.
+fn purger_cache() {
+    purger_dossier(&dossier_cache(), PLAFOND_CACHE);
+}
+
+fn purger_dossier(dossier: &std::path::Path, plafond: u64) {
+    let Ok(entrees) = std::fs::read_dir(dossier) else {
+        return;
+    };
+    let mut fichiers: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = entrees
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            Some((
+                meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                meta.len(),
+                e.path(),
+            ))
+        })
+        .collect();
+
+    let mut total: u64 = fichiers.iter().map(|(_, taille, _)| taille).sum();
+    if total <= plafond {
+        return;
+    }
+    fichiers.sort_by_key(|(date, _, _)| *date);
+    for (_, taille, chemin) in fichiers {
+        if total <= plafond {
+            break;
+        }
+        if std::fs::remove_file(&chemin).is_ok() {
+            total = total.saturating_sub(taille);
+            log::info!("[Sion][lecteur] cache élagué : {}", chemin.display());
+        }
+    }
+}
+
+/// Écrit une source distante dans `cible`, en publiant sa progression.
+///
+/// Le corps est recopié **au fil de l'eau** : le garder en mémoire pour
+/// l'écrire ensuite ferait passer une vidéo d'un gigaoctet par la RAM.
+///
+/// `limite` demande une plage au lieu du fichier entier — voir `ramener_tete`.
+/// Un serveur qui ignore l'en-tête renvoie tout : on coupe alors nous-mêmes.
+fn telecharger(
+    app: &tauri::AppHandle<crate::TauriRuntime>,
+    source: &str,
+    cible: &std::path::Path,
+    limite: Option<u64>,
+) -> Result<(), String> {
+    use std::io::Write as _;
+    use tauri::Emitter as _;
+
+    let mut requete = reqwest::blocking::Client::builder()
+        // Pas d'échéance globale : une vidéo de plusieurs centaines de
+        // mégaoctets sur une ligne lente dépasserait n'importe quel délai
+        // raisonnable. La connexion, elle, doit s'établir vite.
+        .timeout(None)
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("client HTTP : {e}"))?
+        .get(source);
+    if let Some(octets) = limite {
+        requete = requete.header("Range", format!("bytes=0-{}", octets.saturating_sub(1)));
+    }
+
+    let mut reponse = requete.send().map_err(|e| format!("téléchargement : {e}"))?;
+    if !reponse.status().is_success() {
+        return Err(format!("le serveur a répondu {}", reponse.status()));
+    }
+    // Le serveur peut ignorer la plage demandée et tout envoyer : l'annonce
+    // porte alors sur le fichier entier, pas sur ce qu'on va garder.
+    let total = match (limite, reponse.content_length()) {
+        (Some(max), Some(annonce)) => max.min(annonce),
+        (Some(max), None) => max,
+        (None, annonce) => annonce.unwrap_or(0),
+    };
+
+    // Écriture sous un nom provisoire : un téléchargement interrompu
+    // laisserait sinon un fichier tronqué que le cache prendrait pour valide.
+    let partiel = cible.with_extension("partiel");
+    let mut fichier =
+        std::fs::File::create(&partiel).map_err(|e| format!("création du fichier : {e}"))?;
+    let mut tampon = vec![0u8; 256 * 1024];
+    let mut recus: u64 = 0;
+    let mut derniere_annonce = std::time::Instant::now();
+
+    loop {
+        let lus = reponse
+            .read(&mut tampon)
+            .map_err(|e| format!("lecture de la réponse : {e}"))?;
+        if lus == 0 {
+            break;
+        }
+        fichier
+            .write_all(&tampon[..lus])
+            .map_err(|e| format!("écriture : {e}"))?;
+        recus += lus as u64;
+        if limite.is_some_and(|max| recus >= max) {
+            break;
+        }
+        if derniere_annonce.elapsed() >= std::time::Duration::from_millis(120) {
+            derniere_annonce = std::time::Instant::now();
+            let _ = app.emit(
+                "lecteur-video-progres",
+                ProgresTelechargement {
+                    source: source.to_string(),
+                    recus,
+                    total,
+                },
+            );
+        }
+    }
+
+    fichier
+        .sync_all()
+        .map_err(|e| format!("enregistrement : {e}"))?;
+    drop(fichier);
+    std::fs::rename(&partiel, cible).map_err(|e| format!("renommage : {e}"))?;
+    let _ = app.emit(
+        "lecteur-video-progres",
+        ProgresTelechargement {
+            source: source.to_string(),
+            recus,
+            total: recus,
+        },
+    );
+    log::info!(
+        "[Sion][lecteur] {} Mo en cache pour {source}",
+        recus / 1_048_576
+    );
+    Ok(())
+}
+
+/// Ramène une source distante sur le disque, et rend un chemin local.
+///
+/// **ffmpeg ne doit jamais aller sur le réseau lui-même.** Le binaire statique
+/// que nous livrons plante sur toute URL — vidage mémoire, y compris en HTTP
+/// simple — parce que la résolution DNS est cassée dans un exécutable lié
+/// statiquement à la glibc (constaté le 22/09). Un fichier local, lui, se lit
+/// parfaitement.
+///
+/// Télécharger nous-mêmes règle aussi deux choses au passage : on maîtrise
+/// l'authentification, que Matrix impose désormais sur les médias, et le
+/// fichier est mis en cache — rouvrir une vidéo ne la retélécharge pas.
+fn ramener_en_local(
+    app: &tauri::AppHandle<crate::TauriRuntime>,
+    source: &str,
+) -> Result<String, String> {
+    if !source.starts_with("http://") && !source.starts_with("https://") {
+        return Ok(source.to_string());
+    }
+    let cible = dossier_cache().join(format!("media_{}", empreinte(source)));
+    if cible.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(cible.to_string_lossy().into_owned());
+    }
+    log::info!("[Sion][lecteur] téléchargement de {source}");
+    telecharger(app, source, &cible, None)?;
+    purger_cache();
+    Ok(cible.to_string_lossy().into_owned())
+}
+
+/// Ramène le DÉBUT d'une source distante, assez pour en extraire une affiche.
+///
+/// Une carte du fil n'a besoin que d'une image. Télécharger la vidéo entière
+/// pour cela ferait passer des centaines de mégaoctets à chaque ouverture
+/// d'un salon qui en contient plusieurs — et remplirait le cache de films que
+/// personne n'a demandé à voir.
+///
+/// Rend `None` quand la plage ne suffit pas : c'est le cas d'un MP4 dont
+/// l'index est en fin de fichier. L'appelant retombe alors sur le fichier
+/// complet.
+fn ramener_tete(
+    app: &tauri::AppHandle<crate::TauriRuntime>,
+    source: &str,
+    limite: u64,
+) -> Option<std::path::PathBuf> {
+    let cible = dossier_cache().join(format!("tete_{}", empreinte(source)));
+    if cible.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Some(cible);
+    }
+    match telecharger(app, source, &cible, Some(limite)) {
+        Ok(()) => Some(cible),
+        Err(e) => {
+            log::warn!("[Sion][lecteur] début de {source} indisponible : {e}");
+            None
+        }
+    }
+}
+
 /// Ouvre une source et lance sa lecture dans la surface native.
 ///
-/// `chemin` est un fichier local ou une URL : ffmpeg lit les deux. Rend la
-/// main dès que les dimensions sont connues ; la lecture se poursuit sur un
-/// fil dédié. Une lecture déjà en cours est arrêtée d'abord.
+/// `chemin` est un fichier local ou une URL ; dans le second cas le média est
+/// d'abord rapatrié — ffmpeg ne va jamais sur le réseau, voir
+/// `ramener_en_local`. Appeler `lecteur_video_precharger` avant évite d'y
+/// attendre, cette commande étant synchrone.
+///
+/// Rend la main dès que les dimensions sont connues ; la lecture se poursuit
+/// sur un fil dédié. Une lecture déjà en cours est arrêtée d'abord.
 #[tauri::command]
 pub fn lecteur_video_ouvrir(
     app: tauri::AppHandle<crate::TauriRuntime>,
@@ -243,7 +482,28 @@ pub fn lecteur_video_ouvrir(
 ) -> Result<EtatLecteur, String> {
     let gere = crate::managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
     let ffmpeg = crate::resolve_ffmpeg(ffmpeg_path.as_deref(), gere.as_deref());
-    demarrer(&ffmpeg, &chemin, 0)
+    let local = ramener_en_local(&app, &chemin)?;
+    demarrer(&ffmpeg, &local, 0)
+}
+
+/// Ramène le média sur le disque avant l'ouverture, en publiant sa
+/// progression sur `lecteur-video-progres`.
+///
+/// Séparée de l'ouverture à dessein. Une commande synchrone s'exécute sur le
+/// fil principal — celui qui dessine — et y télécharger cent mégaoctets
+/// figerait toute l'interface pendant l'attente. Ici la tâche part sur un fil
+/// à part, et la carte peut afficher où elle en est.
+///
+/// Appeler `lecteur_video_ouvrir` ensuite : le fichier est alors en cache, et
+/// l'ouverture rend la main aussitôt.
+#[tauri::command]
+pub async fn lecteur_video_precharger(
+    app: tauri::AppHandle<crate::TauriRuntime>,
+    chemin: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || ramener_en_local(&app, &chemin))
+        .await
+        .map_err(|e| format!("téléchargement interrompu : {e}"))?
 }
 
 /// Démarre — ou redémarre — la lecture à une position donnée.
@@ -280,14 +540,28 @@ fn demarrer(ffmpeg: &str, chemin: &str, depart_ms: u64) -> Result<EtatLecteur, S
         commande.args(["-ss", &format!("{:.3}", depart_ms as f64 / 1000.0)]);
     }
     commande.arg("-i").arg(&chemin);
+
+    // Dimensions IMPOSÉES, jamais supposées.
+    //
+    // Nous découpons le flux brut tous les `largeur * hauteur * 3/2` octets :
+    // si ffmpeg n'émet pas exactement cette taille, chaque image démarre plus
+    // loin que la précédente et l'écran n'est plus que du bruit. Or les deux
+    // ne coïncident pas toujours — un WebM peut déclarer `DisplayWidth 720`
+    // tout en codant 768 pixels de large. ffmpeg écrit alors 720 dans sa
+    // ligne `Stream`, celle que lit `probe_video`, et sort du 768 en
+    // rawvideo (constaté le 22/09 sur une vidéo d'avant l'alpha 8).
+    //
+    // `setsar=1` interdit au passage qu'un pixel non carré vienne changer la
+    // géométrie derrière notre dos.
+    let mut filtres = vec![format!("scale={largeur}:{hauteur}"), "setsar=1".to_string()];
     if toile_l != largeur {
         // La vidéo reste intacte, centrée : on ajoute seulement du noir de
         // part et d'autre pour que le bandeau ait où s'écrire.
-        commande.args([
-            "-vf",
-            &format!("pad={toile_l}:{toile_h}:({toile_l}-iw)/2:0:color=black"),
-        ]);
+        filtres.push(format!(
+            "pad={toile_l}:{toile_h}:({toile_l}-iw)/2:0:color=black"
+        ));
     }
+    commande.args(["-vf", &filtres.join(",")]);
     commande
         .args([
             "-an",
@@ -544,31 +818,87 @@ pub fn lecteur_video_etat() -> EtatLecteur {
 /// L'image est prise à une seconde du début, un premier plan étant souvent
 /// noir. Sur une vidéo plus courte, ffmpeg rend la dernière image disponible.
 #[tauri::command]
-pub fn lecteur_video_affiche(
+pub async fn lecteur_video_affiche(
     app: tauri::AppHandle<crate::TauriRuntime>,
     chemin: String,
     ffmpeg_path: Option<String>,
 ) -> Result<String, String> {
+    // Hors du fil principal : l'affiche peut demander un aller-retour réseau,
+    // et une carte du fil ne doit jamais figer l'interface en apparaissant.
+    tauri::async_runtime::spawn_blocking(move || affiche_bloquante(&app, &chemin, ffmpeg_path))
+        .await
+        .map_err(|e| format!("extraction interrompue : {e}"))?
+}
+
+/// Ce qu'on télécharge d'une vidéo distante pour en tirer une image.
+///
+/// Douze mégaoctets couvrent largement la première seconde d'un encodage
+/// courant, en-têtes compris.
+const TETE_AFFICHE: u64 = 12 * 1024 * 1024;
+
+fn affiche_bloquante(
+    app: &tauri::AppHandle<crate::TauriRuntime>,
+    chemin: &str,
+    ffmpeg_path: Option<String>,
+) -> Result<String, String> {
     use base64::Engine as _;
-    use std::hash::{Hash, Hasher};
 
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    chemin.hash(&mut h);
-    let cache = crate::sion_media_dir().join(format!("sion_affiche_{:x}.jpg", h.finish()));
-
+    let cache = dossier_cache().join(format!("affiche_{}.jpg", empreinte(chemin)));
     if let Ok(octets) = std::fs::read(&cache) {
         if !octets.is_empty() {
             return Ok(base64::engine::general_purpose::STANDARD.encode(octets));
         }
     }
 
-    let gere = crate::managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
+    let gere = crate::managed_ffmpeg_path(app).map(|p| p.to_string_lossy().into_owned());
     let ffmpeg = crate::resolve_ffmpeg(ffmpeg_path.as_deref(), gere.as_deref());
+    let distant = chemin.starts_with("http://") || chemin.starts_with("https://");
 
-    let sortie = crate::hidden_command(&ffmpeg)
+    let mut garder = |octets: Vec<u8>| {
+        let _ = std::fs::write(&cache, &octets);
+        base64::engine::general_purpose::STANDARD.encode(&octets)
+    };
+
+    if !distant {
+        return extraire_image(&ffmpeg, std::path::Path::new(chemin))
+            .map(&mut garder)
+            .ok_or_else(|| "aucune image extraite".to_string());
+    }
+
+    // Le média entier s'il est déjà là, sinon son seul début : inutile de
+    // rapatrier un film pour en montrer une vignette.
+    let complet = dossier_cache().join(format!("media_{}", empreinte(chemin)));
+    if complet.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        if let Some(octets) = extraire_image(&ffmpeg, &complet) {
+            return Ok(garder(octets));
+        }
+    } else if let Some(tete) = ramener_tete(app, chemin, TETE_AFFICHE) {
+        let extrait = extraire_image(&ffmpeg, &tete);
+        // L'affiche gardée, le fragment n'a plus d'usage.
+        let _ = std::fs::remove_file(&tete);
+        if let Some(octets) = extrait {
+            return Ok(garder(octets));
+        }
+    }
+
+    // Dernier recours : un MP4 dont l'index est en fin de fichier n'est
+    // lisible qu'en entier.
+    log::info!("[Sion][lecteur] affiche : repli sur le fichier complet pour {chemin}");
+    let local = ramener_en_local(app, chemin)?;
+    extraire_image(&ffmpeg, std::path::Path::new(&local))
+        .map(garder)
+        .ok_or_else(|| "aucune image extraite".to_string())
+}
+
+/// Tire une image de `chemin`, en JPEG.
+///
+/// Prise à une seconde du début, un premier plan étant souvent noir. Sur une
+/// vidéo plus courte, ffmpeg rend la dernière image disponible.
+fn extraire_image(ffmpeg: &str, chemin: &std::path::Path) -> Option<Vec<u8>> {
+    let sortie = crate::hidden_command(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-ss", "1"])
         .arg("-i")
-        .arg(&chemin)
+        .arg(chemin)
         .args([
             "-frames:v",
             "1",
@@ -585,13 +915,11 @@ pub fn lecteur_video_affiche(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()
-        .map_err(|e| format!("ffmpeg introuvable : {e}"))?;
-
+        .ok()?;
     if !sortie.status.success() || sortie.stdout.is_empty() {
-        return Err("aucune image extraite".to_string());
+        return None;
     }
-    let _ = std::fs::write(&cache, &sortie.stdout);
-    Ok(base64::engine::general_purpose::STANDARD.encode(&sortie.stdout))
+    Some(sortie.stdout)
 }
 
 /// Où se trouvent les contrôles dans l'image, en pixels du média.
@@ -710,5 +1038,39 @@ mod tests {
         // que peindre un plan incomplet, qui s'afficherait en vert.
         let brut = vec![0u8; 10];
         assert!(decouper_plans(&brut, 4, 2).is_none());
+    }
+
+    /// Le cache s'élague du plus ancien au plus récent, et seulement au-delà
+    /// du plafond.
+    ///
+    /// Le test porte sur du vrai effacement de fichiers : une erreur ici ne
+    /// se verrait qu'en supprimant la vidéo de quelqu'un.
+    #[test]
+    fn purge_les_plus_anciens_au_dela_du_plafond() {
+        let dossier = std::env::temp_dir().join(format!(
+            "sion-test-purge-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dossier);
+        std::fs::create_dir_all(&dossier).unwrap();
+
+        // Écrits dans l'ordre, avec une pause : leurs dates diffèrent.
+        for nom in ["vieux", "moyen", "recent"] {
+            std::fs::write(dossier.join(nom), vec![0u8; 100]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // Sous le plafond : on ne touche à rien.
+        purger_dossier(&dossier, 1000);
+        assert_eq!(std::fs::read_dir(&dossier).unwrap().count(), 3);
+
+        // 300 octets présents, plafond à 150 : les deux plus anciens partent.
+        purger_dossier(&dossier, 150);
+        assert!(!dossier.join("vieux").exists(), "le plus ancien devait partir");
+        assert!(!dossier.join("moyen").exists(), "le deuxième devait partir");
+        assert!(dossier.join("recent").exists(), "le plus récent devait rester");
+
+        std::fs::remove_dir_all(&dossier).unwrap();
     }
 }

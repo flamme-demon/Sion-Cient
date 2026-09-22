@@ -20,6 +20,8 @@ import {
   etatLecteurVideo,
   fermerLecteurVideo,
   ouvrirLecteurVideo,
+  precharcherVideo,
+  type ProgresVideo,
   pauseLecteurVideo,
   registerNativeVideoSurface,
   apercuLecteurVideo,
@@ -41,6 +43,12 @@ interface Props {
   ratio?: string;
 }
 
+/** Voile de téléchargement, posé sur les pixels de la vidéo : il doit rester
+ *  lisible sur l'image quel que soit le thème, comme la letterbox du partage.
+ *  Marqué `theme-exempt` pour le garde anti-couleurs-en-dur. */
+const VOILE_FOND = "rgba(0,0,0,0.55)"; // theme-exempt — voile posé sur le média
+const VOILE_ENCRE = "#fff"; // theme-exempt — voile posé sur le média
+
 export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   const { t } = useTranslation();
   const surfaceRef = useRef<HTMLCanvasElement>(null);
@@ -48,6 +56,8 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   const [pleinEcran, setPleinEcran] = useState(false);
   const [etat, setEtat] = useState<EtatLecteurVideo | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
+  // Avancement du rapatriement, avant que la moindre image existe.
+  const [progres, setProgres] = useState<ProgresVideo | null>(null);
   const [zones, setZones] = useState<ZonesLecteur | null>(null);
   const [volume, setVolume] = useState(1);
   // Volume d'avant la coupure, pour que le second clic rétablisse le niveau
@@ -80,6 +90,11 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
         return;
       }
       try {
+        // Le fichier d'abord, la lecture ensuite : l'ouverture est synchrone
+        // côté Rust, donc y télécharger figerait la fenêtre entière.
+        await precharcherVideo(source, (p) => { if (vivant) setProgres(p); });
+        if (!vivant) return;
+        setProgres(null);
         const e = await ouvrirLecteurVideo(source);
         if (!vivant) return;
         setEtat(e);
@@ -321,6 +336,43 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
             cursor: 'pointer',
           }}
         />
+
+        {/* Le transfert, tant qu'il n'y a rien à montrer. Sans ce retour, un
+            gros fichier laisse un rectangle noir sans explication. */}
+        {progres && !etat && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              background: VOILE_FOND,
+              color: VOILE_ENCRE,
+              fontSize: 12,
+              pointerEvents: 'none',
+            }}
+          >
+            <span>
+              {t("chat.videoDownloading", { defaultValue: "Téléchargement…" })}
+              {progres.total > 0
+                ? ` ${Math.round((progres.recus / progres.total) * 100)} %`
+                : ` ${Math.round(progres.recus / 1048576)} Mo`}
+            </span>
+            <div style={{ width: '60%', maxWidth: 260, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.25)', overflow: 'hidden' }}>
+              <div
+                style={{
+                  height: '100%',
+                  width: progres.total > 0 ? `${(progres.recus / progres.total) * 100}%` : '100%',
+                  background: 'var(--color-primary)',
+                  transition: 'width 120ms linear',
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Zones transparentes alignées sur ce que Rust dessine. Elles ne
             montrent rien : toute l'apparence est dans l'image. */}
