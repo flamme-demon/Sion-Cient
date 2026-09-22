@@ -97,17 +97,17 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
     setPhase("importing");
     setProgress(null);
     try {
-      const opt = info.options.find((o) => o.height === height);
       const file = await importUrlVideo(url.trim(), {
         height,
         start: rangeActive ? start : undefined,
         end: rangeActive ? end : undefined,
         maxBytes: limit || undefined,
-        // Tout ce qui n'est pas déjà de l'AV1 est réencodé en AV1 par
-        // l'expéditeur : meilleur rapport qualité/poids, et les destinataires
-        // n'ont plus rien à convertir. Une source déjà en AV1 part telle
-        // quelle — la réencoder ne ferait que perdre de la qualité.
-        recodeWebm: !!opt && opt.codec !== "AV1",
+        // Le réencodage se décide côté Rust, sur la taille RÉELLE du fichier
+        // téléchargé : il n'a lieu que si la vidéo dépasse la limite du
+        // serveur. Le critère était le codec — tout ce qui n'était pas de
+        // l'AV1 y passait — et une vidéo de cinq mégaoctets en H.264 perdait
+        // de la qualité pour rien. Le lecteur les décode tous.
+        recodeWebm: false,
         title: info.title,
         durationSec: info.duration,
       }, (p) => setProgress(p));

@@ -3185,8 +3185,28 @@ async fn import_url_video(
         return Err("yt-dlp n'a produit aucun fichier vidéo".into());
     };
 
-    // ── Phase 2: re-encode to WebM with real progress ──
-    let (final_path, final_ext) = if recode_webm == Some(true) {
+    // ── Phase 2 : réencodage, SEULEMENT si le fichier ne passe pas ──
+    //
+    // Le critère était le codec de la source : on réencodait tout ce qui
+    // n'était pas déjà de l'AV1. Une vidéo de cinq mégaoctets en H.264, qui
+    // tient largement dans la limite du serveur, y perdait de la qualité et
+    // faisait attendre pour rien. Le lecteur décode tous les formats, donc
+    // seule la taille compte désormais — comme à l'envoi d'un fichier local.
+    //
+    // La décision se prend sur le fichier RÉEL, pas sur l'estimation affichée
+    // avant téléchargement : yt-dlp rend souvent autre chose que la taille
+    // annoncée. `recode_webm` ne sert plus qu'à forcer la conversion.
+    let taille_reelle = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
+    let limite_envoi = max_bytes.unwrap_or(0);
+    let trop_gros = limite_envoi > 0 && taille_reelle > limite_envoi;
+    log::info!(
+        "[Sion][vidéo] import : {} Mo téléchargés, limite {} Mo — réencodage {}",
+        taille_reelle / 1_048_576,
+        limite_envoi / 1_048_576,
+        if trop_gros || recode_webm == Some(true) { "nécessaire" } else { "inutile" }
+    );
+
+    let (final_path, final_ext) = if trop_gros || recode_webm == Some(true) {
         let _ = app.emit(
             "video-import-progress",
             serde_json::json!({ "phase": "convert", "pct": 0.0 }),
