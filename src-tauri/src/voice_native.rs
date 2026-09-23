@@ -2283,6 +2283,21 @@ pub fn voice_native_set_deafened(
     let _connected = wait_for_engine(holder_is_connected);
     #[cfg(not(feature = "native-voice"))]
     let _connected = false;
+    // La sourdine GÈLE la file des clips de soundboard sans la vider : le
+    // rendu où ils sont mixés n'est plus appelé, leur curseur s'arrête. Un
+    // son reçu juste avant la sourdine ressortait donc à sa levée — la fin
+    // d'une musique de Noël jouée la veille, entendue le lendemain dans un
+    // salon où tout le monde était muet (23/09).
+    //
+    // On la vide aux deux bascules. À la levée, AVANT que le rendu reparte :
+    // c'est là qu'un clip glissé pendant la bascule d'entrée serait resté
+    // coincé. Les sons de confirmation ne sont pas touchés : ils sont joués
+    // après la bascule, par la sortie propre à la sourdine ou une fois le
+    // rendu revenu.
+    #[cfg(feature = "native-voice")]
+    if !deafened {
+        webrtc_sys::sion_audio::ffi::clear_soundboard_audio();
+    }
     #[cfg(feature = "native-voice")]
     {
         if _connected {
@@ -2304,6 +2319,12 @@ pub fn voice_native_set_deafened(
     let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
     if applied {
         inner.deafened = deafened;
+        // Après le drapeau : `voice_native_play_soundboard` le lit avant de
+        // mettre en file, aucun son de pair ne peut donc plus y entrer.
+        #[cfg(feature = "native-voice")]
+        if deafened {
+            webrtc_sys::sion_audio::ffi::clear_soundboard_audio();
+        }
     }
     let status = snapshot(&inner);
     emit_status(&app, &status);
