@@ -811,11 +811,16 @@ fn run_share_capture(
             // d'entiers enroulent au lieu de paniquer : le garde-fou passait
             // alors à tort et `argb_to_i420` lisait hors du tampon. Tout est
             // vérifié, et un stride hors bornes fait simplement sauter l'image.
-            let raw_stride = frame.stride();
-            if raw_stride <= 0 {
+            //
+            // `try_from` plutôt qu'un test `<= 0` : le type du stride n'est pas
+            // le même d'une plateforme à l'autre, et une valeur négative doit
+            // être rejetée partout.
+            let Ok(src_stride) = usize::try_from(frame.stride()) else {
+                return;
+            };
+            if src_stride == 0 {
                 return;
             }
-            let src_stride = raw_stride as usize;
             let Some(needed) = (h as usize)
                 .checked_sub(1)
                 .and_then(|rows| rows.checked_mul(src_stride))
