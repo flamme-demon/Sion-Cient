@@ -141,9 +141,76 @@ fn fit_content_rect(
     )
 }
 
+/// Rectangle où peindre une image que le moteur a déjà réduite à la taille
+/// de sa surface.
+///
+/// Elle mesure presque toujours quelques pixels de moins que la zone : le
+/// moteur arrondit sa cible au multiple de 16 inférieur, pour qu'elle cesse
+/// de « danser » (18/09). L'étirer de ces quelques pixels au plus proche
+/// voisin — le rendu GTK filtre en `GL_NEAREST` pour garder le texte net —
+/// dédoublait une colonne tous les quatre-vingts pixels : le texte partagé
+/// prenait des traits d'épaisseur irrégulière (23/09).
+///
+/// Tant que l'écart est celui de l'arrondi, l'image est donc posée au pixel
+/// près, centrée sur des pixels entiers : une marge noire de quelques pixels
+/// au plus, et un texte identique à celui de l'émetteur réduit. Au-delà —
+/// une image qui n'a pas été réduite pour cette zone —, retour au `contain`.
+///
+/// Coordonnées logiques en entrée comme en sortie ; les dimensions de l'image
+/// sont physiques, et `echelle` en donne le rapport.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn rect_affiche(
+    x: f64,
+    y: f64,
+    largeur: f64,
+    hauteur: f64,
+    image_l: u32,
+    image_h: u32,
+    echelle: f64,
+) -> (f64, f64, f64, f64) {
+    let contenu = fit_content_rect(x, y, largeur, hauteur, image_l, image_h);
+    let echelle = echelle.max(1.0);
+    let (il, ih) = (image_l as f64, image_h as f64);
+    let tient = il <= largeur * echelle + 0.5 && ih <= hauteur * echelle + 0.5;
+    let proche = (contenu.2 * echelle - il).abs() <= 16.0 && (contenu.3 * echelle - ih).abs() <= 16.0;
+    if !(tient && proche) {
+        return contenu;
+    }
+    let (l, h) = (il / echelle, ih / echelle);
+    (
+        ((x + (largeur - l) / 2.0) * echelle).round() / echelle,
+        ((y + (hauteur - h) / 2.0) * echelle).round() / echelle,
+        l,
+        h,
+    )
+}
+
 #[cfg(test)]
 mod dimension_tests {
-    use super::{fit_content_rect, fit_frame_dimensions};
+    use super::{fit_content_rect, fit_frame_dimensions, rect_affiche};
+
+    /// Le cas du 23/09 : un partage 1920x1080 réduit pour une zone de 1400
+    /// pixels, arrondie à 1392. Étirée de 8 pixels au plus proche voisin,
+    /// l'image dédoublait des colonnes ; posée telle quelle, elle est nette.
+    #[test]
+    fn une_image_reduite_pour_sa_zone_est_posee_au_pixel_pres() {
+        let (lw, lh) = fit_frame_dimensions(1920, 1080, 1400, 900);
+        let (x, y, w, h) = rect_affiche(10.0, 20.0, 1400.0, 900.0, lw, lh, 1.0);
+        assert_eq!((w, h), (lw as f64, lh as f64), "aucun étirement");
+        assert_eq!((x.fract(), y.fract()), (0.0, 0.0), "sur des pixels entiers");
+        assert!(x >= 10.0 && x + w <= 1410.0);
+        // En double densité, le même raisonnement en pixels physiques.
+        let (x, _, w, _) = rect_affiche(10.0, 20.0, 700.0, 450.0, lw, lh, 2.0);
+        assert_eq!(w * 2.0, lw as f64);
+        assert_eq!((x * 2.0).fract(), 0.0);
+    }
+
+    #[test]
+    fn une_image_qui_n_est_pas_faite_pour_la_zone_reste_en_contain() {
+        // Pas encore réduite : on l'ajuste à la zone, comme avant.
+        let affiche = rect_affiche(0.0, 0.0, 800.0, 450.0, 1920, 1080, 1.0);
+        assert_eq!(affiche, fit_content_rect(0.0, 0.0, 800.0, 450.0, 1920, 1080));
+    }
 
     #[test]
     fn adapte_la_frame_au_rectangle_sans_deformer() {
@@ -311,7 +378,7 @@ mod imp {
     const GL_TEXTURE_2D: u32 = 0x0DE1;
     const GL_TEXTURE_MAG_FILTER: u32 = 0x2800;
     const GL_TEXTURE_MIN_FILTER: u32 = 0x2801;
-    const GL_NEAREST: i32 = 0x2600;
+    const GL_LINEAR: i32 = 0x2601;
     const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
     const GL_RGBA: i32 = 0x1908;
     const GL_BGRA: u32 = 0x80E1;
@@ -1276,10 +1343,45 @@ mod imp {
             out vec2 v_uv;\n\
             const vec2 p[6] = vec2[6](vec2(0,0),vec2(1,0),vec2(1,1),vec2(0,0),vec2(1,1),vec2(0,1));\n\
             void main(){ vec2 q=p[gl_VertexID]; gl_Position=vec4(mix(u_rect.xy,u_rect.zw,q),0,1); v_uv=vec2(q.x,1.0-q.y); }\0";
+        // Échantillonnage bicubique Catmull-Rom, en neuf lectures filtrées
+        // linéairement.
+        //
+        // Le partage arrive souvent PLUS PETIT que la zone : le moteur ne
+        // l'agrandit jamais sur le processeur. Un écran 1920x1080 affiché sur
+        // 2560 pixels était alors étiré au plus proche voisin — un pixel sur
+        // trois doublé, un texte crénelé aux traits irréguliers (23/09). Le
+        // bicubique agrandit net, sans marches.
+        //
+        // Et quand l'image est posée au pixel près (`rect_affiche`), chaque
+        // fragment tombe au centre d'un texel : les poids se réduisent à 1
+        // pour ce texel et 0 ailleurs, le pixel sort tel quel, sans flou.
         const FRAGMENT: &[u8] = b"#version 150 core\n\
             uniform sampler2D u_texture;\n\
             in vec2 v_uv; out vec4 color;\n\
-            void main(){ color=texture(u_texture,v_uv); }\0";
+            void main(){\n\
+              vec2 taille = vec2(textureSize(u_texture, 0));\n\
+              vec2 pos = v_uv * taille;\n\
+              vec2 t1 = floor(pos - 0.5) + 0.5;\n\
+              vec2 f = pos - t1;\n\
+              vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));\n\
+              vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n\
+              vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));\n\
+              vec2 w3 = f * f * (-0.5 + 0.5 * f);\n\
+              vec2 w12 = w1 + w2;\n\
+              vec2 t0 = (t1 - 1.0) / taille;\n\
+              vec2 t3 = (t1 + 2.0) / taille;\n\
+              vec2 t12 = (t1 + w2 / w12) / taille;\n\
+              vec4 c = texture(u_texture, vec2(t0.x, t0.y)) * w0.x * w0.y\n\
+                     + texture(u_texture, vec2(t12.x, t0.y)) * w12.x * w0.y\n\
+                     + texture(u_texture, vec2(t3.x, t0.y)) * w3.x * w0.y\n\
+                     + texture(u_texture, vec2(t0.x, t12.y)) * w0.x * w12.y\n\
+                     + texture(u_texture, vec2(t12.x, t12.y)) * w12.x * w12.y\n\
+                     + texture(u_texture, vec2(t3.x, t12.y)) * w3.x * w12.y\n\
+                     + texture(u_texture, vec2(t0.x, t3.y)) * w0.x * w3.y\n\
+                     + texture(u_texture, vec2(t12.x, t3.y)) * w12.x * w3.y\n\
+                     + texture(u_texture, vec2(t3.x, t3.y)) * w3.x * w3.y;\n\
+              color = clamp(c, 0.0, 1.0);\n\
+            }\0";
         unsafe {
             let vertex = compile_shader(GL_VERTEX_SHADER, VERTEX)?;
             let fragment = compile_shader(GL_FRAGMENT_SHADER, FRAGMENT)?;
@@ -1344,12 +1446,13 @@ mod imp {
                     frame.texture = Some(texture);
                 }
                 glBindTexture(GL_TEXTURE_2D, texture);
-                // libyuv a déjà réduit la frame à la taille physique demandée
-                // par cette surface. Un second filtrage linéaire dans OpenGL
-                // adoucit fortement le texte partagé au moindre écart
-                // d'arrondi ; le blit final doit rester 1:1 et net.
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                // Filtrage LINÉAIRE : le shader bicubique s'en sert pour lire
+                // quatre texels d'un coup. Il ne floute pas pour autant une
+                // image posée au pixel près — voir le shader. Le `GL_NEAREST`
+                // d'avant ne valait que pour ce cas-là, et crénelait tout
+                // agrandissement (23/09).
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
@@ -1409,13 +1512,14 @@ mod imp {
                 let Some(texture) = frame.texture else {
                     continue;
                 };
-                let (x, y, dw, dh) = super::fit_content_rect(
+                let (x, y, dw, dh) = super::rect_affiche(
                     tx,
                     ty,
                     target.width,
                     target.height,
                     frame.width,
                     frame.height,
+                    scale_factor as f64,
                 );
                 let left = (2.0 * x / allocation.width() as f64 - 1.0) as f32;
                 let right = (2.0 * (x + dw) / allocation.width() as f64 - 1.0) as f32;
@@ -1446,13 +1550,16 @@ mod imp {
                     .frames
                     .get(&target.sender)
                     .map(|frame| {
-                        super::fit_content_rect(
+                        // Le même rectangle que l'image : les curseurs restent
+                        // posés sur ce qu'ils désignent.
+                        super::rect_affiche(
                             target.x - state.origin_x,
                             target.y - state.origin_y,
                             target.width,
                             target.height,
                             frame.width,
                             frame.height,
+                            OUTPUT_SCALE.load(Ordering::Relaxed).max(1) as f64,
                         )
                     })
                     .unwrap_or((
