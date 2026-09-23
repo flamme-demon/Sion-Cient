@@ -16,8 +16,9 @@ import { useTranscriptStore } from "../../stores/useTranscriptStore";
 import { detectTtsEngine, listTtsModels, installTtsModel, deleteTtsModel, pickTtsEnginePath, TTS_MODEL_LABELS, type TtsModelInfo } from "../../services/ttsService";
 import { useThemeStore } from "../../stores/useThemeStore";
 import { BUILTIN_THEMES } from "../../themes/builtin";
-import { getActiveTheme, parseThemeFile, themeToJson, resolveThemeTokens } from "../../services/themeService";
+import { getActiveTheme, parseThemeFile, previewTheme, themeToJson, resolveThemeTokens } from "../../services/themeService";
 import { defautsDeContraste } from "../../themes/contrast";
+import type { Theme } from "../../themes/types";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -43,6 +44,22 @@ export function SettingsPanel() {
   const themeFileRef = useRef<HTMLInputElement>(null);
   const [themeMsg, setThemeMsg] = useState<{ ok: boolean; text: string; avertissement?: boolean } | null>(null);
   const allThemes = [...BUILTIN_THEMES, ...customThemes];
+  // Aperçu au survol d'une vignette, après un court arrêt : balayer la liste
+  // ne doit pas faire clignoter toute l'interface d'un thème à l'autre.
+  const apercuRef = useRef<number | undefined>(undefined);
+  const survolerTheme = (theme: Theme | null) => {
+    window.clearTimeout(apercuRef.current);
+    if (!theme) {
+      previewTheme(null);
+      return;
+    }
+    apercuRef.current = window.setTimeout(() => previewTheme(theme), 150);
+  };
+  // Réglages fermés pendant un aperçu : le thème choisi revient.
+  useEffect(() => () => {
+    window.clearTimeout(apercuRef.current);
+    previewTheme(null);
+  }, []);
 
   const handleThemeImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -407,7 +424,11 @@ export function SettingsPanel() {
                 return (
                   <div key={th.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <button
-                      onClick={() => setThemeId(th.id)}
+                      onClick={() => { window.clearTimeout(apercuRef.current); setThemeId(th.id); }}
+                      onMouseEnter={() => survolerTheme(active ? null : th)}
+                      onMouseLeave={() => survolerTheme(null)}
+                      onFocus={() => survolerTheme(active ? null : th)}
+                      onBlur={() => survolerTheme(null)}
                       style={{
                         flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10,
                         padding: '8px 10px', borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',

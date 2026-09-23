@@ -36,6 +36,15 @@ export function getActiveTheme(): Theme {
 }
 
 /**
+ * Aperçu d'un thème sans le choisir — survol de sa vignette dans les
+ * Réglages. `null` rétablit le thème choisi. Rien n'est enregistré : le
+ * prochain changement du store réapplique de toute façon le thème actif.
+ */
+export function previewTheme(theme: Theme | null): void {
+  applyTheme(theme ?? getActiveTheme());
+}
+
+/**
  * Applique le thème courant puis à chaque changement du store. À appeler au
  * boot, avant le premier rendu React (pas de flash de thème par défaut).
  */

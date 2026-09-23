@@ -106,3 +106,16 @@ describe("parseThemeFile — import communautaire", () => {
     expect(again.theme.tokens["color-primary"]).toBe("#ff0000");
   });
 });
+
+describe("previewTheme — aperçu au survol", () => {
+  it("applique le thème survolé puis rétablit le thème choisi", () => {
+    const racine = document.documentElement;
+    mod.previewTheme(SION_LIGHT);
+    expect(racine.dataset.theme).toBe("sion-light");
+    expect(racine.style.colorScheme).toBe("light");
+    expect(racine.style.getPropertyValue("--color-surface")).toBe(SION_LIGHT.tokens["color-surface"]);
+    mod.previewTheme(null);
+    expect(racine.dataset.theme).toBe(mod.getActiveTheme().id);
+    expect(racine.style.colorScheme).toBe(mod.getActiveTheme().mode);
+  });
+});
