@@ -132,7 +132,31 @@ pub fn preferred_frame_dimensions(
     Some(cible)
 }
 
+/// Agrandissement permis au moteur, au-delà de la taille source.
+///
+/// Sous Linux, aucun : le shader agrandit en bicubique sur le GPU, pour rien.
+/// Sous Windows, `StretchDIBits` n'agrandit qu'au plus proche voisin — le mode
+/// `HALFTONE` ne lisse que les réductions —, et un partage 1920x1080 affiché
+/// sur une zone de 2560 pixels y doublait une colonne sur trois, comme sous
+/// Linux avant le 23/09. libyuv l'agrandit donc lui-même, en bilinéaire, pour
+/// que la peinture se fasse au pixel près. Borné à deux fois : au-delà, le
+/// coût de conversion grandit plus vite que ce qu'on y gagne.
+#[cfg(target_os = "windows")]
+const AGRANDISSEMENT_MAX: f64 = 2.0;
+#[cfg(not(target_os = "windows"))]
+const AGRANDISSEMENT_MAX: f64 = 1.0;
+
 fn fit_frame_dimensions(sw: u32, sh: u32, max_width: u32, max_height: u32) -> (u32, u32) {
+    fit_frame_dimensions_jusqua(sw, sh, max_width, max_height, AGRANDISSEMENT_MAX)
+}
+
+fn fit_frame_dimensions_jusqua(
+    sw: u32,
+    sh: u32,
+    max_width: u32,
+    max_height: u32,
+    agrandissement_max: f64,
+) -> (u32, u32) {
     if sw < 2 || sh < 2 || max_width < 2 || max_height < 2 {
         return (sw, sh);
     }
@@ -152,7 +176,7 @@ fn fit_frame_dimensions(sw: u32, sh: u32, max_width: u32, max_height: u32) -> (u
     let max_height = quantifie(max_height);
     let scale = (max_width as f64 / sw as f64)
         .min(max_height as f64 / sh as f64)
-        .min(1.0);
+        .min(agrandissement_max.max(1.0));
     let even = |value: f64| ((value.floor() as u32).max(2)) & !1;
     (even(sw as f64 * scale), even(sh as f64 * scale))
 }
@@ -198,7 +222,7 @@ fn fit_content_rect(
 ///
 /// Coordonnées logiques en entrée comme en sortie ; les dimensions de l'image
 /// sont physiques, et `echelle` en donne le rapport.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 fn rect_affiche(
     x: f64,
     y: f64,
@@ -228,8 +252,8 @@ fn rect_affiche(
 #[cfg(test)]
 mod dimension_tests {
     use super::{
-        fit_content_rect, fit_frame_dimensions, holes_within, rect_affiche,
-        NativeVideoSurfaceHole, NativeVideoSurfaceSpec, MAX_HOLES,
+        fit_content_rect, fit_frame_dimensions, fit_frame_dimensions_jusqua, holes_within,
+        rect_affiche, NativeVideoSurfaceHole, NativeVideoSurfaceSpec, MAX_HOLES,
     };
 
     /// Le cas du 23/09 : un partage 1920x1080 réduit pour une zone de 1400
@@ -267,8 +291,25 @@ mod dimension_tests {
             fit_frame_dimensions(1920, 1080, 1654, 930),
             fit_frame_dimensions(1920, 1080, 1648, 930)
         );
-        assert_eq!(fit_frame_dimensions(1920, 1080, 2560, 1440), (1920, 1080));
+        assert_eq!(fit_frame_dimensions_jusqua(1920, 1080, 2560, 1440, 1.0), (1920, 1080));
         assert_eq!(fit_frame_dimensions(2560, 1440, 768, 432), (768, 432));
+    }
+
+    #[test]
+    /// Sous Windows, le moteur agrandit lui-même l'image jusqu'à sa zone —
+    /// au plus deux fois — pour que GDI la pose sans l'étirer.
+    #[test]
+    fn l_agrandissement_est_borne_et_garde_le_ratio() {
+        assert_eq!(fit_frame_dimensions_jusqua(1920, 1080, 2560, 1440, 2.0), (2560, 1440));
+        assert_eq!(fit_frame_dimensions_jusqua(1280, 720, 5120, 1440, 2.0), (2560, 1440));
+        // Zone large et basse : la hauteur limite, le ratio tient.
+        assert_eq!(fit_frame_dimensions_jusqua(1920, 1080, 5120, 1296, 2.0), (2304, 1296));
+        // Plafond de 1 : jamais d'agrandissement, comme sous Linux.
+        assert_eq!(fit_frame_dimensions_jusqua(1280, 720, 2560, 1440, 1.0), (1280, 720));
+        assert_eq!(
+            fit_frame_dimensions(1280, 720, 2560, 1440),
+            fit_frame_dimensions_jusqua(1280, 720, 2560, 1440, super::AGRANDISSEMENT_MAX)
+        );
     }
 
     #[test]
@@ -4091,12 +4132,21 @@ mod imp {
             if let Some(frame) = frame {
                 let client_width = width;
                 let client_height = height;
-                let scale = (client_width as f64 / frame.width as f64)
-                    .min(client_height as f64 / frame.height as f64);
-                let dest_width = (frame.width as f64 * scale).round().max(1.0) as i32;
-                let dest_height = (frame.height as f64 * scale).round().max(1.0) as i32;
-                let mut dest_width = dest_width;
-                let mut dest_height = dest_height;
+                // Au pixel près quand l'image n'est plus petite que la zone
+                // que de l'arrondi du moteur au multiple de 16 : l'étirer de
+                // ces quelques pixels au plus proche voisin doublerait des
+                // colonnes. Sinon, `contain` comme avant.
+                let (_, _, largeur, hauteur) = super::rect_affiche(
+                    0.0,
+                    0.0,
+                    client_width as f64,
+                    client_height as f64,
+                    frame.width,
+                    frame.height,
+                    1.0,
+                );
+                let mut dest_width = largeur.round().max(1.0) as i32;
+                let mut dest_height = hauteur.round().max(1.0) as i32;
                 // Amortissement du rectangle d'affichage.
                 //
                 // L'émetteur fait varier sa résolution source de quelques
