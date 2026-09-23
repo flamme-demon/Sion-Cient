@@ -188,8 +188,11 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     const plein = document.fullscreenElement === cadreRef.current;
     const physique = { l: Math.round(boite.width * densite), h: Math.round(boite.height * densite) };
     const cle = `${physique.l}x${physique.h}`;
+    // Toute nouvelle mesure annule l'envoi en attente — y compris celle qui
+    // revient à la taille déjà envoyée : sortie du plein écran en moins de
+    // 400 ms, l'envoi prévu pour lui relançait ffmpeg à contretemps.
+    window.clearTimeout(minuterieResolution.current);
     if (cle !== derniereResolution.current) {
-      window.clearTimeout(minuterieResolution.current);
       minuterieResolution.current = window.setTimeout(() => {
         derniereResolution.current = cle;
         void resolutionLecteurVideo(physique.l, physique.h)
@@ -415,10 +418,30 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     return () => document.removeEventListener("fullscreenchange", suivre);
   }, [mesurer]);
 
+  // La croix du bandeau n'existe qu'une fois la lecture partie : en erreur ou
+  // pendant le téléchargement, c'est ce bouton-ci qui ferme le lecteur.
+  const boutonFermer = (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClose(); }}
+      title={t("chat.closePlayer")}
+      aria-label={t("chat.closePlayer")}
+      style={{
+        position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14,
+        border: 'none', cursor: 'pointer', pointerEvents: 'auto', fontSize: 14, lineHeight: 1,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface)',
+      }}
+    >
+      ✕
+    </button>
+  );
+
   if (erreur) {
     return (
-      <div style={{ padding: '10px 14px', borderRadius: 12, background: 'var(--color-surface-container-high)', color: 'var(--color-error)', fontSize: 12 }}>
+      <div style={{ position: 'relative', padding: '10px 44px 10px 14px', borderRadius: 12, background: 'var(--color-surface-container-high)', color: 'var(--color-error)', fontSize: 12 }}>
         {t("chat.videoPlayFailed", { defaultValue: "Lecture impossible" })} — {erreur}
+        {boutonFermer}
       </div>
     );
   }
@@ -531,6 +554,7 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
                 }}
               />
             </div>
+            {boutonFermer}
           </div>
         )}
 

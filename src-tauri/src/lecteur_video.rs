@@ -568,6 +568,10 @@ pub fn lecteur_video_ouvrir(
     let local = ramener_en_local(&app, &chemin)?;
     // Nouvelle vidéo : la taille d'affichage de la précédente ne vaut plus.
     *boite_visee().lock().unwrap_or_else(|e| e.into_inner()) = None;
+    // Elle s'ouvre dans sa bulle : fermée en plein écran, la précédente
+    // faisait dessiner ses premières images avec l'icône de sortie du plein
+    // écran, le temps que la page redéclare l'affichage.
+    affichage().lock().unwrap_or_else(|e| e.into_inner()).plein_ecran = false;
     demarrer(&ffmpeg, &local, 0, false)
 }
 
@@ -857,8 +861,16 @@ fn demarrer(
             // Uniquement si personne n'a pris la place entre-temps.
             let mut garde = lecture().lock().unwrap_or_else(|e| e.into_inner());
             if garde.as_ref().is_some_and(|l| l.numero == numero) {
-                *garde = None;
+                let finie = garde.take();
                 drop(garde);
+                // Le son s'arrête avec l'image. Sa sortie ne se ferme que sur
+                // `arreter` : lâchée sans lui, elle restait ouverte à vide —
+                // un flux et un fil de plus par vidéo vue jusqu'au bout —, et
+                // une bande-son plus longue que l'image continuait sans que
+                // rien ne puisse plus l'arrêter.
+                if let Some(audio) = finie.as_ref().and_then(|l| l.audio.as_ref()) {
+                    audio.arreter();
+                }
                 crate::native_video_surface::remove(SENDER_LECTEUR);
             }
         })
@@ -1111,7 +1123,10 @@ pub fn lecteur_video_pause(en_pause: bool) -> Result<EtatLecteur, String> {
             + l.audio
                 .as_ref()
                 .map_or_else(|| l.position_ms.load(Ordering::Relaxed), |a| a.position_ms());
-        (l.source.clone(), l.ffmpeg.clone(), position)
+        // Bornée comme un déplacement : en pause sur la dernière image,
+        // ffmpeg relancé à la fin exacte ne produisait rien, et le lecteur
+        // se fermait au lieu de reprendre.
+        (l.source.clone(), l.ffmpeg.clone(), position.min(l.duree_ms.saturating_sub(500)))
     };
     demarrer(&ffmpeg, &source, reprise, false)
 }
