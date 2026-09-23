@@ -3530,16 +3530,26 @@ mod imp {
     /// boîte de dialogue de la page la recouvre. Aucun `z-index` ne passe
     /// devant une fenêtre native : sa région est le seul moyen de rendre la
     /// page visible à cet endroit.
-    fn appliquer_trous(window: &mut NativeWindow, holes: &[(f64, f64, f64, f64)], scale: f64) {
+    ///
+    /// `decalage` : écart, en pixels physiques, entre le rectangle demandé et
+    /// la position réelle de la fenêtre, quand l'amortisseur l'a laissée en
+    /// place.
+    fn appliquer_trous(
+        window: &mut NativeWindow,
+        holes: &[(f64, f64, f64, f64)],
+        scale: f64,
+        decalage: (i32, i32),
+    ) {
         // Arrondis vers l'extérieur : aucun filet de vidéo sur le bord du menu.
+        let (dx, dy) = decalage;
         let trous = holes
             .iter()
             .map(|&(x, y, w, h)| {
                 (
-                    (x * scale).floor() as i32,
-                    (y * scale).floor() as i32,
-                    ((x + w) * scale).ceil() as i32,
-                    ((y + h) * scale).ceil() as i32,
+                    (x * scale).floor() as i32 + dx,
+                    (y * scale).floor() as i32 + dy,
+                    ((x + w) * scale).ceil() as i32 + dx,
+                    ((y + h) * scale).ceil() as i32 + dy,
                 )
             })
             .collect::<Vec<_>>();
@@ -3639,7 +3649,6 @@ mod imp {
             let Some(window) = current.get_mut(&surface.id) else {
                 continue;
             };
-            appliquer_trous(window, &surface.holes, scale);
             let x = (surface.x * scale).round() as i32;
             let y = (surface.y * scale).round() as i32;
             let width = (surface.width * scale).round().max(1.0) as i32;
@@ -3691,6 +3700,16 @@ mod imp {
                     let cycle = precedent == Some(candidat)
                         && ecart(dernier, candidat) <= AMPLITUDE_CYCLE;
                     if immobile || cycle {
+                        // La fenêtre reste où elle est : les trous se posent
+                        // par rapport à elle, pas au rectangle demandé, sinon
+                        // ils mordraient à côté du menu de l'écart amorti.
+                        drop(derniers);
+                        appliquer_trous(
+                            window,
+                            &surface.holes,
+                            scale,
+                            (x - dernier.0, y - dernier.1),
+                        );
                         continue;
                     }
                     log::info!(
@@ -3704,6 +3723,7 @@ mod imp {
                     derniers.insert(window.hwnd, (candidat, None));
                 }
             }
+            appliquer_trous(window, &surface.holes, scale, (0, 0));
             let _ = unsafe {
                 SetWindowPos(
                     HWND(window.hwnd as _),

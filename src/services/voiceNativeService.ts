@@ -737,7 +737,16 @@ function startNativeSurfaceLoop() {
  *  géométrie à l'image suivante — React a alors fini de le monter — plutôt
  *  que d'attendre le prochain contrôle, un quart de seconde plus tard, avec
  *  la vidéo par-dessus le menu. */
-function apresInteraction() {
+function apresInteraction(event: Event) {
+  // Une frappe dans un champ de saisie n'ouvre aucun menu : sans ce filtre,
+  // chaque lettre d'un message relançait un parcours complet de la page.
+  if (event.type === "keydown") {
+    const cible = event.target;
+    if (cible instanceof HTMLElement
+      && (cible.isContentEditable || cible.tagName === "INPUT" || cible.tagName === "TEXTAREA")) {
+      return;
+    }
+  }
   requestAnimationFrame(startNativeSurfaceLoop);
 }
 
