@@ -2151,6 +2151,45 @@ pub fn voice_native_disconnect(app: tauri::AppHandle<TauriRuntime>) -> VoiceNati
     status
 }
 
+/// Vrai quand l'utilisateur est en sourdine.
+pub(crate) fn en_sourdine() -> bool {
+    manager().lock().unwrap_or_else(|e| e.into_inner()).deafened
+}
+
+/// Joue un clip reçu d'un pair — son de soundboard ou bande-son d'un meme —
+/// avec les mêmes règles que `voice_native_play_soundboard` : jeté en
+/// sourdine, mixé dans le rendu WebRTC en appel, donc vu par l'annulation
+/// d'écho. Hors appel, où rien ne peut arriver d'un pair, c'est un aperçu
+/// local : il sort par la sortie propre des retours d'action.
+pub(crate) fn jouer_clip_de_pair(
+    app: &tauri::AppHandle<TauriRuntime>,
+    samples: Vec<i16>,
+    gain: f32,
+) {
+    if samples.is_empty() || en_sourdine() {
+        return;
+    }
+    #[cfg(feature = "native-voice")]
+    {
+        let en_appel = holder_is_connected();
+        if en_appel {
+            let res = with_engine(app, "clip de pair", |_| {
+                if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
+                    Ok(())
+                } else {
+                    Err("clip refusé".into())
+                }
+            });
+            if let Err(e) = res {
+                log::warn!("[Sion][voix-native] {e}");
+            }
+            return;
+        }
+    }
+    let _ = app;
+    crate::cue_playback::jouer_clip_local(samples, gain);
+}
+
 /// Joue un clip soundboard mono 48 kHz dans le rendu WebRTC natif. Le mixage
 /// se fait avant l'analyse reverse de l'APM : la sortie sélectionnée et l'AEC
 /// voient donc exactement le même signal. Les octets traversent Tauri une

@@ -14,7 +14,7 @@ use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Trans
 // signale à l'utilisateur. Même remède que sous Linux : pas de winit du tout.
 #[cfg(target_os = "windows")]
 #[path = "cursor_overlay_win32.rs"]
-mod win32_host;
+pub(crate) mod win32_host;
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 #[path = "cursor_overlay_winit.rs"]
 mod winit_host;
@@ -23,13 +23,13 @@ mod winit_host;
 mod layershell_host;
 #[cfg(target_os = "linux")]
 #[path = "cursor_overlay_x11.rs"]
-mod x11_host;
+pub(crate) mod x11_host;
 
 /// Embedded font for the cursor name pill — DejaVu Sans Bold (Bitstream
 /// Vera derivative, free license). ~700 KB; loaded once on first redraw.
 const FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSans-Bold.ttf");
 static FONT: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
-fn font() -> Option<&'static FontRef<'static>> {
+pub(crate) fn font() -> Option<&'static FontRef<'static>> {
     FONT.get_or_init(|| FontRef::try_from_slice(FONT_BYTES).ok())
         .as_ref()
 }

@@ -35,7 +35,7 @@ const SIDEBAR_MODE_CYCLE: readonly SidebarMode[] = ["full", "rail", "hidden"];
 // peut contenir plusieurs panneaux — ils deviennent alors des onglets, comme
 // dans un éditeur. Le chat reste épinglé au centre (jamais déplaçable).
 
-export type DockPanelId = "members" | "soundboard" | "transcript" | "voice" | "pinned";
+export type DockPanelId = "members" | "soundboard" | "memeboard" | "transcript" | "voice" | "pinned";
 export type DockZoneId = "top" | "right" | "bottom";
 
 export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["top", "right", "bottom"];
@@ -46,6 +46,7 @@ export const DOCK_ZONE_IDS: readonly DockZoneId[] = ["top", "right", "bottom"];
 export const DOCK_PANEL_DEFAULT_ZONE: Record<DockPanelId, DockZoneId> = {
   members: "right",
   soundboard: "right",
+  memeboard: "right",
   transcript: "right",
   voice: "bottom",
   // Les épinglés s'ouvraient en bulle ancrée à leur bandeau : sous Windows et

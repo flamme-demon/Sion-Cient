@@ -965,7 +965,7 @@ fn intern(conn: &RustConnection, name: &[u8]) -> Result<u32, Box<dyn std::error:
 
 /// Géométrie du moniteur principal via RANDR ; `None` si l'extension manque
 /// ou ne répond pas (repli : l'écran entier).
-fn primary_monitor(conn: &RustConnection, root: Window) -> Option<(i16, i16, u16, u16)> {
+pub(crate) fn primary_monitor(conn: &RustConnection, root: Window) -> Option<(i16, i16, u16, u16)> {
     let primary = conn
         .randr_get_output_primary(root)
         .ok()?

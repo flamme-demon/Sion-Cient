@@ -114,6 +114,11 @@ interface SettingsState {
   language: string;
   soundboardEnabled: boolean;
   soundboardVolume: number;
+  /** Memeboard activée : coupée, les memes reçus ne s'affichent plus et ceux
+   *  à l'écran se retirent. Indépendante de la soundboard. */
+  memeboardEnabled: boolean;
+  /** Volume de la bande-son des memes, de 0 à 1. */
+  memeboardVolume: number;
   /** Play short join/leave/timeout cues when a member enters or leaves the
    *  voice channel the local user is currently in (TeamSpeak-style). */
   voiceChannelSounds: boolean;
@@ -199,6 +204,8 @@ interface SettingsState {
   setEnableGifs: (v: boolean) => void;
   setSoundboardEnabled: (v: boolean) => void;
   setSoundboardVolume: (v: number) => void;
+  setMemeboardEnabled: (v: boolean) => void;
+  setMemeboardVolume: (v: number) => void;
   setVoiceChannelSounds: (v: boolean) => void;
   setMuteSoundsWhenDeafened: (v: boolean) => void;
   setVoiceSound: (cue: VoiceCue, cfg: VoiceSoundCfg | null) => void;
@@ -255,6 +262,8 @@ export const useSettingsStore = create<SettingsState>()(
       language: "",
       soundboardEnabled: true,
       soundboardVolume: 0.2,
+      memeboardEnabled: true,
+      memeboardVolume: 0.5,
       voiceChannelSounds: true,
       muteSoundsWhenDeafened: false,
       voiceSounds: { ...EMPTY_VOICE_SOUNDS },
@@ -308,6 +317,12 @@ export const useSettingsStore = create<SettingsState>()(
       setMuteSoundsWhenDeafened: (v) => set({ muteSoundsWhenDeafened: v }),
       setVoiceSound: (cue, cfg) => set((s) => ({ voiceSounds: { ...s.voiceSounds, [cue]: cfg } })),
       setSoundboardEnabled: (v) => set({ soundboardEnabled: v }),
+      setMemeboardEnabled: (v) => {
+        set({ memeboardEnabled: v });
+        // Coupée en plein meme : ceux à l'écran doivent partir aussi.
+        if (!v) import("../services/memeboardService").then(({ arreterMemes }) => arreterMemes()).catch(() => {});
+      },
+      setMemeboardVolume: (v) => set({ memeboardVolume: Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5 }),
       setSoundboardVolume: (v) => {
         set({ soundboardVolume: v });
         import("../services/soundboardService").then(({ setPlaybackVolume }) => setPlaybackVolume(v));

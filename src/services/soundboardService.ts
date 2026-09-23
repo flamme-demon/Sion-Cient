@@ -137,7 +137,7 @@ function parseSound(ev: {
 // complete regardless of how much membership churn the room has accumulated.
 let sbFilter: Filter | null = null;
 
-async function fetchSoundboardMessages(
+export async function fetchSoundboardMessages(
   client: NonNullable<ReturnType<typeof getMatrixClient>>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   room: any,

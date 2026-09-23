@@ -132,6 +132,12 @@ export function useLiveKit() {
         if (ev.topic !== SOUNDBOARD_TOPIC || !ev.sender) return;
         handleRemoteBroadcast(native.b64ToBytes(ev.payload_b64), ev.sender);
       }).catch(() => {});
+      import("../services/memeboardService").then(({ MEMEBOARD_TOPIC, recevoirMeme }) => {
+        if (!isCurrent() || ev.topic !== MEMEBOARD_TOPIC) return;
+        const nom = native.resolveNativeDisplayName(sender, room);
+        void recevoirMeme(native.b64ToBytes(ev.payload_b64), sender, nom)
+          .catch((err) => console.warn("[Sion][meme] réception impossible", err));
+      }).catch(() => {});
       import("../services/cursorService").then(({ CURSOR_TOPIC, CURSOR_CLICK_TOPIC, handleNativeCursorData }) => {
         if (!isCurrent()) return;
         if ((ev.topic !== CURSOR_TOPIC && ev.topic !== CURSOR_CLICK_TOPIC) || !sender) return;

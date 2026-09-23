@@ -34,6 +34,9 @@ const MemberPanel = lazy(() =>
 const SoundboardPanel = lazy(() =>
   import("../chat/SoundboardPanel").then((m) => ({ default: m.SoundboardPanel })),
 );
+const MemeboardPanel = lazy(() =>
+  import("../chat/MemeboardPanel").then((m) => ({ default: m.MemeboardPanel })),
+);
 const PinnedPanel = lazy(() =>
   import("../chat/PinnedListPanel").then((m) => ({ default: m.PinnedListPanel })),
 );
@@ -58,6 +61,7 @@ const TranscriptPanel = lazy(() =>
 const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
   members: "members.title",
   soundboard: "soundboard.title",
+  memeboard: "memeboard.title",
   transcript: "transcript.title",
   voice: "layout.voicePanelTitle",
   pinned: "chat.pinnedList",
@@ -66,6 +70,7 @@ const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
 const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
   members: MemberPanel,
   soundboard: SoundboardPanel,
+  memeboard: MemeboardPanel,
   transcript: TranscriptPanel,
   voice: VoiceStatusPanel,
   pinned: PinnedPanel,
@@ -76,6 +81,7 @@ const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
 const PANEL_FLEX: Record<DockPanelId, number> = {
   members: 1,
   soundboard: 1,
+  memeboard: 1,
   transcript: 1,
   voice: 0,
   pinned: 1,
@@ -126,7 +132,7 @@ function useDockAvailability(): Record<DockPanelId, boolean> {
   const hasSoundboard = useMatrixStore((s) => s.channels.some((c) => c.isSoundboard));
   const isDM = useMatrixStore((s) => s.channels.find((c) => c.id === activeChannel)?.isDM ?? false);
   return useMemo(
-    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, transcript: !!connectedVoice, voice: !!connectedVoice, pinned: !!activeChannel }),
+    () => ({ members: !!activeChannel && !isDM, soundboard: hasSoundboard, memeboard: hasSoundboard, transcript: !!connectedVoice, voice: !!connectedVoice, pinned: !!activeChannel }),
     [activeChannel, isDM, hasSoundboard, connectedVoice],
   );
 }
@@ -244,6 +250,7 @@ export function DockZone({ zone }: { zone: DockZoneId }) {
   const blockBgs = {
     members: usePanelBackgroundStyle("members"),
     soundboard: usePanelBackgroundStyle("soundboard"),
+    memeboard: usePanelBackgroundStyle("memeboard"),
     transcript: usePanelBackgroundStyle("transcript"),
     voice: usePanelBackgroundStyle("voice"),
     pinned: usePanelBackgroundStyle("pinned"),

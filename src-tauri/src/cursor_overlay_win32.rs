@@ -213,19 +213,19 @@ fn moniteur_par_index(index: u64) -> Option<(i32, i32, i32, i32)> {
     collecte.trouve
 }
 
-struct Surface {
-    dc: HDC,
+pub(crate) struct Surface {
+    pub(crate) dc: HDC,
     bitmap: HBITMAP,
     ancien: HGDIOBJ,
-    pixels: *mut u8,
-    largeur: i32,
-    hauteur: i32,
+    pub(crate) pixels: *mut u8,
+    pub(crate) largeur: i32,
+    pub(crate) hauteur: i32,
 }
 
 impl Surface {
     /// Crée le DC mémoire et sa section DIB 32 bits descendante. Le stride vaut
     /// exactement `largeur * 4`, d'où l'absence de calcul de pas au blit.
-    fn new(largeur: i32, hauteur: i32) -> Result<Self, String> {
+    pub(crate) fn new(largeur: i32, hauteur: i32) -> Result<Self, String> {
         unsafe {
             let ecran = GetDC(None);
             let dc = CreateCompatibleDC(ecran);

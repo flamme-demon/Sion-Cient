@@ -107,7 +107,7 @@ export function ChatHeader() {
   // Panneaux de la dock ouverts (zone droite ou basse) : les bascules du
   // header s'allument quand leur panneau est ouvert quelque part.
   const dockZones = useLayoutStore((s) => s.dockZones);
-  const dockPanelOpen = (id: "members" | "soundboard" | "transcript") =>
+  const dockPanelOpen = (id: "members" | "soundboard" | "memeboard" | "transcript") =>
     dockZones.right.panels.includes(id) || dockZones.bottom.panels.includes(id);
 
   const channel = channels.find((c) => c.id === activeChannel);
@@ -332,6 +332,30 @@ export function ChatHeader() {
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                 <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
                 <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            </button>
+          )}
+          {!isMobile && channels.some((c) => c.isSoundboard) && (
+            <button
+              onClick={() => useLayoutStore.getState().toggleDockPanel("memeboard")}
+              style={{
+                padding: 6,
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                background: 'transparent',
+                color: dockPanelOpen("memeboard") ? 'var(--color-primary)' : 'var(--color-on-surface-variant)',
+                display: 'flex',
+                alignItems: 'center',
+                transition: 'background 200ms',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              title={t("memeboard.title")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="3" />
+                <polygon points="10 9 15 12 10 15 10 9" fill="currentColor" />
               </svg>
             </button>
           )}
