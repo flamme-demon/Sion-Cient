@@ -1,68 +1,36 @@
 # Roadmap 2.0.0 — Layout modulable, lecteur natif, PIP système, thèmes
 
-Document vivant pour la 2.0.0 finale, remis en phase avec le code de
-2.0.0-alpha.5.
+Document vivant pour la 2.0.0 finale, remis en phase avec le code après
+2.0.0-alpha.9 (24/09/2026).
 
-> **État d'avancement (16/09/2026)** —
-> ✅ **Chantier 1 (layout)** : socle complet — `useLayoutStore` persisté (v3 +
-> migrations), `ResizeHandle` double axe, sidebar 200→400 px / rail 72 px /
-> **masquée** (Ctrl+B cycle les trois, poignée de révélation sur le bord),
-> dock à **deux zones redimensionnables** (droite 220→520, bas 140→520) avec
-> **onglets**, panneaux déplaçables **par menu et par glisser-déposer**, et
-> **détachables en cartes flottantes** (glisser, resize, rattacher, position
-> et taille persistées) ; `resetLayout`, **presets Chat / Voix / Streaming**
-> dans l'en-tête du salon. Bonus : mini-avatars d'occupants (parole/son/AFK/
-> micro) + carte de survol complète (rôles, réseau, clic droit).
-> ✅ **Chantier 2 (partage natif)** : hauteur réglable persistée, barre d'onglets
-> navigateur (son + volume + plein écran), **mosaïque** (tuiles multi-partages,
-> son et curseurs par tuile), **PIP interne** (Ctrl+Maj+P : drag, snap, cumul
-> mosaïque, position persistée), curseurs assainis (TTL 5 s, watchdog,
-> masquage global) et recalage de l'état audio moteur après reload. Le **PIP
-> système natif** est livré (§2.2) : fenêtre always-on-top redimensionnable,
-> position/taille persistées, double-clic de taille, retour à Sion, son et
-> pointeur. Le chemin direct I420 → BGRA → texture GL/GDK du lecteur
-> principal est implémenté et affiche bien le direct sous Wayland. La surface est
-> bornée aux rectangles vidéo, possède une région d'entrée vide et le runtime
-> WRY crée son `GtkOverlay` avant la WebView : les entrées traversent bien la
-> surface, mais la composition du même toplevel ralentit encore WebKit pendant
-> un partage (mesure : ~38 % d'un cœur côté `WebKitWebProcess`). La sortie de
-> la vidéo vers une `wl_subsurface` Wayland / fenêtre enfant X11 est le blocage
-> performance courant ; état de reprise détaillé dans
-> `docs/native-video-surface-handoff.md`.
-> Le renderer DMA-BUF accéléré de WebKitGTK reste le défaut : le repli logiciel
-> mesuré à ~95 % d'un cœur au repos n'est activé qu'après un crash GPU détecté
-> ou via `SION_NATIVE_VIDEO_SOFTWARE_COMPOSITING=1`. La zone GTK reste non
-> mappée tant qu'aucun partage n'est visible, afin d'éviter un repaint à 60 Hz.
-> La surface Linux est désormais
-> active par défaut (opt-out diagnostic `SION_DISABLE_NATIVE_VIDEO_SURFACE=1`).
-> Une surface Windows intégrée est également livrée : un HWND enfant par zone
-> visible, peinture BGRA directe par GDI, géométrie/DPI suivis et hit-test
-> traversant vers WebView2. Le PIP système consomme
-> déjà les mêmes frames BGRA sans recompression. Le socle GTK repose sur Tauri 2.11.5,
-> retrait complet du fork CEF et correctif local ciblé de `tauri-runtime-wry`
-> 2.11.4 pour accepter une WebView imbriquée dans un `GtkOverlay`.
-> ✅ **Chantier 3, phase 1** : tokenisation complète — aucune couleur en dur
-> hors « Matrix » et habillages posés sur le média (constants nommées),
-> `utils/themeColor` pour les canvas, et **garde anti-hex en test**
-> (`services/themeGuard.test.ts` : échappatoires `themeColor(…, "#repli")` et
-> marqueur `theme-exempt`).
-> ✅ **Chantier 3, phases 2–3** : `themeStore` persisté + `applyTheme` appliqué
-> avant le premier rendu (aucun flash), section **Apparence** dans les Réglages
-> (vignettes, « Sion Dark » / **« Sion Light »** / « AMOLED », suppression) — et l'**import/export
-> JSON** de la phase 5 est livré au passage.
-> ✅ **Stabilité locale** : état de fenêtre restauré après initialisation WRY
-> et sauvegardé en continu, `sion-settings` versionné avec migration v0→v1,
-> puis `session.json` écrit par remplacement atomique durable en mode privé.
-> Le store crypto Matrix est isolé dans une IndexedDB Sion versionnée : la
-> base SDK historique qui bouclait dans WASM/WebKitGTK n'est plus ouverte et
-> un timeout ne déclenche plus une seconde initialisation concurrente.
-> ⏳ **Restent** — Chantier 1 : presets exportables/importables, mode Arrange
-> (Ctrl+Shift+L) et finitions container queries du dock bas. Chantier 3 :
-> revue visuelle exhaustive de Sion Light, accent seed (phase 4), fin de la phase 5 (préview
-> au survol, sync Matrix `com.sion.theme`, garde de contraste WCAG). Chantier 2 :
-> validation prolongée des transitions/DPI sous Linux et validation sur une
-> vraie machine Windows (dont curseurs/contrôles superposés), puis retrait du
-> fallback JPEG/SVF1 lorsque la parité multi-plateforme sera acquise.
+> **État d'avancement (24/09/2026)**
+>
+> ✅ **Chantier 1 (layout)** : socle complet — `useLayoutStore` persisté (v5 +
+> migrations), sidebar déployée / rail / masquée (Ctrl+B), côté gauche ou
+> droit, dock à **trois zones** (haut, droite, bas) avec onglets, glisser-
+> déposer, cartes flottantes (deux au plus), presets Chat / Voix / Streaming,
+> **mode édition** de la disposition (Ctrl+Maj+L ou menu « Dispositions »),
+> fonds d'image par panneau, et depuis le 24/09 **export/import JSON d'une
+> disposition** (`services/layoutFile.ts`, validé champ par champ).
+>
+> 🟡 **Chantier 2 (partage et lecteur natifs)** : surface native par défaut
+> sous Linux (GtkGLArea rendu à la demande, agrandissement bicubique et pose
+> au pixel près depuis le 23/09), sous-surface EGL Wayland en opt-in
+> (`SION_WAYLAND_SUBSURFACE`), surface HWND sous Windows, PIP système natif.
+> Depuis l'alpha 9, la vidéo est **percée sous les menus** et panneaux au lieu
+> de passer dessus (Linux et Windows). Le **lecteur vidéo du fil** passe aussi
+> par ffmpeg et la même surface (contrôles incrustés, mini-lecteur, ffmpeg
+> livré). Restent la mesure de fluidité Linux, la validation Windows côté
+> spectateur et le retrait du repli JPEG — voir §2.3.
+>
+> 🟡 **Chantier 3 (thèmes)** : tokenisation et garde anti-hex, Dark / Light /
+> AMOLED, application avant le premier rendu, import/export JSON, et depuis
+> le 24/09 **garde de contraste WCAG** (test sur les thèmes livrés,
+> avertissement à l'import) et **aperçu au survol**. Restent l'accent seed et
+> la synchronisation Matrix, deux décisions — voir §3.4.
+>
+> ⏳ **Hors chantiers, avant la 2.0.0** : voir §6 (voix Android, fonctions
+> retirées avec l'ancien moteur, points de fiabilité).
 
 ---
 
@@ -70,12 +38,13 @@ Document vivant pour la 2.0.0 finale, remis en phase avec le code de
 
 | Sujet | Constat | Fichier |
 |---|---|---|
-| Layout | store v3 migré, sidebar trois états, docks droite/bas, onglets, panneaux flottants et presets | `useLayoutStore.ts`, `DockZone.tsx`, `FloatingPanels.tsx` |
-| Lecteur natif | Linux : I420 → BGRA → texture GL/GDK fonctionnel sous Wayland, mais isolation hors du toplevel WebKit encore à faire pour supprimer le lag ; Windows : I420 → BGRA → HWND/GDI sans passage JS. Surface active par défaut, opt-out diagnostic `SION_DISABLE_NATIVE_VIDEO_SURFACE=1` | `main.rs`, `native_video_surface.rs`, `voice_engine.rs`, `ScreenShareView.tsx` |
+| Layout | store v5 migré, sidebar trois états et deux côtés, dock haut/droite/bas, onglets, cartes flottantes, presets, mode édition, export/import JSON | `useLayoutStore.ts`, `DockZone.tsx`, `FloatingPanels.tsx`, `layoutFile.ts` |
+| Partage natif | Linux : I420 → BGRA → texture d'un `GtkGLArea` rendu à la demande (bicubique, pose au pixel près) ; sous-surface EGL en opt-in ; Windows : I420 → BGRA → HWND/GDI, agrandi par libyuv. Surface percée sous les menus. Opt-out diagnostic `SION_DISABLE_NATIVE_VIDEO_SURFACE=1` | `native_video_surface.rs`, `voice_engine.rs`, `voiceNativeService.ts` |
+| Lecteur vidéo du fil | ffmpeg en sous-processus → plans I420 → même surface native ; contrôles incrustés en Rust, mini-lecteur, ffmpeg livré | `lecteur_video.rs`, `incrustation_lecteur.rs`, `NativeVideoPlayer.tsx` |
 | PIP système | vraie fenêtre OS winit + softbuffer, always-on-top, redimensionnable, persistée et alimentée directement en BGRA | `src-tauri/src/pip_window.rs` |
-| Fallback | JPEG/SVF1/WebSocket conservé uniquement lorsque la surface intégrée native n'est pas disponible | `native_video_transport.rs` |
-| Cible restante | validation Windows réelle, transitions/DPI multi-écrans, parité des calques superposés et retrait définitif du fallback JPEG | voir §2.3 |
-| Thèmes | tokenisation et garde anti-hex livrées ; thèmes Dark/Light/AMOLED, application au boot et import/export JSON livrés | `src/themes/`, `useThemeStore.ts` |
+| Fallback | JPEG/SVF1/WebSocket toujours dans le code, utilisé seulement sans surface native | `native_video_transport.rs` |
+| Cible restante | mesure de fluidité Linux, validation Windows côté spectateur, transitions/DPI multi-écrans, retrait du fallback JPEG | voir §2.3 |
+| Thèmes | tokenisation et garde anti-hex ; Dark/Light/AMOLED ; application au boot ; import/export JSON ; garde de contraste WCAG ; aperçu au survol | `src/themes/`, `themeService.ts`, `useThemeStore.ts` |
 
 Point clé : ni le PIP système ni le lecteur intégré natif ne font traverser
 les pixels dans WebKit. La WebView publie uniquement les rectangles visibles ; Rust garde une file
@@ -259,9 +228,14 @@ le dock bas multi-onglets devient central.
 3. ✅ Flottants : détacher un panneau en carte (glisser, resize, rattacher,
    position/taille persistées) — même primitive que la carte PIP, plafond de
    2 cartes.
-4. Restent : presets **exportables/importables**, mode Arrange (Ctrl+Shift+L —
-   moins utile maintenant que les onglets se glissent) et finitions container
-   queries au fil des panneaux (~3-5 j, étalable).
+4. ✅ Mode édition (Ctrl+Maj+L, ou menu « Dispositions ») et, depuis le
+   24/09, **export/import** d'une disposition en JSON (`layoutFile.ts` : tailles
+   bornées, panneaux inconnus écartés, chaque panneau placé une seule fois ;
+   les fonds d'image, chemins propres à une machine, ne voyagent pas).
+5. Reste : finitions container queries au fil des panneaux — aucune n'est
+   encore posée (`@container` absent du code). Priorité : Members et
+   Transcript en **dock bas** (rangée d'avatars, largeur de lecture). À valider
+   à l'écran.
 
 Ce qu'on ne fait **pas** : placement libre (canvas), sidebar horizontale,
 multi-instances d'un même panneau, éditeur sur mobile (desktop-only).
@@ -311,6 +285,35 @@ PIP. Le Document PiP WebKit n'est plus un objectif : la fenêtre native couvre
 déjà le besoin de PIP système.
 
 ### 2.3 Lecteur principal entièrement natif — 🟡 pixels natifs, isolation du compositeur en cours
+
+**État au 24/09/2026** (les paragraphes datés plus bas sont l'historique) :
+
+- **Linux** : le `GtkGLArea` est le chemin par défaut, rendu **à la
+  demande** (une image = un rendu, plus de composition continue). Depuis le
+  23/09, l'agrandissement est bicubique (Catmull-Rom) et une image réduite
+  pour sa zone est posée au pixel près (`rect_affiche`) : le partage reçu
+  n'est plus crénelé. La sous-surface EGL Wayland existe, hors composition
+  WebKit, mais reste en opt-in (`SION_WAYLAND_SUBSURFACE`).
+- **Menus par-dessus la vidéo** (alpha 9) : la page relève ce qui passe devant
+  la vidéo (panneaux flottants, menus, dialogues) et Rust perce la surface à
+  ces endroits — trous transparents sous Linux, région découpée sous
+  Windows. Journal : « trous dans la vidéo : N ».
+- **Windows** : surface HWND en place depuis le 18/09. Depuis le 24/09,
+  libyuv agrandit l'image jusqu'à sa zone (au plus ×2), car `StretchDIBits`
+  n'agrandit qu'au plus proche voisin — **compilation Windows de ce dernier
+  changement encore à vérifier**.
+- **Lecteur vidéo du fil** : même surface, alimentée par ffmpeg (voir
+  `docs/lecteur-video-natif.md`).
+
+Reste, dans cet ordre :
+
+1. **Mesurer la fluidité Linux** avec le rendu à la demande actuel (le 16/09 :
+   ~38 % d'un cœur côté `WebKitWebProcess` pendant un partage). Si le coût
+   reste là, décider de passer la sous-surface EGL par défaut.
+2. **Valider Windows côté spectateur** avec l'installeur : netteté d'un partage
+   agrandi, trous sous les menus, curseurs, DPI multi-écrans.
+3. **Retirer le repli JPEG/SVF1** (`native_video_transport.rs`) une fois 1 et 2
+   acquis — critères de sortie ci-dessous.
 
 **Socle livré (15/09/2026)** : le pin Git Tauri hérité de CEF a été retiré.
 Le client utilise les crates Tauri 2 stables (`tauri` 2.11.5,
@@ -481,9 +484,9 @@ de tests — sauf les deux échappatoires documentées, le repli de
 |---|---|---|
 | ✅ 1 | Tokenisation complète (§3.3) + garde anti-hex (`services/themeGuard.test.ts`) | très faible |
 | ✅ 2 | `themeStore` + `applyTheme` + section **Apparence** dans SettingsPanel + « Sion Dark » (actuel) + « AMOLED » | faible |
-| ✅ 3 | « Sion Light » — palette complète claire livrée ; repassage visuel exhaustif encore à valider | moyen |
-| 4 | Accent seed (génération de palette type Material You, ~150 l. de HCT simplifié ou vendor `material-color-utilities`) | moyen |
-| 5 | ✅ Import/export JSON (livré avec la phase 2 — thèmes partiels acceptés, `custom-` rétabli au re-import) — reste : préview au survol + (option) sync Matrix `com.sion.theme` en account data → le thème suit le compte sur tous les appareils | faible |
+| ✅ 3 | « Sion Light » — palette complète claire livrée ; contraste vérifié par test (24/09). Un point à trancher : `outline`, employé 77 fois comme texte secondaire (horodatages, indications), n'atteint que 4,26:1 sur `surface` et 3,45:1 sur le conteneur le plus foncé — assez pour un élément d'interface (3:1), pas pour du texte (4,5:1). Le foncer foncerait aussi les bordures | moyen |
+| 4 | Accent seed (génération de palette type Material You, ~150 l. de HCT simplifié ou vendor `material-color-utilities`) — **à décider** : nouvelle dépendance ou HCT maison | moyen |
+| 5 | ✅ Import/export JSON (livré avec la phase 2 — thèmes partiels acceptés, `custom-` rétabli au re-import) ; ✅ **aperçu au survol** (24/09) ; ✅ **garde de contraste WCAG** (24/09, `themes/contrast.ts` : test sur les thèmes livrés, avertissement à l'import) — reste, en option : sync Matrix `com.sion.theme` en account data → le thème suit le compte sur tous les appareils | faible |
 
 **Apparence dans SettingsPanel** : grille de vignettes (aperçu 3 couleurs :
 surface / primary / texte), toggle dark/light, picker accent, bouton « importer
@@ -504,18 +507,18 @@ un thème », « réinitialiser ».
 
 ## 4. Ordre de réalisation conseillé pour la 2.0.0 finale
 
-1. 🚧 **Parité lecteur natif** (§2.3) — valider toutes les transitions Linux,
-   porter la surface intégrée sous Windows, puis supprimer le fallback JPEG.
-2. ⏳ **Finitions layout** (§1.6) — presets exportables/importables, décision
-   sur le mode Arrange et container queries du dock bas.
-3. ⏳ **Thème Sion Light** (§3.4, phase 3) avec audit visuel et contraste WCAG.
-4. ⏳ **Accent seed** (§3.4, phase 4).
-5. ⏳ **Finitions thèmes** (§3.4, phase 5) — aperçu au survol et décision sur
-   la synchronisation Matrix `com.sion.theme`.
+1. 🚧 **Parité du partage natif** (§2.3) — mesurer la fluidité Linux,
+   valider Windows côté spectateur, puis retirer le repli JPEG.
+2. ⏳ **Décision voix Android** (§6) — portage du moteur Rust, ou 2.0.0
+   réservée aux ordinateurs.
+3. ⏳ **Container queries du dock bas** (§1.6) — Members et Transcript.
+4. ⏳ **Thèmes** (§3.4) — `outline` de Sion Light, accent seed, et décision
+   sur la synchronisation Matrix `com.sion.theme`.
 
-Le socle layout, le PIP interne, le PIP système natif, la tokenisation, Dark,
-AMOLED et l'import/export JSON sont déjà livrés ; ils ne sont plus des étapes
-à planifier.
+Le socle layout, le mode édition, l'export/import de disposition, le PIP
+système natif, le lecteur vidéo natif, la tokenisation, Dark / Light /
+AMOLED, l'import/export de thèmes, leur aperçu au survol et la garde de
+contraste sont livrés ; ils ne sont plus des étapes à planifier.
 
 ## 5. Vérifications transverses
 
@@ -540,3 +543,27 @@ AMOLED et l'import/export JSON sont déjà livrés ; ils ne sont plus des étape
   éloigné du design actuel.
 - Mobile : tout ce qui précède est desktop-only (`isMobile`), ne pas régresser
   les vues tactiles.
+
+## 6. Hors chantiers — à régler avant la 2.0.0
+
+État au 24/09/2026, vérifié dans le code et les journaux.
+
+- **Voix Android** : le moteur vocal Rust n'est pas porté sur Android
+  (`build-android.sh` ne compile pas `native-voice`) ; la voix Android est donc
+  inactive. Décision à prendre — voir `docs/native-voice-validation.md`.
+- **Fonctions retirées avec l'ancien moteur**, à refaire en Rust : couper le
+  son d'un seul participant (pas de gain par piste exposé) et l'affichage de
+  la latence (RTT).
+- **Statistiques WebRTC** : `get_stats()` ne fait plus planter Sion (24/09 :
+  le JSON refusé devient une erreur journalisée, patch documenté dans
+  `vendor/libwebrtc/SION_PATCH.md`), mais le JSON produit par libwebrtc reste
+  illisible pour serde dans certains cas — cause à trouver dans le journal
+  avant de s'appuyer sur ces statistiques (RTT par exemple).
+- **Mémoire en émission de partage** : ~2,4 Go de RSS après 4 minutes de
+  partage 1080p, sans redescendre à l'arrêt (mesure du 10/09, build debug) — à refaire en release.
+- **AV1 affiché en vert** sur carte AMD (DMA-BUF).
+- **Memeboard** : jamais essayée par-dessus un vrai jeu en plein écran ;
+  couper la memeboard retire l'image mais laisse finir le son (≤ 10 s).
+- **macOS** : le son du partage n'est pas capturé par le moteur natif (si
+  macOS fait partie de la cible).
+

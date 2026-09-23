@@ -111,11 +111,11 @@ démultiplexeur MP4 et un décodeur AAC pour lire l'historique du salon.
 | 0. Faisabilité du décodage (Linux) | **fait** — voir les mesures ci-dessus |
 | 1. Compilation de `ffmpeg-sys` sous Windows | **fait** — voir ci-dessous |
 | 2. Décodage → surface native, sans audio | **fait** — validé à l'écran le 21/09 |
-| 3. Audio + synchronisation | à faire |
-| 4. Contrôles : lecture, pause, position, volume | à faire |
-| 5. Aperçu dans le fil (`info.thumbnail_url` à l'envoi) | à faire |
-| 6. Suppression de la machinerie webview | à faire |
-| 7. Embarquer **le binaire** ffmpeg (AppImage + installeur) | à faire |
+| 3. Audio + synchronisation | **fait** (21/09) — le son fait foi ; reprendre relance ffmpeg à la position atteinte |
+| 4. Contrôles : lecture, pause, position, volume | **fait** (22-23/09) — incrustés par Rust, volume gardé, mini-lecteur, croix |
+| 5. Aperçu dans le fil | **fait autrement** (22/09) — l'affiche est extraite par ffmpeg chez celui qui regarde et mise en cache, pas envoyée en `info.thumbnail_url` |
+| 6. Suppression de la machinerie webview | **fait** (24/09) — plus aucune balise `<video>` (la dernière, dans les épinglés), `transcode_video` et `remux_video_mp4` retirées |
+| 7. Embarquer **le binaire** ffmpeg (AppImage + installeur) | **fait** (22/09) — `fetch-ffmpeg.sh` sous Linux, BtbN LGPL sous Windows, en CI comme dans `build-windows.ps1` |
 
 ### Étape 1 — résultat (21/09/2026)
 

@@ -1,5 +1,10 @@
 # Reprise — surface vidéo native du partage d'écran
 
+> **Document historique.** Il décrit l'état du 16-17/09. L'état courant du
+> partage natif — rendu à la demande, agrandissement bicubique, vidéo percée
+> sous les menus, surface Windows — est tenu dans
+> [`roadmap-2.0.0.md`](roadmap-2.0.0.md), §2.3.
+
 Dernière mise à jour : **16/09/2026** (3e passe : validation interactive), branche
 `feat/native-voice-no-cef`. Ce document décrit l'état **non commité** du
 chantier avant la publication de `2.0.0-alpha.5`.
