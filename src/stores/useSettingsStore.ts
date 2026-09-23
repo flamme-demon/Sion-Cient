@@ -93,6 +93,12 @@ interface SettingsState {
    *  codec n'est pas décodé par la webview (dépend des codecs système,
    *  notamment sous Linux/WebKitGTK). Empty = use `ffmpeg` from PATH. */
   ffmpegPath: string;
+  /** Volume du lecteur vidéo, de 0 à 1,5 (au-delà de 1 le son est amplifié).
+   *  Gardé d'une vidéo à l'autre et d'une session à l'autre, comme le fait
+   *  n'importe quel lecteur : le réglage suivait jusqu'ici chaque ouverture
+   *  et repartait à 100 %. */
+  videoVolume: number;
+  setVideoVolume: (v: number) => void;
   /** Absolute path to a yt-dlp binary for importing audio from external-media
    *  URLs (soundboard + voice cues). Empty = app-managed download / PATH. */
   ytdlpPath: string;
@@ -238,6 +244,7 @@ export const useSettingsStore = create<SettingsState>()(
       setNativeAudioOutputDevice: (id) => set({ nativeAudioOutputDevice: id }),
       audioInputDevice: "",
       ffmpegPath: "",
+      videoVolume: 1,
       ytdlpPath: "",
       ttsEnginePath: "",
       ttsModel: "chatterbox",
@@ -289,6 +296,7 @@ export const useSettingsStore = create<SettingsState>()(
       setLinkPreviews: (v) => set({ linkPreviews: v }),
       setAudioInputDevice: (v) => set({ audioInputDevice: v }),
       setFfmpegPath: (v) => set({ ffmpegPath: v.trim() }),
+      setVideoVolume: (v) => set({ videoVolume: Number.isFinite(v) ? Math.max(0, Math.min(1.5, v)) : 1 }),
       setYtdlpPath: (v) => set({ ytdlpPath: v.trim() }),
       setTtsEnginePath: (v) => set({ ttsEnginePath: v.trim() }),
       setTtsModel: (v) => set({ ttsModel: v }),

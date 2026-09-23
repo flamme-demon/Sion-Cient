@@ -160,12 +160,12 @@
     "videoDownloading": "Téléchargement…",
     "close": "Fermer",
     "play": "Lire",
-    "replay": "Revoir",
     "pause": "Pause",
     "volume": "Volume",
     "seek": "Aller à cette position",
     "clickToPause": "Cliquer pour mettre en pause",
-    "stop": "Arrêter la lecture",
+    "closePlayer": "Fermer le lecteur",
+    "videoInMiniPlayer": "Lecture dans le mini-lecteur",
     "fullscreen": "Plein écran"
   },
   "poll": {

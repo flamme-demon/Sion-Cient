@@ -20,11 +20,11 @@ import {
   etatLecteurVideo,
   fermerLecteurVideo,
   ouvrirLecteurVideo,
-  rejouerLecteurVideo,
   precharcherVideo,
   type ProgresVideo,
   pauseLecteurVideo,
   registerNativeVideoSurface,
+  resolutionLecteurVideo,
   apercuLecteurVideo,
   seekLecteurVideo,
   volumeLecteurVideo,
@@ -32,6 +32,7 @@ import {
   type EtatLecteurVideo,
   type ZonesLecteur,
 } from "../../services/voiceNativeService";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 
 interface Props {
   /** Chemin local ou URL HTTP — ffmpeg lit les deux. */
@@ -42,6 +43,9 @@ interface Props {
    *  tant que la première image n'est pas arrivée : la bulle se rétracte puis
    *  se rouvre, et la mise en lecture paraît sauter (21/09). */
   ratio?: string;
+  /** Hauteur maximale hors plein écran, en pixels : 340 dans le fil, moins
+   *  dans une zone d'aperçu plus basse. */
+  hauteurMax?: number;
 }
 
 /** Voile de téléchargement, posé sur les pixels de la vidéo : il doit rester
@@ -49,8 +53,26 @@ interface Props {
  *  Marqué `theme-exempt` pour le garde anti-couleurs-en-dur. */
 const VOILE_FOND = "rgba(0,0,0,0.55)"; // theme-exempt — voile posé sur le média
 const VOILE_ENCRE = "#fff"; // theme-exempt — voile posé sur le média
+/** Fond du mini-lecteur : la letterbox du média, noire quel que soit le
+ *  thème, comme celle de la surface native qu'elle prolonge. */
+const MINI_FOND = "#000"; // theme-exempt — letterbox du média
+/** Boîte du mini-lecteur, en pixels CSS. La vidéo y tient en gardant ses
+ *  proportions : une vidéo verticale y est plus haute que large. */
+const MINI_LARGEUR = 320;
+const MINI_HAUTEUR = 280;
+/** Écart entre le mini-lecteur et les bords de la liste des messages. */
+const MINI_MARGE = 16;
 
-export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
+/** Premier ancêtre qui fait défiler son contenu : la liste des messages. */
+function conteneurDefilant(element: HTMLElement | null): HTMLElement | null {
+  for (let e = element?.parentElement ?? null; e; e = e.parentElement) {
+    const { overflowY } = getComputedStyle(e);
+    if (overflowY === "auto" || overflowY === "scroll") return e;
+  }
+  return null;
+}
+
+export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: Props) {
   const { t } = useTranslation();
   const surfaceRef = useRef<HTMLCanvasElement>(null);
   const cadreRef = useRef<HTMLDivElement>(null);
@@ -60,24 +82,22 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   // Avancement du rapatriement, avant que la moindre image existe.
   const [progres, setProgres] = useState<ProgresVideo | null>(null);
   const [zones, setZones] = useState<ZonesLecteur | null>(null);
-  const [volume, setVolume] = useState(1);
+  // Le volume suit l'utilisateur d'une vidéo à l'autre : il part du dernier
+  // niveau retenu, pas de 100 %.
+  const [volume, setVolume] = useState(() => useSettingsStore.getState().videoVolume);
+  const retenirVolume = useSettingsStore((s) => s.setVideoVolume);
   // Volume d'avant la coupure, pour que le second clic rétablisse le niveau
   // choisi plutôt qu'un 100 % arbitraire.
-  const [avantMuet, setAvantMuet] = useState(1);
+  const [avantMuet, setAvantMuet] = useState(() => useSettingsStore.getState().videoVolume || 1);
 
   const largeurMedia = etat?.largeur ?? 0;
 
   const basculerPause = useCallback(() => {
     setEtat((precedent) => {
       if (!precedent?.actif) return precedent;
-      // Après la dernière image, la pause n'a plus de sens : le fil garde
-      // l'écran mais son ffmpeg est mort. Le bouton relance le film.
-      if (precedent.termine) {
-        void rejouerLecteurVideo().then(setEtat).catch(() => { /* lecteur fermé */ });
-        return precedent;
-      }
       const versPause = !precedent.en_pause;
-      void pauseLecteurVideo(versPause);
+      // Reprendre relance le film côté Rust : on prend l'état qu'il rend.
+      void pauseLecteurVideo(versPause).then(setEtat).catch(() => { /* lecteur fermé */ });
       return { ...precedent, en_pause: versPause };
     });
   }, []);
@@ -102,6 +122,9 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
         await precharcherVideo(source, (p) => { if (vivant) setProgres(p); });
         if (!vivant) return;
         setProgres(null);
+        // Le niveau d'abord : Rust l'applique dès le premier échantillon.
+        // Réglé après l'ouverture, un son coupé jouait un instant à fond.
+        await volumeLecteurVideo(useSettingsStore.getState().videoVolume);
         const e = await ouvrirLecteurVideo(source);
         if (!vivant) return;
         setEtat(e);
@@ -130,7 +153,16 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   // en plein écran le canvas est centré et n'occupe plus tout le cadre, donc
   // des pourcentages du cadre tombaient à côté (21/09).
   const [boiteCanvas, setBoiteCanvas] = useState({ left: 0, top: 0, width: 0, height: 0 });
-  const derniereEchelle = useRef(0);
+  // Dernier affichage déclaré à Rust. La densité et le plein écran en font
+  // partie : glisser la fenêtre sur un écran plus dense ne change pas la
+  // taille CSS, mais le bandeau doit être repeint plus finement.
+  const dernierAffichage = useRef({ echelle: 0, densite: 0, plein: false });
+  // Taille physique déclarée à Rust pour la toile. Envoyée seulement une fois
+  // la géométrie posée : le passage en plein écran traverse plusieurs tailles
+  // intermédiaires, et chacune coûterait une relance de ffmpeg.
+  const derniereResolution = useRef("");
+  const minuterieResolution = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(minuterieResolution.current), []);
   const mesurer = useCallback((force = false) => {
     const boite = surfaceRef.current?.getBoundingClientRect();
     const cadre = cadreRef.current?.getBoundingClientRect();
@@ -152,14 +184,33 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
         : place,
     );
     const echelle = boite.width / largeurMedia;
+    const densite = window.devicePixelRatio || 1;
+    const plein = document.fullscreenElement === cadreRef.current;
+    const physique = { l: Math.round(boite.width * densite), h: Math.round(boite.height * densite) };
+    const cle = `${physique.l}x${physique.h}`;
+    if (cle !== derniereResolution.current) {
+      window.clearTimeout(minuterieResolution.current);
+      minuterieResolution.current = window.setTimeout(() => {
+        derniereResolution.current = cle;
+        void resolutionLecteurVideo(physique.l, physique.h)
+          .then(setEtat)
+          .catch(() => { /* lecture terminée */ });
+      }, 400);
+    }
+    const dernier = dernierAffichage.current;
     // Seuil de 2 % : sans lui, le moindre pixel de variation renvoyait une
     // échelle, qui redessinait le bandeau, qui pouvait faire varier la
     // mesure suivante. On coupe la boucle plutôt que d'en amortir les effets.
-    if (!force && Math.abs(echelle - derniereEchelle.current) < derniereEchelle.current * 0.02) {
+    if (
+      !force
+      && dernier.densite === densite
+      && dernier.plein === plein
+      && Math.abs(echelle - dernier.echelle) < dernier.echelle * 0.02
+    ) {
       return;
     }
-    derniereEchelle.current = echelle;
-    void zonesLecteurVideo(largeurMedia, hauteurMedia, echelle)
+    dernierAffichage.current = { echelle, densite, plein };
+    void zonesLecteurVideo(largeurMedia, hauteurMedia, echelle, densite, plein)
       .then(setZones)
       .catch(() => { /* lecture terminée */ });
   }, [largeurMedia, hauteurMedia]);
@@ -185,9 +236,72 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
     return () => window.clearInterval(timer);
   }, [etat?.actif]);
 
+  // Fin du film : Rust a tout démonté, `actif` retombe à faux. On rend la
+  // main à la carte, qui remontre son affiche et sa pastille de lecture —
+  // rouvrir revient alors à relire depuis le début.
+  useEffect(() => {
+    if (etat && !etat.actif) onClose();
+  }, [etat, onClose]);
+
   const actif = etat?.actif ?? false;
+
+  // Mini-lecteur. Sortie du champ, la bulle continuait de jouer — le son
+  // sans l'image ni les commandes — jusqu'à la fin du film (22/09). Le
+  // lecteur flotte désormais dans le coin de la liste, et regagne sa bulle
+  // quand elle réapparaît.
+  //
+  // C'est le MÊME cadre qui passe en position fixe : le déplacer ailleurs
+  // dans le DOM remonterait le composant, donc fermerait la lecture.
+  const placeRef = useRef<HTMLDivElement>(null);
+  const [horsChamp, setHorsChamp] = useState(false);
+  useEffect(() => {
+    const place = placeRef.current;
+    if (!place || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([entree]) => {
+      // Hystérésis : sortie sous 30 % visible, retour au-delà de 60 %. Un
+      // seuil unique ferait hésiter le lecteur au bord de la liste.
+      if (entree.intersectionRatio < 0.3) setHorsChamp(true);
+      else if (entree.intersectionRatio >= 0.6) setHorsChamp(false);
+    }, { threshold: [0, 0.3, 0.6, 1] });
+    io.observe(place);
+    return () => io.disconnect();
+  }, []);
+  const flottant = horsChamp && actif && !pleinEcran;
+  // Coin bas droit de la liste des messages, recalculé si la fenêtre change.
+  const [coin, setCoin] = useState({ droite: MINI_MARGE, bas: MINI_MARGE, largeurMax: MINI_LARGEUR });
+  useEffect(() => {
+    if (!flottant) return;
+    const placer = () => {
+      const liste = conteneurDefilant(placeRef.current)?.getBoundingClientRect()
+        ?? new DOMRect(0, 0, window.innerWidth, window.innerHeight);
+      setCoin({
+        droite: window.innerWidth - liste.right + MINI_MARGE,
+        bas: window.innerHeight - liste.bottom + MINI_MARGE,
+        largeurMax: Math.max(120, liste.width - 2 * MINI_MARGE),
+      });
+    };
+    placer();
+    window.addEventListener("resize", placer);
+    return () => window.removeEventListener("resize", placer);
+  }, [flottant]);
+  const mini = (() => {
+    const proportions = etat?.largeur && etat.hauteur ? etat.largeur / etat.hauteur : 16 / 9;
+    let largeur = Math.min(MINI_LARGEUR, coin.largeurMax);
+    let hauteur = largeur / proportions;
+    if (hauteur > MINI_HAUTEUR) {
+      hauteur = MINI_HAUTEUR;
+      largeur = hauteur * proportions;
+    }
+    return { largeur, hauteur };
+  })();
   useEffect(() => {
     const touche = (e: KeyboardEvent) => {
+      // Les raccourcis écoutent toute la fenêtre : une frappe destinée à un
+      // champ ne les concerne pas. Sans ce filtre, taper un espace dans un
+      // message pendant qu'une vidéo jouait la mettait en pause, et l'espace
+      // n'était jamais écrit (23/09).
+      const cible = e.target as HTMLElement | null;
+      if (cible && (cible.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(cible.tagName))) return;
       if (e.key === "Escape") onClose();
       if (e.key === " " && actif) {
         e.preventDefault();
@@ -243,10 +357,13 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   // quatre à l'écran sur le cas mesuré — et viser une cible pareille est
   // impossible (21/09). On accepte de mordre sur le bas de l'image : rien n'y
   // est cliquable, et la lecture-pause reste accessible partout ailleurs.
-  const styleBarre = zones
+  // Elle couvre toute la largeur, marges comprises : la piste est en retrait
+  // des bords, mais un clic juste à côté de son extrémité doit viser le
+  // début ou la fin, pas mettre en pause.
+  const styleBarre = zones && etat
     ? zoneStyle(
         0,
-        zones.barre_l,
+        etat.largeur,
         Math.max(0, zones.bandeau_y - zones.taille),
         zones.taille + zones.rangee_y,
       )
@@ -254,6 +371,7 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
   const styleBouton = zones ? zoneStyle(zones.bouton_x, zones.bouton_l, rangeeY, zones.taille) : null;
   const styleVolume = zones ? zoneStyle(zones.volume_x, zones.volume_l, rangeeY, zones.taille) : null;
   const stylePlein = zones ? zoneStyle(zones.plein_x, zones.plein_l, rangeeY, zones.taille) : null;
+  const styleFermer = zones ? zoneStyle(zones.fermer_x, zones.fermer_l, zones.fermer_y, zones.fermer_l) : null;
 
   /**
    * Plein écran sur le canvas lui-même.
@@ -309,7 +427,24 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
     // Le lecteur remplit le cadre que la carte lui donne : elle garde sa
     // taille et sa légende, on n'échange que le contenu. Un arbre séparé
     // faisait démonter la carte au démarrage, et toute la liste sursautait.
-    <div style={{ position: 'absolute', inset: 0 }}>
+    <div ref={placeRef} style={{ position: 'absolute', inset: 0 }}>
+      {/* La bulle, pendant que le lecteur flotte ailleurs. */}
+      {flottant && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--color-outline)',
+            fontSize: 12,
+            pointerEvents: 'none',
+          }}
+        >
+          {t("chat.videoInMiniPlayer", { defaultValue: "Lecture dans le mini-lecteur" })}
+        </div>
+      )}
       <div
         ref={cadreRef}
         style={{
@@ -322,11 +457,29 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
           justifyContent: pleinEcran ? 'center' : 'flex-start',
           alignItems: 'center',
           // Avant la première image, on occupe la place de l'affiche.
-          ...(etat ? {} : { aspectRatio: ratio, maxHeight: 340, alignSelf: 'flex-start' }),
+          ...(etat ? {} : { aspectRatio: ratio, maxHeight: hauteurMax, alignSelf: 'flex-start' }),
           // En plein écran, le cadre occupe l'écran et c'est lui qui donne sa
           // hauteur au canvas, qui garde son ratio.
           ...(pleinEcran ? { background: 'var(--color-surface-container-lowest)', height: '100%' } : {}),
-          ["--sion-share-max-height" as string]: pleinEcran ? '96vh' : '340px',
+          ["--sion-share-max-height" as string]: pleinEcran ? '96vh' : `${hauteurMax}px`,
+          ...(flottant
+            ? {
+                position: 'fixed',
+                right: coin.droite,
+                bottom: coin.bas,
+                width: mini.largeur,
+                height: mini.hauteur,
+                // Au-dessus de la liste, sous les menus et les fenêtres :
+                // ses zones de clic ne doivent pas leur voler la souris.
+                zIndex: 30,
+                justifyContent: 'center',
+                borderRadius: 12,
+                overflow: 'hidden',
+                background: MINI_FOND,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                ["--sion-share-max-height" as string]: `${mini.hauteur}px`,
+              }
+            : {}),
         } as React.CSSProperties}
       >
         <canvas
@@ -386,13 +539,7 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
         {styleBouton && (
           <div
             onClick={(e) => { e.stopPropagation(); basculerPause(); }}
-            title={
-              etat?.termine
-                ? t("chat.replay", { defaultValue: "Revoir" })
-                : etat?.en_pause
-                  ? t("chat.play", { defaultValue: "Lire" })
-                  : t("chat.pause", { defaultValue: "Pause" })
-            }
+            title={etat?.en_pause ? t("chat.play", { defaultValue: "Lire" }) : t("chat.pause", { defaultValue: "Pause" })}
             style={styleBouton}
           />
         )}
@@ -437,34 +584,38 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
           <div
             onMouseDown={(e) => {
               e.stopPropagation();
-              const niveau = (x: number) => {
-                const f = fractionDansZone(x, zones.volume_x, zones.volume_l);
-                // La jauge commence après l'icône, qui occupe le premier
-                // cinquième de la zone.
-                return Math.min(1.5, Math.max(0, ((f - 0.2) / 0.8) * 1.5));
-              };
+              // Le niveau se lit sur la piste de la jauge, que Rust situe
+              // après l'icône : supposer une proportion de la zone faisait
+              // tomber la pastille à côté du pointeur.
+              const niveau = (x: number) => fractionDansZone(x, zones.jauge_x, zones.jauge_l) * 1.5;
               // Un clic sur l'icône coupe le son au lieu de le mettre à zéro,
-              // et un second rend le niveau d'avant.
-              if (fractionDansZone(e.clientX, zones.volume_x, zones.volume_l) < 0.2) {
+              // et un second rend le niveau d'avant. Sans jauge, toute la zone
+              // est l'icône.
+              if (!zones.avec_jauge || fractionDansZone(e.clientX, zones.volume_x, zones.taille) < 1) {
                 const coupe = volume > 0;
                 if (coupe) setAvantMuet(volume);
                 const v = coupe ? 0 : avantMuet || 1;
                 setVolume(v);
+                retenirVolume(v);
                 void volumeLecteurVideo(v);
                 return;
               }
               // Glissement : le volume s'applique en direct, il n'y a rien à
               // relancer — contrairement au déplacement dans la vidéo.
+              let dernier = niveau(e.clientX);
               const appliquer = (x: number) => {
-                const v = niveau(x);
-                setVolume(v);
-                void volumeLecteurVideo(v);
+                dernier = niveau(x);
+                setVolume(dernier);
+                void volumeLecteurVideo(dernier);
               };
               appliquer(e.clientX);
               const bouge = (ev: MouseEvent) => appliquer(ev.clientX);
+              // Retenu au relâchement seulement : les réglages sont réécrits
+              // en entier à chaque changement, pas à chaque pixel parcouru.
               const relache = () => {
                 window.removeEventListener("mousemove", bouge);
                 window.removeEventListener("mouseup", relache);
+                retenirVolume(dernier);
               };
               window.addEventListener("mousemove", bouge);
               window.addEventListener("mouseup", relache);
@@ -478,6 +629,13 @@ export function NativeVideoPlayer({ source, onClose, ratio }: Props) {
             onClick={(e) => { e.stopPropagation(); basculerPleinEcran(); }}
             title={t("chat.fullscreen", { defaultValue: "Plein écran" })}
             style={stylePlein}
+          />
+        )}
+        {styleFermer && (
+          <div
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            title={t("chat.closePlayer", { defaultValue: "Fermer le lecteur" })}
+            style={styleFermer}
           />
         )}
       </div>

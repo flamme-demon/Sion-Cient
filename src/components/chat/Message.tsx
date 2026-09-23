@@ -386,19 +386,6 @@ function VideoCard({ resolvedUrl, attachment }: { resolvedUrl: string | null; at
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
-        {source && estActive ? (
-          <button
-            type="button"
-            onClick={() => { setSource(null); libererLecteurActif(attachment.id); }}
-            style={{
-              flexShrink: 0, border: 'none', cursor: 'pointer', padding: 0,
-              background: 'transparent', color: 'var(--color-outline)',
-              fontSize: 11, fontFamily: 'inherit',
-            }}
-          >
-            ✕ {t("chat.stop", { defaultValue: "Arrêter" })}
-          </button>
-        ) : null}
         <span style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--color-outline)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {attachment.name} — {formatFileSize(attachment.size)}
         </span>

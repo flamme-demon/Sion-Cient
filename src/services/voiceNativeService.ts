@@ -1007,8 +1007,6 @@ export interface EtatLecteurVideo {
   en_pause: boolean;
   /** Faux si le média est muet, ou si la machine n'a pas de sortie utilisable. */
   a_du_son: boolean;
-  /** Le film est allé au bout : le bouton devient une flèche de relecture. */
-  termine: boolean;
 }
 
 /** Identifiant de flux du lecteur dans la surface native. Doit rester
@@ -1078,18 +1076,32 @@ export function etatLecteurVideo(): Promise<EtatLecteurVideo> {
 }
 
 /**
- * Reprend le film depuis le début, après la dernière image.
+ * Met la lecture en pause, ou la reprend.
  *
- * À la fin du média, le fil de lecture garde l'image à l'écran mais son
- * ffmpeg est mort : la pause ne sert plus à rien, il faut relancer.
+ * Reprendre RELANCE le film à la position atteinte : `-re` fait cadencer
+ * ffmpeg sur son horloge de départ, et à la reprise il rattraperait à pleine
+ * vitesse le temps passé à l'arrêt — l'image sautait en avant en laissant le
+ * son derrière. Compter donc quelques dixièmes de seconde, comme pour un
+ * déplacement.
  */
-export function rejouerLecteurVideo(): Promise<EtatLecteurVideo> {
-  return tauriInvoke<EtatLecteurVideo>("lecteur_video_rejouer");
+export function pauseLecteurVideo(enPause: boolean): Promise<EtatLecteurVideo> {
+  return tauriInvoke<EtatLecteurVideo>("lecteur_video_pause", { enPause });
 }
 
-/** Met la lecture en pause, ou la reprend. */
-export function pauseLecteurVideo(enPause: boolean): Promise<void> {
-  return tauriInvoke<void>("lecteur_video_pause", { enPause });
+/**
+ * Taille, en pixels physiques, où la vidéo s'affiche.
+ *
+ * Quand l'affichage dépasse nettement la résolution du média — en plein
+ * écran —, Rust relance la lecture à la position atteinte avec une toile à
+ * la taille de l'écran : sinon la vidéo ET le bandeau peint dedans étaient
+ * étirés par le GPU, et tout ressortait pixelisé. Sans effet quand rien ne
+ * change ; rend l'état, dont les nouvelles dimensions de toile.
+ */
+export function resolutionLecteurVideo(largeur: number, hauteur: number): Promise<EtatLecteurVideo> {
+  return tauriInvoke<EtatLecteurVideo>("lecteur_video_resolution", {
+    largeur: Math.max(1, Math.round(largeur)),
+    hauteur: Math.max(1, Math.round(hauteur)),
+  });
 }
 
 /** Volume, de 0 à 1,5 — au-delà de 1 le son est amplifié. */
@@ -1109,15 +1121,27 @@ export interface ZonesLecteur {
   bandeau_y: number;
   bandeau_h: number;
   barre_h: number;
+  /** Centre de la piste, depuis le haut du bandeau. */
+  barre_y: number;
   bouton_x: number;
   bouton_l: number;
+  /** La piste, en retrait des bords comme le reste de la rangée. */
   barre_x: number;
   barre_l: number;
+  /** Icône du haut-parleur, puis la jauge s'il y en a une. */
   volume_x: number;
   volume_l: number;
+  /** Piste de la jauge : c'est sur elle que se lit le niveau. */
+  jauge_x: number;
+  jauge_l: number;
   compteur_x: number;
+  compteur_l: number;
   /** "complet" | "court" | "aucun" */
   compteur: string;
+  /** Bouton de fermeture, carré, en haut à droite de l'image. */
+  fermer_x: number;
+  fermer_y: number;
+  fermer_l: number;
   plein_x: number;
   plein_l: number;
   rangee_y: number;
@@ -1126,19 +1150,29 @@ export interface ZonesLecteur {
 }
 
 /**
- * Découpe du bandeau, et déclaration de l'échelle d'affichage.
+ * Découpe du bandeau, et déclaration de l'affichage.
  *
  * `echelle` vaut « pixels d'écran par pixel de média ». Rust s'en sert pour
  * dimensionner le bandeau afin qu'il reste lisible APRÈS réduction : sans
  * elle, une vidéo verticale affichée au tiers de sa taille donnait des
- * contrôles minuscules.
+ * contrôles minuscules. `densite` — le `devicePixelRatio` — fixe la finesse
+ * du dessin : le bandeau est peint à la résolution physique de l'écran.
+ * `pleinEcran` choisit l'icône du bouton de plein écran.
  */
 export function zonesLecteurVideo(
   largeur: number,
   hauteur: number,
   echelle: number,
+  densite: number,
+  pleinEcran: boolean,
 ): Promise<ZonesLecteur> {
-  return tauriInvoke<ZonesLecteur>("lecteur_video_zones", { largeur, hauteur, echelle });
+  return tauriInvoke<ZonesLecteur>("lecteur_video_zones", {
+    largeur,
+    hauteur,
+    echelle,
+    densite,
+    pleinEcran,
+  });
 }
 
 /**

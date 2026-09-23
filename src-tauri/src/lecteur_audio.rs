@@ -84,7 +84,11 @@ impl Audio {
 ///
 /// Renvoie `None` si le média n'a pas de son, ou si aucune sortie audio n'est
 /// disponible : une vidéo muette vaut mieux qu'une vidéo qui refuse de partir.
-pub fn demarrer(ffmpeg: &str, source: &str, depart_ms: u64) -> Option<Audio> {
+///
+/// `volume` s'applique dès le premier échantillon : le régler après coup
+/// laisserait passer un instant à plein volume, que l'on entend quand le son
+/// avait été coupé.
+pub fn demarrer(ffmpeg: &str, source: &str, depart_ms: u64, volume: f32) -> Option<Audio> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let hote = cpal::default_host();
@@ -138,7 +142,7 @@ pub fn demarrer(ffmpeg: &str, source: &str, depart_ms: u64) -> Option<Audio> {
     let arret = Arc::new(AtomicBool::new(false));
     let joues = Arc::new(AtomicU64::new(0));
     let pause = Arc::new(AtomicBool::new(false));
-    let volume = Arc::new(Mutex::new(1.0f32));
+    let volume = Arc::new(Mutex::new(volume.clamp(0.0, 1.5)));
     let enfant = Arc::new(Mutex::new(Some(enfant)));
 
     // Producteur : lit le PCM et remplit la file. Il s'endort quand elle est
