@@ -685,6 +685,10 @@ struct LocalShareState {
     audio_pump: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Délai laissé à chaque dépublication d'un partage avant de l'abandonner.
+/// Voir `stop_screensharing`.
+const DELAI_DEPUBLICATION: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Pompe audio du partage : PCM système (f32 48 kHz mono 20 ms, capturé
 /// SANS Sion — pas d'écho) → i16 → `AudioFrame` poussée dans une source
 /// native (traitements OFF, comme `main` : sur une boucle, l'écho
@@ -2235,17 +2239,46 @@ impl LiveKitEngine {
                 log::warn!("[Sion][voix-native] pompe audio du partage terminée sur panique");
             }
         }
-        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(room) = room_guard.as_ref() {
+        // Le participant est cloné et le verrou de la salle rendu AVANT
+        // d'attendre le réseau : rien d'autre ne doit rester bloqué derrière
+        // une dépublication.
+        let participant = self
+            .room
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|room| room.local_participant());
+        if let Some(participant) = participant {
+            // Chaque dépublication est bornée.
+            //
+            // Le 23/09, celle de la vidéo n'est jamais revenue : le portail
+            // avait échoué et la capture était morte avant sa première image.
+            // Or l'arrêt tourne sous le verrou global du moteur
+            // (`with_engine_shared`) : la première commande vocale du fil
+            // principal l'a attendu pour toujours. Interface figée des heures
+            // durant, pendant que le son, lui, continuait de sortir.
+            //
+            // Mieux vaut abandonner une dépublication — la piste d'une capture
+            // morte n'envoie plus rien, et la déconnexion la retirera — que
+            // bloquer l'application entière.
+            let depublier = |sid: &TrackSid, quoi: &str| {
+                let issue = self.rt.block_on(async {
+                    tokio::time::timeout(DELAI_DEPUBLICATION, participant.unpublish_track(sid)).await
+                });
+                match issue {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => log::warn!("[Sion][voix-native] dépublication {quoi} : {e}"),
+                    Err(_) => log::warn!(
+                        "[Sion][voix-native] dépublication {quoi} sans réponse après {} s — abandonnée",
+                        DELAI_DEPUBLICATION.as_secs()
+                    ),
+                }
+            };
             // Audio d'abord (miroir JS), vidéo en dernier.
             if let Some(audio_sid) = &state.audio_sid {
-                let _ = self
-                    .rt
-                    .block_on(room.local_participant().unpublish_track(audio_sid));
+                depublier(audio_sid, "du son du partage");
             }
-            let _ = self
-                .rt
-                .block_on(room.local_participant().unpublish_track(&state.video_sid));
+            depublier(&state.video_sid, "de la vidéo du partage");
         }
         log::info!("[Sion][voix-native] partage local arrêté");
         Ok(())
