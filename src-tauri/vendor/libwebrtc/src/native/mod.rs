@@ -45,6 +45,50 @@ use webrtc_sys::{rtc_error as sys_err, webrtc as sys_rtc};
 
 use crate::{MediaType, RtcError, RtcErrorType};
 
+/// Statistiques JSON de libwebrtc → statistiques typées (patch Sion).
+///
+/// Le code d'origine faisait `unwrap()` sur ce décodage, dans un rappel C++ :
+/// un JSON que serde refuse (« key must be a string », constaté le 23/09 sur
+/// un `get_stats()` de piste vidéo reçue) abattait tout le processus. Une
+/// statistique illisible devient une erreur, journalisée avec l'endroit du
+/// JSON en cause — de quoi trouver la vraie cause la prochaine fois.
+///
+/// Public pour que Sion puisse le tester : ce crate, hors de l'espace de
+/// travail, ne lance pas ses propres tests.
+pub fn parse_stats(stats: &str) -> Result<Vec<crate::stats::RtcStats>, RtcError> {
+    if stats.is_empty() {
+        return Ok(vec![]);
+    }
+    serde_json::from_str(stats).map_err(|e| {
+        let extrait = extrait_autour(stats, e.line(), e.column());
+        log::warn!("[libwebrtc] statistiques illisibles : {e} — « {extrait} »");
+        RtcError {
+            error_type: RtcErrorType::Internal,
+            message: format!("statistiques illisibles : {e} — « {extrait} »"),
+        }
+    })
+}
+
+/// Une soixantaine d'octets de part et d'autre de la position d'une erreur,
+/// coupés sur des frontières de caractères.
+fn extrait_autour(texte: &str, ligne: usize, colonne: usize) -> &str {
+    let debut_ligne = texte
+        .split_inclusive('\n')
+        .take(ligne.saturating_sub(1))
+        .map(str::len)
+        .sum::<usize>();
+    let position = (debut_ligne + colonne.saturating_sub(1)).min(texte.len());
+    let mut debut = position.saturating_sub(60);
+    while !texte.is_char_boundary(debut) {
+        debut -= 1;
+    }
+    let mut fin = (position + 60).min(texte.len());
+    while !texte.is_char_boundary(fin) {
+        fin += 1;
+    }
+    &texte[debut..fin]
+}
+
 impl From<sys_err::ffi::RtcErrorType> for RtcErrorType {
     fn from(value: sys_err::ffi::RtcErrorType) -> Self {
         match value {

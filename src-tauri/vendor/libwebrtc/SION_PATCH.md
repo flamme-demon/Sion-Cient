@@ -44,3 +44,21 @@ conservent `stereo=1` ; les pistes mono ne sont pas affectées
 
 À retirer si le SFU cesse d'émettre des fmtp opus hétérogènes, ou si
 libwebrtc/LiveKit normalise côté serveur.
+
+## Statistiques : plus de panique sur un JSON refusé
+
+`src/native/{rtp_receiver,rtp_sender,peer_connection}.rs` (`get_stats`) : le
+code d'origine décodait le JSON des statistiques par
+`serde_json::from_str(&stats).unwrap()`, **dans le rappel C++**. Le 23/09, un
+`RemoteVideoTrack::get_stats()` a reçu un JSON que serde refuse (« key must be
+a string ») : panique, abandon du processus, Sion fermé en plein appel.
+
+Le patch passe par `native::parse_stats` (exposé dans `lib.rs` pour être testé
+depuis Sion — ce crate, hors de l'espace de travail, ne lance pas ses propres
+tests) : un JSON illisible devient une `RtcError` dont le message et le
+journal portent l'erreur et une centaine d'octets autour de l'endroit fautif.
+La cause elle-même — le JSON produit par libwebrtc — n'est pas encore
+identifiée ; ce journal servira à la trouver. Test :
+`voice_engine::tests::des_statistiques_illisibles_ne_font_plus_planter`.
+
+À une mise à jour du SDK : retirer si l'amont ne fait plus `unwrap()`.

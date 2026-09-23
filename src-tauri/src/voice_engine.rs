@@ -3317,6 +3317,22 @@ impl VoiceEngine for LiveKitEngine {
 mod tests {
     use super::*;
 
+    /// Patch du libwebrtc embarqué : des statistiques que serde refuse — le
+    /// « key must be a string » du 23/09 — deviennent une erreur au lieu
+    /// d'abattre Sion depuis un rappel C++.
+    #[test]
+    fn des_statistiques_illisibles_ne_font_plus_planter() {
+        use livekit::webrtc::native::parse_stats;
+        assert!(parse_stats("").unwrap().is_empty());
+        assert!(parse_stats("[]").unwrap().is_empty());
+        let erreur = parse_stats(r#"[{"type":"codec","id":"c",{1:2}}]"#).unwrap_err();
+        assert!(erreur.message.contains("statistiques illisibles"), "{}", erreur.message);
+        // L'extrait montre l'endroit fautif, coupé sur des caractères entiers.
+        assert!(erreur.message.contains("{1:2}"), "{}", erreur.message);
+        let long = format!(r#"[{{"type":"codec","id":"{}é",{{1:2}}}}]"#, "a".repeat(80));
+        assert!(parse_stats(&long).is_err());
+    }
+
     #[test]
     fn engine_rejects_empty_credentials_without_touching_network() {
         let mut engine = LiveKitEngine::new().expect("runtime tokio");
