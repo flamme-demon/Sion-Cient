@@ -2960,8 +2960,14 @@ mod imp {
         /// La fusion des commandes viewer est latest-wins par (cible,
         /// expéditeur) et le sweep TTL retire tout ce qui a expiré. Ces deux
         /// propriétés bornent l'état de rendu sans fuite mémoire.
+        /// Les deux tests passent par la file GLOBALE des commandes curseur,
+        /// sous la même cible : lancés en parallèle, le drain de l'un vidait
+        /// la file de l'autre, qui échouait une fois sur vingt-cinq environ.
+        static FILE_CURSEURS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
         #[test]
         fn fusion_curseurs_viewer_latest_wins_puis_sweep_ttl() {
+            let _serie = FILE_CURSEURS.lock().unwrap_or_else(|err| err.into_inner());
             let mut state = RenderState::default();
             let echeance = Instant::now() + Duration::from_millis(5000);
             // Deux positions successives du même viewer sur le même partage :
@@ -3025,6 +3031,7 @@ mod imp {
         /// clics : l'état ne croît pas au-delà de MAX_VIEWER_CLICKS.
         #[test]
         fn plafond_ondes_de_clic() {
+            let _serie = FILE_CURSEURS.lock().unwrap_or_else(|err| err.into_inner());
             let mut state = RenderState::default();
             let now = Instant::now();
             {
