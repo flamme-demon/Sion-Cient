@@ -33,51 +33,58 @@ export function AttachButton() {
   };
 
   return (
-    <div
-      style={{ position: 'relative', display: 'flex' }}
-      onMouseEnter={() => setMenuOpen(true)}
-      onMouseLeave={() => setMenuOpen(false)}
-    >
-      <button
-        type="button"
-        onClick={() => setMenuOpen((o) => !o)}
-        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 10, display: 'flex', borderRadius: '50%', color: 'var(--color-on-surface-variant)', transition: 'background 200ms' }}
-        title={t("chat.attachFile")}
+    <>
+      <div
+        style={{ position: 'relative', display: 'flex' }}
+        onMouseEnter={() => setMenuOpen(true)}
+        onMouseLeave={() => setMenuOpen(false)}
       >
-        <PaperclipIcon />
-      </button>
-      <input ref={inputRef} type="file" multiple style={{ display: 'none' }} onChange={handleChange} />
+        <button
+          type="button"
+          onClick={() => setMenuOpen((o) => !o)}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 10, display: 'flex', borderRadius: '50%', color: 'var(--color-on-surface-variant)', transition: 'background 200ms' }}
+          title={t("chat.attachFile")}
+        >
+          <PaperclipIcon />
+        </button>
+        <input ref={inputRef} type="file" multiple style={{ display: 'none' }} onChange={handleChange} />
 
-      {menuOpen && (
-        // paddingBottom acts as an invisible bridge so the cursor can travel from
-        // the paperclip into the menu without crossing a gap that closes it.
-        <div style={{ position: 'absolute', bottom: '100%', left: 0, paddingBottom: 8, zIndex: 51 }}>
-          <div style={{ background: 'var(--color-surface-container-high)', border: '1px solid var(--color-outline-variant)', borderRadius: 12, padding: 6, minWidth: 190, boxShadow: '0 6px 20px rgba(0,0,0,0.4)' }}>
-            <button type="button" style={itemStyle}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              onClick={() => { setMenuOpen(false); inputRef.current?.click(); }}>
-              <FileIcon /> {t("chat.attachFileItem")}
-            </button>
-            <button type="button" style={itemStyle}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              onClick={() => { setMenuOpen(false); setShowVideoImport(true); }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="23 7 16 12 23 17 23 7" />
-                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-              </svg> {t("extVideo.menuItem")}
-            </button>
-            <button type="button" style={itemStyle} disabled={!activeChannel}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              onClick={() => { setMenuOpen(false); setShowPoll(true); }}>
-              <PollIcon /> {t("poll.menuItem")}
-            </button>
+        {menuOpen && (
+          // paddingBottom acts as an invisible bridge so the cursor can travel from
+          // the paperclip into the menu without crossing a gap that closes it.
+          <div style={{ position: 'absolute', bottom: '100%', left: 0, paddingBottom: 8, zIndex: 51 }}>
+            <div style={{ background: 'var(--color-surface-container-high)', border: '1px solid var(--color-outline-variant)', borderRadius: 12, padding: 6, minWidth: 190, boxShadow: '0 6px 20px rgba(0,0,0,0.4)' }}>
+              <button type="button" style={itemStyle}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => { setMenuOpen(false); inputRef.current?.click(); }}>
+                <FileIcon /> {t("chat.attachFileItem")}
+              </button>
+              <button type="button" style={itemStyle}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => { setMenuOpen(false); setShowVideoImport(true); }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="23 7 16 12 23 17 23 7" />
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                </svg> {t("extVideo.menuItem")}
+              </button>
+              <button type="button" style={itemStyle} disabled={!activeChannel}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => { setMenuOpen(false); setShowPoll(true); }}>
+                <PollIcon /> {t("poll.menuItem")}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
+      {/* HORS du bloc de survol, et c'est tout le sujet. Ces fenêtres ont un
+          fond plein écran : rendues dedans, tout l'écran devenait « le
+          trombone ». Le menu se rouvrait au moindre mouvement sur la fenêtre,
+          puis ne se refermait plus — la souris n'en sortait jamais — et restait
+          posé sur l'aperçu du fichier qu'on venait d'importer (22/09). */}
       {showPoll && activeChannel && <PollCreateModal roomId={activeChannel} onClose={() => setShowPoll(false)} />}
       {showVideoImport && (
         <Suspense fallback={null}>
@@ -87,6 +94,6 @@ export function AttachButton() {
           />
         </Suspense>
       )}
-    </div>
+    </>
   );
 }
