@@ -149,6 +149,36 @@ if (Test-Path "$ProjectDir\dist") { Remove-Item -Recurse -Force "$ProjectDir\dis
 if (Test-Path "$ProjectDir\node_modules\.vite") { Remove-Item -Recurse -Force "$ProjectDir\node_modules\.vite" }
 if (Test-Path "$releaseDir\sion-client.exe") { Remove-Item -Force "$releaseDir\sion-client.exe" }
 
+# ffmpeg livre avec l'application, comme dans la CI (release.yml) : le lecteur
+# video, l'affiche des videos et la memeboard en dependent. Meme source LGPL.
+# Sans cette etape, un installeur construit ici n'embarquait aucun ffmpeg
+# Windows - et, depuis une archive de package-for-windows.sh anterieure au
+# 24/09, le ffmpeg LINUX de 80 Mo, inutilisable.
+Write-Host "  ffmpeg embarque..." -ForegroundColor Gray
+$resourcesDir = "$tauriDir\resources"
+New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
+if (Test-Path "$resourcesDir\ffmpeg") { Remove-Item -Force "$resourcesDir\ffmpeg" }
+if (-not (Test-Path "$resourcesDir\ffmpeg.exe")) {
+    $ProgressPreference = "SilentlyContinue"
+    $ffZip = "$env:TEMP\sion-ffmpeg.zip"
+    $ffDir = "$env:TEMP\sion-ffmpeg"
+    $ffUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-lgpl-shared-9.0.zip"
+    Invoke-WebRequest -Uri $ffUrl -OutFile $ffZip -UseBasicParsing
+    if (Test-Path $ffDir) { Remove-Item -Recurse -Force $ffDir }
+    Expand-Archive -Path $ffZip -DestinationPath $ffDir -Force
+    $ffRacine = (Get-ChildItem $ffDir -Directory | Select-Object -First 1).FullName
+    # ffmpeg.exe et les DLL dont il depend ; ni ffplay, ni ffprobe.
+    Copy-Item "$ffRacine\bin\ffmpeg.exe" $resourcesDir -Force
+    Get-ChildItem "$ffRacine\bin" -Filter *.dll | Copy-Item -Destination $resourcesDir -Force
+    Remove-Item -Force $ffZip
+    Remove-Item -Recurse -Force $ffDir
+}
+if (-not (Test-Path "$resourcesDir\ffmpeg.exe")) {
+    Write-Host "  ERREUR: ffmpeg.exe absent de $resourcesDir." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  ffmpeg.exe present" -ForegroundColor Green
+
 # --- 7. Build frontend ---
 Write-Host "[7/10] Build du frontend..." -ForegroundColor Yellow
 Set-Location $ProjectDir
