@@ -17,6 +17,7 @@ import { detectTtsEngine, listTtsModels, installTtsModel, deleteTtsModel, pickTt
 import { useThemeStore } from "../../stores/useThemeStore";
 import { BUILTIN_THEMES } from "../../themes/builtin";
 import { getActiveTheme, parseThemeFile, themeToJson, resolveThemeTokens } from "../../services/themeService";
+import { defautsDeContraste } from "../../themes/contrast";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -40,7 +41,7 @@ export function SettingsPanel() {
   const upsertCustomTheme = useThemeStore((s) => s.upsertCustomTheme);
   const removeCustomTheme = useThemeStore((s) => s.removeCustomTheme);
   const themeFileRef = useRef<HTMLInputElement>(null);
-  const [themeMsg, setThemeMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [themeMsg, setThemeMsg] = useState<{ ok: boolean; text: string; avertissement?: boolean } | null>(null);
   const allThemes = [...BUILTIN_THEMES, ...customThemes];
 
   const handleThemeImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -54,6 +55,25 @@ export function SettingsPanel() {
         return;
       }
       upsertCustomTheme(parsed.theme);
+      // Importé quand même — l'utilisateur reste maître —, mais prévenu
+      // qu'une partie du texte se lira mal.
+      const defauts = defautsDeContraste(resolveThemeTokens(parsed.theme));
+      if (defauts.length > 0) {
+        const pire = defauts[0];
+        setThemeMsg({
+          ok: true,
+          avertissement: true,
+          text: t("settings.themeImportedLowContrast", {
+            name: parsed.theme.name,
+            count: defauts.length,
+            texte: pire.texte.replace(/^color-/, ""),
+            fond: pire.fond.replace(/^color-/, ""),
+            rapport: pire.rapport.toLocaleString(i18n.language, { maximumFractionDigits: 1 }),
+            minimum: pire.minimum,
+          }),
+        });
+        return;
+      }
       setThemeMsg({ ok: true, text: t("settings.themeImported", { name: parsed.theme.name }) });
     } catch {
       setThemeMsg({ ok: false, text: t("settings.themeErrInvalid") });
@@ -436,7 +456,7 @@ export function SettingsPanel() {
             </div>
             <div style={{ fontSize: 10, color: 'var(--color-outline)', marginTop: 8, lineHeight: 1.45 }}>{t("settings.themeHint")}</div>
             {themeMsg && (
-              <div style={{ fontSize: 11, marginTop: 6, color: themeMsg.ok ? 'var(--color-green)' : 'var(--color-error)' }}>{themeMsg.text}</div>
+              <div style={{ fontSize: 11, marginTop: 6, color: themeMsg.avertissement ? 'var(--color-warning)' : themeMsg.ok ? 'var(--color-green)' : 'var(--color-error)' }}>{themeMsg.text}</div>
             )}
             <input ref={themeFileRef} type="file" accept="application/json,.json" onChange={handleThemeImport} style={{ display: 'none' }} />
           </div>

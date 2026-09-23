@@ -488,6 +488,8 @@
     "themeCopied": "Thème copié dans le presse-papiers — collez-le dans un fichier .json pour le partager.",
     "themeCopyFailed": "Copie impossible — réessayez.",
     "themeImported": "Thème « {{name}} » importé.",
+    "themeImportedLowContrast_one": "Thème « {{name}} » importé — attention : une paire de couleurs manque de contraste ({{texte}} sur {{fond}} : {{rapport}}:1, {{minimum}}:1 requis).",
+    "themeImportedLowContrast_other": "Thème « {{name}} » importé — attention : {{count}} paires de couleurs manquent de contraste, dont {{texte}} sur {{fond}} ({{rapport}}:1, {{minimum}}:1 requis).",
     "themeErrInvalid": "Fichier de thème invalide.",
     "themeRemove": "Supprimer ce thème",
     "themeHint": "Un thème est un simple fichier JSON (name + tokens). Copiez le thème actuel, changez les couleurs, partagez — les thèmes partiels sont acceptés.",
