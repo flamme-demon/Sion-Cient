@@ -2171,17 +2171,14 @@ pub(crate) fn jouer_clip_de_pair(
     }
     #[cfg(feature = "native-voice")]
     {
-        let en_appel = holder_is_connected();
-        if en_appel {
-            let res = with_engine(app, "clip de pair", |_| {
-                if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
-                    Ok(())
-                } else {
-                    Err("clip refusé".into())
-                }
-            });
-            if let Err(e) = res {
-                log::warn!("[Sion][voix-native] {e}");
+        // La file des clips n'a pas besoin du moteur : on ne le sort pas de
+        // son emplacement. Sorti, même un instant, une commande concurrente
+        // — un envoi de curseur — concluait à une session morte et vidait
+        // l'interface en plein appel. On attend seulement qu'il soit revenu
+        // s'il est emprunté : ce fil n'est pas celui de l'interface.
+        if wait_for_engine(holder_is_connected) {
+            if !webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
+                log::warn!("[Sion][voix-native] clip de pair refusé");
             }
             return;
         }
@@ -2248,13 +2245,18 @@ pub fn voice_native_play_soundboard(
             crate::cue_playback::jouer_clip_local(samples, gain);
             return Ok(());
         }
-        with_engine(&app, "soundboard native", |_| {
-            if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
-                Ok(())
-            } else {
-                Err("clip soundboard refusé".into())
-            }
-        })
+        // Même raison que `jouer_clip_de_pair` : la file des clips se passe du
+        // moteur, et le sortir de son emplacement faisait croire à une
+        // session morte à toute commande concurrente.
+        let _ = &app;
+        if !wait_for_engine(holder_has_engine) {
+            return Err("pas de moteur natif".into());
+        }
+        if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
+            Ok(())
+        } else {
+            Err("clip soundboard refusé".into())
+        }
     }
 }
 
