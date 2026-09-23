@@ -112,12 +112,22 @@ pub fn memeboard_jouer(
         return Ok(());
     };
     let gain = if gain.is_finite() { gain.clamp(0.0, 3.0) } else { 1.0 };
+    // Relevée MAINTENANT, avant le téléchargement : une memeboard coupée
+    // pendant qu'il dure doit empêcher le meme de surgir à son terme.
+    let generation = GENERATION.load(Ordering::Acquire);
     std::thread::Builder::new()
         .name("sion-meme".into())
         .spawn(move || {
             let _place = place;
-            if let Err(e) = jouer(&app, &source, gain, emetteur.as_deref(), ffmpeg_path.as_deref())
-            {
+            let issue = jouer(
+                &app,
+                &source,
+                gain,
+                emetteur.as_deref(),
+                ffmpeg_path.as_deref(),
+                generation,
+            );
+            if let Err(e) = issue {
                 log::warn!("[Sion][meme] {e}");
             }
         })
@@ -137,11 +147,15 @@ fn jouer(
     gain: f32,
     emetteur: Option<&str>,
     ffmpeg_path: Option<&str>,
+    generation: u64,
 ) -> Result<(), String> {
     let gere = crate::managed_ffmpeg_path(app).map(|p| p.to_string_lossy().into_owned());
     let ffmpeg = crate::resolve_ffmpeg(ffmpeg_path, gere.as_deref());
-    let chemin = crate::lecteur_video::ramener_en_local(app, source)?;
-    lire(&ffmpeg, &chemin, emetteur, |samples| {
+    // La source vient d'un pair : plafonnée, pour qu'aucun client ne fasse
+    // télécharger un film entier à tout le salon en le faisant passer pour
+    // un meme. Un meme préparé ici pèse au plus `POIDS_MAX`.
+    let chemin = crate::lecteur_video::ramener_en_local_plafonne(app, source, 2 * POIDS_MAX)?;
+    lire(&ffmpeg, &chemin, emetteur, generation, |samples| {
         crate::voice_native::jouer_clip_de_pair(app, samples, gain)
     })
 }
@@ -152,9 +166,9 @@ fn lire(
     ffmpeg: &str,
     chemin: &str,
     emetteur: Option<&str>,
+    generation: u64,
     jouer_son: impl FnOnce(Vec<i16>),
 ) -> Result<(), String> {
-    let generation = GENERATION.load(Ordering::Acquire);
     let (vl, vh, _) = crate::probe_video(ffmpeg, std::path::Path::new(chemin))
         .ok_or_else(|| format!("meme illisible : {chemin}"))?;
     let (l, h) = taille_affichee(vl, vh);
@@ -870,7 +884,8 @@ mod tests {
     #[ignore]
     fn apercu() {
         let Ok(chemin) = std::env::var("SION_MEME_APERCU") else { return };
-        lire("ffmpeg", &chemin, Some("Picsou"), |_| {}).expect("lecture du meme");
+        lire("ffmpeg", &chemin, Some("Picsou"), GENERATION.load(Ordering::Acquire), |_| {})
+            .expect("lecture du meme");
     }
 
     /// Source générée par ffmpeg : le test se passe de fichier, et s'efface

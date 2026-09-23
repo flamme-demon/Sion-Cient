@@ -381,7 +381,14 @@ function MemeImportModal({ onClose, onEnvoye }: { onClose: () => void; onEnvoye:
     };
   }, [selecteurOuvert, placerSelecteur]);
 
+  // Numéro du dernier fichier choisi : l'analyse d'un fichier remplacé entre-
+  // temps ne doit rien écrire. Sans lui, un gros fichier choisi puis
+  // remplacé par un petit finissait après lui, et l'on envoyait le premier
+  // sous le nom du second.
+  const choixRef = useRef(0);
+
   const choisir = async (f: File) => {
+    const numero = ++choixRef.current;
     setFichier(f);
     setSource(null);
     setAnalyse(null);
@@ -392,13 +399,14 @@ function MemeImportModal({ onClose, onEnvoye }: { onClose: () => void; onEnvoye:
     try {
       const chemin = await deposerSource(f);
       const a = await analyserMeme(chemin);
+      if (numero !== choixRef.current) return;
       setSource(chemin);
       setAnalyse(a);
       setRegion({ debut: 0, fin: Math.min(MEME_DUREE_MAX_MS, a.duree_ms) });
     } catch (err) {
-      setErreur(`${t("memeboard.prepareError")} — ${String(err)}`);
+      if (numero === choixRef.current) setErreur(`${t("memeboard.prepareError")} — ${String(err)}`);
     } finally {
-      setOccupe(null);
+      if (numero === choixRef.current) setOccupe(null);
     }
   };
 

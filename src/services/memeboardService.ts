@@ -166,10 +166,13 @@ export async function declencherMeme(meme: MemeEntry): Promise<boolean> {
   // appuie. Rust ignore la demande en sourdine.
   await jouerLocalement(source, meme.gain, nom);
   if (useAppStore.getState().connectedVoiceChannel) {
+    // `emoji` et une durée toujours chiffrée : Rust en tire le badge 🎬 que
+    // l'émetteur se pose à lui-même, les pairs le posant de leur côté.
     const paquet = encodeur.encode(JSON.stringify({
       mxc: meme.mxcUrl,
+      emoji: "🎬",
       gain: meme.gain,
-      duration: meme.durationMs,
+      duration: Math.min(meme.durationMs ?? MEME_DUREE_MAX_MS, MEME_DUREE_MAX_MS),
     }));
     await voiceNativePublishData(MEMEBOARD_TOPIC, bytesToB64(paquet));
   }

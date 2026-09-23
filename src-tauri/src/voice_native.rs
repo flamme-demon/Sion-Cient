@@ -391,6 +391,9 @@ impl NativeParticipant {
 pub const TOPIC_AFK: &str = "sion-afk";
 /// `broadcastSound` — reliable.
 pub const TOPIC_SOUNDBOARD: &str = "sion-soundboard";
+/// Memes de la memeboard : même forme de paquet que la soundboard pour le
+/// badge (`emoji`, `duration`), que l'émetteur se renvoie aussi à lui-même.
+pub const TOPIC_MEMEBOARD: &str = "sion-memeboard";
 /// `broadcastCursor` — lossy ; `broadcastCursorHide` — reliable, même topic.
 pub const TOPIC_CURSOR: &str = "sion-cursor";
 /// `broadcastCursorClick` — reliable.
@@ -2721,7 +2724,9 @@ pub fn voice_native_publish_data(
                 forward_cursor_to_viewer_surface(Some(&topic), &payload_b64, Some(&identity));
             }
         }
-        if res.is_ok() && topic == TOPIC_SOUNDBOARD {
+        // Son propre badge, que les pairs voient déjà : le paquet ne revient
+        // pas à celui qui l'envoie.
+        if res.is_ok() && (topic == TOPIC_SOUNDBOARD || topic == TOPIC_MEMEBOARD) {
             let identity = manager()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())

@@ -402,11 +402,15 @@ fn purger_dossier(dossier: &std::path::Path, plafond: u64) {
 ///
 /// `limite` demande une plage au lieu du fichier entier — voir `ramener_tete`.
 /// Un serveur qui ignore l'en-tête renvoie tout : on coupe alors nous-mêmes.
+///
+/// `plafond` refuse une source plus lourde : le téléchargement échoue au lieu
+/// de s'arrêter en route, qui laisserait un fichier tronqué.
 fn telecharger(
     app: &tauri::AppHandle<crate::TauriRuntime>,
     source: &str,
     cible: &std::path::Path,
     limite: Option<u64>,
+    plafond: Option<u64>,
 ) -> Result<(), String> {
     use std::io::Write as _;
     use tauri::Emitter as _;
@@ -430,6 +434,11 @@ fn telecharger(
     }
     // Le serveur peut ignorer la plage demandée et tout envoyer : l'annonce
     // porte alors sur le fichier entier, pas sur ce qu'on va garder.
+    if let (Some(max), Some(annonce)) = (plafond, reponse.content_length()) {
+        if annonce > max {
+            return Err(format!("média trop lourd ({} Mo)", annonce / 1_048_576));
+        }
+    }
     let total = match (limite, reponse.content_length()) {
         (Some(max), Some(annonce)) => max.min(annonce),
         (Some(max), None) => max,
@@ -438,7 +447,14 @@ fn telecharger(
 
     // Écriture sous un nom provisoire : un téléchargement interrompu
     // laisserait sinon un fichier tronqué que le cache prendrait pour valide.
-    let partiel = cible.with_extension("partiel");
+    // Un nom par téléchargement : deux fils qui ramènent le même meme au même
+    // moment écrasaient sinon le fichier l'un de l'autre, et le cache gardait
+    // un mélange des deux.
+    static NUMERO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let partiel = cible.with_extension(format!(
+        "partiel-{}",
+        NUMERO.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let mut fichier =
         std::fs::File::create(&partiel).map_err(|e| format!("création du fichier : {e}"))?;
     let mut tampon = vec![0u8; 256 * 1024];
@@ -458,6 +474,11 @@ fn telecharger(
         recus += lus as u64;
         if limite.is_some_and(|max| recus >= max) {
             break;
+        }
+        if plafond.is_some_and(|max| recus > max) {
+            drop(fichier);
+            let _ = std::fs::remove_file(&partiel);
+            return Err(format!("média trop lourd (plus de {} Mo)", recus / 1_048_576));
         }
         if derniere_annonce.elapsed() >= std::time::Duration::from_millis(120) {
             derniere_annonce = std::time::Instant::now();
@@ -515,7 +536,26 @@ pub(crate) fn ramener_en_local(
         return Ok(cible.to_string_lossy().into_owned());
     }
     log::info!("[Sion][lecteur] téléchargement de {source}");
-    telecharger(app, source, &cible, None)?;
+    telecharger(app, source, &cible, None, None)?;
+    purger_cache();
+    Ok(cible.to_string_lossy().into_owned())
+}
+
+/// `ramener_en_local`, mais pour une source qu'un pair nous impose : au-delà
+/// de `plafond` octets, elle est refusée.
+pub(crate) fn ramener_en_local_plafonne(
+    app: &tauri::AppHandle<crate::TauriRuntime>,
+    source: &str,
+    plafond: u64,
+) -> Result<String, String> {
+    if !source.starts_with("http://") && !source.starts_with("https://") {
+        return Ok(source.to_string());
+    }
+    let cible = dossier_cache().join(format!("media_{}", empreinte(source)));
+    if cible.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        return Ok(cible.to_string_lossy().into_owned());
+    }
+    telecharger(app, source, &cible, None, Some(plafond))?;
     purger_cache();
     Ok(cible.to_string_lossy().into_owned())
 }
@@ -539,7 +579,7 @@ fn ramener_tete(
     if cible.metadata().map(|m| m.len() > 0).unwrap_or(false) {
         return Some(cible);
     }
-    match telecharger(app, source, &cible, Some(limite)) {
+    match telecharger(app, source, &cible, Some(limite), None) {
         Ok(()) => Some(cible),
         Err(e) => {
             log::warn!("[Sion][lecteur] début de {source} indisponible : {e}");
