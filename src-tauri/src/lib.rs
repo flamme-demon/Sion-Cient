@@ -1463,7 +1463,7 @@ fn save_imported_audio(
 /// ffprobe, yt-dlp and tar are CLI tools; spawning them straight would flash a
 /// black `cmd` window on every video conversion. CREATE_NO_WINDOW (0x0800_0000)
 /// keeps them invisible. No-op on non-Windows targets (incl. Android/Linux),
-/// so it is NOT cfg-gated: `transcode_video` (a caller) is compiled on Android.
+/// so it is NOT cfg-gated: `prepare_video_for_send` (a caller) is compiled on Android.
 pub(crate) fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
     let cmd = std::process::Command::new(program);
     #[cfg(target_os = "windows")]
@@ -1488,7 +1488,14 @@ pub(crate) fn bin_runs(bin: &str, version_flag: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Clean up old Sion transcode temp files (older than 24 hours).
+/// Retire les fichiers temporaires de médias de plus de 24 heures : vidéos
+/// chiffrées déposées pour ffmpeg (`sion_in_`), vidéos préparées pour l'envoi
+/// (`sion_send_`) et anciennes conversions pour la webview (`sion_out_`,
+/// `sion_mux_`).
+///
+/// Appelée par ceux qui en produisent. Elle ne l'était plus que par les
+/// conversions pour la webview, que plus rien n'utilisait : ces fichiers
+/// s'accumulaient sans fin jusqu'au 24/09.
 fn cleanup_old_transcodes() {
     let tmp_dir = sion_media_dir();
     let cutoff = std::time::SystemTime::now() - Duration::from_secs(24 * 3600);
@@ -1498,6 +1505,7 @@ fn cleanup_old_transcodes() {
             let name_str = name.to_string_lossy();
             if (name_str.starts_with("sion_in_")
                 || name_str.starts_with("sion_out_")
+                || name_str.starts_with("sion_mux_")
                 || name_str.starts_with("sion_send_"))
                 && entry
                     .metadata()
@@ -1510,12 +1518,6 @@ fn cleanup_old_transcodes() {
         }
     }
 }
-
-/// Plafond de résolution des conversions de compatibilité : 1280 sur le grand
-/// côté, ratio conservé, dimensions paires (exigées par les encodeurs YUV).
-const VIDEO_SCALE_FILTER_FLAG: &str = "-vf";
-const VIDEO_SCALE_FILTER: &str =
-    "scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2";
 
 /// Dossier temporaire dédié aux médias. Isolé du `temp_dir` général pour que la
 /// portée du protocole `asset` (qui laisse la webview lire ces fichiers) puisse
@@ -1574,6 +1576,7 @@ fn stage_media(request: tauri::ipc::Request<'_>) -> Result<String, String> {
         .map(|v| v.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>())
         .filter(|v| !v.is_empty() && v.len() <= 8)
         .unwrap_or_else(|| "bin".to_string());
+    cleanup_old_transcodes();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.len().hash(&mut hasher);
     std::time::SystemTime::now()
@@ -1866,206 +1869,6 @@ async fn prepare_video_for_send(
         duration_ms: (secs * 1000.0) as u64,
         transcoded: true,
     })
-}
-
-/// Convertit une vidéo en WebM (VP9 + Opus) et renvoie le **chemin** du fichier
-/// produit, que la webview lit ensuite par le protocole `asset`.
-///
-/// Renvoyait autrefois du base64 : les octets traversaient l'IPC en texte dans
-/// les deux sens (ab3316d, époque CEF). Un chemin suffit et ne copie rien.
-#[tauri::command]
-async fn transcode_video(
-    app: tauri::AppHandle<TauriRuntime>,
-    url: String,
-    ffmpeg_path: Option<String>,
-    input_path: Option<String>,
-    codec: Option<String>,
-) -> Result<String, String> {
-    // VP9 par défaut (meilleure compression). VP8 est le repli demandé quand le
-    // lecteur a échoué à décoder : mesuré le 17/09 sous WebKitGTK, un VP9
-    // 1080x1920 donne `MEDIA_ERR_DECODE` dès la première image alors que
-    // `ffmpeg` et `gst-launch` le décodent en logiciel sans broncher — le
-    // décodage matériel décroche. VP8 est le codec le plus universellement
-    // décodable de cette pile.
-    let vp8 = codec.as_deref() == Some("vp8");
-    // Resolve the ffmpeg binary: user-configured path (Settings → Advanced) →
-    // app-managed download → common install locations → `ffmpeg` on PATH. Lets
-    // the transcode work out-of-box when ffmpeg is installed but not on PATH
-    // (common on Windows) or after the in-app "Installer ffmpeg" button.
-    #[cfg(not(target_os = "android"))]
-    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
-    #[cfg(target_os = "android")]
-    let managed: Option<String> = None;
-    let _ = &app;
-    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed.as_deref());
-
-    // Clean up old temp files on each transcode call
-    cleanup_old_transcodes();
-
-    // Hash URL for temp file naming
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut hasher);
-    let hash = hasher.finish();
-    let tmp_dir = sion_media_dir();
-    let output_path = tmp_dir.join(format!(
-        "sion_out_{:x}{}.webm",
-        hash,
-        if vp8 { "_vp8" } else { "" }
-    ));
-
-    // Conversion déjà faite : on rend le même chemin, la webview le relira.
-    if output_path.exists() {
-        return Ok(output_path.to_string_lossy().into_owned());
-    }
-
-    // Obtain the source bytes. Prefer the bytes the renderer already resolved
-    // (it has handled E2EE decryption + Matrix media auth) and passed in as
-    // base64 — re-downloading the URL here would have NO access token and NO
-    // decryption, so it fails on authenticated-media servers (401) and on
-    // encrypted channels (we'd fetch ciphertext that ffmpeg can't decode).
-    // Fall back to downloading the URL only when no bytes were provided.
-    let input_path = match input_path.filter(|s| !s.is_empty()) {
-        Some(staged) => std::path::PathBuf::from(staged),
-        None => {
-            let downloaded = tmp_dir.join(format!("sion_in_{:x}.bin", hash));
-            let client = build_client().map_err(|e| e.to_string())?;
-            let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            if !resp.status().is_success() {
-                return Err(format!("HTTP {}", resp.status()));
-            }
-            let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-            std::fs::write(&downloaded, &bytes).map_err(|e| e.to_string())?;
-            downloaded
-        }
-    };
-
-    // Transcode with ffmpeg (fast preset)
-    let output = hidden_command(&ffmpeg_bin)
-        .args(["-y", "-i"])
-        .arg(&input_path)
-        // Plafond de résolution : 1280 sur le grand côté, ratio conservé,
-        // dimensions paires. Mesuré le 17/09 — deux conversions identiques en
-        // tout point (VP9 profil 0, yuv420p, bt709, 30 fps, ~1200 kb/s) se
-        // comportent différemment sous WebKitGTK selon leur seule taille : le
-        // 720x1280 se lit, le 1080x1920 donne `MEDIA_ERR_DECODE` dès la
-        // première image. Le décodeur décroche au-delà d'une certaine
-        // résolution, pas sur le codec. Le plafond réduit au passage le poids
-        // et le temps d'encodage.
-        .args(if vp8 {
-            // VP8 n'a pas de mode qualité constante utilisable seul : `-crf`
-            // demande un plafond de débit pour être pris en compte.
-            [
-                "-c:v", "libvpx", "-crf", "12", "-b:v", "2M", "-deadline",
-                "realtime", "-cpu-used", "8", "-c:a", "libopus", "-b:a", "96k",
-                VIDEO_SCALE_FILTER_FLAG, VIDEO_SCALE_FILTER, "-f", "webm",
-            ]
-        } else {
-            [
-                "-c:v", "libvpx-vp9", "-crf", "35", "-b:v", "0", "-deadline",
-                "realtime", "-cpu-used", "8", "-c:a", "libopus", "-b:a", "96k",
-                VIDEO_SCALE_FILTER_FLAG, VIDEO_SCALE_FILTER, "-f", "webm",
-            ]
-        })
-        .arg(&output_path)
-        .output()
-        .map_err(|e| format!("ffmpeg not found: {}", e))?;
-
-    let _ = std::fs::remove_file(&input_path);
-
-    if !output.status.success() {
-        let _ = std::fs::remove_file(&output_path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ffmpeg error: {}", stderr));
-    }
-
-    Ok(output_path.to_string_lossy().into_owned())
-}
-
-/// Réécrit une vidéo dans un conteneur MP4 **sans retoucher les flux vidéo**.
-///
-/// Pourquoi : la lecture d'un WebM passe par `matroskademux`, dont une
-/// assertion a abattu le processus web de WebKit — et avec lui toute
-/// l'interface (17/09). Le décodeur n'était pas en cause, le conteneur si.
-/// Un MP4 est ouvert par `qtdemux`, qui n'a pas ce défaut.
-///
-/// Le flux vidéo est copié bit pour bit : l'AV1 reste de l'AV1, sans perte ni
-/// réencodage, en une seconde au lieu des minutes d'un transcodage complet.
-/// Seul l'audio est réencodé en AAC : l'Opus dans un MP4 est légal mais
-/// inégalement supporté selon les piles GStreamer, et ce réencodage-là ne
-/// coûte presque rien.
-///
-/// Échoue sur les flux que le MP4 n'accepte pas (VP8 notamment) : l'appelant
-/// retombe alors sur `transcode_video`.
-#[tauri::command]
-async fn remux_video_mp4(
-    app: tauri::AppHandle<TauriRuntime>,
-    url: String,
-    ffmpeg_path: Option<String>,
-    input_path: Option<String>,
-) -> Result<String, String> {
-    #[cfg(not(target_os = "android"))]
-    let managed = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
-    #[cfg(target_os = "android")]
-    let managed: Option<String> = None;
-    let _ = &app;
-    let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed.as_deref());
-
-    cleanup_old_transcodes();
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut hasher);
-    let hash = hasher.finish();
-    let tmp_dir = sion_media_dir();
-    let output_path = tmp_dir.join(format!("sion_mux_{hash:x}.mp4"));
-    if output_path.exists() {
-        return Ok(output_path.to_string_lossy().into_owned());
-    }
-
-    let input_path = match input_path.filter(|s| !s.is_empty()) {
-        Some(staged) => std::path::PathBuf::from(staged),
-        None => {
-            let downloaded = tmp_dir.join(format!("sion_in_{hash:x}.bin"));
-            let client = build_client().map_err(|e| e.to_string())?;
-            let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
-            if !resp.status().is_success() {
-                return Err(format!("HTTP {}", resp.status()));
-            }
-            let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-            std::fs::write(&downloaded, &bytes).map_err(|e| e.to_string())?;
-            downloaded
-        }
-    };
-
-    let output = hidden_command(&ffmpeg_bin)
-        .args(["-y", "-i"])
-        .arg(&input_path)
-        .args([
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            // L'index en tête : le lecteur peut commencer sans lire tout le
-            // fichier, et le serveur média répond aux requêtes `Range`.
-            "-movflags",
-            "+faststart",
-            "-f",
-            "mp4",
-        ])
-        .arg(&output_path)
-        .output()
-        .map_err(|e| format!("ffmpeg introuvable: {e}"))?;
-
-    let _ = std::fs::remove_file(&input_path);
-
-    if !output.status.success() {
-        let _ = std::fs::remove_file(&output_path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("remux impossible: {stderr}"));
-    }
-    log::info!("[Sion][vidéo] remux MP4 (flux vidéo copié) → {output_path:?}");
-    Ok(output_path.to_string_lossy().into_owned())
 }
 
 /// Prépare une vidéo pour servir de FOND de panneau.
@@ -3765,8 +3568,6 @@ pub fn run() {
         open_local_file,
         show_in_folder,
         fetch_link_preview,
-        transcode_video,
-        remux_video_mp4,
         prepare_background_video,
         purge_background_files,
         stage_media,
@@ -3871,8 +3672,6 @@ pub fn run() {
         open_local_file,
         show_in_folder,
         fetch_link_preview,
-        transcode_video,
-        remux_video_mp4,
         prepare_background_video,
         purge_background_files,
         stage_media,
