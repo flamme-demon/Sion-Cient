@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { LayoutIcon } from "../icons";
 import { applyLayoutPreset, type LayoutPresetId } from "../../services/layoutPresets";
+import { applyLayout, layoutToJson, parseLayoutFile } from "../../services/layoutFile";
 import { useLayoutStore } from "../../stores/useLayoutStore";
 
 /**
@@ -15,13 +16,57 @@ export function LayoutPresetsMenu() {
   const [open, setOpen] = useState(false);
   const sidebarSide = useLayoutStore((s) => s.sidebarSide);
   const ref = useRef<HTMLDivElement>(null);
+  const fichierRef = useRef<HTMLInputElement>(null);
+  // Retour de l'export ou de l'import, affiché au pied du menu, qui reste
+  // ouvert pour qu'on le lise.
+  const [statut, setStatut] = useState<{ ok: boolean; text: string } | null>(null);
+  const basculer = (ouvert: boolean) => {
+    setOpen(ouvert);
+    setStatut(null);
+  };
+  const choisirFichier = () => fichierRef.current?.click();
+
+  // Même mécanique que l'export d'un thème : WebKitGTK n'expose pas toujours
+  // navigator.clipboard, le textarea + execCommand est le plus compatible.
+  const exporter = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = layoutToJson();
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      setStatut({ ok, text: ok ? t("layout.layoutCopied") : t("layout.layoutCopyFailed") });
+    } catch {
+      setStatut({ ok: false, text: t("layout.layoutCopyFailed") });
+    }
+  };
+
+  const importer = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fichier = e.target.files?.[0];
+    if (fichierRef.current) fichierRef.current.value = "";
+    if (!fichier) return;
+    try {
+      const lu = parseLayoutFile(await fichier.text());
+      if ("error" in lu) {
+        setStatut({ ok: false, text: `${t("layout.layoutErrInvalid")} (${lu.error})` });
+        return;
+      }
+      applyLayout(lu.disposition);
+      setStatut({ ok: true, text: t("layout.layoutImported") });
+    } catch {
+      setStatut({ ok: false, text: t("layout.layoutErrInvalid") });
+    }
+  };
 
   // Fermeture au clic extérieur (le menu vit dans le header, sans overlay :
   // un overlay pleine fenêtre intercepterait les drops de fichiers du chat).
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (!ref.current?.contains(e.target as Node)) basculer(false);
     };
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
@@ -48,7 +93,7 @@ export function LayoutPresetsMenu() {
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => basculer(!open)}
         style={buttonStyle}
         title={t("layout.presets")}
         aria-haspopup="menu"
@@ -123,6 +168,34 @@ export function LayoutPresetsMenu() {
               ? t("layout.moveMenuRight", { defaultValue: "Déplacer le menu à droite" })
               : t("layout.moveMenuLeft", { defaultValue: "Déplacer le menu à gauche" })}
           </button>
+          <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 4px' }} />
+          {[
+            { cle: "export", label: t("layout.exportLayout"), hint: t("layout.exportLayoutHint") },
+            { cle: "import", label: t("layout.importLayout"), hint: t("layout.importLayoutHint") },
+          ].map((it) => (
+            <button
+              key={it.cle}
+              role="menuitem"
+              onClick={it.cle === "export" ? exporter : choisirFichier}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                padding: '8px 10px', borderRadius: 8, border: 'none',
+                background: 'transparent', color: 'var(--color-on-surface)',
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-high)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{it.label}</span>
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>{it.hint}</span>
+            </button>
+          ))}
+          <input ref={fichierRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={importer} />
+          {statut && (
+            <div role="status" style={{ fontSize: 11, padding: '4px 10px 6px', color: statut.ok ? 'var(--color-green)' : 'var(--color-error)' }}>
+              {statut.text}
+            </div>
+          )}
         </div>
       )}
     </div>
