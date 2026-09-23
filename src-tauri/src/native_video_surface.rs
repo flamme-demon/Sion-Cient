@@ -18,6 +18,46 @@ pub struct NativeVideoSurfaceSpec {
     y: f64,
     width: f64,
     height: f64,
+    /// Rectangles de la page qui recouvrent la vidéo : menus, panneaux
+    /// flottants, boîtes de dialogue. Mêmes coordonnées que la surface.
+    #[serde(default)]
+    holes: Vec<NativeVideoSurfaceHole>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct NativeVideoSurfaceHole {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Au-delà, le front envoie de toute façon l'enveloppe des trous.
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+const MAX_HOLES: usize = 16;
+
+/// Les trous d'une surface dans son propre repère — origine en haut à gauche
+/// de la surface —, rognés à elle.
+///
+/// La surface native est peinte AU-DESSUS de la page : aucun `z-index` ne
+/// peut faire passer un menu devant. On la perce donc là où la page doit se
+/// voir, plutôt que de l'effacer tout entière (23/09 : le partage recouvrait
+/// la soundboard flottante, que l'ancien échantillonnage de cinq points ne
+/// voyait pas).
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+fn holes_within(spec: &NativeVideoSurfaceSpec) -> Vec<(f64, f64, f64, f64)> {
+    spec.holes
+        .iter()
+        .filter(|h| [h.x, h.y, h.width, h.height].iter().all(|v| v.is_finite()))
+        .filter_map(|h| {
+            let gauche = (h.x - spec.x).max(0.0);
+            let haut = (h.y - spec.y).max(0.0);
+            let droite = (h.x + h.width - spec.x).min(spec.width);
+            let bas = (h.y + h.height - spec.y).min(spec.height);
+            (droite > gauche && bas > haut).then_some((gauche, haut, droite - gauche, bas - haut))
+        })
+        .take(MAX_HOLES)
+        .collect()
 }
 
 #[tauri::command]
@@ -187,7 +227,10 @@ fn rect_affiche(
 
 #[cfg(test)]
 mod dimension_tests {
-    use super::{fit_content_rect, fit_frame_dimensions, rect_affiche};
+    use super::{
+        fit_content_rect, fit_frame_dimensions, holes_within, rect_affiche,
+        NativeVideoSurfaceHole, NativeVideoSurfaceSpec, MAX_HOLES,
+    };
 
     /// Le cas du 23/09 : un partage 1920x1080 réduit pour une zone de 1400
     /// pixels, arrondie à 1392. Étirée de 8 pixels au plus proche voisin,
@@ -238,6 +281,45 @@ mod dimension_tests {
         assert!((x - 76.666_666).abs() < 0.000_01);
         assert_eq!((y, h), (20.0, 200.0));
         assert!((w - 266.666_666).abs() < 0.000_01);
+    }
+
+    fn trou(x: f64, y: f64, width: f64, height: f64) -> NativeVideoSurfaceHole {
+        NativeVideoSurfaceHole { x, y, width, height }
+    }
+
+    /// Les trous arrivent en coordonnées de la page ; le renderer les veut
+    /// dans le repère de la surface, sans rien qui déborde.
+    #[test]
+    fn les_trous_sont_ramenes_a_la_surface_et_rognes() {
+        let spec = NativeVideoSurfaceSpec {
+            id: "s".into(),
+            sender: "@a".into(),
+            x: 100.0,
+            y: 50.0,
+            width: 800.0,
+            height: 450.0,
+            holes: vec![
+                // Un panneau flottant qui mord sur le coin bas droit.
+                trou(700.0, 400.0, 400.0, 300.0),
+                // Un menu entièrement dedans.
+                trou(150.0, 80.0, 200.0, 120.0),
+                // Hors de la vidéo : ignoré.
+                trou(0.0, 0.0, 90.0, 40.0),
+                // Valeur absurde : ignorée.
+                trou(f64::NAN, 0.0, 10.0, 10.0),
+            ],
+        };
+        assert_eq!(
+            holes_within(&spec),
+            vec![(600.0, 350.0, 200.0, 100.0), (50.0, 30.0, 200.0, 120.0)]
+        );
+        let plein = NativeVideoSurfaceSpec {
+            holes: vec![trou(0.0, 0.0, 1.0, 1.0); MAX_HOLES + 4],
+            x: 0.0,
+            y: 0.0,
+            ..spec
+        };
+        assert_eq!(holes_within(&plein).len(), MAX_HOLES);
     }
 }
 
@@ -475,6 +557,11 @@ mod imp {
     static DRAW_COUNT: AtomicU64 = AtomicU64::new(0);
     static EMBEDDED_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
     static DRAWN_FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
+    /// Dernier écart journalisé entre l'allocation GTK et l'emprise voulue
+    /// (largeur << 32 | hauteur de l'allocation, 0 = pas d'écart).
+    static ECART_ALLOCATION: AtomicU64 = AtomicU64::new(0);
+    /// Dernier nombre de trous journalisé, toutes surfaces confondues.
+    static TROUS_JOURNALISES: AtomicU64 = AtomicU64::new(0);
     static OUTPUT_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
 
     thread_local! {
@@ -511,6 +598,8 @@ mod imp {
         y: f64,
         width: f64,
         height: f64,
+        /// Zones rendues à la page, dans le repère de la surface.
+        holes: Vec<(f64, f64, f64, f64)>,
     }
 
     /// Curseur distant d'un viewer pointant CE partage (état viewer).
@@ -781,6 +870,7 @@ mod imp {
         {
             return None;
         }
+        let holes = super::holes_within(&spec);
         Some(Surface {
             id: spec.id,
             sender: spec.sender,
@@ -788,6 +878,7 @@ mod imp {
             y: spec.y,
             width: spec.width,
             height: spec.height,
+            holes,
         })
     }
 
@@ -928,7 +1019,15 @@ mod imp {
 
                     // Des pixels vont arriver : l'horloge de drain reprend.
                     arm_drain();
-                    let use_wayland_single_surface = surfaces.len() == 1;
+                    // La sous-surface Wayland (opt-in) ne sait pas se percer :
+                    // dès qu'un menu recouvre la vidéo, on repasse par le
+                    // GtkGLArea, qui le sait.
+                    let percee = surfaces.iter().any(|surface| !surface.holes.is_empty());
+                    let trous = surfaces.iter().map(|surface| surface.holes.len() as u64).sum::<u64>();
+                    if TROUS_JOURNALISES.swap(trous, Ordering::Relaxed) != trous {
+                        log::info!("[Sion][partage-natif] trous dans la vidéo : {trous}");
+                    }
+                    let use_wayland_single_surface = surfaces.len() == 1 && !percee;
                     let first_surface = surfaces.first().cloned();
                     let min_x = surfaces
                         .iter()
@@ -957,8 +1056,9 @@ mod imp {
                     // Une surface unique remplit exactement le widget : un
                     // renderbuffer opaque permet à GTK de le blitter sans
                     // recomposition alpha à chaque frame WebKit. Les vues
-                    // multiples gardent l'alpha pour leurs intervalles.
-                    renderer.area.set_has_alpha(surfaces.len() != 1);
+                    // multiples gardent l'alpha pour leurs intervalles, et
+                    // une surface percée pour ses trous.
+                    renderer.area.set_has_alpha(surfaces.len() != 1 || percee);
 
                     let mut state = renderer.state.borrow_mut();
                     state.surfaces = surfaces;
@@ -1422,6 +1522,30 @@ mod imp {
         }
     }
 
+    /// Taille, en pixels logiques, du rectangle qui englobe les surfaces —
+    /// celle demandée au widget.
+    fn emprise(state: &RenderState) -> Option<(i32, i32)> {
+        if state.surfaces.is_empty() {
+            return None;
+        }
+        let droite = state
+            .surfaces
+            .iter()
+            .map(|surface| surface.x + surface.width)
+            .fold(0.0, f64::max)
+            .ceil();
+        let bas = state
+            .surfaces
+            .iter()
+            .map(|surface| surface.y + surface.height)
+            .fold(0.0, f64::max)
+            .ceil();
+        Some((
+            (droite - state.origin_x).max(1.0) as i32,
+            (bas - state.origin_y).max(1.0) as i32,
+        ))
+    }
+
     fn render_gl(state: &mut RenderState, area: &gtk::GLArea) -> Result<(), String> {
         area.make_current();
         if let Some(err) = area.error() {
@@ -1483,6 +1607,26 @@ mod imp {
                 }
             }
             let allocation = area.allocation();
+            // GTK doit allouer au widget exactement l'emprise des surfaces.
+            // Plus grand, le reste serait peint en noir opaque par-dessus la
+            // page (23/09 : image en haut à gauche d'un cadre noir qui
+            // mordait sur la dock) — on veut le voir dans le journal.
+            if let Some((voulu_l, voulu_h)) = emprise(state) {
+                let ecart = (allocation.width() - voulu_l).abs() > 1
+                    || (allocation.height() - voulu_h).abs() > 1;
+                let cle = if ecart {
+                    ((allocation.width() as u64) << 32) | allocation.height() as u64
+                } else {
+                    0
+                };
+                if ECART_ALLOCATION.swap(cle, Ordering::Relaxed) != cle && ecart {
+                    log::warn!(
+                        "[Sion][partage-natif] allocation GTK {}x{} ≠ emprise voulue {voulu_l}x{voulu_h}",
+                        allocation.width(),
+                        allocation.height()
+                    );
+                }
+            }
             let scale_factor = area.scale_factor().max(1);
             let pixel_width = allocation.width().max(1) * scale_factor;
             let pixel_height = allocation.height().max(1) * scale_factor;
@@ -1506,31 +1650,50 @@ mod imp {
                 glClearColor(0.0, 0.0, 0.0, 1.0);
                 glClear(GL_COLOR_BUFFER_BIT);
                 glDisable(GL_SCISSOR_TEST);
-                let Some(frame) = state.frames.get(&target.sender) else {
-                    continue;
-                };
-                let Some(texture) = frame.texture else {
-                    continue;
-                };
-                let (x, y, dw, dh) = super::rect_affiche(
-                    tx,
-                    ty,
-                    target.width,
-                    target.height,
-                    frame.width,
-                    frame.height,
-                    scale_factor as f64,
-                );
-                let left = (2.0 * x / allocation.width() as f64 - 1.0) as f32;
-                let right = (2.0 * (x + dw) / allocation.width() as f64 - 1.0) as f32;
-                let top = (1.0 - 2.0 * y / allocation.height() as f64) as f32;
-                let bottom = (1.0 - 2.0 * (y + dh) / allocation.height() as f64) as f32;
-                glUniform4f(gl.rect_location, left, bottom, right, top);
-                glBindTexture(GL_TEXTURE_2D, texture);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-                let previous = DRAWN_FRAME_SEQ.swap(frame.seq, Ordering::Relaxed);
-                if frame.seq != previous && (frame.seq == 1 || frame.seq % 120 == 0) {
-                    log::info!("[Sion][partage-natif] frame intégrée peinte #{}", frame.seq);
+                'image: {
+                    let Some(frame) = state.frames.get(&target.sender) else {
+                        break 'image;
+                    };
+                    let Some(texture) = frame.texture else {
+                        break 'image;
+                    };
+                    let (x, y, dw, dh) = super::rect_affiche(
+                        tx,
+                        ty,
+                        target.width,
+                        target.height,
+                        frame.width,
+                        frame.height,
+                        scale_factor as f64,
+                    );
+                    let left = (2.0 * x / allocation.width() as f64 - 1.0) as f32;
+                    let right = (2.0 * (x + dw) / allocation.width() as f64 - 1.0) as f32;
+                    let top = (1.0 - 2.0 * y / allocation.height() as f64) as f32;
+                    let bottom = (1.0 - 2.0 * (y + dh) / allocation.height() as f64) as f32;
+                    glUniform4f(gl.rect_location, left, bottom, right, top);
+                    glBindTexture(GL_TEXTURE_2D, texture);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                    let previous = DRAWN_FRAME_SEQ.swap(frame.seq, Ordering::Relaxed);
+                    if frame.seq != previous && (frame.seq == 1 || frame.seq % 120 == 0) {
+                        log::info!("[Sion][partage-natif] frame intégrée peinte #{}", frame.seq);
+                    }
+                }
+                // Les trous en dernier, transparents : la page reparaît sous
+                // le menu qui recouvre la vidéo. Arrondis vers l'extérieur,
+                // pour qu'aucun filet de vidéo ne morde sur son bord.
+                if !target.holes.is_empty() {
+                    let s = scale_factor as f64;
+                    glEnable(GL_SCISSOR_TEST);
+                    glClearColor(0.0, 0.0, 0.0, 0.0);
+                    for &(hx, hy, hw, hh) in &target.holes {
+                        let gauche = ((tx + hx) * s).floor() as i32;
+                        let haut = ((ty + hy) * s).floor() as i32;
+                        let droite = ((tx + hx + hw) * s).ceil() as i32;
+                        let bas = ((ty + hy + hh) * s).ceil() as i32;
+                        glScissor(gauche, pixel_height - bas, droite - gauche, bas - haut);
+                        glClear(GL_COLOR_BUFFER_BIT);
+                    }
+                    glDisable(GL_SCISSOR_TEST);
                 }
             }
             glBindVertexArray(0);
@@ -1568,7 +1731,25 @@ mod imp {
                         target.width,
                         target.height,
                     ));
+                if target.holes.is_empty() {
+                    draw_viewer_cursors(context, x, y, width, height, cursors);
+                    continue;
+                }
+                // Pas de curseur par-dessus un menu qui perce la vidéo : on
+                // les peint à part, puis on efface les trous avant de poser.
+                // Un rognage pair-impair rendrait l'intersection de deux
+                // trous qui se chevauchent.
+                let (tx, ty) = (target.x - state.origin_x, target.y - state.origin_y);
+                context.push_group();
                 draw_viewer_cursors(context, x, y, width, height, cursors);
+                context.set_operator(gtk::cairo::Operator::Clear);
+                for &(hx, hy, hw, hh) in &target.holes {
+                    context.rectangle(tx + hx, ty + hy, hw, hh);
+                }
+                let _ = context.fill();
+                if context.pop_group_to_source().is_ok() {
+                    let _ = context.paint();
+                }
             }
         }
     }
@@ -2881,7 +3062,8 @@ mod imp {
         BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, DIB_RGB_COLORS, PAINTSTRUCT, SRCCOPY,
     };
     use windows::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, SelectObject,
+        BitBlt, CombineRgn, CreateCompatibleBitmap, CreateCompatibleDC, CreateRectRgn, DeleteDC,
+        DeleteObject, SelectObject, SetWindowRgn, HRGN, RGN_DIFF,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -2928,6 +3110,8 @@ mod imp {
         y: f64,
         width: f64,
         height: f64,
+        /// Zones rendues à la page, dans le repère de la surface (CSS).
+        holes: Vec<(f64, f64, f64, f64)>,
     }
 
     struct Frame {
@@ -2943,6 +3127,9 @@ mod imp {
     struct NativeWindow {
         hwnd: isize,
         sender: String,
+        /// Trous posés par la dernière région, en pixels physiques : une
+        /// région inchangée n'est pas réappliquée.
+        trous: Vec<(i32, i32, i32, i32)>,
         // Adresse stable lue par WndProc via GWLP_USERDATA. La Box reste
         // vivante jusqu'au retour de DestroyWindow.
         _context: Box<WindowContext>,
@@ -3208,6 +3395,7 @@ mod imp {
         {
             return None;
         }
+        let holes = super::holes_within(&spec);
         Some(Surface {
             id: spec.id,
             sender: spec.sender,
@@ -3215,6 +3403,7 @@ mod imp {
             y: spec.y,
             width: spec.width,
             height: spec.height,
+            holes,
         })
     }
 
@@ -3332,8 +3521,53 @@ mod imp {
         Ok(NativeWindow {
             hwnd: hwnd.0 as isize,
             sender: surface.sender.clone(),
+            trous: Vec::new(),
             _context: context,
         })
+    }
+
+    /// Perce la fenêtre enfant là où un menu, un panneau flottant ou une
+    /// boîte de dialogue de la page la recouvre. Aucun `z-index` ne passe
+    /// devant une fenêtre native : sa région est le seul moyen de rendre la
+    /// page visible à cet endroit.
+    fn appliquer_trous(window: &mut NativeWindow, holes: &[(f64, f64, f64, f64)], scale: f64) {
+        // Arrondis vers l'extérieur : aucun filet de vidéo sur le bord du menu.
+        let trous = holes
+            .iter()
+            .map(|&(x, y, w, h)| {
+                (
+                    (x * scale).floor() as i32,
+                    (y * scale).floor() as i32,
+                    ((x + w) * scale).ceil() as i32,
+                    ((y + h) * scale).ceil() as i32,
+                )
+            })
+            .collect::<Vec<_>>();
+        if trous == window.trous {
+            return;
+        }
+        let hwnd = HWND(window.hwnd as _);
+        unsafe {
+            if trous.is_empty() {
+                // Plus de région : la fenêtre redevient un rectangle plein.
+                let _ = SetWindowRgn(hwnd, HRGN::default(), BOOL(1));
+            } else {
+                // Une région plus grande que toute fenêtre : c'est la
+                // fenêtre elle-même qui la borne.
+                let region = CreateRectRgn(0, 0, 16384, 16384);
+                for &(gauche, haut, droite, bas) in &trous {
+                    let trou = CreateRectRgn(gauche, haut, droite, bas);
+                    let _ = CombineRgn(region, region, trou, RGN_DIFF);
+                    let _ = DeleteObject(trou);
+                }
+                // Posée, la région appartient au système ; refusée, elle
+                // reste à nous.
+                if SetWindowRgn(hwnd, region, BOOL(1)) == 0 {
+                    let _ = DeleteObject(region);
+                }
+            }
+        }
+        window.trous = trous;
     }
 
     fn destroy_surface_window(window: NativeWindow) {
@@ -3402,9 +3636,10 @@ mod imp {
                     }
                 }
             }
-            let Some(window) = current.get(&surface.id) else {
+            let Some(window) = current.get_mut(&surface.id) else {
                 continue;
             };
+            appliquer_trous(window, &surface.holes, scale);
             let x = (surface.x * scale).round() as i32;
             let y = (surface.y * scale).round() as i32;
             let width = (surface.width * scale).round().max(1.0) as i32;

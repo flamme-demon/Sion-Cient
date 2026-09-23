@@ -416,6 +416,8 @@ interface NativeVideoSurfaceRect {
   y: number;
   width: number;
   height: number;
+  /** Zones que la page recouvre : Rust y perce la surface. */
+  holes: ZonePage[];
 }
 
 const nativeSurfaceRegistrations = new Map<string, NativeVideoSurfaceRegistration>();
@@ -491,35 +493,189 @@ function ensureNativeSurfaceSizeListener(): Promise<void> {
   return nativeSurfaceSizeListenerPromise;
 }
 
-/** Un élément hors du conteneur du partage recouvre-t-il la zone vidéo ?
+/** Le rectangle réellement visible d'un élément.
  *
- *  `elementFromPoint` respecte `pointer-events: none`, donc les calques
- *  décoratifs du lecteur ne comptent jamais comme occultants. On échantillonne
- *  le centre et quatre points internes plutôt que les coins, qui tombent sur
- *  les bordures arrondies. */
-function isOccluded(
-  element: HTMLCanvasElement,
-  left: number,
-  top: number,
-  width: number,
-  height: number,
-): boolean {
-  const container = element.parentElement;
-  if (!container) return false;
-  const samples: Array<[number, number]> = [
+ *  getBoundingClientRect() ignore le rognage des ancêtres. Une surface
+ *  native n'en sait rien non plus, et peindrait par-dessus les barres
+ *  latérales, les cartes arrondies ou les panneaux masqués : on intersecte
+ *  chaque ancêtre qui rogne avant de passer le rectangle à Rust. */
+function rectVisible(element: Element): DOMRect {
+  let visible = element.getBoundingClientRect();
+  // Le rognage s'arrête à l'élément affiché en plein écran.
+  //
+  // Un élément plein écran sort de la composition normale : ses ancêtres ne
+  // le contiennent plus visuellement, même s'ils restent ses parents dans
+  // le DOM. Sans cette borne, le lecteur passé en plein écran se voyait
+  // intersecté avec la liste des messages qui le contient, et sa surface
+  // tombait à 1076×61 au milieu d'un écran de 5120×1440 (21/09).
+  const plein = document.fullscreenElement;
+  const sousPlein = plein?.contains(element) ?? false;
+  // Seuls rognent les ancêtres qui contiennent la boîte au sens CSS. Un
+  // élément en position fixe échappe à tous — le mini-lecteur vidéo, la carte
+  // de survol du rail (23/09 : rognée à la largeur du rail, elle ne perçait
+  // plus la vidéo). Un élément absolu échappe à ceux qui ne sont pas
+  // positionnés.
+  let position = getComputedStyle(element).position;
+  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (sousPlein && (ancestor === plein || !plein!.contains(ancestor))) break;
+    const ancestorStyle = getComputedStyle(ancestor);
+    const contient = position === "fixed"
+      ? contientLesFixes(ancestorStyle)
+      : position === "absolute"
+        ? ancestorStyle.position !== "static" || contientLesFixes(ancestorStyle)
+        : true;
+    if (!contient) continue;
+    position = ancestorStyle.position;
+    const clipsX = ancestorStyle.overflowX !== "visible";
+    const clipsY = ancestorStyle.overflowY !== "visible";
+    if (!clipsX && !clipsY) continue;
+    const clip = ancestor.getBoundingClientRect();
+    if (clipsX) {
+      visible = new DOMRect(
+        Math.max(visible.left, clip.left),
+        visible.top,
+        Math.min(visible.right, clip.right) - Math.max(visible.left, clip.left),
+        visible.height,
+      );
+    }
+    if (clipsY) {
+      visible = new DOMRect(
+        visible.left,
+        Math.max(visible.top, clip.top),
+        visible.width,
+        Math.min(visible.bottom, clip.bottom) - Math.max(visible.top, clip.top),
+      );
+    }
+    if (visible.width <= 0 || visible.height <= 0) break;
+  }
+  return visible;
+}
+
+/** Cet ancêtre sert-il de bloc contenant aux éléments en position fixe ?
+ *  Une transformation, un filtre ou un confinement le font. */
+function contientLesFixes(style: CSSStyleDeclaration): boolean {
+  return style.transform !== "none"
+    || style.filter !== "none"
+    || /paint|layout|strict|content/.test(style.contain)
+    || /transform|filter/.test(style.willChange);
+}
+
+/** Zone de la page, en pixels CSS de la vue. */
+interface ZonePage {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Ce qui peut passer devant une vidéo : ce qui sort du flux. Sion n'a ni
+ *  portail ni feuille de style qui positionne un calque — tout passe par une
+ *  classe Tailwind ou un style en ligne. */
+const SELECTEUR_CALQUES =
+  '[class*="fixed"], [class*="absolute"], [style*="position: fixed"], [style*="position: absolute"]';
+
+/** Même plafond que Rust ; au-delà, un seul trou : leur enveloppe. */
+const TROUS_MAX = 16;
+
+/** Cinq points dans une zone : le centre et quatre points intérieurs,
+ *  plutôt que les coins, qui tombent sur les bordures arrondies. */
+function echantillons(left: number, top: number, width: number, height: number): Array<[number, number]> {
+  return [
     [left + width / 2, top + height / 2],
     [left + width * 0.25, top + height * 0.25],
     [left + width * 0.75, top + height * 0.25],
     [left + width * 0.25, top + height * 0.75],
     [left + width * 0.75, top + height * 0.75],
   ];
-  for (const [x, y] of samples) {
+}
+
+/** Le calque auquel appartient un élément : son plus proche ancêtre sorti
+ *  du flux, à défaut lui-même. */
+function calqueDe(element: Element, video: Element): Element {
+  for (let e: Element | null = element; e && !e.contains(video); e = e.parentElement) {
+    const position = getComputedStyle(e).position;
+    if (position === "fixed" || position === "absolute") return e;
+  }
+  return element;
+}
+
+/** Les zones de la vidéo que la page recouvre — menus, panneaux flottants,
+ *  boîtes de dialogue —, ou `null` si elle est recouverte tout entière.
+ *
+ *  La surface native est peinte AU-DESSUS de la WebView : aucun `z-index` ne
+ *  peut faire passer un élément devant elle. Rust la perce donc là où la page
+ *  doit se voir. Avant, on l'effaçait tout entière dès qu'un de cinq points
+ *  tombait sur autre chose que la vidéo ; un panneau posé entre ces points
+ *  passait dessous — la soundboard flottante, le 23/09.
+ *
+ *  Tout ce qui appartient au conteneur de la vidéo (boutons, chevrons,
+ *  calques du partage) reste légitime. `elementFromPoint` respecte
+ *  `pointer-events: none` : un calque décoratif ne perce jamais rien. */
+function trousSur(element: HTMLCanvasElement, left: number, top: number, width: number, height: number): ZonePage[] | null {
+  const right = left + width;
+  const bottom = top + height;
+  const conteneur = element.parentElement;
+  const plein = document.fullscreenElement;
+  const retenus: Element[] = [];
+  const trous: ZonePage[] = [];
+  const retenir = (calque: Element) => {
+    if (retenus.some((r) => r.contains(calque))) return;
+    const r = rectVisible(calque);
+    const gauche = Math.floor(Math.max(left, r.left));
+    const haut = Math.floor(Math.max(top, r.top));
+    const droite = Math.ceil(Math.min(right, r.right));
+    const bas = Math.ceil(Math.min(bottom, r.bottom));
+    if (droite <= gauche || bas <= haut) return;
+    for (let i = retenus.length - 1; i >= 0; i--) {
+      if (calque.contains(retenus[i])) {
+        retenus.splice(i, 1);
+        trous.splice(i, 1);
+      }
+    }
+    retenus.push(calque);
+    trous.push({ x: gauche, y: haut, width: droite - gauche, height: bas - haut });
+  };
+  const etranger = (e: Element) => e !== element && !(conteneur?.contains(e) ?? false);
+
+  for (const calque of document.querySelectorAll(SELECTEUR_CALQUES)) {
+    if (!etranger(calque) || calque.contains(element)) continue;
+    // Hors de l'élément plein écran : invisible, il est dans la couche du
+    // dessous.
+    if (plein && !plein.contains(calque)) continue;
+    const r = calque.getBoundingClientRect();
+    const gauche = Math.max(left, r.left);
+    const haut = Math.max(top, r.top);
+    const droite = Math.min(right, r.right);
+    const bas = Math.min(bottom, r.bottom);
+    if (droite <= gauche || bas <= haut) continue;
+    // Recouvrir la vidéo ne suffit pas : il faut être DEVANT elle. Un calque
+    // dessous serait caché par le fond du canvas, et le trou montrerait ce
+    // fond noir au lieu de la vidéo.
+    const devant = echantillons(gauche, haut, droite - gauche, bas - haut).some(([x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return hit !== null && calque.contains(hit);
+    });
+    if (devant) retenir(calque);
+  }
+  // Filet : ce qui est devant la vidéo sans que le sélecteur l'ait vu.
+  for (const [x, y] of echantillons(left, top, width, height)) {
     const hit = document.elementFromPoint(x, y);
     // Rien sous le point (hors viewport) : ne pas conclure à une occultation.
-    if (!hit) continue;
-    if (hit !== element && !container.contains(hit)) return true;
+    if (!hit || !etranger(hit) || hit.contains(element)) continue;
+    retenir(calqueDe(hit, element));
   }
-  return false;
+
+  if (trous.some((t) => t.x <= left && t.y <= top && t.x + t.width >= right && t.y + t.height >= bottom)) {
+    return null;
+  }
+  if (trous.length > TROUS_MAX) {
+    const x = Math.min(...trous.map((t) => t.x));
+    const y = Math.min(...trous.map((t) => t.y));
+    const width = Math.max(...trous.map((t) => t.x + t.width)) - x;
+    const height = Math.max(...trous.map((t) => t.y + t.height)) - y;
+    return [{ x, y, width, height }];
+  }
+  return trous;
 }
 
 function nativeSurfaceLoop() {
@@ -529,46 +685,7 @@ function nativeSurfaceLoop() {
     const element = registration.element;
     const style = getComputedStyle(element);
     if (!element.isConnected || style.display === "none" || style.visibility === "hidden") continue;
-    // getBoundingClientRect() ignores clipping performed by ancestors. A
-    // native Wayland subsurface has no knowledge of that DOM clipping and
-    // would otherwise paint over sidebars, rounded cards, or hidden panels.
-    // Intersect every ancestor that establishes an overflow clip before
-    // handing the rectangle to Rust.
-    let visible = element.getBoundingClientRect();
-    // Le rognage s'arrête à l'élément affiché en plein écran.
-    //
-    // Un élément plein écran sort de la composition normale : ses ancêtres ne
-    // le contiennent plus visuellement, même s'ils restent ses parents dans
-    // le DOM. Sans cette borne, le lecteur passé en plein écran se voyait
-    // intersecté avec la liste des messages qui le contient, et sa surface
-    // tombait à 1076×61 au milieu d'un écran de 5120×1440 (21/09).
-    const plein = document.fullscreenElement;
-    const sousPlein = plein?.contains(element) ?? false;
-    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
-      if (sousPlein && (ancestor === plein || !plein!.contains(ancestor))) break;
-      const ancestorStyle = getComputedStyle(ancestor);
-      const clipsX = ancestorStyle.overflowX !== "visible";
-      const clipsY = ancestorStyle.overflowY !== "visible";
-      if (!clipsX && !clipsY) continue;
-      const clip = ancestor.getBoundingClientRect();
-      if (clipsX) {
-        visible = new DOMRect(
-          Math.max(visible.left, clip.left),
-          visible.top,
-          Math.min(visible.right, clip.right) - Math.max(visible.left, clip.left),
-          visible.height,
-        );
-      }
-      if (clipsY) {
-        visible = new DOMRect(
-          visible.left,
-          Math.max(visible.top, clip.top),
-          visible.width,
-          Math.min(visible.bottom, clip.bottom) - Math.max(visible.top, clip.top),
-        );
-      }
-      if (visible.width <= 0 || visible.height <= 0) break;
-    }
+    const visible = rectVisible(element);
     const left = Math.max(0, visible.left);
     const top = Math.max(0, visible.top);
     const right = Math.min(window.innerWidth, visible.right);
@@ -576,14 +693,16 @@ function nativeSurfaceLoop() {
     const width = Math.round(right - left);
     const height = Math.round(bottom - top);
     if (width < 1 || height < 1) continue;
-    // La surface native est peinte AU-DESSUS de la WebView : aucun menu,
-    // aucune boîte de dialogue, aucune liste déroulante DOM ne peut passer
-    // devant elle, quel que soit son z-index. Tant qu'on ne sait pas découper
-    // la surface autour de l'élément qui la recouvre, le seul comportement
-    // correct est de s'effacer. On échantillonne la zone : tout ce qui
-    // appartient au conteneur du partage (boutons, chevrons, calques) reste
-    // légitime ; un élément venu d'ailleurs dans le DOM est un occultant.
-    if (isOccluded(element, left, top, width, height)) continue;
+    let holes: ZonePage[] | null;
+    try {
+      holes = trousSur(element, left, top, width, height);
+    } catch (error) {
+      // Une exception ici arrêterait la boucle : la vidéo resterait figée
+      // à son dernier rectangle, par-dessus tout ce qui s'ouvrirait ensuite.
+      console.warn("[Sion][partage-natif] calcul des trous impossible", error);
+      holes = [];
+    }
+    if (!holes) continue;
     surfaces.push({
       id: registration.id,
       sender: registration.sender,
@@ -591,6 +710,7 @@ function nativeSurfaceLoop() {
       y: Math.round(top),
       width,
       height,
+      holes,
     });
   }
   const payload = JSON.stringify(surfaces);
@@ -613,6 +733,16 @@ function startNativeSurfaceLoop() {
   nativeSurfaceTimer = window.setTimeout(nativeSurfaceLoop, 0);
 }
 
+/** Un menu s'ouvre ou se ferme sur un clic, une touche : on reprend la
+ *  géométrie à l'image suivante — React a alors fini de le monter — plutôt
+ *  que d'attendre le prochain contrôle, un quart de seconde plus tard, avec
+ *  la vidéo par-dessus le menu. */
+function apresInteraction() {
+  requestAnimationFrame(startNativeSurfaceLoop);
+}
+
+const INTERACTIONS = ["pointerdown", "click", "contextmenu", "keydown"] as const;
+
 function ensureNativeSurfaceGeometryObservers() {
   if (!nativeSurfaceResizeObserver) {
     nativeSurfaceResizeObserver = new ResizeObserver(startNativeSurfaceLoop);
@@ -620,6 +750,9 @@ function ensureNativeSurfaceGeometryObservers() {
   if (!nativeSurfaceWindowObserversActive) {
     window.addEventListener("resize", startNativeSurfaceLoop, { passive: true });
     window.addEventListener("scroll", startNativeSurfaceLoop, { passive: true, capture: true });
+    for (const type of INTERACTIONS) {
+      window.addEventListener(type, apresInteraction, { passive: true, capture: true });
+    }
     nativeSurfaceWindowObserversActive = true;
   }
 }
@@ -660,6 +793,7 @@ export async function registerNativeVideoSurface(
       if (nativeSurfaceWindowObserversActive) {
         window.removeEventListener("resize", startNativeSurfaceLoop);
         window.removeEventListener("scroll", startNativeSurfaceLoop, true);
+        for (const type of INTERACTIONS) window.removeEventListener(type, apresInteraction, true);
         nativeSurfaceWindowObserversActive = false;
       }
       nativeSurfaceLastPayload = "[]";
