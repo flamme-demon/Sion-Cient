@@ -1910,6 +1910,9 @@ export interface PinnedSummary {
    *  chiffrés stockent le fichier dans `content.file` : la vignette y est
    *  omise plutôt que d'embarquer tout le déchiffrement dans une liste. */
   mediaUrl: string | null;
+  /** URL http du média lui-même, jamais sa vignette. Pour une vidéo sans
+   *  vignette serveur, c'est d'elle que ffmpeg tire une affiche. */
+  sourceUrl: string | null;
 }
 
 /**
@@ -1930,6 +1933,12 @@ function pinnedMediaUrl(contenu: unknown): string | null {
     | { url?: string; info?: { thumbnail_url?: string } }
     | undefined;
   const mxc = c?.info?.thumbnail_url || c?.url;
+  return mxc ? mxcToHttp(mxc) : null;
+}
+
+/** URL http du média lui-même, sans passer par sa vignette. */
+function pinnedSourceUrl(contenu: unknown): string | null {
+  const mxc = (contenu as { url?: string } | undefined)?.url;
   return mxc ? mxcToHttp(mxc) : null;
 }
 
@@ -1969,6 +1978,7 @@ export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[
         text: String(contenu?.body ?? ""),
         media: pinnedMediaKind(contenu?.msgtype),
         mediaUrl: pinnedMediaUrl(contenu),
+        sourceUrl: pinnedSourceUrl(contenu),
         loaded: true,
       });
       continue;
@@ -1985,6 +1995,7 @@ export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[
         text: String(contenu?.body ?? ""),
         media: pinnedMediaKind(contenu?.msgtype),
         mediaUrl: pinnedMediaUrl(contenu),
+        sourceUrl: pinnedSourceUrl(contenu),
         loaded: false,
       });
     } catch {

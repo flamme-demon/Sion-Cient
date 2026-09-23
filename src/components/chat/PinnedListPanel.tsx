@@ -105,8 +105,7 @@ export function PinnedListPanel() {
           >
             {/* Vignette du média : une image et une vidéo se reconnaissent d'un
                 coup d'œil, là où le libellé « Fichier joint » ne disait rien de
-                leur nature. La vidéo passe par un `<video preload="metadata">`,
-                qui affiche sa première image sans télécharger le fichier. */}
+                leur nature. */}
             {pin.mediaUrl && pin.media === "image" && (
               <img
                 src={pin.mediaUrl}
@@ -120,17 +119,7 @@ export function PinnedListPanel() {
               />
             )}
             {pin.mediaUrl && pin.media === "video" && (
-              <video
-                src={pin.mediaUrl}
-                muted
-                playsInline
-                preload="metadata"
-                style={{
-                  width: enBandeau ? '100%' : 56, height: enBandeau ? 84 : 56,
-                  flex: '0 0 auto', objectFit: 'cover',
-                  borderRadius: 6, background: 'var(--color-surface-container-highest)',
-                }}
-              />
+              <AfficheVideo pin={pin} largeur={enBandeau ? '100%' : 56} hauteur={enBandeau ? 84 : 56} />
             )}
 
             <div style={{ minWidth: 0, flex: '1 1 auto' }}>
@@ -153,6 +142,46 @@ export function PinnedListPanel() {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Affiche d'une vidéo épinglée.
+ *
+ * Jamais de balise `<video>` : cette version de WebKit ne lit pas les vidéos
+ * du fil, et la vignette restait noire. Quand le serveur a une vignette,
+ * `mediaUrl` la désigne déjà ; sinon ffmpeg extrait une image du média, comme
+ * pour les cartes du fil, mise en cache côté Rust.
+ */
+function AfficheVideo({ pin, largeur, hauteur }: { pin: PinnedSummary; largeur: number | string; hauteur: number }) {
+  const vignette = pin.mediaUrl && pin.mediaUrl !== pin.sourceUrl ? pin.mediaUrl : null;
+  const [extraite, setExtraite] = useState<string | null>(null);
+  useEffect(() => {
+    if (vignette || !pin.sourceUrl) return;
+    let vivant = true;
+    void import("../../services/voiceNativeService")
+      .then((m) => m.afficheLecteurVideo(pin.sourceUrl!))
+      .then((data) => { if (vivant) setExtraite(data); })
+      .catch(() => { /* ffmpeg absent, ou format sans image */ });
+    return () => { vivant = false; };
+  }, [vignette, pin.sourceUrl]);
+  const image = vignette ?? extraite;
+  return (
+    <div style={{
+      position: 'relative', width: largeur, height: hauteur, flex: '0 0 auto',
+      borderRadius: 6, overflow: 'hidden', background: 'var(--color-surface-container-highest)',
+    }}>
+      {image && (
+        <img src={image} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      )}
+      {/* Le triangle distingue une vidéo d'une image au premier regard. */}
+      <span aria-hidden style={{
+        position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'var(--color-on-surface)', fontSize: 16, textShadow: '0 1px 3px var(--color-surface)',
+      }}>
+        ▶
+      </span>
     </div>
   );
 }
