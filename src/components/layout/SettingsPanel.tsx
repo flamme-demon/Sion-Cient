@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import i18n from "../../i18n";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { Fragment, useEffect, useState, useRef, useCallback } from "react";
 import { SettingsIcon, ArrowLeftIcon, PaperclipIcon, FileIcon, DownloadIcon } from "../icons";
 import { useSettingsStore, type VoiceCue, type VoiceSoundCfg } from "../../stores/useSettingsStore";
 import { useAppStore } from "../../stores/useAppStore";
@@ -18,6 +18,7 @@ import { useThemeStore } from "../../stores/useThemeStore";
 import { BUILTIN_THEMES } from "../../themes/builtin";
 import { getActiveTheme, parseThemeFile, previewTheme, themeToJson, resolveThemeTokens } from "../../services/themeService";
 import { defautsDeContraste } from "../../themes/contrast";
+import { ACCENTS_PROPOSES, tokensAccent } from "../../themes/accent";
 import type { Theme } from "../../themes/types";
 
 
@@ -41,20 +42,29 @@ export function SettingsPanel() {
   const setThemeId = useThemeStore((s) => s.setThemeId);
   const upsertCustomTheme = useThemeStore((s) => s.upsertCustomTheme);
   const removeCustomTheme = useThemeStore((s) => s.removeCustomTheme);
+  const accent = useThemeStore((s) => s.accent);
+  const setAccent = useThemeStore((s) => s.setAccent);
   const themeFileRef = useRef<HTMLInputElement>(null);
   const [themeMsg, setThemeMsg] = useState<{ ok: boolean; text: string; avertissement?: boolean } | null>(null);
   const allThemes = [...BUILTIN_THEMES, ...customThemes];
   // Aperçu au survol d'une vignette, après un court arrêt : balayer la liste
   // ne doit pas faire clignoter toute l'interface d'un thème à l'autre.
   const apercuRef = useRef<number | undefined>(undefined);
-  const survolerTheme = (theme: Theme | null) => {
+  /** Lance un aperçu après l'arrêt, ou rétablit tout de suite le choix
+   *  enregistré (`null`). */
+  const planifierApercu = (apercu: (() => void) | null) => {
     window.clearTimeout(apercuRef.current);
-    if (!theme) {
+    if (!apercu) {
       previewTheme(null);
       return;
     }
-    apercuRef.current = window.setTimeout(() => previewTheme(theme), 150);
+    apercuRef.current = window.setTimeout(apercu, 150);
   };
+  const survolerTheme = (theme: Theme | null) => planifierApercu(theme ? () => previewTheme(theme) : null);
+  /** `hex` : une pastille ; `null` : la pastille « du thème ». */
+  const survolerAccent = (hex: string | null) => planifierApercu(() => previewTheme(null, hex));
+  const themeActif = allThemes.find((th) => th.id === themeId) ?? BUILTIN_THEMES[0];
+  const primaireDuTheme = resolveThemeTokens(themeActif)["color-primary"];
   // Réglages fermés pendant un aperçu : le thème choisi revient.
   useEffect(() => () => {
     window.clearTimeout(apercuRef.current);
@@ -420,7 +430,7 @@ export function SettingsPanel() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {allThemes.map((th) => {
                 const active = th.id === themeId;
-                const tokens = resolveThemeTokens(th);
+                const tokens = resolveThemeTokens(th, accent);
                 return (
                   <div key={th.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <button
@@ -471,6 +481,63 @@ export function SettingsPanel() {
                 );
               })}
             </div>
+            {/* Couleur d'accent : par-dessus le thème, quel qu'il soit. */}
+            <div style={{ fontSize: 13, color: 'var(--color-on-surface)', margin: '14px 0 8px' }}>{t("settings.accent")}</div>
+            <div role="radiogroup" aria-label={t("settings.accent")} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              {[{ id: "theme", hex: null as string | null }, ...ACCENTS_PROPOSES].map((a, i) => {
+                const choisi = a.hex === accent;
+                const couleur = a.hex ? tokensAccent(a.hex, themeActif.mode)?.["color-primary"] : primaireDuTheme;
+                const nom = t(`settings.accentName.${a.id}`);
+                return (
+                  <Fragment key={a.id}>
+                    <button
+                      role="radio"
+                      aria-checked={choisi}
+                      aria-label={nom}
+                      title={nom}
+                      onClick={() => { window.clearTimeout(apercuRef.current); setAccent(a.hex); }}
+                      onMouseEnter={() => (choisi ? planifierApercu(null) : survolerAccent(a.hex))}
+                      onMouseLeave={() => planifierApercu(null)}
+                      onFocus={() => (choisi ? planifierApercu(null) : survolerAccent(a.hex))}
+                      onBlur={() => planifierApercu(null)}
+                      style={{
+                        width: 28, height: 28, borderRadius: '50%', padding: 0, cursor: 'pointer',
+                        background: couleur,
+                        border: choisi ? '2px solid var(--color-on-surface)' : '1px solid var(--color-outline-variant)',
+                        boxShadow: choisi ? '0 0 0 2px var(--color-surface-container)' : 'none',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'var(--color-on-primary)', fontSize: 12, fontWeight: 700,
+                      }}
+                    >
+                      {choisi ? "✓" : ""}
+                    </button>
+                    {/* Un filet sépare l'accent du thème, le défaut, des pastilles. */}
+                    {i === 0 && <span aria-hidden style={{ width: 1, height: 20, background: 'var(--color-outline-variant)' }} />}
+                  </Fragment>
+                );
+              })}
+              {/* Couleur libre : le sélecteur du système, sous une pastille
+                  arc-en-ciel. Une couleur hors pastilles la montre choisie. */}
+              <label
+                title={t("settings.accentCustom")}
+                style={{
+                  position: 'relative', width: 28, height: 28, borderRadius: '50%', cursor: 'pointer',
+                  background: 'conic-gradient(hsl(0 75% 60%), hsl(60 75% 55%), hsl(120 60% 50%), hsl(180 65% 50%), hsl(240 70% 65%), hsl(300 65% 60%), hsl(360 75% 60%))',
+                  border: accent && !ACCENTS_PROPOSES.some((a) => a.hex === accent)
+                    ? '2px solid var(--color-on-surface)'
+                    : '1px solid var(--color-outline-variant)',
+                }}
+              >
+                <input
+                  type="color"
+                  aria-label={t("settings.accentCustom")}
+                  value={accent ?? primaireDuTheme}
+                  onChange={(e) => setAccent(e.target.value)}
+                  style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
+                />
+              </label>
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--color-outline)', marginTop: 6, lineHeight: 1.45 }}>{t("settings.accentHint")}</div>
             <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
               <button onClick={() => themeFileRef.current?.click()} style={smallBtnStyle}>{t("settings.themeImport")}</button>
               <button onClick={handleThemeExport} style={smallBtnStyle}>{t("settings.themeExport")}</button>

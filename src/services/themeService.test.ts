@@ -119,3 +119,28 @@ describe("previewTheme — aperçu au survol", () => {
     expect(racine.style.colorScheme).toBe(mod.getActiveTheme().mode);
   });
 });
+
+describe("accent — choix et aperçu", () => {
+  it("n'enregistre qu'une vraie couleur, et l'applique par-dessus le thème", async () => {
+    const { useThemeStore } = await import("../stores/useThemeStore");
+    const { tokensAccent } = await import("../themes/accent");
+    const racine = document.documentElement;
+
+    useThemeStore.getState().setAccent("pas une couleur");
+    expect(useThemeStore.getState().accent).toBeNull();
+
+    useThemeStore.getState().setAccent("#7E57C2");
+    expect(useThemeStore.getState().accent).toBe("#7e57c2");
+    mod.applyTheme(mod.getActiveTheme());
+    const attendu = tokensAccent("#7e57c2", mod.getActiveTheme().mode)!;
+    expect(racine.style.getPropertyValue("--color-primary")).toBe(attendu["color-primary"]);
+
+    // Aperçu de la pastille « du thème », puis retour au choix enregistré.
+    mod.previewTheme(null, null);
+    expect(racine.style.getPropertyValue("--color-primary")).toBe(mod.resolveThemeTokens(mod.getActiveTheme())["color-primary"]);
+    mod.previewTheme(null);
+    expect(racine.style.getPropertyValue("--color-primary")).toBe(attendu["color-primary"]);
+
+    useThemeStore.getState().setAccent(null);
+  });
+});

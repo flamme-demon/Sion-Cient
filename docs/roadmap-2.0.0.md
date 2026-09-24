@@ -26,8 +26,9 @@ Document vivant pour la 2.0.0 finale, remis en phase avec le code après
 > 🟡 **Chantier 3 (thèmes)** : tokenisation et garde anti-hex, Dark / Light /
 > AMOLED, application avant le premier rendu, import/export JSON, et depuis
 > le 24/09 **garde de contraste WCAG** (test sur les thèmes livrés,
-> avertissement à l'import) et **aperçu au survol**. Restent l'accent seed et
-> la synchronisation Matrix, deux décisions — voir §3.4.
+> avertissement à l'import), **aperçu au survol** et **couleur d'accent**
+> personnalisée. Restent `outline` de Sion Light et la synchronisation
+> Matrix — voir §3.4.
 >
 > ⏳ **Hors chantiers, avant la 2.0.0** : voir §6 (fonctions retirées avec
 > l'ancien moteur, points de fiabilité).
@@ -488,7 +489,7 @@ de tests — sauf les deux échappatoires documentées, le repli de
 | ✅ 1 | Tokenisation complète (§3.3) + garde anti-hex (`services/themeGuard.test.ts`) | très faible |
 | ✅ 2 | `themeStore` + `applyTheme` + section **Apparence** dans SettingsPanel + « Sion Dark » (actuel) + « AMOLED » | faible |
 | ✅ 3 | « Sion Light » — palette complète claire livrée ; contraste vérifié par test (24/09). Un point à trancher : `outline`, employé 77 fois comme texte secondaire (horodatages, indications), n'atteint que 4,26:1 sur `surface` et 3,45:1 sur le conteneur le plus foncé — assez pour un élément d'interface (3:1), pas pour du texte (4,5:1). Le foncer foncerait aussi les bordures | moyen |
-| 4 | Accent seed (génération de palette type Material You, ~150 l. de HCT simplifié ou vendor `material-color-utilities`) — **à décider** : nouvelle dépendance ou HCT maison | moyen |
+| ✅ 4 | Accent seed (24/09) : `@material/material-color-utilities` (Google, Apache-2.0), schéma « tonal spot » — `themes/accent.ts`. Il ne redéfinit que primary / secondary / tertiary / accent, par-dessus n'importe quel thème, clair ou sombre ; 7 pastilles + couleur libre, aperçu au survol ; chaque pastille est testée contre les seuils de contraste sur les trois thèmes livrés | moyen |
 | 5 | ✅ Import/export JSON (livré avec la phase 2 — thèmes partiels acceptés, `custom-` rétabli au re-import) ; ✅ **aperçu au survol** (24/09) ; ✅ **garde de contraste WCAG** (24/09, `themes/contrast.ts` : test sur les thèmes livrés, avertissement à l'import) — reste, en option : sync Matrix `com.sion.theme` en account data → le thème suit le compte sur tous les appareils | faible |
 
 **Apparence dans SettingsPanel** : grille de vignettes (aperçu 3 couleurs :
@@ -513,8 +514,8 @@ un thème », « réinitialiser ».
 1. 🚧 **Parité du partage natif** (§2.3) — mesurer la fluidité Linux,
    valider Windows côté spectateur, puis retirer le repli JPEG.
 2. ⏳ **Container queries du dock bas** (§1.6) — Members et Transcript.
-3. ⏳ **Thèmes** (§3.4) — `outline` de Sion Light, accent seed, et décision
-   sur la synchronisation Matrix `com.sion.theme`.
+3. ⏳ **Thèmes** (§3.4) — `outline` de Sion Light, et décision sur la
+   synchronisation Matrix `com.sion.theme`.
 
 Android n'est plus une étape de la 2.0.0 : décision du 24/09, voir §6.
 

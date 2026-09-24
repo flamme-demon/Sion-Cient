@@ -1,13 +1,15 @@
 import { THEME_TOKEN_NAMES, type Theme, type ThemeTokenName, type ThemeTokens } from "../themes/types";
 import { BUILTIN_THEMES, SION_DARK, SION_DARK_TOKENS } from "../themes/builtin";
 import { useThemeStore } from "../stores/useThemeStore";
+import { tokensAccent } from "../themes/accent";
 
 /**
  * Fusionne les tokens du thème sur le jeu de base (Sion Dark) : un thème
- * communautaire partiel n'a besoin de redéfinir que ce qu'il change.
+ * communautaire partiel n'a besoin de redéfinir que ce qu'il change. Une
+ * couleur d'accent, si l'utilisateur en a choisi une, passe par-dessus.
  */
-export function resolveThemeTokens(theme: Theme): Record<ThemeTokenName, string> {
-  return { ...SION_DARK_TOKENS, ...theme.tokens };
+export function resolveThemeTokens(theme: Theme, accent: string | null = null): Record<ThemeTokenName, string> {
+  return { ...SION_DARK_TOKENS, ...theme.tokens, ...(accent ? tokensAccent(accent, theme.mode) : null) };
 }
 
 /**
@@ -16,9 +18,9 @@ export function resolveThemeTokens(theme: Theme): Record<ThemeTokenName, string>
  * `data-theme` (crochet CSS futur) et `color-scheme` (pilotage des widgets
  * natifs WebKitGTK : selects, scrollbars).
  */
-export function applyTheme(theme: Theme): void {
+export function applyTheme(theme: Theme, accent: string | null = useThemeStore.getState().accent): void {
   const root = document.documentElement;
-  const tokens = resolveThemeTokens(theme);
+  const tokens = resolveThemeTokens(theme, accent);
   for (const name of THEME_TOKEN_NAMES) {
     root.style.setProperty(`--${name}`, tokens[name]);
   }
@@ -39,9 +41,12 @@ export function getActiveTheme(): Theme {
  * Aperçu d'un thème sans le choisir — survol de sa vignette dans les
  * Réglages. `null` rétablit le thème choisi. Rien n'est enregistré : le
  * prochain changement du store réapplique de toute façon le thème actif.
+ *
+ * `accent` : omis, celui choisi ; `null`, aucun — aperçu de la pastille « du
+ * thème » ; une couleur, aperçu de cette pastille.
  */
-export function previewTheme(theme: Theme | null): void {
-  applyTheme(theme ?? getActiveTheme());
+export function previewTheme(theme: Theme | null, accent?: string | null): void {
+  applyTheme(theme ?? getActiveTheme(), accent === undefined ? useThemeStore.getState().accent : accent);
 }
 
 /**
