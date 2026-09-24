@@ -45,7 +45,19 @@ fn nom_valide(nom: &str) -> Option<&str> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
     let extension = simple.rsplit_once('.')?.1.to_ascii_lowercase();
-    (correct && EXTENSIONS.contains(&extension.as_str())).then_some(simple)
+    (correct && EXTENSIONS.contains(&extension.as_str()) && !nom_reserve_windows(simple))
+        .then_some(simple)
+}
+
+/// `CON.png`, `nul.webp`, `COM1.ogg`… : sous Windows, ces noms désignent des
+/// périphériques, quelle que soit l'extension. Un profil étranger ne doit pas
+/// pouvoir y faire écrire.
+fn nom_reserve_windows(simple: &str) -> bool {
+    let racine = simple.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(racine.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((racine.starts_with("COM") || racine.starts_with("LPT"))
+            && racine.len() == 4
+            && racine.as_bytes()[3].is_ascii_digit())
 }
 
 #[derive(Deserialize)]
@@ -62,34 +74,44 @@ pub struct EntreeProfil {
     taille: u64,
 }
 
+#[derive(Serialize, Debug, PartialEq)]
+pub struct ExportEcrit {
+    taille: u64,
+    /// Fichiers laissés de côté : format inconnu, trop gros, illisible. Le
+    /// manifeste les cite encore ; l'import écarte ce qui manque.
+    ignores: Vec<String>,
+}
+
 #[derive(Serialize, Debug)]
 pub struct ProfilLu {
     manifeste: String,
     fichiers: Vec<EntreeProfil>,
 }
 
-fn ecrire(destination: &Path, manifeste: &str, fichiers: &[FichierAEcrire]) -> Result<u64, String> {
+fn ecrire(destination: &Path, manifeste: &str, fichiers: &[FichierAEcrire]) -> Result<ExportEcrit, String> {
     if manifeste.len() as u64 > MANIFESTE_MAX {
         return Err("manifeste trop volumineux".into());
     }
-    if fichiers.len() > ENTREES_MAX {
-        return Err(format!("plus de {ENTREES_MAX} fichiers"));
-    }
+    // Un fichier qui ne passe pas est laissé de côté, pas fatal : un son
+    // d'événement au format inattendu ne doit pas empêcher d'exporter le
+    // thème et la disposition.
+    let mut ignores = Vec::new();
+    let mut retenus = Vec::new();
     let mut total = 0u64;
     for f in fichiers {
-        if nom_valide(&f.nom).is_none() {
-            return Err(format!("nom de fichier refusé : {}", f.nom));
+        let taille = std::fs::metadata(&f.source).map(|m| m.len()).ok();
+        match taille {
+            Some(t)
+                if nom_valide(&f.nom).is_some()
+                    && t <= FICHIER_MAX
+                    && total + t <= TOTAL_MAX
+                    && retenus.len() < ENTREES_MAX =>
+            {
+                total += t;
+                retenus.push(f);
+            }
+            _ => ignores.push(f.nom.clone()),
         }
-        let taille = std::fs::metadata(&f.source)
-            .map_err(|e| format!("{} : {e}", f.source))?
-            .len();
-        if taille > FICHIER_MAX {
-            return Err(format!("{} dépasse {} Mo", f.source, FICHIER_MAX / 1_048_576));
-        }
-        total += taille;
-    }
-    if total > TOTAL_MAX {
-        return Err(format!("le profil dépasserait {} Mo", TOTAL_MAX / 1_048_576));
     }
 
     // Écrit à côté puis renommé : un export interrompu ne laisse pas un
@@ -105,7 +127,7 @@ fn ecrire(destination: &Path, manifeste: &str, fichiers: &[FichierAEcrire]) -> R
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         zip.start_file(MANIFESTE, texte).map_err(|e| e.to_string())?;
         zip.write_all(manifeste.as_bytes()).map_err(|e| e.to_string())?;
-        for f in fichiers {
+        for f in &retenus {
             zip.start_file(&f.nom, brut).map_err(|e| e.to_string())?;
             let mut source =
                 std::fs::File::open(&f.source).map_err(|e| format!("{} : {e}", f.source))?;
@@ -120,7 +142,10 @@ fn ecrire(destination: &Path, manifeste: &str, fichiers: &[FichierAEcrire]) -> R
         return Err(e);
     }
     std::fs::rename(&partiel, destination).map_err(|e| format!("renommage : {e}"))?;
-    Ok(std::fs::metadata(destination).map(|m| m.len()).unwrap_or(0))
+    Ok(ExportEcrit {
+        taille: std::fs::metadata(destination).map(|m| m.len()).unwrap_or(0),
+        ignores,
+    })
 }
 
 fn lire(chemin: &Path) -> Result<ProfilLu, String> {
@@ -171,6 +196,16 @@ fn lire(chemin: &Path) -> Result<ProfilLu, String> {
 /// Extrait les entrées demandées dans `dossier`, et rend pour chacune le
 /// chemin où elle a été posée.
 fn extraire_vers(chemin: &Path, noms: &[String], dossier: &Path) -> Result<HashMap<String, String>, String> {
+    // Le dossier est propre à cet import : un échec en cours de route le
+    // retire en entier, plutôt que de laisser des fichiers à moitié posés.
+    let resultat = extraire_dans(chemin, noms, dossier);
+    if resultat.is_err() {
+        let _ = std::fs::remove_dir_all(dossier);
+    }
+    resultat
+}
+
+fn extraire_dans(chemin: &Path, noms: &[String], dossier: &Path) -> Result<HashMap<String, String>, String> {
     let fichier = std::fs::File::open(chemin).map_err(|e| format!("ouverture : {e}"))?;
     let mut zip = zip::ZipArchive::new(fichier).map_err(|_| "ce n'est pas un profil Sion".to_string())?;
     std::fs::create_dir_all(dossier).map_err(|e| format!("dossier du profil : {e}"))?;
@@ -205,6 +240,11 @@ fn dossier_profils(app: &tauri::AppHandle<crate::TauriRuntime>) -> Result<PathBu
         .join("profils"))
 }
 
+/// Le fichier choisi dans la boîte d'enregistrement, et lui seul : sans ce
+/// lien, la page aurait pu faire écrire l'archive sur n'importe quel chemin
+/// — `~/.bashrc` compris.
+static DESTINATION: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
 /// Où enregistrer le profil ; `None` si l'utilisateur renonce.
 #[tauri::command]
 pub async fn profil_choisir_destination() -> Option<String> {
@@ -218,6 +258,7 @@ pub async fn profil_choisir_destination() -> Option<String> {
     if !matches!(chemin.extension(), Some(e) if e == "sionprofil") {
         chemin.set_extension("sionprofil");
     }
+    *DESTINATION.lock().unwrap_or_else(|e| e.into_inner()) = Some(chemin.clone());
     Some(chemin.to_string_lossy().into_owned())
 }
 
@@ -232,13 +273,18 @@ pub async fn profil_choisir_source() -> Option<String> {
         .map(|h| h.path().to_string_lossy().into_owned())
 }
 
+/// Écrit le profil à l'endroit que l'utilisateur vient de choisir.
 #[tauri::command]
 pub async fn profil_ecrire(
-    chemin: String,
     manifeste: String,
     fichiers: Vec<FichierAEcrire>,
-) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || ecrire(Path::new(&chemin), &manifeste, &fichiers))
+) -> Result<ExportEcrit, String> {
+    let destination = DESTINATION
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .ok_or("aucune destination choisie")?;
+    tauri::async_runtime::spawn_blocking(move || ecrire(&destination, &manifeste, &fichiers))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -322,6 +368,10 @@ mod tests {
             "fichiers/",
             "autre/a.png",
             "fichiers/a b.png",
+            "fichiers/CON.png",
+            "fichiers/nul.webp",
+            "fichiers/com1.ogg",
+            "fichiers/Lpt9.mp3",
         ] {
             assert_eq!(nom_valide(refuse), None, "{refuse}");
         }
@@ -337,7 +387,7 @@ mod tests {
             nom: "fichiers/fond-chat.webp".into(),
             source: image.to_string_lossy().into_owned(),
         }];
-        ecrire(&profil, r#"{"kind":"sion-profile"}"#, &fichiers).unwrap();
+        assert!(ecrire(&profil, r#"{"kind":"sion-profile"}"#, &fichiers).unwrap().ignores.is_empty());
         assert!(!profil.with_extension("sionprofil.partiel").exists());
 
         let lu = lire(&profil).unwrap();
@@ -382,6 +432,41 @@ mod tests {
         assert!(extraire_vers(&profil, &["fichiers/../../evade.png".into()], &cible).is_err());
         assert!(extraire_vers(&profil, &["fichiers/outil.exe".into()], &cible).is_err());
         assert!(!d.join("evade.png").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn un_fichier_qui_ne_passe_pas_est_ignore_sans_bloquer_l_export() {
+        let d = dossier_essai("ignores");
+        let image = d.join("fond.webp");
+        std::fs::write(&image, b"x").unwrap();
+        let fichiers = vec![
+            FichierAEcrire { nom: "fichiers/fond-chat.webp".into(), source: image.to_string_lossy().into_owned() },
+            // Format que l'archive n'accepte pas : un son d'événement en .mp4.
+            FichierAEcrire { nom: "fichiers/son-join.mp4".into(), source: image.to_string_lossy().into_owned() },
+            // Source disparue.
+            FichierAEcrire { nom: "fichiers/son-leave.ogg".into(), source: d.join("absent.ogg").to_string_lossy().into_owned() },
+        ];
+        let profil = d.join("essai.sionprofil");
+        let ecrit = ecrire(&profil, "{}", &fichiers).unwrap();
+        assert_eq!(ecrit.ignores, vec!["fichiers/son-join.mp4".to_string(), "fichiers/son-leave.ogg".to_string()]);
+        let noms = lire(&profil).unwrap().fichiers.into_iter().map(|f| f.nom).collect::<Vec<_>>();
+        assert_eq!(noms, vec!["fichiers/fond-chat.webp".to_string()]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn une_extraction_ratee_ne_laisse_rien() {
+        let d = dossier_essai("ratee");
+        let image = d.join("fond.webp");
+        std::fs::write(&image, b"x").unwrap();
+        let profil = d.join("essai.sionprofil");
+        let f = vec![FichierAEcrire { nom: "fichiers/a.webp".into(), source: image.to_string_lossy().into_owned() }];
+        ecrire(&profil, "{}", &f).unwrap();
+        let cible = d.join("import");
+        // La première entrée passe, la seconde n'existe pas : tout est retiré.
+        assert!(extraire_vers(&profil, &["fichiers/a.webp".into(), "fichiers/b.webp".into()], &cible).is_err());
+        assert!(!cible.exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

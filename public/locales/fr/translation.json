@@ -841,6 +841,8 @@
     "applied": "Profil appliqué.",
     "error": "Échec : {{message}}",
     "notAProfile": "Ce fichier n'est pas un profil Sion.",
-    "tooRecent": "Ce profil vient d'une version plus récente de Sion."
+    "tooRecent": "Ce profil vient d'une version plus récente de Sion.",
+    "skipped_one": "Un fichier a été laissé de côté (format non pris en charge, trop gros ou introuvable).",
+    "skipped_other": "{{count}} fichiers ont été laissés de côté (format non pris en charge, trop gros ou introuvables)."
   }
 }

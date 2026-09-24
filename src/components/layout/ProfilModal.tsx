@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "../../i18n";
 import {
@@ -41,28 +41,46 @@ export function ProfilModal({ mode, onClose }: Props) {
   const [fini, setFini] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // Les parents passent `onClose` en fonction recréée à chaque rendu : en
+  // dépendre relançait l'effet — donc le sélecteur de fichier — dès qu'un
+  // parent se redessinait, par exemple juste après « Appliquer ».
+  const fermerRef = useRef(onClose);
+  const tRef = useRef(t);
+  useEffect(() => {
+    fermerRef.current = onClose;
+    tRef.current = t;
+  });
+
   // L'import commence par choisir le fichier : renoncer ferme la fenêtre.
   useEffect(() => {
     if (mode !== "import") return;
     let vivant = true;
-    void lireProfil().then((lu) => {
-      if (!vivant) return;
-      if (!lu) {
-        onClose();
-        return;
-      }
+    const echec = (texte: string) => {
       setOccupe(false);
-      if ("error" in lu) {
-        const cle = lu.error === "notAProfile" || lu.error === "tooRecent" ? `profile.${lu.error}` : null;
-        setMessage({ ok: false, text: cle ? t(cle) : t("profile.error", { message: lu.error }) });
-        setFini(true);
-        return;
-      }
-      setProfil(lu.profil);
-      setCases(sectionsPresentes(lu.profil));
-    });
+      setMessage({ ok: false, text: texte });
+      setFini(true);
+    };
+    lireProfil()
+      .then((lu) => {
+        if (!vivant) return;
+        if (!lu) {
+          fermerRef.current();
+          return;
+        }
+        if ("error" in lu) {
+          const cle = lu.error === "notAProfile" || lu.error === "tooRecent" ? `profile.${lu.error}` : null;
+          echec(cle ? tRef.current(cle) : tRef.current("profile.error", { message: lu.error }));
+          return;
+        }
+        setOccupe(false);
+        setProfil(lu.profil);
+        setCases(sectionsPresentes(lu.profil));
+      })
+      // Sans cela, un échec laissait la fenêtre sur « Lecture du profil… »,
+      // Annuler désactivé : plus aucun moyen d'en sortir.
+      .catch((err) => { if (vivant) echec(tRef.current("profile.error", { message: String(err) })); });
     return () => { vivant = false; };
-  }, [mode, onClose, t]);
+  }, [mode]);
 
   const nomAccent = (hex: string | null) => {
     if (!hex) return t("profile.accentOwn");
@@ -107,7 +125,11 @@ export function ProfilModal({ mode, onClose }: Props) {
           return;
         }
         const mo = (r.taille / 1_048_576).toLocaleString(i18n.language, { maximumFractionDigits: 1 });
-        setMessage({ ok: true, text: t("profile.exported", { size: `${mo} Mo` }) });
+        const texte = t("profile.exported", { size: `${mo} Mo` });
+        setMessage({
+          ok: true,
+          text: r.ignores.length > 0 ? `${texte} ${t("profile.skipped", { count: r.ignores.length })}` : texte,
+        });
       } else if (profil) {
         await appliquerProfil(profil, cases);
         setMessage({ ok: true, text: t("profile.applied") });

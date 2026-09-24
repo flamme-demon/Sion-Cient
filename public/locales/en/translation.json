@@ -841,6 +841,8 @@
     "applied": "Profile applied.",
     "error": "Failed: {{message}}",
     "notAProfile": "This file is not a Sion profile.",
-    "tooRecent": "This profile comes from a newer version of Sion."
+    "tooRecent": "This profile comes from a newer version of Sion.",
+    "skipped_one": "One file was left out (unsupported format, too large or missing).",
+    "skipped_other": "{{count}} files were left out (unsupported format, too large or missing)."
   }
 }

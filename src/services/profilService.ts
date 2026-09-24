@@ -113,14 +113,18 @@ export function composerProfil(sections: SectionsProfil): { manifeste: string; f
   return { manifeste: JSON.stringify(profil, null, 2), fichiers };
 }
 
-/** Choisit où enregistrer, puis écrit. `null` si l'utilisateur renonce ;
- *  sinon le chemin écrit et sa taille. */
-export async function exporterProfil(sections: SectionsProfil): Promise<{ chemin: string; taille: number } | null> {
+/** Choisit où enregistrer, puis écrit — là, et nulle part ailleurs : Rust
+ *  n'écrit qu'à l'endroit choisi dans sa boîte de dialogue. `null` si
+ *  l'utilisateur renonce ; sinon le chemin, la taille, et les fichiers
+ *  laissés de côté (format inconnu, trop gros, disparu). */
+export async function exporterProfil(
+  sections: SectionsProfil,
+): Promise<{ chemin: string; taille: number; ignores: string[] } | null> {
   const chemin = await invoke<string | null>("profil_choisir_destination");
   if (!chemin) return null;
   const { manifeste, fichiers } = composerProfil(sections);
-  const taille = await invoke<number>("profil_ecrire", { chemin, manifeste, fichiers });
-  return { chemin, taille };
+  const ecrit = await invoke<{ taille: number; ignores: string[] }>("profil_ecrire", { manifeste, fichiers });
+  return { chemin, ...ecrit };
 }
 
 // ---------------------------------------------------------------- import --
@@ -203,7 +207,7 @@ export function analyserManifeste(
         file: f.file,
         opacity: nombre(f.opacity, 0, 1) ?? 0.55,
         ...(f.mode === "veil" || f.mode === "blur" ? { mode: f.mode } : {}),
-        ...(typeof f.anchor === "string" && f.anchor in ANCRAGES ? { anchor: f.anchor as BgAnchor } : {}),
+        ...(typeof f.anchor === "string" && Object.hasOwn(ANCRAGES, f.anchor) ? { anchor: f.anchor as BgAnchor } : {}),
       };
     }
     profil.fonds = fonds;
@@ -213,7 +217,9 @@ export function analyserManifeste(
     const sons: Partial<Record<VoiceCue, SonLu>> = {};
     for (const [cue, v] of Object.entries(brut.voiceSounds as Record<string, unknown>)) {
       const s = v as Partial<SonLu> | null;
-      if (!(cue in CUES) || !s || typeof s.file !== "string" || !presents.has(s.file)) continue;
+      // `hasOwn`, pas `in` : `toString` ou `__proto__` passeraient pour des
+      // événements, hérités de `Object.prototype`.
+      if (!Object.hasOwn(CUES, cue) || !s || typeof s.file !== "string" || !presents.has(s.file)) continue;
       const debut = nombre(s.start, 0, 3600);
       const fin = nombre(s.end, 0, 3600);
       const gain = nombre(s.gain, 0, 4);
@@ -228,9 +234,9 @@ export function analyserManifeste(
 /** Choisit un profil et le lit, sans rien appliquer. `null` si
  *  l'utilisateur renonce. */
 export async function lireProfil(): Promise<{ profil: ProfilLu } | { error: ErreurProfil | string } | null> {
-  const chemin = await invoke<string | null>("profil_choisir_source");
-  if (!chemin) return null;
   try {
+    const chemin = await invoke<string | null>("profil_choisir_source");
+    if (!chemin) return null;
     const lu = await invoke<{ manifeste: string; fichiers: { nom: string; taille: number }[] }>("profil_lire", { chemin });
     return analyserManifeste(chemin, lu.manifeste, new Set(lu.fichiers.map((f) => f.nom)));
   } catch (err) {
