@@ -77,6 +77,11 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
   const surfaceRef = useRef<HTMLCanvasElement>(null);
   const cadreRef = useRef<HTMLDivElement>(null);
   const [pleinEcran, setPleinEcran] = useState(false);
+  // Plein écran « de fenêtre » : le repli quand le navigateur refuse le vrai
+  // (voir `basculerPleinEcran`). La fenêtre de Sion passe en plein écran et le
+  // cadre s'étale dessus.
+  const [pleinFenetre, setPleinFenetre] = useState(false);
+  const pleinFenetreRef = useRef(false);
   const [etat, setEtat] = useState<EtatLecteurVideo | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   // Avancement du rapatriement, avant que la moindre image existe.
@@ -185,7 +190,7 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     );
     const echelle = boite.width / largeurMedia;
     const densite = window.devicePixelRatio || 1;
-    const plein = document.fullscreenElement === cadreRef.current;
+    const plein = document.fullscreenElement === cadreRef.current || pleinFenetreRef.current;
     const physique = { l: Math.round(boite.width * densite), h: Math.round(boite.height * densite) };
     const cle = `${physique.l}x${physique.h}`;
     // Toute nouvelle mesure annule l'envoi en attente — y compris celle qui
@@ -217,6 +222,23 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
       .then(setZones)
       .catch(() => { /* lecture terminée */ });
   }, [largeurMedia, hauteurMedia]);
+
+  /** Remesure sur plusieurs échéances : la géométrie d'un passage en plein
+   *  écran change en plusieurs reflows, pas en une image (voir plus bas). */
+  const remesurer = useCallback(() => {
+    for (const delai of [0, 120, 350, 700]) {
+      window.setTimeout(() => mesurer(true), delai);
+    }
+  }, [mesurer]);
+
+  const pleinEcranFenetre = useCallback((plein: boolean) => {
+    pleinFenetreRef.current = plein;
+    setPleinFenetre(plein);
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().setFullscreen(plein))
+      .catch((err) => console.warn("[Sion][lecteur] plein écran de la fenêtre impossible", err));
+    remesurer();
+  }, [remesurer]);
 
   useEffect(() => {
     mesurer();
@@ -269,7 +291,7 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     io.observe(place);
     return () => io.disconnect();
   }, []);
-  const flottant = horsChamp && actif && !pleinEcran;
+  const flottant = horsChamp && actif && !pleinEcran && !pleinFenetre;
   // Coin bas droit de la liste des messages, recalculé si la fenêtre change.
   const [coin, setCoin] = useState({ droite: MINI_MARGE, bas: MINI_MARGE, largeurMax: MINI_LARGEUR });
   useEffect(() => {
@@ -305,7 +327,11 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
       // n'était jamais écrit (23/09).
       const cible = e.target as HTMLElement | null;
       if (cible && (cible.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(cible.tagName))) return;
-      if (e.key === "Escape") onClose();
+      // Échap sort d'abord du plein écran de fenêtre, comme il sort du vrai.
+      if (e.key === "Escape") {
+        if (pleinFenetreRef.current) pleinEcranFenetre(false);
+        else onClose();
+      }
       if (e.key === " " && actif) {
         e.preventDefault();
         basculerPause();
@@ -313,7 +339,7 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     };
     window.addEventListener("keydown", touche);
     return () => window.removeEventListener("keydown", touche);
-  }, [onClose, actif, basculerPause]);
+  }, [onClose, actif, basculerPause, pleinEcranFenetre]);
 
   /**
    * Convertit une abscisse de la page en fraction d'une zone du média.
@@ -386,14 +412,28 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
   const basculerPleinEcran = () => {
     const cadre = cadreRef.current;
     if (!cadre) return;
-    if (document.fullscreenElement) {
+    if (pleinFenetreRef.current) {
+      pleinEcranFenetre(false);
+    } else if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => { /* déjà sorti */ });
     } else {
-      void cadre.requestFullscreen().catch((err) => {
-        console.warn("[Sion][lecteur] plein écran refusé", err);
-      });
+      // Le navigateur n'accorde le plein écran qu'à un vrai geste de
+      // l'utilisateur. Sous Windows, les clics sur la vidéo arrivent à la
+      // page REJOUÉS depuis la fenêtre vidéo native, qui capte la souris : le
+      // plein écran était refusé (24/09). La fenêtre de Sion prend alors le
+      // relais.
+      void cadre.requestFullscreen().catch(() => pleinEcranFenetre(true));
     }
   };
+
+  // Lecteur fermé en plein écran de fenêtre : la fenêtre revient à sa taille.
+  useEffect(() => () => {
+    if (pleinFenetreRef.current) {
+      void import("@tauri-apps/api/window")
+        .then(({ getCurrentWindow }) => getCurrentWindow().setFullscreen(false))
+        .catch(() => { /* fenêtre fermée */ });
+    }
+  }, []);
 
   // Le plein écran porte sur le CADRE, jamais sur le canvas : mis en plein
   // écran, un élément se voit imposer toute la surface et perd son ratio. Le
@@ -477,14 +517,19 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
           display: 'flex',
           // Aligné à gauche hors plein écran, comme l'affiche qu'il remplace :
           // centré, il semblait se déplacer au démarrage.
-          justifyContent: pleinEcran ? 'center' : 'flex-start',
+          justifyContent: pleinEcran || pleinFenetre ? 'center' : 'flex-start',
           alignItems: 'center',
           // Avant la première image, on occupe la place de l'affiche.
           ...(etat ? {} : { aspectRatio: ratio, maxHeight: hauteurMax, alignSelf: 'flex-start' }),
           // En plein écran, le cadre occupe l'écran et c'est lui qui donne sa
           // hauteur au canvas, qui garde son ratio.
           ...(pleinEcran ? { background: 'var(--color-surface-container-lowest)', height: '100%' } : {}),
-          ["--sion-share-max-height" as string]: pleinEcran ? '96vh' : `${hauteurMax}px`,
+          // Plein écran de fenêtre : le cadre recouvre toute la fenêtre, déjà
+          // passée en plein écran, au-dessus de tout le reste de la page.
+          ...(pleinFenetre
+            ? { position: 'fixed', inset: 0, width: '100vw', height: '100vh', zIndex: 1500, background: 'var(--color-surface-container-lowest)' }
+            : {}),
+          ["--sion-share-max-height" as string]: pleinEcran || pleinFenetre ? '96vh' : `${hauteurMax}px`,
           ...(flottant
             ? {
                 position: 'fixed',

@@ -910,6 +910,19 @@ struct NativeCursorPayload {
     n: Option<String>,
 }
 
+#[cfg(all(feature = "native-voice", not(target_os = "android")))]
+/// Surface propre à cette machine — le lecteur vidéo (`sion:lecteur`) —, et
+/// non le partage d'un participant.
+///
+/// Son identifiant est le même partout : un curseur publié vers lui
+/// s'affichait sur le lecteur de TOUS les autres. Sous Windows, où la fenêtre
+/// vidéo capte la souris, survoler sa propre vidéo faisait apparaître son
+/// pointeur, nommé, chez chacun (24/09). Rien n'est donc publié vers une
+/// telle cible, et rien de ce qui la vise n'est affiché.
+fn cible_locale(cible: &str) -> bool {
+    cible.starts_with("sion:")
+}
+
 /// Publie NOTRE position de curseur, depuis le Rust, sans passer par le front.
 ///
 /// La surface vidéo native recouvre la WebView2 : c'est elle qui reçoit la
@@ -928,6 +941,9 @@ pub fn publier_curseur_local(
     x: f32,
     y: f32,
 ) {
+    if cible_locale(cible) {
+        return;
+    }
     let identity = manager()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -981,6 +997,9 @@ pub fn publier_clic_local(
     x: f32,
     y: f32,
 ) {
+    if cible_locale(cible) {
+        return;
+    }
     let identity = manager()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1077,6 +1096,11 @@ fn forward_cursor_to_viewer_surface(topic: Option<&str>, payload_b64: &str, send
     let Some(target_identity) = payload.t.as_deref() else {
         return;
     };
+    // Un client antérieur au 24/09 publie encore vers `sion:lecteur` : ce
+    // n'est le partage de personne, c'est notre propre lecteur.
+    if cible_locale(target_identity) {
+        return;
+    }
     // Cible inconnue de nos surfaces affichées : jeter silencieusement (à
     // 60 Hz et plusieurs partages, c'est le cas le plus fréquent). Un
     // ensemble VIDE (aucun rectangle publié : transition React) garde le

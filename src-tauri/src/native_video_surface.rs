@@ -3113,13 +3113,14 @@ mod imp {
         DeleteObject, SelectObject, SetWindowRgn, HRGN, RGN_DIFF,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
         RegisterClassExW, SetWindowLongPtrW, SetWindowPos, CREATESTRUCTW, GWLP_USERDATA,
         HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
         SWP_SHOWWINDOW, WINDOW_EX_STYLE, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY,
-        WM_LBUTTONDOWN, WM_PAINT, WNDCLASSEXW, WNDCLASS_STYLES, WS_CHILD, WS_CLIPSIBLINGS,
-        WS_VISIBLE,
+        WM_LBUTTONDOWN, WM_PAINT, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS,
+        WS_VISIBLE, CS_DBLCLKS, WM_CAPTURECHANGED, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE,
     };
     use windows_core::w;
 
@@ -3518,7 +3519,10 @@ mod imp {
                 let module = unsafe { GetModuleHandleW(None) }.map_err(|err| err.to_string())?;
                 let class = WNDCLASSEXW {
                     cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                    style: WNDCLASS_STYLES::default(),
+                    // Double-clic : sans ce style, Windows envoie deux appuis
+                    // simples, et le double-clic du lecteur (plein écran) ne
+                    // pouvait pas être rejoué dans la page.
+                    style: CS_DBLCLKS,
                     lpfnWndProc: Some(surface_window_proc),
                     cbClsExtra: 0,
                     cbWndExtra: 0,
@@ -3812,8 +3816,44 @@ mod imp {
             // Clic : publié comme onde chez le partageur. Le calque DOM s'en
             // chargeait ; notre fenêtre recouvre le canvas et capte désormais
             // ces clics, donc c'est à nous de les transmettre (18/09).
-            WM_LBUTTONDOWN => {
+            //
+            // Et rejoué dans la page. Cette fenêtre capte TOUTE la souris
+            // au-dessus de la vidéo : les boutons de la page posés dessous —
+            // ceux du lecteur vidéo, ceux d'un partage — ne recevaient plus
+            // rien, et le lecteur ne répondait à aucun clic sous Windows
+            // (24/09). La souris est capturée tant que le bouton reste appuyé,
+            // pour qu'un glissement sur la barre de lecture la suive hors de
+            // la fenêtre.
+            WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                 publier_clic(hwnd, lparam);
+                enfoncees().lock().unwrap_or_else(|e| e.into_inner()).insert(hwnd.0 as isize);
+                let _ = SetCapture(hwnd);
+                let genre = if message == WM_LBUTTONDBLCLK { "dblclick" } else { "down" };
+                rejouer_dans_la_page(hwnd, genre, lparam);
+                return LRESULT(0);
+            }
+            WM_MOUSEMOVE => {
+                if enfoncees().lock().unwrap_or_else(|e| e.into_inner()).contains(&(hwnd.0 as isize)) {
+                    rejouer_dans_la_page(hwnd, "move", lparam);
+                }
+                return LRESULT(0);
+            }
+            WM_LBUTTONUP => {
+                let etait = enfoncees().lock().unwrap_or_else(|e| e.into_inner()).remove(&(hwnd.0 as isize));
+                if etait {
+                    let _ = ReleaseCapture();
+                    rejouer_dans_la_page(hwnd, "up", lparam);
+                }
+                return LRESULT(0);
+            }
+            // Capture perdue en plein glissement — autre fenêtre, Alt+Tab :
+            // la page doit voir le bouton relâché, sinon le glissement ne se
+            // termine jamais.
+            WM_CAPTURECHANGED => {
+                let etait = enfoncees().lock().unwrap_or_else(|e| e.into_inner()).remove(&(hwnd.0 as isize));
+                if etait {
+                    rejouer_dans_la_page(hwnd, "up", LPARAM(-1));
+                }
                 return LRESULT(0);
             }
             // `HTTRANSPARENT` était renvoyé ici pour laisser la souris
@@ -3950,6 +3990,51 @@ mod imp {
     /// Les coordonnées sont normalisées sur l'image, pas sur la fenêtre : les
     /// bandes noires du letterbox n'en font pas partie.
     /// Transmet un clic, normalisé sur l'image comme les positions.
+    /// Fenêtres dont le bouton gauche est appuyé : un relâchement ne se
+    /// rejoue que s'il a été précédé d'un appui chez nous.
+    fn enfoncees() -> &'static Mutex<HashSet<isize>> {
+        static ENFONCEES: OnceLock<Mutex<HashSet<isize>>> = OnceLock::new();
+        ENFONCEES.get_or_init(|| Mutex::new(HashSet::new()))
+    }
+
+    /// Envoie à la page un geste reçu par la fenêtre vidéo, en pixels CSS de
+    /// la vue — le repère des rectangles publiés par le front. La page le
+    /// rejoue sur l'élément qu'il vise (`voiceNativeService`).
+    ///
+    /// `LPARAM(-1)` : pas de position (capture perdue) ; la dernière connue
+    /// est reprise.
+    unsafe fn rejouer_dans_la_page(hwnd: HWND, genre: &str, lparam: LPARAM) {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
+
+        static DERNIERE: Mutex<(f64, f64)> = Mutex::new((0.0, 0.0));
+        let (x, y) = if lparam.0 == -1 {
+            *DERNIERE.lock().unwrap_or_else(|e| e.into_inner())
+        } else {
+            let brut = lparam.0 as u32;
+            let mut point = POINT {
+                x: (brut & 0xFFFF) as i16 as i32,
+                y: ((brut >> 16) & 0xFFFF) as i16 as i32,
+            };
+            // Coordonnées du client de la fenêtre vidéo → client de la
+            // fenêtre principale, où la WebView occupe tout l'espace.
+            let parent = HWND(PARENT.load(Ordering::Acquire) as _);
+            if !ClientToScreen(hwnd, &mut point).as_bool() || !ScreenToClient(parent, &mut point).as_bool() {
+                return;
+            }
+            let echelle = output_scale();
+            let position = (point.x as f64 / echelle, point.y as f64 / echelle);
+            *DERNIERE.lock().unwrap_or_else(|e| e.into_inner()) = position;
+            position
+        };
+        if let Some(app) = APP.get() {
+            let _ = app.emit(
+                "surface-native-souris",
+                serde_json::json!({ "genre": genre, "x": x, "y": y }),
+            );
+        }
+    }
+
     unsafe fn publier_clic(hwnd: HWND, lparam: LPARAM) {
         let brut = lparam.0 as u32;
         let px = (brut & 0xFFFF) as i16 as i32;

@@ -493,6 +493,88 @@ function ensureNativeSurfaceSizeListener(): Promise<void> {
   return nativeSurfaceSizeListenerPromise;
 }
 
+/** Geste de souris reçu par la fenêtre vidéo native de Windows. */
+interface GesteSurface {
+  genre: "down" | "dblclick" | "move" | "up";
+  x: number;
+  y: number;
+}
+
+let rejeuSourisPromise: Promise<void> | null = null;
+
+/**
+ * Rejoue dans la page les gestes que la fenêtre vidéo de Windows a captés.
+ *
+ * Sous Windows, la vidéo est une fenêtre native posée sur la WebView2, qui
+ * vit dans un autre processus : aucune souris ne la traverse
+ * (`HTTRANSPARENT` n'agit qu'entre fenêtres d'un même fil). Les boutons de la
+ * page posés sous la vidéo — lecteur, partage — ne recevaient donc rien
+ * (24/09). Rust renvoie chaque geste ; on le rejoue sur l'élément visé, dans
+ * l'ordre d'un vrai clic : `mousedown`, `mouseup`, puis `click` sur l'ancêtre
+ * commun, et `dblclick` au second clic d'un double-clic. Linux n'en a pas
+ * besoin : sa surface laisse passer la souris.
+ */
+function ensureRejeuSouris(): Promise<void> {
+  if (!rejeuSourisPromise) {
+    let enfonce: Element | null = null;
+    let double = false;
+    const envoyer = (type: string, x: number, y: number, cible: EventTarget) => {
+      const boutons = type === "mousedown" || type === "mousemove" ? 1 : 0;
+      cible.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        buttons: boutons,
+        detail: type === "dblclick" || double ? 2 : 1,
+        view: window,
+      }));
+    };
+    const ancetreCommun = (a: Element, b: Element): Element => {
+      for (let e: Element | null = a; e; e = e.parentElement) {
+        if (e.contains(b)) return e;
+      }
+      return document.documentElement;
+    };
+    rejeuSourisPromise = import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        await listen<GesteSurface>("surface-native-souris", ({ payload: { genre, x, y } }) => {
+          const sous = document.elementFromPoint(x, y);
+          switch (genre) {
+            case "down":
+            case "dblclick":
+              if (!sous) return;
+              enfonce = sous;
+              double = genre === "dblclick";
+              envoyer("mousedown", x, y, sous);
+              break;
+            case "move":
+              envoyer("mousemove", x, y, sous ?? document);
+              break;
+            case "up": {
+              envoyer("mouseup", x, y, sous ?? document);
+              if (enfonce && sous) {
+                const cible = ancetreCommun(enfonce, sous);
+                envoyer("click", x, y, cible);
+                if (double) envoyer("dblclick", x, y, cible);
+              }
+              enfonce = null;
+              double = false;
+              break;
+            }
+          }
+        });
+      })
+      .catch((error) => {
+        rejeuSourisPromise = null;
+        throw error;
+      });
+  }
+  return rejeuSourisPromise;
+}
+
 /** Le rectangle réellement visible d'un élément.
  *
  *  getBoundingClientRect() ignore le rognage des ancêtres. Une surface
@@ -778,6 +860,7 @@ export async function registerNativeVideoSurface(
   // publiée à Rust. Installer l'écouteur avant cette publication évite de
   // rater l'unique événement d'un partage dont la résolution reste fixe.
   await ensureNativeSurfaceSizeListener();
+  void ensureRejeuSouris().catch(() => { /* hors Tauri */ });
   const id = `native-video-${++nativeSurfaceSequence}`;
   // Marque l'élément comme placeholder de surface native : son backing-store
   // ne porte aucune résolution, les calculs de letterbox doivent le savoir.
