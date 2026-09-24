@@ -176,9 +176,9 @@ export interface PanelBackgroundCfg {
   opacity: number;
   mode?: "veil" | "blur";
   anchor?: BgAnchor;
-  /** Fond animé : le chemin désigne une vidéo transcodée par
-   *  `prepare_background_video`, rendue par un `<video>` et non par une règle
-   *  CSS — une feuille de style ne sait pas afficher de vidéo en fond. */
+  /** Obsolète, conservé pour les états déjà enregistrés. Un fond animé n'est
+   *  plus une vidéo : `prepare_background_video` en tire un WebP animé, donc
+   *  une image, qui passe par le même chemin CSS que les fonds fixes. */
   video?: boolean;
 }
 
