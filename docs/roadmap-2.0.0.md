@@ -10,8 +10,9 @@ Document vivant pour la 2.0.0 finale, remis en phase avec le code après
 > droit, dock à **trois zones** (haut, droite, bas) avec onglets, glisser-
 > déposer, cartes flottantes (deux au plus), presets Chat / Voix / Streaming,
 > **mode édition** de la disposition (Ctrl+Maj+L ou menu « Dispositions »),
-> fonds d'image par panneau, et depuis le 24/09 **export/import JSON d'une
-> disposition** (`services/layoutFile.ts`, validé champ par champ).
+> fonds d'image par panneau, et depuis le 24/09 les **profils** : disposition,
+> thème et accent, fonds et sons d'événements dans un fichier `.sionprofil`,
+> une case par section (`profilService.ts`, `profil.rs`).
 >
 > 🟡 **Chantier 2 (partage et lecteur natifs)** : surface native par défaut
 > sous Linux (GtkGLArea rendu à la demande, agrandissement bicubique et pose
@@ -42,7 +43,7 @@ Document vivant pour la 2.0.0 finale, remis en phase avec le code après
 
 | Sujet | Constat | Fichier |
 |---|---|---|
-| Layout | store v5 migré, sidebar trois états et deux côtés, dock haut/droite/bas, onglets, cartes flottantes, presets, mode édition, export/import JSON | `useLayoutStore.ts`, `DockZone.tsx`, `FloatingPanels.tsx`, `layoutFile.ts` |
+| Layout | store v5 migré, sidebar trois états et deux côtés, dock haut/droite/bas, onglets, cartes flottantes, presets, mode édition, profils exportables | `useLayoutStore.ts`, `DockZone.tsx`, `FloatingPanels.tsx`, `profilService.ts` |
 | Partage natif | Linux : I420 → BGRA → texture d'un `GtkGLArea` rendu à la demande (bicubique, pose au pixel près) ; sous-surface EGL en opt-in ; Windows : I420 → BGRA → HWND/GDI, agrandi par libyuv. Surface percée sous les menus. Opt-out diagnostic `SION_DISABLE_NATIVE_VIDEO_SURFACE=1` | `native_video_surface.rs`, `voice_engine.rs`, `voiceNativeService.ts` |
 | Lecteur vidéo du fil | ffmpeg en sous-processus → plans I420 → même surface native ; contrôles incrustés en Rust, mini-lecteur, ffmpeg livré | `lecteur_video.rs`, `incrustation_lecteur.rs`, `NativeVideoPlayer.tsx` |
 | PIP système | vraie fenêtre OS winit + softbuffer, always-on-top, redimensionnable, persistée et alimentée directement en BGRA | `src-tauri/src/pip_window.rs` |
@@ -233,9 +234,14 @@ le dock bas multi-onglets devient central.
    position/taille persistées) — même primitive que la carte PIP, plafond de
    2 cartes.
 4. ✅ Mode édition (Ctrl+Maj+L, ou menu « Dispositions ») et, depuis le
-   24/09, **export/import** d'une disposition en JSON (`layoutFile.ts` : tailles
-   bornées, panneaux inconnus écartés, chaque panneau placé une seule fois ;
-   les fonds d'image, chemins propres à une machine, ne voyagent pas).
+   24/09, les **profils Sion** (`.sionprofil`, une archive zip) : disposition,
+   thème et accent, fonds de panneaux et sons d'événements, une case par
+   section à l'export (sons décochés par défaut) comme à l'import. Chaque
+   section passe par le contrôle de son import isolé (`layoutFile.ts`,
+   `parseThemeFile`, bornes des fonds et des sons) ; côté Rust, un nom
+   d'entrée ne sert jamais de chemin, tailles et nombre d'entrées sont
+   plafonnés. Les fichiers importés vont sous `profils/` du dossier de
+   données, et ceux que plus rien ne cite sont retirés à l'import suivant.
 5. Reste : finitions container queries au fil des panneaux — aucune n'est
    encore posée (`@container` absent du code). Priorité : Members et
    Transcript en **dock bas** (rangée d'avatars, largeur de lecture). À valider

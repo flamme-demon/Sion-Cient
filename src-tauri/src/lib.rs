@@ -40,6 +40,8 @@ mod cue_playback;
 mod incrustation_lecteur;
 #[cfg(not(target_os = "android"))]
 mod meme_pop;
+#[cfg(not(target_os = "android"))]
+mod profil;
 mod lecteur_audio;
 mod lecteur_video;
 mod media_server;
@@ -3611,6 +3613,12 @@ pub fn run() {
         meme_pop::memeboard_preparer,
         meme_pop::memeboard_analyser,
         meme_pop::memeboard_image,
+        profil::profil_choisir_destination,
+        profil::profil_choisir_source,
+        profil::profil_ecrire,
+        profil::profil_lire,
+        profil::profil_extraire,
+        profil::profil_nettoyer,
         cursor_overlay::cursor_overlay_open,
         cursor_overlay::cursor_overlay_close,
         native_video_surface::native_video_surface_available,

@@ -84,6 +84,9 @@ keyring = "3"
 # Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
 # les images dans `clipboardData.items`, contrairement à CEF/Chromium.
 arboard = { version = "3", features = ["wayland-data-control"] }
+# Profils exportés (`.sionprofil`) : une archive zip. Sans les fonctions par
+# défaut — bzip2 et zstd tirent des bibliothèques C —, `deflate` suffit.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # JPEG (partage d'écran natif) + PNG (image du presse-papiers).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # Persists window position/size/maximised/fullscreen state across launches

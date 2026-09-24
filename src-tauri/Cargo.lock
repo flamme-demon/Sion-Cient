@@ -5925,6 +5925,7 @@ dependencies = [
  "wl-clipboard-rs",
  "x11rb",
  "xkeysym",
+ "zip",
 ]
 
 [[package]]

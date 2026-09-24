@@ -19,6 +19,7 @@ import { BUILTIN_THEMES } from "../../themes/builtin";
 import { getActiveTheme, parseThemeFile, previewTheme, themeToJson, resolveThemeTokens } from "../../services/themeService";
 import { defautsDeContraste } from "../../themes/contrast";
 import { ACCENTS_PROPOSES, tokensAccent } from "../../themes/accent";
+import { ProfilModal } from "./ProfilModal";
 import type { Theme } from "../../themes/types";
 
 
@@ -43,6 +44,7 @@ export function SettingsPanel() {
   const upsertCustomTheme = useThemeStore((s) => s.upsertCustomTheme);
   const removeCustomTheme = useThemeStore((s) => s.removeCustomTheme);
   const accent = useThemeStore((s) => s.accent);
+  const [profilModal, setProfilModal] = useState<"export" | "import" | null>(null);
   const setAccent = useThemeStore((s) => s.setAccent);
   const themeFileRef = useRef<HTMLInputElement>(null);
   const [themeMsg, setThemeMsg] = useState<{ ok: boolean; text: string; avertissement?: boolean } | null>(null);
@@ -547,6 +549,16 @@ export function SettingsPanel() {
               <div style={{ fontSize: 11, marginTop: 6, color: themeMsg.avertissement ? 'var(--color-warning)' : themeMsg.ok ? 'var(--color-green)' : 'var(--color-error)' }}>{themeMsg.text}</div>
             )}
             <input ref={themeFileRef} type="file" accept="application/json,.json" onChange={handleThemeImport} style={{ display: 'none' }} />
+          </div>
+          {/* Profil : disposition, thème, fonds et sons dans un seul fichier. */}
+          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-on-surface)', marginBottom: 6 }}>{t("profile.title")}</div>
+            <div style={{ fontSize: 11, color: 'var(--color-outline)', lineHeight: 1.45 }}>{t("profile.hint")}</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button onClick={() => setProfilModal("export")} style={smallBtnStyle}>{t("profile.exportButton")}</button>
+              <button onClick={() => setProfilModal("import")} style={smallBtnStyle}>{t("profile.importButton")}</button>
+            </div>
+            {profilModal && <ProfilModal mode={profilModal} onClose={() => setProfilModal(null)} />}
           </div>
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ marginBottom: 14 }}>

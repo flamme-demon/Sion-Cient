@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { LayoutIcon } from "../icons";
 import { applyLayoutPreset, type LayoutPresetId } from "../../services/layoutPresets";
-import { applyLayout, layoutToJson, parseLayoutFile } from "../../services/layoutFile";
 import { useLayoutStore } from "../../stores/useLayoutStore";
+import { ProfilModal } from "./ProfilModal";
 
 /**
  * Menu « Dispositions » (roadmap §1.4) : trois présets qui remettent d'aplomb
@@ -16,49 +16,12 @@ export function LayoutPresetsMenu() {
   const [open, setOpen] = useState(false);
   const sidebarSide = useLayoutStore((s) => s.sidebarSide);
   const ref = useRef<HTMLDivElement>(null);
-  const fichierRef = useRef<HTMLInputElement>(null);
-  // Retour de l'export ou de l'import, affiché au pied du menu, qui reste
-  // ouvert pour qu'on le lise.
-  const [statut, setStatut] = useState<{ ok: boolean; text: string } | null>(null);
-  const basculer = (ouvert: boolean) => {
-    setOpen(ouvert);
-    setStatut(null);
-  };
-  const choisirFichier = () => fichierRef.current?.click();
-
-  // Même mécanique que l'export d'un thème : WebKitGTK n'expose pas toujours
-  // navigator.clipboard, le textarea + execCommand est le plus compatible.
-  const exporter = () => {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = layoutToJson();
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      setStatut({ ok, text: ok ? t("layout.layoutCopied") : t("layout.layoutCopyFailed") });
-    } catch {
-      setStatut({ ok: false, text: t("layout.layoutCopyFailed") });
-    }
-  };
-
-  const importer = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fichier = e.target.files?.[0];
-    if (fichierRef.current) fichierRef.current.value = "";
-    if (!fichier) return;
-    try {
-      const lu = parseLayoutFile(await fichier.text());
-      if ("error" in lu) {
-        setStatut({ ok: false, text: `${t("layout.layoutErrInvalid")} (${lu.error})` });
-        return;
-      }
-      applyLayout(lu.disposition);
-      setStatut({ ok: true, text: t("layout.layoutImported") });
-    } catch {
-      setStatut({ ok: false, text: t("layout.layoutErrInvalid") });
-    }
+  // Profil (disposition, thème, fonds, sons) : sa fenêtre survit à la
+  // fermeture du menu qui l'a ouverte.
+  const [profil, setProfil] = useState<"export" | "import" | null>(null);
+  const ouvrirProfil = (mode: "export" | "import") => {
+    setOpen(false);
+    setProfil(mode);
   };
 
   // Fermeture au clic extérieur (le menu vit dans le header, sans overlay :
@@ -66,7 +29,7 @@ export function LayoutPresetsMenu() {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) basculer(false);
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
     };
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
@@ -93,7 +56,7 @@ export function LayoutPresetsMenu() {
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
-        onClick={() => basculer(!open)}
+        onClick={() => setOpen((o) => !o)}
         style={buttonStyle}
         title={t("layout.presets")}
         aria-haspopup="menu"
@@ -170,13 +133,13 @@ export function LayoutPresetsMenu() {
           </button>
           <div style={{ height: 1, background: 'var(--color-outline-variant)', margin: '4px 4px' }} />
           {[
-            { cle: "export", label: t("layout.exportLayout"), hint: t("layout.exportLayoutHint") },
-            { cle: "import", label: t("layout.importLayout"), hint: t("layout.importLayoutHint") },
+            { mode: "export" as const, label: t("profile.exportButton"), hint: t("profile.menuHint") },
+            { mode: "import" as const, label: t("profile.importButton"), hint: t("profile.menuImportHint") },
           ].map((it) => (
             <button
-              key={it.cle}
+              key={it.mode}
               role="menuitem"
-              onClick={it.cle === "export" ? exporter : choisirFichier}
+              onClick={() => ouvrirProfil(it.mode)}
               style={{
                 display: 'block', width: '100%', textAlign: 'left',
                 padding: '8px 10px', borderRadius: 8, border: 'none',
@@ -190,14 +153,9 @@ export function LayoutPresetsMenu() {
               <span style={{ display: 'block', fontSize: 11, color: 'var(--color-outline)', marginTop: 2 }}>{it.hint}</span>
             </button>
           ))}
-          <input ref={fichierRef} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={importer} />
-          {statut && (
-            <div role="status" style={{ fontSize: 11, padding: '4px 10px 6px', color: statut.ok ? 'var(--color-green)' : 'var(--color-error)' }}>
-              {statut.text}
-            </div>
-          )}
         </div>
       )}
+      {profil && <ProfilModal mode={profil} onClose={() => setProfil(null)} />}
     </div>
   );
 }

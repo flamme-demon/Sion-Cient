@@ -295,7 +295,6 @@ mod dimension_tests {
         assert_eq!(fit_frame_dimensions(2560, 1440, 768, 432), (768, 432));
     }
 
-    #[test]
     /// Sous Windows, le moteur agrandit lui-même l'image jusqu'à sa zone —
     /// au plus deux fois — pour que GDI la pose sans l'étirer.
     #[test]
