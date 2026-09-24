@@ -231,14 +231,51 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     }
   }, [mesurer]);
 
+  // La fenêtre était-elle déjà en plein écran avant le lecteur ? Alors en
+  // sortir ne doit pas la faire sortir, elle.
+  const fenetreDejaPleine = useRef(false);
+  const entreeFenetre = useRef(0);
+
   const pleinEcranFenetre = useCallback((plein: boolean) => {
     pleinFenetreRef.current = plein;
     setPleinFenetre(plein);
+    if (plein) entreeFenetre.current = performance.now();
     void import("@tauri-apps/api/window")
-      .then(({ getCurrentWindow }) => getCurrentWindow().setFullscreen(plein))
+      .then(async ({ getCurrentWindow }) => {
+        const fenetre = getCurrentWindow();
+        if (plein) {
+          fenetreDejaPleine.current = await fenetre.isFullscreen();
+          if (!fenetreDejaPleine.current) await fenetre.setFullscreen(true);
+        } else if (!fenetreDejaPleine.current) {
+          await fenetre.setFullscreen(false);
+        }
+      })
       .catch((err) => console.warn("[Sion][lecteur] plein écran de la fenêtre impossible", err));
     remesurer();
   }, [remesurer]);
+
+  // La fenêtre peut quitter le plein écran sans nous — raccourci du système,
+  // gestionnaire de fenêtres : le lecteur ne doit pas rester étalé sur toute
+  // la page. On vérifie à chaque redimensionnement, sauf juste après l'entrée,
+  // le temps que la fenêtre ait fini de s'agrandir.
+  useEffect(() => {
+    if (!pleinFenetre) return;
+    const verifier = () => {
+      if (performance.now() - entreeFenetre.current < 1500) return;
+      void import("@tauri-apps/api/window")
+        .then(({ getCurrentWindow }) => getCurrentWindow().isFullscreen())
+        .then((plein) => {
+          if (!plein && pleinFenetreRef.current) {
+            pleinFenetreRef.current = false;
+            setPleinFenetre(false);
+            remesurer();
+          }
+        })
+        .catch(() => { /* hors Tauri */ });
+    };
+    window.addEventListener("resize", verifier);
+    return () => window.removeEventListener("resize", verifier);
+  }, [pleinFenetre, remesurer]);
 
   useEffect(() => {
     mesurer();
@@ -426,9 +463,10 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
     }
   };
 
-  // Lecteur fermé en plein écran de fenêtre : la fenêtre revient à sa taille.
+  // Lecteur fermé en plein écran de fenêtre : la fenêtre revient à sa taille
+  // — sauf si elle était déjà en plein écran avant lui.
   useEffect(() => () => {
-    if (pleinFenetreRef.current) {
+    if (pleinFenetreRef.current && !fenetreDejaPleine.current) {
       void import("@tauri-apps/api/window")
         .then(({ getCurrentWindow }) => getCurrentWindow().setFullscreen(false))
         .catch(() => { /* fenêtre fermée */ });
@@ -450,13 +488,11 @@ export function NativeVideoPlayer({ source, onClose, ratio, hauteurMax = 340 }: 
       //
       // On remesure sur plusieurs échéances, en forçant le renvoi : le seuil
       // anti-oscillation n'a pas à filtrer un changement aussi franc.
-      for (const delai of [0, 120, 350, 700]) {
-        window.setTimeout(() => mesurer(true), delai);
-      }
+      remesurer();
     };
     document.addEventListener("fullscreenchange", suivre);
     return () => document.removeEventListener("fullscreenchange", suivre);
-  }, [mesurer]);
+  }, [remesurer]);
 
   // La croix du bandeau n'existe qu'une fois la lecture partie : en erreur ou
   // pendant le téléchargement, c'est ce bouton-ci qui ferme le lecteur.

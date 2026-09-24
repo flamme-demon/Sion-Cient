@@ -495,12 +495,23 @@ function ensureNativeSurfaceSizeListener(): Promise<void> {
 
 /** Geste de souris reçu par la fenêtre vidéo native de Windows. */
 interface GesteSurface {
-  genre: "down" | "dblclick" | "move" | "up";
+  genre: "down" | "dblclick" | "move" | "up" | "annule";
   x: number;
   y: number;
 }
 
 let rejeuSourisPromise: Promise<void> | null = null;
+
+/**
+ * Cet événement a-t-il été rejoué depuis la fenêtre vidéo de Windows ?
+ *
+ * Rust y publie déjà clic et position du curseur de spectateur, à la source.
+ * Les gestionnaires de la page qui en publient aussi doivent donc passer leur
+ * tour — sinon chaque clic faisait deux ondes chez le partageur.
+ */
+export function estRejoue(e: Event): boolean {
+  return (e as Event & { sionRejoue?: boolean }).sionRejoue === true;
+}
 
 /**
  * Rejoue dans la page les gestes que la fenêtre vidéo de Windows a captés.
@@ -520,7 +531,7 @@ function ensureRejeuSouris(): Promise<void> {
     let double = false;
     const envoyer = (type: string, x: number, y: number, cible: EventTarget) => {
       const boutons = type === "mousedown" || type === "mousemove" ? 1 : 0;
-      cible.dispatchEvent(new MouseEvent(type, {
+      const evenement = new MouseEvent(type, {
         bubbles: true,
         cancelable: true,
         composed: true,
@@ -530,7 +541,9 @@ function ensureRejeuSouris(): Promise<void> {
         buttons: boutons,
         detail: type === "dblclick" || double ? 2 : 1,
         view: window,
-      }));
+      });
+      Object.defineProperty(evenement, "sionRejoue", { value: true });
+      cible.dispatchEvent(evenement);
     };
     const ancetreCommun = (a: Element, b: Element): Element => {
       for (let e: Element | null = a; e; e = e.parentElement) {
@@ -552,6 +565,14 @@ function ensureRejeuSouris(): Promise<void> {
               break;
             case "move":
               envoyer("mousemove", x, y, sous ?? document);
+              break;
+            // Capture perdue en plein appui (Alt+Tab…) : le bouton est
+            // relâché pour clore un glissement, mais sans clic — un vrai
+            // navigateur n'en envoie pas non plus.
+            case "annule":
+              envoyer("mouseup", x, y, sous ?? document);
+              enfonce = null;
+              double = false;
               break;
             case "up": {
               envoyer("mouseup", x, y, sous ?? document);

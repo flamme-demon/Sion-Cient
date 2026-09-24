@@ -3848,11 +3848,11 @@ mod imp {
             }
             // Capture perdue en plein glissement — autre fenêtre, Alt+Tab :
             // la page doit voir le bouton relâché, sinon le glissement ne se
-            // termine jamais.
+            // termine jamais. Mais pas de clic : « annule », pas « up ».
             WM_CAPTURECHANGED => {
                 let etait = enfoncees().lock().unwrap_or_else(|e| e.into_inner()).remove(&(hwnd.0 as isize));
                 if etait {
-                    rejouer_dans_la_page(hwnd, "up", LPARAM(-1));
+                    rejouer_dans_la_page(hwnd, "annule", LPARAM(-1));
                 }
                 return LRESULT(0);
             }

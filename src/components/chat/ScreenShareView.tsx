@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { onCursorsChange, onCursorClick, broadcastCursor, broadcastCursorHide, broadcastCursorClick, type RemoteCursor, type RemoteCursorClick } from "../../services/cursorService";
-import { connectVoiceNativeVideoStream, getVoiceNativeShareAudioState, isNativeVideoSurfaceAvailable, registerNativeVideoSurface, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, onVoiceNativeShareAudio, onVoiceNativePip, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
+import { connectVoiceNativeVideoStream, estRejoue, getVoiceNativeShareAudioState, isNativeVideoSurfaceAvailable, registerNativeVideoSurface, resolveNativeDisplayName, setVoiceNativeShareAudioMuted, setVoiceNativeShareAudioVolume, pipNativeOpen, pipNativeClose, pipNativeStatus, onVoiceNativeShareAudio, onVoiceNativePip, type VoiceNativeBinaryFrame } from "../../services/voiceNativeService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { useLayoutStore, SHARE_VIEW_MIN_VH, SHARE_VIEW_MAX_VH, SHARE_FLOATING_MIN_W, SHARE_FLOATING_MIN_H } from "../../stores/useLayoutStore";
@@ -468,6 +468,8 @@ function ShareTile({ identity, name, hasAudio, muted, volume, subscribe, getLate
       if (hideTimer !== null) { window.clearTimeout(hideTimer); hideTimer = null; }
     };
     const onMove = (e: MouseEvent) => {
+      // Rejoué depuis la fenêtre vidéo de Windows : Rust l'a déjà publié.
+      if (estRejoue(e)) return;
       const now = performance.now();
       const r = tileContentRect(canvas, lastFrameRef.current);
       const x = (e.clientX - r.left) / r.width;
@@ -1190,6 +1192,8 @@ export function ScreenShareView() {
     };
 
     const onMove = (e: MouseEvent) => {
+      // Rejoué depuis la fenêtre vidéo de Windows : Rust l'a déjà publié.
+      if (estRejoue(e)) return;
       const now = performance.now();
       const rect = getRect();
       const x = (e.clientX - rect.left) / rect.width;
@@ -1251,6 +1255,8 @@ export function ScreenShareView() {
     let lastClickAt = 0;
     const DBLCLICK_WINDOW = 300;
     const onClick = (e: MouseEvent) => {
+      // Rejoué depuis la fenêtre vidéo de Windows : l'onde est déjà partie.
+      if (estRejoue(e)) return;
       const rect = getRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
