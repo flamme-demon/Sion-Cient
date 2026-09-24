@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -157,18 +157,39 @@ export function PinnedListPanel() {
 function AfficheVideo({ pin, largeur, hauteur }: { pin: PinnedSummary; largeur: number | string; hauteur: number }) {
   const vignette = pin.mediaUrl && pin.mediaUrl !== pin.sourceUrl ? pin.mediaUrl : null;
   const [extraite, setExtraite] = useState<string | null>(null);
+  // Extraire une affiche télécharge le début de la vidéo — jusqu'à 12 Mo — et
+  // lance ffmpeg : seulement pour celles qui entrent à l'écran, pas pour toute
+  // la liste à l'ouverture du panneau.
+  const cadreRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
   useEffect(() => {
-    if (vignette || !pin.sourceUrl) return;
+    const cadre = cadreRef.current;
+    if (!cadre || vignette) return;
+    if (typeof IntersectionObserver === "undefined") {
+      queueMicrotask(() => setVisible(true));
+      return;
+    }
+    const io = new IntersectionObserver((entrees) => {
+      if (entrees.some((e) => e.isIntersecting)) {
+        setVisible(true);
+        io.disconnect();
+      }
+    }, { rootMargin: "100px" });
+    io.observe(cadre);
+    return () => io.disconnect();
+  }, [vignette]);
+  useEffect(() => {
+    if (vignette || !visible || !pin.sourceUrl) return;
     let vivant = true;
     void import("../../services/voiceNativeService")
       .then((m) => m.afficheLecteurVideo(pin.sourceUrl!))
       .then((data) => { if (vivant) setExtraite(data); })
       .catch(() => { /* ffmpeg absent, ou format sans image */ });
     return () => { vivant = false; };
-  }, [vignette, pin.sourceUrl]);
+  }, [vignette, visible, pin.sourceUrl]);
   const image = vignette ?? extraite;
   return (
-    <div style={{
+    <div ref={cadreRef} style={{
       position: 'relative', width: largeur, height: hauteur, flex: '0 0 auto',
       borderRadius: 6, overflow: 'hidden', background: 'var(--color-surface-container-highest)',
     }}>
