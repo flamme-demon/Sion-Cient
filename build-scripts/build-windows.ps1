@@ -270,10 +270,13 @@ if ($hasEngine -eq 0 -or $hasGgml -eq 0 -or $hasCpu -eq 0) {
 # Backup tauri.conf.json
 Copy-Item $tauriConf "$tauriConf.bak"
 
-# Inject native DLLs into tauri.conf.json for bundling
+# Inject native DLLs into tauri.conf.json for bundling. L'injection REMPLACE
+# la liste : sans `resources/*`, ffmpeg.exe et ses DLL, deposes plus haut, ne
+# partaient pas dans l'installeur (meme piege que dans release.yml).
 $confJson = Get-Content $tauriConf -Raw | ConvertFrom-Json
 $confJson.bundle | Add-Member -NotePropertyName "resources" -NotePropertyValue @{
     "native-dist/*.dll" = "./"
+    "resources/*" = "./"
 } -Force
 [System.IO.File]::WriteAllText($tauriConf, ($confJson | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
