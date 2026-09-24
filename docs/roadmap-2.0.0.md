@@ -29,8 +29,11 @@ Document vivant pour la 2.0.0 finale, remis en phase avec le code après
 > avertissement à l'import) et **aperçu au survol**. Restent l'accent seed et
 > la synchronisation Matrix, deux décisions — voir §3.4.
 >
-> ⏳ **Hors chantiers, avant la 2.0.0** : voir §6 (voix Android, fonctions
-> retirées avec l'ancien moteur, points de fiabilité).
+> ⏳ **Hors chantiers, avant la 2.0.0** : voir §6 (fonctions retirées avec
+> l'ancien moteur, points de fiabilité).
+>
+> 📌 **Décision du 24/09** : la 2.0.0 est **réservée aux ordinateurs** (Linux,
+> Windows). Android revient, compatible, dans une 2.1.
 
 ---
 
@@ -509,11 +512,11 @@ un thème », « réinitialiser ».
 
 1. 🚧 **Parité du partage natif** (§2.3) — mesurer la fluidité Linux,
    valider Windows côté spectateur, puis retirer le repli JPEG.
-2. ⏳ **Décision voix Android** (§6) — portage du moteur Rust, ou 2.0.0
-   réservée aux ordinateurs.
-3. ⏳ **Container queries du dock bas** (§1.6) — Members et Transcript.
-4. ⏳ **Thèmes** (§3.4) — `outline` de Sion Light, accent seed, et décision
+2. ⏳ **Container queries du dock bas** (§1.6) — Members et Transcript.
+3. ⏳ **Thèmes** (§3.4) — `outline` de Sion Light, accent seed, et décision
    sur la synchronisation Matrix `com.sion.theme`.
+
+Android n'est plus une étape de la 2.0.0 : décision du 24/09, voir §6.
 
 Le socle layout, le mode édition, l'export/import de disposition, le PIP
 système natif, le lecteur vidéo natif, la tokenisation, Dark / Light /
@@ -548,9 +551,11 @@ contraste sont livrés ; ils ne sont plus des étapes à planifier.
 
 État au 24/09/2026, vérifié dans le code et les journaux.
 
-- **Voix Android** : le moteur vocal Rust n'est pas porté sur Android
-  (`build-android.sh` ne compile pas `native-voice`) ; la voix Android est donc
-  inactive. Décision à prendre — voir `docs/native-voice-validation.md`.
+- **Android → 2.1** (décision du 24/09) : la 2.0.0 sort pour ordinateurs
+  seulement. Le moteur vocal Rust n'est pas porté sur Android
+  (`build-android.sh` ne compile pas `native-voice`), la voix y est donc
+  inactive ; son portage est le chantier de la 2.1 — voir
+  `docs/native-voice-validation.md`.
 - **Fonctions retirées avec l'ancien moteur**, à refaire en Rust : couper le
   son d'un seul participant (pas de gain par piste exposé) et l'affichage de
   la latence (RTT).
