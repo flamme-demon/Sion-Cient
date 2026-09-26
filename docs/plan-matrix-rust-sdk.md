@@ -174,8 +174,19 @@ Appris en route :
 - **vitest 4** : un simulacre remis à zéro dans `beforeEach` fait signaler
   comme erreur un rejet pourtant traité par le code testé.
 
-Reste pour clore T0 : connexion, reprise au relancement et déconnexion
-validées à l'écran sur le compte de test ; compilation Windows verte en CI.
+**T0 terminé le 26/09/2026.** Sur sionchat.fr, avec le compte de test : connexion
+d'un nouvel appareil, reprise sans mot de passe (même appareil) après
+« fermeture », déconnexion (appareil supprimé), puis reprise impossible — test
+`sion-matrix/tests/compte_reel.rs`, ignoré par défaut :
+
+```sh
+SION_TEST_SERVEUR=sionchat.fr SION_TEST_IDENTIFIANT=… SION_TEST_MOT_DE_PASSE=… \
+  cargo test -p sion-matrix --test compte_reel -- --ignored --nocapture
+```
+
+Compilation Windows MSVC verte en CI (le risque `aws-lc-rs` est levé), Linux et
+Android arm64 vérifiés. Pour essayer l'écran de développement :
+`SION_MATRIX_MOTEUR=rust ./build-scripts/run-native.sh --features moteur-matrix-rust`.
 
 ## Les étapes suivantes
 
