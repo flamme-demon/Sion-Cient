@@ -1,0 +1,253 @@
+//! Le client Matrix et son cycle de vie : connexion d'un nouvel appareil,
+//! reprise de session, déconnexion, et un état de connexion observable.
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use matrix_sdk::authentication::matrix::MatrixSession;
+use matrix_sdk::config::SyncSettings;
+use matrix_sdk::encryption::{BackupDownloadStrategy, EncryptionSettings};
+use matrix_sdk::ruma::api::error::ErrorKind;
+use matrix_sdk::ruma::{OwnedDeviceId, UserId};
+use matrix_sdk::{Client, SessionMeta, SessionTokens};
+use serde::Serialize;
+use tokio::sync::{watch, Mutex};
+
+use crate::session::{self, Secrets, Session, DOSSIER_MAGASIN};
+use crate::{Coffre, Erreur, Resultat};
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "etat", rename_all = "kebab-case")]
+pub enum EtatConnexion {
+    Deconnecte,
+    Connexion,
+    Connecte { utilisateur: String, appareil: String },
+    /// Session conservée mais serveur injoignable, ou connexion refusée.
+    Erreur { message: String },
+}
+
+pub struct CoeurMatrix {
+    dossier: PathBuf,
+    nom_appareil: String,
+    coffre: Arc<dyn Coffre>,
+    client: Mutex<Option<Client>>,
+    etat: watch::Sender<EtatConnexion>,
+}
+
+/// Rien d'automatique : le cœur ne doit jamais créer une nouvelle identité
+/// de signature croisée ni une nouvelle sauvegarde sur un compte qui en a
+/// déjà une. Seul un amorçage explicite (tranche T5) le fera.
+fn reglages_chiffrement() -> EncryptionSettings {
+    EncryptionSettings {
+        auto_enable_cross_signing: false,
+        backup_download_strategy: BackupDownloadStrategy::Manual,
+        auto_enable_backups: false,
+    }
+}
+
+fn synchro_immediate() -> SyncSettings {
+    SyncSettings::default().timeout(Duration::ZERO)
+}
+
+impl CoeurMatrix {
+    /// `dossier` : réservé au cœur (session + magasins SQLite).
+    pub fn nouveau(dossier: PathBuf, nom_appareil: impl Into<String>, coffre: Arc<dyn Coffre>) -> Self {
+        Self {
+            dossier,
+            nom_appareil: nom_appareil.into(),
+            coffre,
+            client: Mutex::new(None),
+            etat: watch::Sender::new(EtatConnexion::Deconnecte),
+        }
+    }
+
+    pub fn etat(&self) -> watch::Receiver<EtatConnexion> {
+        self.etat.subscribe()
+    }
+
+    pub fn etat_actuel(&self) -> EtatConnexion {
+        self.etat.borrow().clone()
+    }
+
+    pub async fn client(&self) -> Option<Client> {
+        self.client.lock().await.clone()
+    }
+
+    async fn construire(&self, serveur: &str, phrase: &str, url_connue: bool) -> Resultat<Client> {
+        let constructeur = Client::builder();
+        let constructeur = if url_connue {
+            constructeur.homeserver_url(serveur)
+        } else {
+            constructeur.server_name_or_homeserver_url(serveur)
+        };
+        Ok(constructeur
+            .sqlite_store(self.dossier.join(DOSSIER_MAGASIN), Some(phrase))
+            .with_encryption_settings(reglages_chiffrement())
+            .build()
+            .await?)
+    }
+
+    fn publier_connecte(&self, client: &Client) {
+        self.etat.send_replace(EtatConnexion::Connecte {
+            utilisateur: client.user_id().map(|u| u.to_string()).unwrap_or_default(),
+            appareil: client.device_id().map(|d| d.to_string()).unwrap_or_default(),
+        });
+    }
+
+    /// Connexion par mot de passe, toujours comme **nouvel appareil** avec des
+    /// magasins neufs : tout état local précédent est effacé.
+    pub async fn connecter(&self, serveur: &str, identifiant: &str, mot_de_passe: &str) -> Resultat<()> {
+        let mut garde = self.client.lock().await;
+        drop(garde.take()); // libère SQLite avant d'effacer les magasins
+        session::effacer(&self.dossier, &*self.coffre)?;
+        self.etat.send_replace(EtatConnexion::Connexion);
+
+        let phrase = session::phrase_aleatoire()?;
+        let mut client_connecte: Option<Client> = None;
+        let resultat = async {
+            let client = self.construire(serveur, &phrase, false).await?;
+            client
+                .matrix_auth()
+                .login_username(identifiant, mot_de_passe)
+                .initial_device_display_name(&self.nom_appareil)
+                .await?;
+            client_connecte = Some(client.clone());
+            let s = client.matrix_auth().session().ok_or(Erreur::PasDeSession)?;
+            Session {
+                serveur: client.homeserver().to_string(),
+                utilisateur: s.meta.user_id.to_string(),
+                appareil: s.meta.device_id.to_string(),
+                secrets: Secrets {
+                    jeton_acces: s.tokens.access_token,
+                    jeton_rafraichissement: s.tokens.refresh_token,
+                    phrase_magasin: phrase.clone(),
+                },
+            }
+            .enregistrer(&self.dossier, &*self.coffre)?;
+            // Première synchro : publie les clés du nouvel appareil.
+            client.sync_once(synchro_immediate()).await?;
+            Ok::<_, Erreur>(client)
+        }
+        .await;
+
+        match resultat {
+            Ok(client) => {
+                log::info!(
+                    "[Sion][matrix] connecté : {} (appareil {})",
+                    client.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                    client.device_id().map(|d| d.to_string()).unwrap_or_default()
+                );
+                self.publier_connecte(&client);
+                *garde = Some(client);
+                Ok(())
+            }
+            Err(e) => {
+                // Connecté au serveur mais échec ensuite : ne pas laisser un
+                // appareil orphelin sur le compte.
+                if let Some(client) = client_connecte {
+                    let _ = client.matrix_auth().logout().await;
+                }
+                let _ = session::effacer(&self.dossier, &*self.coffre);
+                self.etat.send_replace(EtatConnexion::Erreur { message: e.to_string() });
+                Err(e)
+            }
+        }
+    }
+
+    /// Reprend la session sauvegardée. `Ok(false)` s'il n'y en a pas ou si
+    /// elle n'est plus valable (jeton révoqué, magasin disparu) ; hors ligne,
+    /// la session est gardée et l'état passe en erreur.
+    pub async fn reprendre(&self) -> Resultat<bool> {
+        let mut garde = self.client.lock().await;
+        let Some(s) = Session::charger(&self.dossier, &*self.coffre)? else {
+            self.etat.send_replace(EtatConnexion::Deconnecte);
+            return Ok(false);
+        };
+        self.etat.send_replace(EtatConnexion::Connexion);
+
+        let client = self.construire(&s.serveur, &s.secrets.phrase_magasin, true).await?;
+        let utilisateur = UserId::parse(&s.utilisateur).map_err(|e| Erreur::Autre(e.to_string()))?;
+        client
+            .restore_session(MatrixSession {
+                meta: SessionMeta { user_id: utilisateur, device_id: OwnedDeviceId::from(s.appareil.as_str()) },
+                tokens: SessionTokens {
+                    access_token: s.secrets.jeton_acces.clone(),
+                    refresh_token: s.secrets.jeton_rafraichissement.clone(),
+                },
+            })
+            .await?;
+
+        match client.sync_once(synchro_immediate()).await {
+            Ok(_) => {
+                self.publier_connecte(&client);
+                *garde = Some(client);
+                Ok(true)
+            }
+            Err(e) if matches!(e.client_api_error_kind(), Some(ErrorKind::UnknownToken(_))) => {
+                log::warn!("[Sion][matrix] jeton révoqué : session abandonnée");
+                drop(client);
+                session::effacer(&self.dossier, &*self.coffre)?;
+                self.etat.send_replace(EtatConnexion::Deconnecte);
+                Ok(false)
+            }
+            Err(e) => {
+                log::warn!("[Sion][matrix] reprise hors ligne : {e}");
+                self.etat.send_replace(EtatConnexion::Erreur { message: e.to_string() });
+                *garde = Some(client);
+                Ok(true)
+            }
+        }
+    }
+
+    /// Déconnexion : l'appareil est supprimé côté serveur, puis la session et
+    /// les magasins locaux sont effacés.
+    pub async fn deconnecter(&self) -> Resultat<()> {
+        let mut garde = self.client.lock().await;
+        if let Some(client) = garde.take() {
+            if let Err(e) = client.matrix_auth().logout().await {
+                log::warn!("[Sion][matrix] déconnexion côté serveur impossible : {e}");
+            }
+        }
+        session::effacer(&self.dossier, &*self.coffre)?;
+        self.etat.send_replace(EtatConnexion::Deconnecte);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CoffreMemoire;
+
+    fn coeur(dossier: &std::path::Path) -> CoeurMatrix {
+        CoeurMatrix::nouveau(dossier.to_path_buf(), "Sion test", Arc::new(CoffreMemoire::default()))
+    }
+
+    #[tokio::test]
+    async fn sans_session_la_reprise_rend_faux_et_l_etat_est_deconnecte() {
+        let d = tempfile::tempdir().unwrap();
+        let c = coeur(d.path());
+        assert!(!c.reprendre().await.unwrap());
+        assert_eq!(c.etat_actuel(), EtatConnexion::Deconnecte);
+        assert!(c.client().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn la_deconnexion_sans_client_efface_quand_meme() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join(session::FICHIER_SESSION), b"{}").unwrap();
+        let c = coeur(d.path());
+        c.deconnecter().await.unwrap();
+        assert!(!d.path().join(session::FICHIER_SESSION).exists());
+        assert_eq!(c.etat_actuel(), EtatConnexion::Deconnecte);
+    }
+
+    #[test]
+    fn l_etat_se_serialise_pour_l_interface() {
+        let etat = EtatConnexion::Connecte { utilisateur: "@a:b".into(), appareil: "X".into() };
+        assert_eq!(
+            serde_json::to_string(&etat).unwrap(),
+            r#"{"etat":"connecte","utilisateur":"@a:b","appareil":"X"}"#
+        );
+    }
+}

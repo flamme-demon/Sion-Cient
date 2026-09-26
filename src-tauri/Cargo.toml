@@ -1,5 +1,5 @@
 [workspace]
-members = ["native-audio"]
+members = ["native-audio", "sion-matrix"]
 default-members = ["."]
 resolver = "2"
 
@@ -80,6 +80,10 @@ tauri-plugin-global-shortcut = "2"
 #      Linux — la migration du fichier en clair se fait alors toute seule au
 #      premier `load_session`.
 keyring = "3"
+# Cœur Matrix en Rust (docs/plan-matrix-rust-sdk.md) : compilé seulement avec
+# la feature `moteur-matrix-rust`, désactivée tant que le moteur n'est pas
+# livrable — ni les bêtas ni la CI ne payent la compilation de matrix-sdk.
+sion-matrix = { path = "sion-matrix", optional = true }
 # keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-native", "apple-native"] }
 # Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
 # les images dans `clipboardData.items`, contrairement à CEF/Chromium.
@@ -230,6 +234,9 @@ windows-core = "0.58"
 # aucune feature CEF. `native-voice` est désormais obligatoire pour la voix.
 default = ["native-voice"]
 native-voice = ["dep:sion-native-audio", "dep:webrtc-sys", "dep:livekit", "dep:tokio", "dep:futures-util", "dep:jpeg-rusturbo"]
+# Moteur Matrix Rust (développement) : `run-native.sh --features moteur-matrix-rust`,
+# puis lancer avec SION_MATRIX_MOTEUR=rust.
+moteur-matrix-rust = ["dep:sion-matrix"]
 
 # serde_json is on the IPC hot path; keep it optimized even in dev builds.
 [profile.dev.package.serde_json]
