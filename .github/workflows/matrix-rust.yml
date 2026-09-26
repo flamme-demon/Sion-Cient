@@ -1,0 +1,52 @@
+name: Cœur Matrix Rust
+
+# Garde-fou de la branche du moteur Matrix Rust (docs/plan-matrix-rust-sdk.md).
+# Léger : `sion-matrix` ne dépend ni de WebKit ni de libwebrtc. Il vérifie les
+# tests sous Linux et, surtout, la compilation sous Windows — matrix-sdk tire
+# aws-lc-rs (TLS), dont la compilation MSVC est le risque identifié en T0.
+
+on:
+  push:
+    branches: [feat/matrix-rust]
+    paths:
+      - 'src-tauri/sion-matrix/**'
+      - 'src-tauri/Cargo.lock'
+      - '.github/workflows/matrix-rust.yml'
+  workflow_dispatch:
+
+jobs:
+  tests-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-sion-matrix-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-sion-matrix-
+      - name: Tests du cœur Matrix
+        working-directory: src-tauri
+        run: cargo test -j4 -p sion-matrix
+
+  compilation-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-sion-matrix-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-sion-matrix-
+      - name: Compilation du cœur Matrix (MSVC)
+        working-directory: src-tauri
+        run: cargo check -j4 -p sion-matrix --tests

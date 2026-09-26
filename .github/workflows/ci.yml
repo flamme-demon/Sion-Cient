@@ -89,3 +89,8 @@ jobs:
         env:
           CC: clang-21
           CXX: clang++-21
+
+      - name: Rust unit tests — cœur Matrix (sion-matrix)
+        # Hors `default-members` : sans `-p`, ses tests ne tourneraient pas.
+        working-directory: src-tauri
+        run: cargo test -j4 -p sion-matrix

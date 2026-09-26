@@ -70,6 +70,23 @@ async function bootstrap() {
 
   // i18n lit directement sion-settings à l'évaluation du module.
   await import("./i18n");
+  // Moteur Matrix Rust (développement, docs/plan-matrix-rust-sdk.md) : tant
+  // que l'interface n'y est pas branchée, un écran dédié remplace l'appli.
+  // Moteur JS (par défaut) : un seul aller-retour IPC, puis rien ne change.
+  const { moteurMatrix } = await import("./services/matrixCore");
+  if ((await moteurMatrix()) === "rust") {
+    const [{ MoteurRustApercu }, { installThemeSync: synchroniserTheme }] = await Promise.all([
+      import("./components/dev/MoteurRustApercu"),
+      import("./services/themeService"),
+    ]);
+    synchroniserTheme();
+    createRoot(document.getElementById("root")!).render(
+      <StrictMode>
+        <MoteurRustApercu />
+      </StrictMode>,
+    );
+    return;
+  }
   const [{ default: App }, { installThemeSync }, { useSettingsStore }] = await Promise.all([
     import("./App"),
     import("./services/themeService"),

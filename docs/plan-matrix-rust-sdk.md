@@ -151,6 +151,32 @@ utilisateurs avant la fin de l'étape 3.
 Ordre de grandeur : de 4 à 6 semaines de travail effectif pour T0 à T6, dont
 la moitié pour T2, T4 et T6.
 
+### État — T0 (branche `feat/matrix-rust`, 26/09/2026)
+
+Fait : crate `sion-matrix` (coffre, session, cycle de vie du client, 10 tests
+sans réseau dont l'invariant « magasin disparu = pas de reprise ») ; pont
+`matrix_pont.rs` derrière la feature `moteur-matrix-rust` ; façade
+`src/services/matrixCore.ts` ; écran de développement
+`src/components/dev/MoteurRustApercu.tsx`, affiché au lieu de l'appli quand
+`SION_MATRIX_MOTEUR=rust` ; workflow `matrix-rust.yml` (tests Linux +
+compilation Windows). Compilation Android (arm64) vérifiée à la main.
+
+Appris en route :
+
+- **matrix-sdk 0.19.1 exige Rust ≥ 1.96.** Le Rust d'Arch (1.98) convient ; la
+  chaîne rustup `stable`, qu'utilise `build-android.sh`, était restée en 1.94 —
+  mise à jour le 26/09.
+- **Le lockfile monte 14 dépendances existantes** (mineures ou correctives :
+  `http`, `reqwest`, `futures`, `uuid`, `wasm-bindgen`…), toutes imposées par
+  les versions minimales de matrix-sdk — vérifié une à une. rdev, LiveKit,
+  webrtc-sys, Tauri, wry, keyring et tokio n'ont pas bougé. Même désactivé par
+  la feature, le crate pèse sur le lockfile : c'est inévitable.
+- **vitest 4** : un simulacre remis à zéro dans `beforeEach` fait signaler
+  comme erreur un rejet pourtant traité par le code testé.
+
+Reste pour clore T0 : connexion, reprise au relancement et déconnexion
+validées à l'écran sur le compte de test ; compilation Windows verte en CI.
+
 ## Les étapes suivantes
 
 - **Étape 3 — MatrixRTC en Rust.** Port maison depuis

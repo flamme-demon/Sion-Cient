@@ -45,6 +45,7 @@ mod profil;
 mod lecteur_audio;
 mod lecteur_video;
 mod media_server;
+mod matrix_pont;
 mod native_video_transport;
 #[cfg(feature = "native-voice")]
 mod voice_engine;
@@ -3562,6 +3563,11 @@ pub fn run() {
 
     #[cfg(not(target_os = "android"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        matrix_pont::matrix_moteur,
+        matrix_pont::commandes::matrix_etat,
+        matrix_pont::commandes::matrix_connecter,
+        matrix_pont::commandes::matrix_reprendre,
+        matrix_pont::commandes::matrix_deconnecter,
         update_shortcuts,
         get_shortcut_ws_port,
         open_url,
@@ -3674,6 +3680,11 @@ pub fn run() {
 
     #[cfg(target_os = "android")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        matrix_pont::matrix_moteur,
+        matrix_pont::commandes::matrix_etat,
+        matrix_pont::commandes::matrix_connecter,
+        matrix_pont::commandes::matrix_reprendre,
+        matrix_pont::commandes::matrix_deconnecter,
         open_url,
         open_file_default,
         download_file,
@@ -3760,6 +3771,9 @@ pub fn run() {
                     ))
                     .build(),
             )?;
+            // Moteur Matrix Rust (SION_MATRIX_MOTEUR=rust + feature) : après le
+            // journal, pour que ses messages y arrivent.
+            matrix_pont::initialiser(app.handle());
 
             #[cfg(not(target_os = "android"))]
             install_window_state_resilience(app);
