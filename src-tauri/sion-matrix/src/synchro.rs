@@ -5,7 +5,7 @@
 //! dans son code, sans `m.room.type` — le marqueur des salons vocaux de Sion.
 //! Un salon vocal dont on aurait changé le sujet y deviendrait un salon texte.
 //! Voir docs/plan-matrix-rust-sdk.md, T1.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +16,7 @@ use matrix_sdk::deserialized_responses::{RawAnySyncOrStrippedState, SyncOrStripp
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::StateEventType;
-use matrix_sdk::ruma::uint;
+use matrix_sdk::ruma::{uint, OwnedRoomId};
 use matrix_sdk::{Client, Room, RoomDisplayName, RoomMemberships};
 use serde_json::Value;
 use tokio::sync::watch;
@@ -169,8 +169,15 @@ async fn tous_les_salons(client: &Client, activites: &Activites, horloge: &Horlo
 /// Invitations acceptées d'office, comme le moteur JS. Une invitation en MP
 /// met aussi `m.direct` à jour : sans cela, le prochain « écrire à… » créerait
 /// un MP en double.
-async fn accepter_invitations(client: &Client) {
+///
+/// Une seule tentative par invitation et par session, comme le JS : une
+/// invitation vers un salon banni du serveur (403) échoue à coup sûr, et la
+/// retenter à chaque synchro martelait le serveur (vu le 26/09).
+async fn accepter_invitations(client: &Client, tentees: &mut HashSet<OwnedRoomId>) {
     for salon in client.invited_rooms() {
+        if !tentees.insert(salon.room_id().to_owned()) {
+            continue;
+        }
         // L'état d'un salon où l'on est seulement invité est « dépouillé ».
         let directe = salon
             .invite_details()
@@ -243,7 +250,8 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
         let mut activites = Activites::charger(dossier.join(FICHIER_ACTIVITE));
         let base = client.homeserver().to_string();
         publication.horloge.sonder(&base).await;
-        accepter_invitations(&client).await;
+        let mut invitations_tentees = HashSet::new();
+        accepter_invitations(&client, &mut invitations_tentees).await;
         amorcer_activites(&client, &mut activites).await;
         publier(&client, &activites, &publication).await;
 
@@ -266,9 +274,7 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
                     if change {
                         activites.enregistrer();
                     }
-                    if !client.invited_rooms().is_empty() {
-                        accepter_invitations(&client).await;
-                    }
+                    accepter_invitations(&client, &mut invitations_tentees).await;
                     if publication.horloge.perimee() {
                         publication.horloge.sonder(&base).await;
                     }

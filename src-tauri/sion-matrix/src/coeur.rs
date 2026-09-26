@@ -213,8 +213,16 @@ impl CoeurMatrix {
     /// elle n'est plus valable (jeton révoqué, magasin disparu) ; hors ligne,
     /// la session est gardée et l'état passe en erreur.
     pub async fn reprendre(&self) -> Resultat<bool> {
-        self.arreter_synchro().await;
+        // Idempotent : une session qui tourne déjà n'est pas relancée. (En
+        // développement, React monte l'écran deux fois : sans cela, la
+        // synchro repartait de zéro au second appel.)
+        // La vérification se fait SOUS le verrou, tenu jusqu'au bout : deux
+        // appels simultanés ne passent pas tous les deux.
         let mut garde = self.client.lock().await;
+        if garde.is_some() {
+            return Ok(true);
+        }
+        self.arreter_synchro().await;
         let Some(s) = Session::charger(&self.dossier, &*self.coffre)? else {
             self.etat.send_replace(EtatConnexion::Deconnecte);
             return Ok(false);
@@ -299,6 +307,23 @@ mod tests {
         assert!(!c.reprendre().await.unwrap());
         assert_eq!(c.etat_actuel(), EtatConnexion::Deconnecte);
         assert!(c.client().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn deux_reprises_simultanees_ne_casse_rien() {
+        let d = tempfile::tempdir().unwrap();
+        let c = Arc::new(coeur(d.path()));
+        let (a, b) = tokio::join!(c.reprendre(), c.reprendre());
+        assert!(!a.unwrap() && !b.unwrap());
+    }
+
+    #[tokio::test]
+    async fn reprendre_deux_fois_de_suite_ne_casse_rien() {
+        let d = tempfile::tempdir().unwrap();
+        let c = coeur(d.path());
+        assert!(!c.reprendre().await.unwrap());
+        assert!(!c.reprendre().await.unwrap());
+        assert_eq!(c.etat_actuel(), EtatConnexion::Deconnecte);
     }
 
     #[tokio::test]

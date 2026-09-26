@@ -234,6 +234,17 @@ Il fait tourner le vrai `mapRoomToChannel` du moteur JS
 Pas encore couvert, rattaché à T2 : les non-lus (le JS les compte à partir des
 messages reçus depuis le début de la session).
 
+Appris en route (26/09, sur un compte réel en écran de développement) :
+
+- **Invitation vers un salon banni du serveur** : `403 M_FORBIDDEN « This room
+  is banned on this homeserver »`, qui échouera toujours. La boucle la
+  retentait à chaque synchro ; désormais une seule tentative par invitation
+  et par session, comme le JS. Une nouvelle invitation reste traitée à son
+  arrivée.
+- **`reprendre()` est idempotent**, vérifié sous verrou : en développement,
+  React monte l'écran deux fois, et le second appel relançait toute la
+  synchro.
+
 ## Les étapes suivantes
 
 - **Étape 3 — MatrixRTC en Rust.** Port maison depuis
