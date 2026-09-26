@@ -183,4 +183,14 @@ The client connects to a Matrix homeserver at login. Voice channels use MatrixRT
 
 ## License
 
-All rights reserved.
+Sion is free software, licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Forks and derivative works — including commercial ones — are
+welcome, as long as the copyright notice is kept.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in Sion shall be dual-licensed as above, without any additional
+terms or conditions.

@@ -2,6 +2,7 @@
   "name": "sion-client",
   "private": true,
   "version": "2.0.0-beta.1",
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
