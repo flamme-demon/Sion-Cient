@@ -539,9 +539,72 @@ async function _initMatrixClientImpl(config: MatrixConfig): Promise<MatrixClient
   if (crypto) {
     const { AllDevicesIsolationMode } = await import("matrix-js-sdk/lib/crypto-api");
     crypto.setDeviceIsolationMode(new AllDevicesIsolationMode(false));
+    eviterSynchroCryptoInutile(crypto);
   }
 
   return matrixClient;
+}
+
+/** Les deux entrées de la crypto Rust que la boucle /sync appelle à chaque
+ *  réponse (`sync.ts` les lit sur l'objet même que renvoie `getCrypto()`). */
+type RappelsSynchroCrypto = {
+  processKeyCounts(oneTimeKeysCounts?: Record<string, number>, unusedFallbackKeys?: string[]): Promise<void>;
+  processDeviceLists(deviceLists: { changed?: string[]; left?: string[] }): Promise<void>;
+};
+
+const PASSAGE_FORCE_MS = 10 * 60_000;
+const APPEL_LENT_MS = 50;
+
+/** Chaque réponse /sync, même vide, appelait la crypto Rust deux fois : listes
+ *  d'appareils (souvent vides) et compteurs de clés (Continuwuity les renvoie à
+ *  chaque réponse). Or chaque appel se termine par un `deep_clone()` du compte
+ *  Olm — sérialisé puis reconstruit, en recalculant la clé publique de CHAQUE
+ *  clé à usage unique gardée en local, jusqu'à 5 000. Mesuré le 26/09 : 0,4 à
+ *  0,9 s de fil principal bloqué par réponse de 380 octets.
+ *
+ *  On ne transmet donc que ce qui change. Sans perte : le compte ne génère de
+ *  clés que sur un compteur qui bouge, et une clé de secours consommée change
+ *  la liste des inutilisées. Un passage forcé toutes les 10 min reste un filet.
+ *  Les messages to-device, eux, passent toujours. */
+export function eviterSynchroCryptoInutile(crypto: object) {
+  const rappels = crypto as RappelsSynchroCrypto;
+  if (typeof rappels.processKeyCounts !== "function" || typeof rappels.processDeviceLists !== "function") return;
+  const compteursOrigine = rappels.processKeyCounts.bind(crypto);
+  const appareilsOrigine = rappels.processDeviceLists.bind(crypto);
+  let derniersCompteurs: string | null = null;
+  let dernierPassage = 0;
+  let ignores = 0;
+
+  const chronometrer = async (quoi: string, appel: () => Promise<void>) => {
+    const debut = performance.now();
+    await appel();
+    const duree = Math.round(performance.now() - debut);
+    if (duree >= APPEL_LENT_MS) {
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(`[Sion][crypto] ${quoi} : ${duree} ms (${ignores} appel(s) inutile(s) évité(s) avant)`))
+        .catch(() => {});
+    }
+    ignores = 0;
+  };
+
+  rappels.processKeyCounts = async (compteurs, secoursInutilisees) => {
+    const cle = JSON.stringify([compteurs ?? null, secoursInutilisees ? [...secoursInutilisees].sort() : null]);
+    if (cle === derniersCompteurs && Date.now() - dernierPassage < PASSAGE_FORCE_MS) {
+      ignores++;
+      return;
+    }
+    await chronometrer("compteurs de clés", () => compteursOrigine(compteurs, secoursInutilisees));
+    derniersCompteurs = cle;
+    dernierPassage = Date.now();
+  };
+
+  rappels.processDeviceLists = async (listes) => {
+    if (!listes.changed?.length && !listes.left?.length) {
+      ignores++;
+      return;
+    }
+    await chronometrer("listes d'appareils", () => appareilsOrigine(listes));
+  };
 }
 
 export function getMatrixClient(): MatrixClient | null {
