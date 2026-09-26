@@ -59,6 +59,49 @@ async fn connexion_reprise_deconnexion() {
         std::fs::write(&sortie, serde_json::to_vec_pretty(&liste).unwrap()).unwrap();
         println!("   liste écrite dans {sortie}");
     }
+
+    // T2 : un fil publié par salon.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while premier.fils_actuels().len() < liste.len() {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("fils non publiés en 30 s");
+    // Historique remonté comme le ferait l'interface à l'ouverture de chaque
+    // salon (~30 messages affichables).
+    for salon in &liste {
+        premier.charger_historique(&salon.id).await.expect("historique");
+    }
+    let fils = premier.fils_actuels();
+    let total: usize = fils.iter().map(|f| f.messages.len()).sum();
+    println!("   {} fils, {total} messages", fils.len());
+    // Médias : le premier de chaque sorte est réellement servi par le cœur.
+    let mut sortes = std::collections::BTreeSet::new();
+    for piece in fils.iter().flat_map(|f| &f.messages).flat_map(|m| m.attachments.iter().flatten()) {
+        let sorte = piece.mime_type.split('/').next().unwrap_or("").to_owned();
+        if !sortes.insert(sorte.clone()) {
+            continue;
+        }
+        for (url, vignette) in [(Some(&piece.url), false), (piece.thumbnail_url.as_ref(), true)] {
+            let Some(url) = url else { continue };
+            let cle = url.strip_prefix(sion_matrix::PREFIXE_PAR_DEFAUT).expect("URL sion-media").split('?').next().unwrap();
+            let octets = premier.media(cle, vignette).await.expect("média servi");
+            println!("   {sorte}{} : {} octets, {}", if vignette { " (vignette)" } else { "" }, octets.len(), sion_matrix::type_mime(&octets));
+            assert!(!octets.is_empty());
+        }
+    }
+    // Épinglés : un résumé par épinglé lisible, jamais plus.
+    for fil in fils.iter().filter(|f| !f.epingles.is_empty()) {
+        let resumes = premier.epingles(&fil.salon).await.expect("épinglés");
+        assert!(resumes.len() <= fil.epingles.len());
+        let charges = resumes.iter().filter(|r| r.loaded).count();
+        println!("   {} : {} épinglé(s), {} résumé(s) dont {charges} chargé(s)", fil.salon, fil.epingles.len(), resumes.len());
+    }
+    if let Ok(sortie) = std::env::var("SION_TEST_SORTIE_MESSAGES") {
+        std::fs::write(&sortie, serde_json::to_vec_pretty(&fils).unwrap()).unwrap();
+        println!("   messages écrits dans {sortie}");
+    }
     premier.fermer().await; // « fermeture de l'appli »
     drop(premier);
 

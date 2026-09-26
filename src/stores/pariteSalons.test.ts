@@ -1,11 +1,13 @@
 /** @vitest-environment jsdom */
 /**
- * Parité des salons entre le moteur JS et le moteur Rust (T1,
- * docs/plan-matrix-rust-sdk.md) — sur un VRAI compte, ignoré par défaut.
+ * Parité entre le moteur JS et le moteur Rust — salons (T1) et messages (T2),
+ * docs/plan-matrix-rust-sdk.md — sur un VRAI compte, ignoré par défaut.
  *
- * Fait tourner le vrai `mapRoomToChannel` du moteur JS sur le compte et écrit
- * la liste obtenue ; `sion-matrix/tests/compte_reel.rs` écrit la sienne ; un
- * script les compare champ par champ. L'appareil créé est supprimé à la fin.
+ * Fait tourner le vrai `mapRoomToChannel` et le vrai `extractMessagesFromEvents`
+ * du moteur JS sur le compte et écrit ce qu'ils produisent ;
+ * `sion-matrix/tests/compte_reel.rs` écrit l'équivalent Rust ;
+ * `build-scripts/parite-moteurs.sh` compare champ par champ. L'appareil créé
+ * est supprimé à la fin.
  *
  *   SION_TEST_SERVEUR=sionchat.fr SION_TEST_IDENTIFIANT=… SION_TEST_MOT_DE_PASSE=… \
  *   SION_TEST_SORTIE_SALONS_JS=/chemin/salons-js.json bunx vitest run src/stores/pariteSalons.test.ts
@@ -24,7 +26,12 @@ async function ecrireFichier(chemin: string, donnees: string): Promise<void> {
 
 // Mêmes simulacres que extractVoiceUsers.test.ts : `useMatrixStore` touche ces
 // modules à l'import.
-vi.mock("../services/matrixService", () => ({ mxcToHttp: vi.fn() }));
+// Médias résolus (sinon le moteur JS ignore les messages de médias) ; l'URL
+// elle-même n'est pas comparée, elle diffère par construction.
+vi.mock("../services/matrixService", () => ({
+  mxcToHttp: (mxc: string) => (mxc ? `https://parite/${mxc}` : null),
+  mxcToThumbnail: (mxc: string) => (mxc ? `https://parite/vignette/${mxc}` : null),
+}));
 vi.mock("../services/soundService", () => ({ playMessageReceived: vi.fn() }));
 vi.mock("../services/voiceChannelSounds", () => ({
   playPokeCue: vi.fn(), playKickCue: vi.fn(), playMemberKickedCue: vi.fn(), noteKicked: vi.fn(),
@@ -39,12 +46,13 @@ vi.mock("./useAppStore", () => ({
 vi.mock("./useSettingsStore", () => ({ useSettingsStore: { getState: () => ({}), subscribe: vi.fn() } }));
 
 import * as sdk from "matrix-js-sdk";
-import { mapRoomToChannel } from "./useMatrixStore";
+import { extractMessagesFromEvents, mapRoomToChannel } from "./useMatrixStore";
 
 const SERVEUR = process.env.SION_TEST_SERVEUR;
 const ID = process.env.SION_TEST_IDENTIFIANT;
 const MDP = process.env.SION_TEST_MOT_DE_PASSE;
 const SORTIE = process.env.SION_TEST_SORTIE_SALONS_JS;
+const SORTIE_MESSAGES = process.env.SION_TEST_SORTIE_MESSAGES_JS;
 
 describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte réel)", () => {
   it("écrit la liste des salons du moteur JS", async () => {
@@ -67,6 +75,10 @@ describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte 
           if (etat === sdk.SyncState.Prepared) resoudre();
         });
       });
+      // Crypto en mémoire, comme le vrai Sion : un message chiffré devient un
+      // échec de déchiffrement affiché (appareil neuf, sans les clés), à
+      // comparer au substitut « 🔒 » du cœur Rust.
+      await client.initRustCrypto({ useIndexedDB: false });
       await client.startClient({ initialSyncLimit: 20 });
       await pret;
       const salons = client
@@ -75,10 +87,41 @@ describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte 
         .map((r) => mapRoomToChannel(r, client))
         .sort((a, b) => a.id.localeCompare(b.id));
       await ecrireFichier(SORTIE!, JSON.stringify(salons, null, 2));
+      if (SORTIE_MESSAGES) {
+        // Historique remonté comme `loadRoomHistory` : pages de 30 événements
+        // jusqu'à 30 messages affichables, au plus 50 pages.
+        const affichable = (e: { getType(): string; getContent(): { msgtype?: string } }) =>
+          e.getType() === "m.room.message" || !!e.getContent()?.msgtype;
+        const salonsRejoints = client.getRooms().filter((r) => r.getMyMembership() === "join");
+        for (const r of salonsRejoints) {
+          for (let i = 0; i < 50; i++) {
+            // `getEvents()` rend le tableau interne, qui grandit en place.
+            const avant = r.getLiveTimeline().getEvents();
+            const longueur = avant.length;
+            if (avant.filter(affichable).length >= 30) break;
+            await client.scrollback(r, 30);
+            if (r.getLiveTimeline().getEvents().length === longueur) break;
+          }
+        }
+        const fils = salonsRejoints
+          .map((r) => ({
+            salon: r.roomId,
+            messages: extractMessagesFromEvents(r.getLiveTimeline().getEvents(), r, client),
+            epingles: (r.currentState.getStateEvents("m.room.pinned_events", "")?.getContent()?.pinned ?? []) as string[],
+            // Les éditions, pour reconnaître celles que le JS affiche en double.
+            editions: r
+              .getLiveTimeline()
+              .getEvents()
+              .filter((e) => e.getRelation()?.rel_type === "m.replace")
+              .map((e) => e.getId()),
+          }))
+          .sort((a, b) => a.salon.localeCompare(b.salon));
+        await ecrireFichier(SORTIE_MESSAGES, JSON.stringify(fils, null, 2));
+      }
       expect(salons.length).toBeGreaterThan(0);
     } finally {
       client.stopClient();
       await client.logout(true);
     }
-  }, 90_000);
+  }, 240_000);
 });

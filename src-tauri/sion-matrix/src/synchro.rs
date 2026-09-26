@@ -22,10 +22,21 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::appels::EvenementAppel;
+use crate::fil::Fils;
 use crate::horloge::Horloge;
 use crate::salons::{self, EntreesSalon, Salon};
 use crate::session::FICHIER_ACTIVITE;
 use crate::EtatConnexion;
+
+/// Réglages de synchro : 20 événements par salon, comme le
+/// `initialSyncLimit: 20` du moteur JS — les deux moteurs voient alors la
+/// même fenêtre (et l'outil de parité compare ce qui est comparable).
+pub(crate) fn reglages(attente: Duration) -> SyncSettings {
+    use matrix_sdk::ruma::api::client::filter::FilterDefinition;
+    let mut filtre = FilterDefinition::default();
+    filtre.room.timeline.limit = Some(uint!(20));
+    SyncSettings::default().timeout(attente).filter(filtre.into())
+}
 
 /// Ce que la boucle publie.
 #[derive(Clone)]
@@ -33,6 +44,32 @@ pub(crate) struct Publication {
     pub salons: watch::Sender<Vec<Salon>>,
     pub etat: watch::Sender<EtatConnexion>,
     pub horloge: Arc<Horloge>,
+    pub fils: Fils,
+}
+
+/// Un fil suivi par salon rejoint ; un salon quitté cesse d'être suivi. Les
+/// tâches vivent dans un `JoinSet` : elles s'arrêtent avec la boucle.
+fn suivre_les_salons(
+    client: &Client,
+    fils: &Fils,
+    taches: &mut tokio::task::JoinSet<()>,
+    suivis: &mut HashMap<OwnedRoomId, tokio::task::AbortHandle>,
+) {
+    let rejoints: HashSet<OwnedRoomId> = client.joined_rooms().iter().map(|s| s.room_id().to_owned()).collect();
+    suivis.retain(|id, tache| {
+        let garde = rejoints.contains(id);
+        if !garde {
+            tache.abort();
+            fils.oublier(id.as_str());
+        }
+        garde
+    });
+    for salon in client.joined_rooms() {
+        if !suivis.contains_key(salon.room_id()) {
+            let id = salon.room_id().to_owned();
+            suivis.insert(id, taches.spawn(fils.clone().suivre(salon)));
+        }
+    }
 }
 
 // ── Dernière activité par salon, gardée d'un lancement à l'autre ─────────────
@@ -254,9 +291,11 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
         accepter_invitations(&client, &mut invitations_tentees).await;
         amorcer_activites(&client, &mut activites).await;
         publier(&client, &activites, &publication).await;
+        let mut taches = tokio::task::JoinSet::new();
+        let mut suivis = HashMap::new();
+        suivre_les_salons(&client, &publication.fils, &mut taches, &mut suivis);
 
-        let reglages = SyncSettings::default().timeout(Duration::from_secs(30));
-        let mut flux = Box::pin(client.sync_stream(reglages).await);
+        let mut flux = Box::pin(client.sync_stream(reglages(Duration::from_secs(30))).await);
         while let Some(reponse) = flux.next().await {
             match reponse {
                 Ok(reponse) => {
@@ -279,6 +318,7 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
                         publication.horloge.sonder(&base).await;
                     }
                     publier(&client, &activites, &publication).await;
+                    suivre_les_salons(&client, &publication.fils, &mut taches, &mut suivis);
                 }
                 Err(e) => {
                     log::warn!("[Sion][matrix] synchro : {e}");

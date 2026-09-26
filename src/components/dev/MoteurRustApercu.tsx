@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
-import { connecter, deconnecter, ecartHorloge, reprendre, salons as lireSalons, surEtat, surSalons, type EtatConnexion } from "../../services/matrixCore";
-import type { Channel } from "../../types/matrix";
+import {
+  chargerHistorique, connecter, deconnecter, ecartHorloge, epingles as lireEpingles, fils as lireFils, reprendre,
+  salons as lireSalons, surEtat, surMessages, surSalons, urlLecture, type EtatConnexion, type FilSalon,
+} from "../../services/matrixCore";
+import type { PinnedSummary } from "../../services/matrixService";
+import type { Channel, ChatMessage } from "../../types/matrix";
 
 /**
  * Écran de développement du moteur Matrix Rust (tranche T0).
@@ -10,7 +14,8 @@ import type { Channel } from "../../types/matrix";
  * Il valide les fondations — connexion d'un nouvel appareil, reprise de la
  * session au lancement suivant, déconnexion — avant que le reste de
  * l'interface ne soit branché sur ce moteur ; T1 y ajoute la liste des
- * salons (texte, vocaux avec leurs participants, MP). Textes non
+ * salons (texte, vocaux avec leurs participants, MP), T2 le fil d'un salon
+ * (médias servis par `sion-media`, historique, épinglés). Textes non
  * traduits : c'est un outil de développement, pas un écran livré.
  */
 export function MoteurRustApercu() {
@@ -22,6 +27,8 @@ export function MoteurRustApercu() {
   const [erreur, setErreur] = useState<string | null>(null);
   const [liste, setListe] = useState<Channel[]>([]);
   const [ecart, setEcart] = useState(0);
+  const [fils, setFils] = useState<Record<string, FilSalon>>({});
+  const [ouvert, setOuvert] = useState<string | null>(null);
 
   useEffect(() => {
     const desabonnements: (() => void)[] = [];
@@ -33,10 +40,18 @@ export function MoteurRustApercu() {
       if (e.etat === "connecte") {
         lireSalons().then((l) => actif && setListe(l)).catch(() => {});
         ecartHorloge().then((m) => actif && setEcart(m)).catch(() => {});
+        lireFils()
+          .then((tous) => actif && setFils((courants) => ({ ...Object.fromEntries(tous.map((f) => [f.salon, f])), ...courants })))
+          .catch(() => {});
       }
-      if (e.etat === "deconnecte") setListe([]);
+      if (e.etat === "deconnecte") {
+        setListe([]);
+        setFils({});
+        setOuvert(null);
+      }
     }).then(garder);
     void surSalons((l) => actif && setListe(l)).then(garder);
+    void surMessages((f) => actif && setFils((courants) => ({ ...courants, [f.salon]: f }))).then(garder);
     // Reprise automatique : c'est le critère de T0 (relancer sans se reconnecter).
     reprendre().catch((e) => actif && setErreur(String(e)));
     return () => {
@@ -69,11 +84,12 @@ export function MoteurRustApercu() {
 
   return (
     <div style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'var(--color-surface)', color: 'var(--color-on-surface)', fontFamily: 'system-ui, sans-serif',
+      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 16,
+      boxSizing: 'border-box', background: 'var(--color-surface)', color: 'var(--color-on-surface)',
+      fontFamily: 'system-ui, sans-serif',
     }}>
       <div style={{
-        width: 420, padding: 24, borderRadius: 16, display: 'flex', flexDirection: 'column', gap: 14,
+        width: 420, flexShrink: 0, padding: 24, borderRadius: 16, display: 'flex', flexDirection: 'column', gap: 14,
         background: 'var(--color-surface-container)', border: '1px solid var(--color-outline-variant)',
       }}>
         <div>
@@ -120,13 +136,18 @@ export function MoteurRustApercu() {
           </div>
         )}
 
-        {etat.etat === "connecte" && <ListeSalons liste={liste} />}
+        {etat.etat === "connecte" && <ListeSalons liste={liste} fils={fils} ouvert={ouvert} ouvrir={setOuvert} />}
       </div>
+      {etat.etat === "connecte" && ouvert && (
+        <Fil key={ouvert} salon={liste.find((c) => c.id === ouvert)} fil={fils[ouvert]} id={ouvert} />
+      )}
     </div>
   );
 }
 
-function ListeSalons({ liste }: { liste: Channel[] }) {
+function ListeSalons({ liste, fils, ouvert, ouvrir }: {
+  liste: Channel[]; fils: Record<string, FilSalon>; ouvert: string | null; ouvrir: (id: string) => void;
+}) {
   const visibles = liste.filter((c) => !c.isSoundboard);
   const groupes: [string, Channel[]][] = [
     ["Salons texte", visibles.filter((c) => !c.hasVoice && !c.isDM)],
@@ -142,17 +163,150 @@ function ListeSalons({ liste }: { liste: Channel[] }) {
         <div key={titre}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{titre}</div>
           {salons.map((c) => (
-            <div key={c.id} style={{ fontSize: 14, padding: '3px 0' }}>
+            <button
+              key={c.id}
+              onClick={() => ouvrir(c.id)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', border: 'none', font: 'inherit', color: 'inherit',
+                fontSize: 14, padding: '3px 6px', borderRadius: 6, cursor: 'pointer',
+                background: c.id === ouvert ? 'var(--color-surface-container-highest)' : 'transparent',
+              }}
+            >
               {c.hasVoice ? "🔊" : c.isDM ? "💬" : "#"} {c.name}
+              <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
+                {" "}({fils[c.id]?.messages.length ?? 0})
+              </span>
               {c.voiceUsers.length > 0 && (
                 <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
                   {" — "}{c.voiceUsers.map((u) => `${u.name}${u.muted ? " (muet)" : ""}${u.deafened ? " (sourd)" : ""}`).join(", ")}
                 </span>
               )}
-            </div>
+            </button>
           ))}
         </div>
       ))}
     </div>
   );
+}
+
+/** Fil d'un salon. L'ouvrir remonte ~30 messages d'historique et envoie
+ *  l'accusé de lecture, comme l'ouverture d'un salon dans Sion. */
+function Fil({ id, salon, fil }: { id: string; salon?: Channel; fil?: FilSalon }) {
+  // Monté à neuf pour chaque salon (clé = salon) : l'ouverture charge d'office.
+  const [charge, setCharge] = useState(true);
+  const [erreur, setErreur] = useState<string | null>(null);
+  const [resumes, setResumes] = useState<PinnedSummary[]>([]);
+
+  const remonter = () =>
+    chargerHistorique(id)
+      .catch((e) => setErreur(String(e)))
+      .finally(() => setCharge(false));
+  const plus = () => {
+    setCharge(true);
+    setErreur(null);
+    void remonter();
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- une fois à l'ouverture
+  useEffect(() => void remonter(), []);
+  const nbEpingles = fil?.epingles.length ?? 0;
+  useEffect(() => {
+    if (nbEpingles > 0) lireEpingles(id).then(setResumes).catch((e) => setErreur(String(e)));
+  }, [id, nbEpingles]);
+
+  return (
+    <div style={{
+      flex: 1, maxWidth: 720, height: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column', gap: 8,
+      padding: 16, borderRadius: 16, boxSizing: 'border-box',
+      background: 'var(--color-surface-container)', border: '1px solid var(--color-outline-variant)',
+    }}>
+      <div style={{ fontSize: 16, fontWeight: 800 }}>
+        {salon?.name ?? id}
+        <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--color-on-surface-variant)' }}>
+          {" "}— {fil?.messages.length ?? 0} messages{nbEpingles > 0 && `, ${nbEpingles} épinglé(s)`}
+        </span>
+      </div>
+      {nbEpingles > 0 && resumes.length > 0 && (
+        <div style={{ fontSize: 12, padding: 8, borderRadius: 8, background: 'var(--color-surface-container-high)' }}>
+          {resumes.map((r) => (
+            <div key={r.eventId}>
+              📌 <b>{r.sender}</b> : {r.text || r.media || "(vide)"}
+              {!r.loaded && <span style={{ color: 'var(--color-on-surface-variant)' }}> (hors du fil chargé)</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {fil?.aPlus !== false && (
+          <button
+            onClick={plus}
+            disabled={charge}
+            style={{
+              alignSelf: 'center', padding: '4px 12px', borderRadius: 999, border: '1px solid var(--color-outline-variant)',
+              background: 'transparent', color: 'var(--color-on-surface)', cursor: charge ? 'wait' : 'pointer',
+            }}
+          >
+            {charge ? "chargement…" : "Charger plus"}
+          </button>
+        )}
+        {fil?.aPlus === false && (
+          <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--color-on-surface-variant)' }}>Début du salon</div>
+        )}
+        {erreur && <div style={{ fontSize: 12, color: 'var(--color-error)' }}>{erreur}</div>}
+        {fil?.messages.map((m) => <Bulle key={m.eventId ?? m.id} m={m} epingle={fil.epingles.includes(String(m.eventId))} />)}
+      </div>
+    </div>
+  );
+}
+
+function Bulle({ m, epingle }: { m: ChatMessage; epingle: boolean }) {
+  const discret = { fontSize: 11, color: 'var(--color-on-surface-variant)' };
+  return (
+    <div style={{ display: 'flex', gap: 8, fontSize: 14 }}>
+      {m.avatarUrl
+        ? <img src={m.avatarUrl} alt="" style={{ width: 28, height: 28, borderRadius: '50%', flexShrink: 0 }} />
+        : <div style={{ width: 28, height: 28, borderRadius: '50%', flexShrink: 0, background: 'var(--color-surface-container-highest)' }} />}
+      <div style={{ minWidth: 0 }}>
+        <div>
+          <b>{m.user}</b> <span style={discret}>{m.time}{m.edited && " (modifié)"}{epingle && " 📌"}{m.msgtype && m.msgtype !== "m.text" && ` ${m.msgtype}`}</span>
+        </div>
+        {m.replyTo && (
+          <div style={{ ...discret, borderLeft: '2px solid var(--color-outline-variant)', paddingLeft: 6 }}>
+            ↪ {m.replyTo.user ?? m.replyTo.senderId ?? "?"} : {m.replyTo.text ?? m.replyTo.attachmentName ?? "…"}
+          </div>
+        )}
+        {m.poll ? (
+          <div>📊 {m.poll.question} — {m.poll.answers.map((a) => a.text).join(" / ")}{m.poll.ended && " (clos)"}</div>
+        ) : (
+          m.text && <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</div>
+        )}
+        {m.attachments?.map((a) => (
+          <div key={a.id}>
+            {a.mimeType.startsWith("image/") ? (
+              <img src={a.thumbnailUrl ?? a.url} alt={a.name} style={{ maxWidth: 320, maxHeight: 240, borderRadius: 8 }} />
+            ) : a.mimeType.startsWith("audio/") || a.mimeType.startsWith("video/") ? (
+              <Lecture url={a.url} video={a.mimeType.startsWith("video/")} />
+            ) : null}
+            <div style={discret}>{a.name} — {Math.round(a.size / 1024)} Ko</div>
+          </div>
+        ))}
+        {m.reactions && m.reactions.length > 0 && (
+          <div style={discret}>{m.reactions.map((r) => `${r.emoji} ${r.count}`).join("  ")}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Son ou vidéo : lus par le serveur média local (voir `urlLecture`). */
+function Lecture({ url, video }: { url: string; video: boolean }) {
+  const [source, setSource] = useState<string | null>(null);
+  useEffect(() => {
+    let vivant = true;
+    void urlLecture(url).then((u) => vivant && setSource(u));
+    return () => { vivant = false; };
+  }, [url]);
+  if (!source) return null;
+  return video
+    ? <video controls preload="metadata" src={source} style={{ maxWidth: 320, maxHeight: 240, borderRadius: 8 }} />
+    : <audio controls preload="metadata" src={source} style={{ maxWidth: 320 }} />;
 }

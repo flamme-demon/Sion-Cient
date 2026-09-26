@@ -8,12 +8,15 @@ use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::encryption::{BackupDownloadStrategy, EncryptionSettings};
 use matrix_sdk::ruma::api::error::ErrorKind;
-use matrix_sdk::ruma::{OwnedDeviceId, UserId};
+use matrix_sdk::ruma::{OwnedDeviceId, RoomId, UserId};
 use matrix_sdk::{Client, SessionMeta, SessionTokens};
 use serde::Serialize;
 use tokio::sync::{watch, Mutex};
 
+use crate::fil::{self, FilSalon, Fils};
+use crate::epingles::ResumeEpingle;
 use crate::horloge::Horloge;
+use crate::medias::{Medias, PREFIXE_PAR_DEFAUT};
 use crate::salons::Salon;
 use crate::session::{self, Secrets, Session, DOSSIER_MAGASIN};
 use crate::synchro::{self, Publication};
@@ -37,6 +40,7 @@ pub struct CoeurMatrix {
     etat: watch::Sender<EtatConnexion>,
     salons: watch::Sender<Vec<Salon>>,
     horloge: Arc<Horloge>,
+    fils: Fils,
     /// Boucle de synchro : elle tient les magasins SQLite ouverts, elle doit
     /// donc s'arrêter AVANT tout effacement ou nouvelle connexion.
     synchro: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -54,7 +58,7 @@ fn reglages_chiffrement() -> EncryptionSettings {
 }
 
 fn synchro_immediate() -> SyncSettings {
-    SyncSettings::default().timeout(Duration::ZERO)
+    synchro::reglages(Duration::ZERO)
 }
 
 impl CoeurMatrix {
@@ -68,8 +72,57 @@ impl CoeurMatrix {
             etat: watch::Sender::new(EtatConnexion::Deconnecte),
             salons: watch::Sender::new(Vec::new()),
             horloge: Arc::new(Horloge::default()),
+            fils: Fils::nouveau(Arc::new(Medias::nouveau(PREFIXE_PAR_DEFAUT))),
             synchro: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Préfixe des URL de médias (`sion-media://localhost/` par défaut ;
+    /// `http://sion-media.localhost/` sous Windows et Android).
+    pub fn avec_prefixe_medias(mut self, prefixe: impl Into<String>) -> Self {
+        self.fils = Fils::nouveau(Arc::new(Medias::nouveau(prefixe)));
+        self
+    }
+
+    /// Messages d'un salon, publiés à chaque changement.
+    pub fn messages(&self) -> tokio::sync::broadcast::Receiver<FilSalon> {
+        self.fils.abonner()
+    }
+
+    /// Dernière version publiée de tous les fils (chargement initial).
+    pub fn fils_actuels(&self) -> Vec<FilSalon> {
+        self.fils.tous()
+    }
+
+    async fn salon(&self, id: &str) -> Resultat<matrix_sdk::Room> {
+        let client = self.client().await.ok_or(Erreur::PasDeSession)?;
+        let id = RoomId::parse(id).map_err(|e| Erreur::Autre(e.to_string()))?;
+        client.get_room(&id).ok_or_else(|| Erreur::Autre(format!("salon inconnu : {id}")))
+    }
+
+    /// Remonte l'historique d'un salon ; renvoie « il en reste ».
+    pub async fn charger_historique(&self, salon: &str) -> Resultat<bool> {
+        let salon = self.salon(salon).await?;
+        // En boîte : voir `recursion_limit` dans lib.rs.
+        Box::pin(self.fils.charger_historique(&salon)).await
+    }
+
+    /// Résumés des messages épinglés d'un salon, du plus récent au plus ancien.
+    pub async fn epingles(&self, salon: &str) -> Resultat<Vec<ResumeEpingle>> {
+        let salon = self.salon(salon).await?;
+        Ok(Box::pin(self.fils.epingles(&salon)).await)
+    }
+
+    /// Accusé de lecture sur le dernier événement du salon.
+    pub async fn marquer_lu(&self, salon: &str) -> Resultat<()> {
+        Box::pin(fil::marquer_lu(&self.salon(salon).await?)).await;
+        Ok(())
+    }
+
+    /// Contenu d'un média servi par `sion-media` (déchiffré s'il le faut).
+    pub async fn media(&self, cle: &str, vignette: bool) -> Resultat<Vec<u8>> {
+        let client = self.client().await.ok_or(Erreur::PasDeSession)?;
+        self.fils.medias.contenu(&client, cle, vignette).await
     }
 
     /// Liste des salons rejoints, republiée à chaque changement.
@@ -91,6 +144,7 @@ impl CoeurMatrix {
             salons: self.salons.clone(),
             etat: self.etat.clone(),
             horloge: self.horloge.clone(),
+            fils: self.fils.clone(),
         };
         let tache = synchro::demarrer(client, self.dossier.clone(), publication);
         if let Some(ancienne) = self.synchro.lock().unwrap().replace(tache) {
@@ -132,11 +186,16 @@ impl CoeurMatrix {
         } else {
             constructeur.server_name_or_homeserver_url(serveur)
         };
-        Ok(constructeur
+        let client = constructeur
             .sqlite_store(self.dossier.join(DOSSIER_MAGASIN), Some(phrase))
             .with_encryption_settings(reglages_chiffrement())
             .build()
-            .await?)
+            .await?;
+        // Le cache d'événements n'écoute que les synchros qui suivent son
+        // activation : dès la construction, sinon le fil de la première
+        // synchro lui échappe.
+        client.event_cache().subscribe().map_err(|e| Erreur::Autre(e.to_string()))?;
+        Ok(client)
     }
 
     fn publier_connecte(&self, client: &Client) {
@@ -154,6 +213,7 @@ impl CoeurMatrix {
         drop(garde.take()); // libère SQLite avant d'effacer les magasins
         session::effacer(&self.dossier, &*self.coffre)?;
         self.salons.send_replace(Vec::new());
+        self.fils.vider();
         self.etat.send_replace(EtatConnexion::Connexion);
 
         let phrase = session::phrase_aleatoire()?;
@@ -278,6 +338,7 @@ impl CoeurMatrix {
         }
         session::effacer(&self.dossier, &*self.coffre)?;
         self.salons.send_replace(Vec::new());
+        self.fils.vider();
         self.etat.send_replace(EtatConnexion::Deconnecte);
         Ok(())
     }

@@ -4,10 +4,20 @@
 //! ses magasins SQLite chiffrés et la session, et publie un état de connexion
 //! observable. L'application lui fournit un [`Coffre`] pour les secrets.
 //! Plan et invariants : `docs/plan-matrix-rust-sdk.md`.
+// Les futurs de matrix-sdk sont si imbriqués que le compilateur ne sait plus
+// calculer la taille de ceux qui les attendent (« queries overflow the depth
+// limit »). La limite est relevée ICI seulement : les méthodes publiques de
+// `CoeurMatrix` rendent des futurs en boîte, que l'appli attend sans rien
+// changer de son côté.
+#![recursion_limit = "256"]
 mod appels;
 mod coeur;
 mod coffre;
+mod epingles;
+mod fil;
 mod horloge;
+mod medias;
+mod messages;
 mod salons;
 mod session;
 mod synchro;
@@ -15,6 +25,10 @@ mod synchro;
 pub use appels::UtilisateurVocal;
 pub use coeur::{CoeurMatrix, EtatConnexion};
 pub use coffre::{Coffre, CoffreMemoire};
+pub use epingles::ResumeEpingle;
+pub use fil::FilSalon;
+pub use medias::{type_mime, PREFIXE_PAR_DEFAUT};
+pub use messages::Message;
 pub use salons::Salon;
 
 /// Erreurs du cœur, présentables telles quelles à l'interface.

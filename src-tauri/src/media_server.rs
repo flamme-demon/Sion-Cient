@@ -24,6 +24,12 @@
 //! système. Ne sert que les fichiers directement contenus dans
 //! `sion_media_dir()`, désignés par leur seul nom de fichier — tout chemin
 //! contenant un séparateur ou `..` est rejeté avant d'atteindre le disque.
+//!
+//! **Moteur Matrix Rust.** `/matrix/<clé>` sert un média de message
+//! (`sion-media://localhost/<clé>`) : le même `webkitwebsrc` ignore ce
+//! protocole-là aussi, un `<audio>` ou une `<video>` ne peuvent donc pas le lire.
+//! Le cœur le télécharge — et le déchiffre — une fois, `matrix_pont` le dépose
+//! dans le dossier média, et il est servi ensuite comme les autres fichiers.
 
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
@@ -151,8 +157,16 @@ fn serve(stream: TcpStream) -> std::io::Result<()> {
     if method != "GET" && method != "HEAD" {
         return write_status(&mut stream, 405, "Method Not Allowed");
     }
-    let Some(name) = target.strip_prefix('/').and_then(safe_name) else {
-        return write_status(&mut stream, 400, "Bad Request");
+    let (name, mime_matrix) = if let Some(cle) = target.strip_prefix("/matrix/") {
+        match crate::matrix_pont::deposer_media(cle) {
+            Some((nom, mime)) => (nom, Some(mime)),
+            None => return write_status(&mut stream, 404, "Not Found"),
+        }
+    } else {
+        match target.strip_prefix('/').and_then(safe_name) {
+            Some(nom) => (nom, None),
+            None => return write_status(&mut stream, 400, "Bad Request"),
+        }
     };
     let path = crate::sion_media_dir().join(&name);
     let mut file = match std::fs::File::open(&path) {
@@ -160,7 +174,9 @@ fn serve(stream: TcpStream) -> std::io::Result<()> {
         Err(_) => return write_status(&mut stream, 404, "Not Found"),
     };
     let len = file.metadata()?.len();
-    let mime = if name.ends_with(".webm") {
+    let mime = if let Some(mime) = mime_matrix {
+        mime
+    } else if name.ends_with(".webm") {
         "video/webm"
     } else if name.ends_with(".mp4") {
         "video/mp4"

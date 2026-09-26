@@ -1509,7 +1509,8 @@ fn cleanup_old_transcodes() {
             if (name_str.starts_with("sion_in_")
                 || name_str.starts_with("sion_out_")
                 || name_str.starts_with("sion_mux_")
-                || name_str.starts_with("sion_send_"))
+                || name_str.starts_with("sion_send_")
+                || name_str.starts_with("sion_mx_"))
                 && entry
                     .metadata()
                     .and_then(|m| m.modified())
@@ -3570,6 +3571,10 @@ pub fn run() {
         matrix_pont::commandes::matrix_deconnecter,
         matrix_pont::commandes::matrix_salons,
         matrix_pont::commandes::matrix_ecart_horloge,
+        matrix_pont::commandes::matrix_fils,
+        matrix_pont::commandes::matrix_charger_historique,
+        matrix_pont::commandes::matrix_marquer_lu,
+        matrix_pont::commandes::matrix_epingles,
         update_shortcuts,
         get_shortcut_ws_port,
         open_url,
@@ -3689,6 +3694,10 @@ pub fn run() {
         matrix_pont::commandes::matrix_deconnecter,
         matrix_pont::commandes::matrix_salons,
         matrix_pont::commandes::matrix_ecart_horloge,
+        matrix_pont::commandes::matrix_fils,
+        matrix_pont::commandes::matrix_charger_historique,
+        matrix_pont::commandes::matrix_marquer_lu,
+        matrix_pont::commandes::matrix_epingles,
         open_url,
         open_file_default,
         download_file,
@@ -3742,6 +3751,8 @@ pub fn run() {
     // events under the hood; no JS glue needed for the default behaviour.
     #[cfg(not(target_os = "android"))]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+
+    let builder = matrix_pont::enregistrer_protocole(builder);
 
     let builder = builder
         .plugin(tauri_plugin_notification::init())

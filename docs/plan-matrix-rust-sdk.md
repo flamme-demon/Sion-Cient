@@ -224,7 +224,7 @@ pour les tranches suivantes :
 
 ```sh
 SION_TEST_SERVEUR=sionchat.fr SION_TEST_IDENTIFIANT=… SION_TEST_MOT_DE_PASSE=… \
-  ./build-scripts/parite-salons.sh
+  ./build-scripts/parite-moteurs.sh
 ```
 
 Il fait tourner le vrai `mapRoomToChannel` du moteur JS
@@ -244,6 +244,77 @@ Appris en route (26/09, sur un compte réel en écran de développement) :
 - **`reprendre()` est idempotent**, vérifié sous verrou : en développement,
   React monte l'écran deux fois, et le second appel relançait toute la
   synchro.
+
+### État — T2 (branche `feat/matrix-rust`, 27/09/2026)
+
+Fait :
+
+- `messages.rs` — port pur de `extractMessagesFromEvents` (texte, formaté,
+  éditions, réponses, réactions, sondages, pièces jointes, indéchiffrables),
+  les tests JS portés à l'identique, plus ceux des écarts voulus.
+- `fil.rs` — un abonnement au cache d'événements de matrix-sdk par salon
+  (persisté en SQLite, re-déchiffrement tardif géré par le SDK), fil republié
+  seulement s'il change ; historique par pages de 30 événements jusqu'à ~30
+  messages affichables (`loadRoomHistory`), accusé de lecture à l'ouverture.
+  Les fils de TOUS les salons sont publiés : l'interface en tire les non-lus
+  comme aujourd'hui (`ChannelItem`, `ChannelList`), rien à porter côté cœur.
+- `epingles.rs` — identifiants des épinglés joints à chaque fil
+  (`getPinnedEventIds`) et résumés (`getPinnedSummaries`), un épinglé hors du
+  fil chargé étant lu dans le cache ou demandé au serveur.
+- `medias.rs` — protocole `sion-media://localhost/<clé>` (Windows et Android :
+  `http://sion-media.localhost/<clé>`) : la clé est opaque, les clés de
+  déchiffrement ne quittent jamais Rust, le téléchargement est authentifié.
+  Type MIME reconnu aux premiers octets.
+- **Son et vidéo** : sous WebKitGTK, `<audio>` et `<video>` passent par
+  GStreamer, qui ignore les protocoles personnalisés (déjà constaté le 17/09
+  pour `asset://`). Le serveur média local sert donc aussi `/matrix/<clé>` :
+  le cœur télécharge — et déchiffre — le média une fois, le dépose (0600) dans
+  le dossier média, purgé après 24 h, et il est servi avec les requêtes par
+  plage. `urlLecture()` de la façade fait la conversion.
+- Pont : `matrix_fils`, `matrix_charger_historique`, `matrix_marquer_lu`,
+  `matrix_epingles`, événement `matrix-messages` ; l'écran de développement
+  affiche le fil (images, sons, vidéos, épinglés, « charger plus »).
+
+**Parité vérifiée sur le compte de test : 113 messages comparés, 0 écart
+strict** ; épinglés identiques (5 sur 2 salons). L'outil est devenu
+`build-scripts/parite-moteurs.sh` : les deux moteurs remontent l'historique,
+le banc JS a la crypto (en mémoire) comme le vrai Sion, et un message absent
+d'un côté alors qu'il est dans la fenêtre chargée de l'autre est un écart.
+`SION_PARITE_SORTIES=<dossier>` garde les sorties pour examen.
+
+Écarts VOULUS (documentés dans `messages.rs` et `epingles.rs`) :
+
+- **Éditions** : comme matrix-js-sdk, la dernière édition de l'auteur
+  remplace tout le contenu, type compris (un « poke » corrigé devient un
+  texte). Mais une réponse éditée reste une réponse (le JS perdait la
+  relation), une « édition » par un autre que l'auteur est ignorée (le JS en
+  affichait le texte : usurpation possible), une édition de média n'est pas
+  affichée en double (le JS le faisait — visible dans le salon soundboard), et
+  un média édité est marqué « modifié ».
+- La miniature d'une image chiffrée, et le média d'un épinglé chiffré, sont
+  servis déchiffrés ; le JS n'en affichait aucun.
+- L'heure affichée (`time`) est calculée par l'interface.
+
+Appris en route (27/09) :
+
+- **Le cache d'événements n'écoute que les synchros qui suivent son
+  activation** : il est activé dès la construction du client, sinon le fil de
+  la première synchro lui échappait.
+- `getEvents()` de matrix-js-sdk rend le tableau interne, qui grandit en place
+  pendant un `scrollback` : noter sa longueur avant.
+- Les futurs de matrix-sdk sont si imbriqués que le compilateur dépasse sa
+  profondeur de requêtes (« queries overflow the depth limit »). La limite est
+  relevée dans `sion-matrix` seulement, et ses méthodes publiques rendent des
+  futurs en boîte : l'appli n'a rien à changer.
+- Au lancement suivant, matrix-sdk ne recharge que le dernier segment du fil
+  (souvent des événements d'appel, sans message) : c'est l'ouverture du salon
+  qui remonte l'historique, depuis le disque d'abord. Le moteur JS, lui,
+  refait une synchro initiale de 20 événements par salon à chaque lancement.
+
+Reste pour le branchement de la vraie interface : le lecteur vidéo natif
+reçoit aujourd'hui une URL http ou un fichier ; il devra accepter un média
+`sion-media` (via `/matrix/<clé>`, ou le fichier déposé). `resolveServerEventId`
+(échos locaux `~…`) relève de T3 (envoi).
 
 ## Les étapes suivantes
 
