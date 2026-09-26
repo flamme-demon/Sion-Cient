@@ -51,9 +51,77 @@ const EMOJI_ECART = 8;
 /** Supprimer un meme d'un autre : réservé aux modérateurs, comme ailleurs. */
 const NIVEAU_MODERATION = 50;
 
+/** Aperçu d'une tuile : la première image, figée dans un canvas, et le WebP
+ *  animé seulement au survol. Tous animés, les aperçus (12 images/s) faisaient
+ *  redessiner la grille en permanence, tuiles hors écran comprises : 26 memes
+ *  = ~1 700 dessins en 6,7 s et un cœur à moitié occupé par le pilote GPU,
+ *  mesuré le 26/09. Chargement différé jusqu'à l'approche de l'écran, comme le
+ *  `loading="lazy"` d'avant. */
+function ApercuMeme({ src, anime }: { src: string; anime: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let annule = false;
+    let image: HTMLImageElement | null = null;
+    let chargement = false;
+    const dessiner = (img: HTMLImageElement) => {
+      const cote = Math.min(img.naturalWidth, img.naturalHeight);
+      if (annule || !cote) return;
+      // Recadrage « cover » au carré, comme l'<img> qu'il remplace.
+      canvas.width = cote;
+      canvas.height = cote;
+      canvas.getContext("2d")?.drawImage(
+        img, (img.naturalWidth - cote) / 2, (img.naturalHeight - cote) / 2, cote, cote, 0, 0, cote, cote,
+      );
+    };
+    const figer = () => {
+      if (image) return dessiner(image);
+      if (chargement) return;
+      chargement = true;
+      const img = new Image();
+      img.src = src;
+      // Détachée du document, une image animée n'avance pas : on dessine sa
+      // première image. Le canvas est « teinté » (autre origine) mais s'affiche.
+      img.decode().then(() => {
+        image = img;
+        dessiner(img);
+      }).catch(() => { chargement = false; });
+    };
+    // Redessiné à CHAQUE retour à l'écran, pas seulement au premier : WebKitGTK
+    // vide un canvas qu'on a masqué, et les tuiles survolées redevenaient
+    // grises (26/09). L'image décodée est gardée, redessiner coûte 220 px.
+    const observateur = new IntersectionObserver((entrees) => {
+      if (entrees.some((e) => e.isIntersecting)) figer();
+    }, { rootMargin: "200px" });
+    observateur.observe(canvas);
+    return () => {
+      annule = true;
+      observateur.disconnect();
+    };
+  }, [src]);
+
+  // Le canvas n'est jamais masqué : au survol, l'aperçu animé se pose
+  // par-dessus.
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
+      {anime && (
+        <img
+          src={src}
+          alt=""
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+        />
+      )}
+    </div>
+  );
+}
+
 export function MemeboardPanel() {
   const { t } = useTranslation();
   const [memes, setMemes] = useState<MemeEntry[]>([]);
+  const [survolee, setSurvolee] = useState<string | null>(null);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [recherche, setRecherche] = useState("");
   const [import_, setImport] = useState(false);
@@ -287,8 +355,14 @@ export function MemeboardPanel() {
                   border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-container)',
                   opacity: actif ? 1 : 0.45, transition: 'border-color 120ms',
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--color-primary)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-outline-variant)'; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-primary)';
+                  setSurvolee(m.eventId);
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--color-outline-variant)';
+                  setSurvolee((id) => (id === m.eventId ? null : id));
+                }}
               >
                 <div style={{
                   aspectRatio: '1 / 1', borderRadius: 8, overflow: 'hidden',
@@ -296,7 +370,7 @@ export function MemeboardPanel() {
                   display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28,
                 }}>
                   {apercu
-                    ? <img src={apercu} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                    ? <ApercuMeme src={apercu} anime={survolee === m.eventId} />
                     : (m.emoji || '🎬')}
                 </div>
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
