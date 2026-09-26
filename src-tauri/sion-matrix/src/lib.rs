@@ -4,12 +4,18 @@
 //! ses magasins SQLite chiffrés et la session, et publie un état de connexion
 //! observable. L'application lui fournit un [`Coffre`] pour les secrets.
 //! Plan et invariants : `docs/plan-matrix-rust-sdk.md`.
+mod appels;
 mod coeur;
 mod coffre;
+mod horloge;
+mod salons;
 mod session;
+mod synchro;
 
+pub use appels::UtilisateurVocal;
 pub use coeur::{CoeurMatrix, EtatConnexion};
 pub use coffre::{Coffre, CoffreMemoire};
+pub use salons::Salon;
 
 /// Erreurs du cœur, présentables telles quelles à l'interface.
 #[derive(Debug, thiserror::Error)]

@@ -13,7 +13,10 @@ use matrix_sdk::{Client, SessionMeta, SessionTokens};
 use serde::Serialize;
 use tokio::sync::{watch, Mutex};
 
+use crate::horloge::Horloge;
+use crate::salons::Salon;
 use crate::session::{self, Secrets, Session, DOSSIER_MAGASIN};
+use crate::synchro::{self, Publication};
 use crate::{Coffre, Erreur, Resultat};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -32,6 +35,11 @@ pub struct CoeurMatrix {
     coffre: Arc<dyn Coffre>,
     client: Mutex<Option<Client>>,
     etat: watch::Sender<EtatConnexion>,
+    salons: watch::Sender<Vec<Salon>>,
+    horloge: Arc<Horloge>,
+    /// Boucle de synchro : elle tient les magasins SQLite ouverts, elle doit
+    /// donc s'arrêter AVANT tout effacement ou nouvelle connexion.
+    synchro: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// Rien d'automatique : le cœur ne doit jamais créer une nouvelle identité
@@ -58,7 +66,51 @@ impl CoeurMatrix {
             coffre,
             client: Mutex::new(None),
             etat: watch::Sender::new(EtatConnexion::Deconnecte),
+            salons: watch::Sender::new(Vec::new()),
+            horloge: Arc::new(Horloge::default()),
+            synchro: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Liste des salons rejoints, republiée à chaque changement.
+    pub fn salons(&self) -> watch::Receiver<Vec<Salon>> {
+        self.salons.subscribe()
+    }
+
+    pub fn salons_actuels(&self) -> Vec<Salon> {
+        self.salons.borrow().clone()
+    }
+
+    /// Écart de l'horloge locale avec le serveur, en minutes (0 sous 5 min).
+    pub fn ecart_horloge_minutes(&self) -> i64 {
+        self.horloge.ecart_minutes()
+    }
+
+    fn lancer_synchro(&self, client: Client) {
+        let publication = Publication {
+            salons: self.salons.clone(),
+            etat: self.etat.clone(),
+            horloge: self.horloge.clone(),
+        };
+        let tache = synchro::demarrer(client, self.dossier.clone(), publication);
+        if let Some(ancienne) = self.synchro.lock().unwrap().replace(tache) {
+            ancienne.abort();
+        }
+    }
+
+    /// Arrête la boucle de synchro et attend qu'elle ait lâché le client.
+    async fn arreter_synchro(&self) {
+        let tache = self.synchro.lock().unwrap().take();
+        if let Some(tache) = tache {
+            tache.abort();
+            let _ = tache.await;
+        }
+    }
+
+    /// Fermeture de l'appli : la session est gardée pour la reprise suivante.
+    pub async fn fermer(&self) {
+        self.arreter_synchro().await;
+        *self.client.lock().await = None;
     }
 
     pub fn etat(&self) -> watch::Receiver<EtatConnexion> {
@@ -97,9 +149,11 @@ impl CoeurMatrix {
     /// Connexion par mot de passe, toujours comme **nouvel appareil** avec des
     /// magasins neufs : tout état local précédent est effacé.
     pub async fn connecter(&self, serveur: &str, identifiant: &str, mot_de_passe: &str) -> Resultat<()> {
+        self.arreter_synchro().await;
         let mut garde = self.client.lock().await;
         drop(garde.take()); // libère SQLite avant d'effacer les magasins
         session::effacer(&self.dossier, &*self.coffre)?;
+        self.salons.send_replace(Vec::new());
         self.etat.send_replace(EtatConnexion::Connexion);
 
         let phrase = session::phrase_aleatoire()?;
@@ -138,6 +192,7 @@ impl CoeurMatrix {
                     client.device_id().map(|d| d.to_string()).unwrap_or_default()
                 );
                 self.publier_connecte(&client);
+                self.lancer_synchro(client.clone());
                 *garde = Some(client);
                 Ok(())
             }
@@ -158,6 +213,7 @@ impl CoeurMatrix {
     /// elle n'est plus valable (jeton révoqué, magasin disparu) ; hors ligne,
     /// la session est gardée et l'état passe en erreur.
     pub async fn reprendre(&self) -> Resultat<bool> {
+        self.arreter_synchro().await;
         let mut garde = self.client.lock().await;
         let Some(s) = Session::charger(&self.dossier, &*self.coffre)? else {
             self.etat.send_replace(EtatConnexion::Deconnecte);
@@ -180,6 +236,7 @@ impl CoeurMatrix {
         match client.sync_once(synchro_immediate()).await {
             Ok(_) => {
                 self.publier_connecte(&client);
+                self.lancer_synchro(client.clone());
                 *garde = Some(client);
                 Ok(true)
             }
@@ -193,6 +250,8 @@ impl CoeurMatrix {
             Err(e) => {
                 log::warn!("[Sion][matrix] reprise hors ligne : {e}");
                 self.etat.send_replace(EtatConnexion::Erreur { message: e.to_string() });
+                // La boucle réessaie et repassera « connecté » au retour du réseau.
+                self.lancer_synchro(client.clone());
                 *garde = Some(client);
                 Ok(true)
             }
@@ -202,6 +261,7 @@ impl CoeurMatrix {
     /// Déconnexion : l'appareil est supprimé côté serveur, puis la session et
     /// les magasins locaux sont effacés.
     pub async fn deconnecter(&self) -> Resultat<()> {
+        self.arreter_synchro().await;
         let mut garde = self.client.lock().await;
         if let Some(client) = garde.take() {
             if let Err(e) = client.matrix_auth().logout().await {
@@ -209,8 +269,17 @@ impl CoeurMatrix {
             }
         }
         session::effacer(&self.dossier, &*self.coffre)?;
+        self.salons.send_replace(Vec::new());
         self.etat.send_replace(EtatConnexion::Deconnecte);
         Ok(())
+    }
+}
+
+impl Drop for CoeurMatrix {
+    fn drop(&mut self) {
+        if let Some(tache) = self.synchro.get_mut().ok().and_then(Option::take) {
+            tache.abort();
+        }
     }
 }
 

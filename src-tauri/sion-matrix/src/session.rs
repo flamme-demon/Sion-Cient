@@ -13,6 +13,8 @@ use crate::{Coffre, Erreur, Resultat};
 
 pub(crate) const FICHIER_SESSION: &str = "session.json";
 pub(crate) const DOSSIER_MAGASIN: &str = "magasin";
+/// Dernière activité par salon (voir `synchro.rs`).
+pub(crate) const FICHIER_ACTIVITE: &str = "activite.json";
 /// Base du magasin de chiffrement de matrix-sdk-sqlite.
 const BASE_CHIFFREMENT: &str = "matrix-sdk-crypto.sqlite3";
 
@@ -108,6 +110,7 @@ pub(crate) fn effacer(dossier: &Path, coffre: &dyn Coffre) -> Resultat<()> {
     coffre.effacer();
     for resultat in [
         std::fs::remove_file(dossier.join(FICHIER_SESSION)),
+        std::fs::remove_file(dossier.join(FICHIER_ACTIVITE)),
         std::fs::remove_dir_all(dossier.join(DOSSIER_MAGASIN)),
     ] {
         match resultat {

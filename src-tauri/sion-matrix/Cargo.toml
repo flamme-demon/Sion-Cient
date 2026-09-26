@@ -8,13 +8,16 @@ publish = false
 
 [dependencies]
 matrix-sdk = { version = "=0.19.1", features = ["bundled-sqlite"] }
-tokio = { version = "1", features = ["sync", "fs"] }
+tokio = { version = "1", features = ["sync", "fs", "rt", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 thiserror = "2"
 getrandom = "0.3"
+httpdate = "1"
+futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

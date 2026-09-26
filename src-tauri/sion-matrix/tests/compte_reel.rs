@@ -35,11 +35,46 @@ async fn connexion_reprise_deconnexion() {
     println!("1. connecté : {utilisateur}, appareil {appareil}");
     let texte = std::fs::read_to_string(dossier.path().join("session.json")).unwrap();
     assert!(!texte.contains(&mot_de_passe), "le mot de passe ne doit jamais être écrit");
-    drop(premier); // « fermeture de l'appli »
+
+    // T1 : la liste des salons arrive par la boucle de synchro.
+    let mut salons = premier.salons();
+    let liste = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if !salons.borrow_and_update().is_empty() {
+                return salons.borrow().clone();
+            }
+            salons.changed().await.expect("publication des salons");
+        }
+    })
+    .await
+    .expect("aucun salon publié en 30 s");
+    println!("   {} salons :", liste.len());
+    for s in &liste {
+        println!(
+            "   - {:<28} vocal={:<5} mp={:<5} soundboard={:<5} en vocal={} activité={}",
+            s.name, s.has_voice, s.is_dm, s.is_soundboard, s.voice_users.len(), s.last_activity
+        );
+    }
+    if let Ok(sortie) = std::env::var("SION_TEST_SORTIE_SALONS") {
+        std::fs::write(&sortie, serde_json::to_vec_pretty(&liste).unwrap()).unwrap();
+        println!("   liste écrite dans {sortie}");
+    }
+    premier.fermer().await; // « fermeture de l'appli »
+    drop(premier);
 
     // 2. Reprise au lancement suivant, sans mot de passe.
     let second = CoeurMatrix::nouveau(dossier.path().to_path_buf(), "Sion — test T0", coffre.clone());
     assert!(second.reprendre().await.expect("reprise"), "la session aurait dû être reprise");
+    // Au lancement suivant, les salons reviennent du magasin local.
+    let mut salons = second.salons();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while salons.borrow_and_update().is_empty() {
+            salons.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("salons non republiés après reprise");
+    println!("2b. salons republiés après reprise : {}", second.salons_actuels().len());
     match second.etat_actuel() {
         EtatConnexion::Connecte { appareil: repris, .. } => {
             assert_eq!(repris, appareil, "la reprise doit garder le même appareil");
