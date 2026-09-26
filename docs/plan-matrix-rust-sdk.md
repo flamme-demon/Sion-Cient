@@ -188,6 +188,52 @@ Compilation Windows MSVC verte en CI (le risque `aws-lc-rs` est levé), Linux et
 Android arm64 vérifiés. Pour essayer l'écran de développement :
 `SION_MATRIX_MOTEUR=rust ./build-scripts/run-native.sh --features moteur-matrix-rust`.
 
+### État — T1 (26/09/2026)
+
+**Décision : synchro classique, pas la synchro glissante.** La liste de salons
+d'Element X (`RoomListService`) ne demande au serveur qu'une liste d'états
+**figée dans son code** (`DEFAULT_REQUIRED_STATE`) : `org.matrix.msc3401.call.member`
+y est, mais pas `m.room.type` — le marqueur que Sion pose sur ses salons
+vocaux (`m.voice_channel`, voir `createChannel`). Le sujet « voice » n'est
+qu'un complément, modifiable : un salon vocal renommé deviendrait un salon
+texte. La synchro classique donne l'état complet ; pour des serveurs
+communautaires, son coût est négligeable (114–173 ms pour 8 salons). Une
+synchro glissante avec nos propres listes (`matrix_sdk::sliding_sync`) reste
+possible si de gros comptes l'exigent.
+
+Fait :
+
+- `appels.rs` — participants vocaux (`extractVoiceUsers`), les 9 tests JS
+  portés à l'identique, plus 3.
+- `salons.rs` — classement pur (`mapRoomToChannel`) : vocal, MP (`m.direct`,
+  salon à deux, MP orphelin), soundboard, nom, icône ; sérialisé au format
+  `Channel` exact (dont `isDM`).
+- `horloge.rs` — écart avec le serveur par l'en-tête `Date` (port de
+  `serverClock.ts`, même tolérance de 5 min, même validité de 10 min).
+- `synchro.rs` — boucle de synchro, invitations acceptées d'office (et
+  `m.direct` mis à jour pour un MP, comme le JS), dernière activité gardée
+  d'un lancement à l'autre (`activite.json`), liste republiée seulement si
+  elle change.
+- Pont : commande `matrix_salons`, événement `matrix-salons`,
+  `matrix_ecart_horloge` ; l'écran de développement affiche la liste.
+
+**Parité vérifiée sur le compte de test : 8 salons de chaque côté, 0 écart**
+(nom, sujet, icône, vocal, MP et correspondant, soundboard, création,
+participants vocaux ; dernière activité identique aussi). Outil réutilisable
+pour les tranches suivantes :
+
+```sh
+SION_TEST_SERVEUR=sionchat.fr SION_TEST_IDENTIFIANT=… SION_TEST_MOT_DE_PASSE=… \
+  ./build-scripts/parite-salons.sh
+```
+
+Il fait tourner le vrai `mapRoomToChannel` du moteur JS
+(`src/stores/pariteSalons.test.ts`, ignoré sans ces variables) et le cœur Rust
+(`tests/compte_reel.rs`) sur le même compte, puis compare champ par champ.
+
+Pas encore couvert, rattaché à T2 : les non-lus (le JS les compte à partir des
+messages reçus depuis le début de la session).
+
 ## Les étapes suivantes
 
 - **Étape 3 — MatrixRTC en Rust.** Port maison depuis

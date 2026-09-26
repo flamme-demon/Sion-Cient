@@ -4,8 +4,11 @@
  * `docs/plan-matrix-rust-sdk.md`.
  *
  * T0 : moteur actif, session (connexion, reprise, déconnexion) et état de
- * connexion. Le jeton d'accès ne passe jamais par ici : il reste côté Rust.
+ * connexion. T1 : liste des salons, au format `Channel` du moteur JS.
+ * Le jeton d'accès ne passe jamais par ici : il reste côté Rust.
  */
+
+import type { Channel } from "../types/matrix";
 
 export type EtatConnexion =
   | { etat: "deconnecte" }
@@ -44,4 +47,16 @@ export const deconnecter = () => invoquer<void>("matrix_deconnecter");
 export async function surEtat(rappel: (etat: EtatConnexion) => void): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<EtatConnexion>("matrix-etat", (evenement) => rappel(evenement.payload));
+}
+
+/** Liste des salons rejoints, telle que le cœur l'a publiée en dernier. */
+export const salons = () => invoquer<Channel[]>("matrix_salons");
+
+/** Écart de l'horloge locale avec le serveur, en minutes (0 sous 5 min). */
+export const ecartHorloge = () => invoquer<number>("matrix_ecart_horloge");
+
+/** Suit la liste des salons (republiée seulement quand elle change). */
+export async function surSalons(rappel: (liste: Channel[]) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<Channel[]>("matrix-salons", (evenement) => rappel(evenement.payload));
 }

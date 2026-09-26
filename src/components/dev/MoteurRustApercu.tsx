@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { connecter, deconnecter, reprendre, surEtat, type EtatConnexion } from "../../services/matrixCore";
+import { connecter, deconnecter, ecartHorloge, reprendre, salons as lireSalons, surEtat, surSalons, type EtatConnexion } from "../../services/matrixCore";
+import type { Channel } from "../../types/matrix";
 
 /**
  * Écran de développement du moteur Matrix Rust (tranche T0).
@@ -8,7 +9,8 @@ import { connecter, deconnecter, reprendre, surEtat, type EtatConnexion } from "
  * `SION_MATRIX_MOTEUR=rust` et compilée avec la feature `moteur-matrix-rust`.
  * Il valide les fondations — connexion d'un nouvel appareil, reprise de la
  * session au lancement suivant, déconnexion — avant que le reste de
- * l'interface ne soit branché sur ce moteur (T1 et suivantes). Textes non
+ * l'interface ne soit branché sur ce moteur ; T1 y ajoute la liste des
+ * salons (texte, vocaux avec leurs participants, MP). Textes non
  * traduits : c'est un outil de développement, pas un écran livré.
  */
 export function MoteurRustApercu() {
@@ -18,19 +20,28 @@ export function MoteurRustApercu() {
   const [motDePasse, setMotDePasse] = useState("");
   const [occupe, setOccupe] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
+  const [liste, setListe] = useState<Channel[]>([]);
+  const [ecart, setEcart] = useState(0);
 
   useEffect(() => {
-    let desabonner: (() => void) | undefined;
+    const desabonnements: (() => void)[] = [];
     let actif = true;
-    void surEtat((e) => actif && setEtat(e)).then((d) => {
-      if (actif) desabonner = d;
-      else d();
-    });
+    const garder = (d: () => void) => (actif ? desabonnements.push(d) : d());
+    void surEtat((e) => {
+      if (!actif) return;
+      setEtat(e);
+      if (e.etat === "connecte") {
+        lireSalons().then((l) => actif && setListe(l)).catch(() => {});
+        ecartHorloge().then((m) => actif && setEcart(m)).catch(() => {});
+      }
+      if (e.etat === "deconnecte") setListe([]);
+    }).then(garder);
+    void surSalons((l) => actif && setListe(l)).then(garder);
     // Reprise automatique : c'est le critère de T0 (relancer sans se reconnecter).
     reprendre().catch((e) => actif && setErreur(String(e)));
     return () => {
       actif = false;
-      desabonner?.();
+      desabonnements.forEach((d) => d());
     };
   }, []);
 
@@ -102,7 +113,46 @@ export function MoteurRustApercu() {
         )}
 
         {erreur && <div style={{ fontSize: 12, color: 'var(--color-error)' }}>{erreur}</div>}
+
+        {ecart !== 0 && (
+          <div style={{ fontSize: 12, color: 'var(--color-error)' }}>
+            Horloge locale décalée de {ecart} min par rapport au serveur.
+          </div>
+        )}
+
+        {etat.etat === "connecte" && <ListeSalons liste={liste} />}
       </div>
+    </div>
+  );
+}
+
+function ListeSalons({ liste }: { liste: Channel[] }) {
+  const visibles = liste.filter((c) => !c.isSoundboard);
+  const groupes: [string, Channel[]][] = [
+    ["Salons texte", visibles.filter((c) => !c.hasVoice && !c.isDM)],
+    ["Salons vocaux", visibles.filter((c) => c.hasVoice && !c.isDM)],
+    ["Messages privés", visibles.filter((c) => c.isDM)],
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 360, overflowY: 'auto' }}>
+      <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
+        {liste.length} salons reçus du cœur Rust ({liste.length - visibles.length} soundboard masqué).
+      </div>
+      {groupes.map(([titre, salons]) => salons.length > 0 && (
+        <div key={titre}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-on-surface-variant)', marginBottom: 4 }}>{titre}</div>
+          {salons.map((c) => (
+            <div key={c.id} style={{ fontSize: 14, padding: '3px 0' }}>
+              {c.hasVoice ? "🔊" : c.isDM ? "💬" : "#"} {c.name}
+              {c.voiceUsers.length > 0 && (
+                <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
+                  {" — "}{c.voiceUsers.map((u) => `${u.name}${u.muted ? " (muet)" : ""}${u.deafened ? " (sourd)" : ""}`).join(", ")}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

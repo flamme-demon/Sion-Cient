@@ -87,18 +87,27 @@ mod actif {
         };
         let coeur = Arc::new(CoeurMatrix::nouveau(dossier, "Sion (moteur Rust)", Arc::new(CoffreSysteme)));
         let mut etat = coeur.etat();
+        let mut salons = coeur.salons();
         let _ = COEUR.set(coeur);
         log::info!("[Sion][matrix] moteur Rust actif");
 
-        // Relais de l'état de connexion vers la webview.
-        let app = app.clone();
+        // Relais de l'état de connexion et de la liste des salons vers la
+        // webview. Le cœur ne republie la liste que si elle a changé.
+        let app_etat = app.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 let courant = etat.borrow_and_update().clone();
-                let _ = app.emit("matrix-etat", &courant);
+                let _ = app_etat.emit("matrix-etat", &courant);
                 if etat.changed().await.is_err() {
                     break;
                 }
+            }
+        });
+        let app_salons = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while salons.changed().await.is_ok() {
+                let liste = salons.borrow_and_update().clone();
+                let _ = app_salons.emit("matrix-salons", &liste);
             }
         });
     }
@@ -146,6 +155,17 @@ pub mod commandes {
     pub async fn matrix_deconnecter() -> Result<(), String> {
         coeur()?.deconnecter().await.map_err(|e| e.to_string())
     }
+
+    #[tauri::command]
+    pub fn matrix_salons() -> Result<serde_json::Value, String> {
+        serde_json::to_value(coeur()?.salons_actuels()).map_err(|e| e.to_string())
+    }
+
+    /// Écart de l'horloge locale avec le serveur, en minutes (0 sous 5 min).
+    #[tauri::command]
+    pub fn matrix_ecart_horloge() -> Result<i64, String> {
+        Ok(coeur()?.ecart_horloge_minutes())
+    }
 }
 
 #[cfg(not(feature = "moteur-matrix-rust"))]
@@ -169,6 +189,16 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_deconnecter() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub fn matrix_salons() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub fn matrix_ecart_horloge() -> Result<i64, String> {
         Err(INACTIF.into())
     }
 }

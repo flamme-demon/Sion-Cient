@@ -300,7 +300,7 @@ function vignetteDe(mxcUrl: string, info: Record<string, any>, chiffre: boolean)
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channel {
+export function mapRoomToChannel(room: any, client: MatrixClient | null = null): Channel {
   const topic = room.currentState?.getStateEvents?.("m.room.topic", "")?.getContent?.()?.topic || "";
   const createEvent = room.currentState?.getStateEvents?.("m.room.create", "");
   const createContent = createEvent?.getContent?.() || {};
