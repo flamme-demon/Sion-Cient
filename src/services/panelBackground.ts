@@ -148,11 +148,9 @@ export function usePanelBackgroundStyle(scope: BackgroundScope): CSSProperties |
   // Mode « flou » : l'image vit dans une couche dédiée floutée
   // (`PanelBackgroundLayer`) — le conteneur ne porte rien.
   if (cfg.mode === "blur") return undefined;
-  const veil = `color-mix(in srgb, var(--color-surface-container-low) ${Math.round((1 - cfg.opacity) * 100)}%, transparent)`;
-  return {
-    backgroundImage: `linear-gradient(${veil}, ${veil}), url(${url})`,
-    backgroundSize: 'cover',
-    backgroundPosition: bgAnchorCss(cfg.anchor),
-    backgroundRepeat: 'no-repeat',
-  };
+  // Mode « voile » : rendu lui aussi par `PanelBackgroundLayer`, sur sa propre
+  // couche — posé ici, un fond animé faisait repeindre tout le panneau. Le
+  // conteneur devient un contexte d'empilement pour que cette couche, au
+  // niveau -1, reste sous son contenu sans passer derrière les ancêtres.
+  return { isolation: 'isolate' };
 }

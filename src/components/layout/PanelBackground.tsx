@@ -143,8 +143,41 @@ export function PanelBackgroundLayer({ scope }: { scope: BackgroundScope }) {
   const url = usePanelBackgroundUrl(scope);
   if (!cfg || !url) return null;
 
-  if (cfg.mode !== "blur") return null;
   const veil = `color-mix(in srgb, var(--color-surface-container-low) ${Math.round((1 - cfg.opacity) * 100)}%, transparent)`;
+  if (cfg.mode !== "blur") {
+    // Mode « voile » : l'image est une <img> sur SA couche de composition
+    // (`will-change`), pas un `background-image` du conteneur. Posée en fond
+    // du conteneur, chaque image d'un fond animé (WebP ~24 i/s) faisait
+    // repeindre tout le panneau, messages compris : ~50 % d'un cœur entre le
+    // fil principal et le pilote GPU, mesuré le 26/09. Sur sa couche, seule
+    // l'image est repeinte — ~37 % au total, et plus rien côté messages.
+    //
+    // Niveau -1, dans un conteneur isolé (`usePanelBackgroundStyle`) : le
+    // contenu passe par-dessus d'un seul tenant, sans que chaque bloc doive
+    // devenir sa propre couche.
+    return (
+      <div aria-hidden style={{ position: 'absolute', inset: 0, zIndex: -1, pointerEvents: 'none', overflow: 'hidden' }}>
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          style={{
+            position: 'absolute', inset: 0, width: '100%', height: '100%',
+            objectFit: 'cover', objectPosition: bgAnchorCss(cfg.anchor),
+            willChange: 'transform',
+            // Ce fond, invisible sous l'image recadrée, n'est pas décoratif :
+            // il empêche WebKit d'en faire une « couche directe ». Dans ce
+            // mode, chaque image de l'animation est décodée de façon
+            // synchrone sur le fil principal, et le défilement des messages
+            // saccadait (fil principal à 81–86 %, 26/09). Peinte dans sa
+            // couche, l'image est décodée sur le fil dédié de WebKit.
+            background: 'var(--color-surface-container-low)',
+          }}
+        />
+        <div style={{ position: 'absolute', inset: 0, background: veil }} />
+      </div>
+    );
+  }
   return (
     <div
       aria-hidden
@@ -164,3 +197,4 @@ export function PanelBackgroundLayer({ scope }: { scope: BackgroundScope }) {
     />
   );
 }
+
