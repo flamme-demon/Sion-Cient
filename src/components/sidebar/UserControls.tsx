@@ -197,17 +197,19 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
 
       {inVoice && voiceInMenu && (
         compact ? (
-          // Rail : la carte vocale se réduit à une colonne d'icônes — état,
-          // récupération E2EE, micro, son, transcription, raccrocher.
-          <div style={{
-            padding: '8px 0', borderRadius: 12, width: '100%', flexShrink: 0,
-            background: 'var(--color-surface-container-high)',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-          }}>
-            <span
-              title={`${t("voice.connected")} — ${activeVoice.name}`}
-              style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--color-green)', animation: 'pulse 2s infinite', cursor: 'help' }}
-            />
+          // Rail : la carte vocale se réduit à une colonne d'icônes —
+          // récupération E2EE, micro, son, transcription, raccrocher. Elle
+          // n'existe qu'en vocal : une pastille « connecté » y serait redondante,
+          // et son clignotement infini redessinait la page à 60 images/s
+          // (mesuré le 26/09). Le salon reste lisible en infobulle.
+          <div
+            title={`${t("voice.connected")} — ${activeVoice.name}`}
+            style={{
+              padding: '8px 0', borderRadius: 12, width: '100%', flexShrink: 0,
+              background: 'var(--color-surface-container-high)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+            }}
+          >
             {(e2eeUnhealthy || republished) && (
               <button
                 onClick={handleRepublish}
@@ -255,7 +257,8 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
           {/* Status + ping + hang up */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-green)', flexShrink: 0, animation: 'pulse 2s infinite' }} />
+              {/* Fixe : un clignotement infini force WebKit à redessiner en continu. */}
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-green)', flexShrink: 0 }} />
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-green)', whiteSpace: 'nowrap' }}>{t("voice.connected")}</span>
             </div>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
