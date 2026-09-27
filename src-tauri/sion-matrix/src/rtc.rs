@@ -309,15 +309,14 @@ impl GestionCles {
         identite(&self.moi, &self.appareil)
     }
 
+    /// Anneau d'un participant, dans l'ordre d'arrivée : la dernière clé est
+    /// la plus récente, même quand l'index a bouclé (255 → 0).
     fn noter(&mut self, m: &CleMedia) {
         let anneau = self.anneaux.entry(m.identite.clone()).or_default();
-        if let Some(e) = anneau.iter_mut().find(|(i, _)| *i == m.index) {
-            e.1 = m.cle.clone();
-        } else {
-            anneau.push((m.index, m.cle.clone()));
-            if anneau.len() > TAILLE_ANNEAU {
-                anneau.remove(0);
-            }
+        anneau.retain(|(i, _)| *i != m.index);
+        anneau.push((m.index, m.cle.clone()));
+        if anneau.len() > TAILLE_ANNEAU {
+            anneau.remove(0);
         }
     }
 
@@ -418,14 +417,19 @@ impl GestionCles {
         std::mem::take(&mut self.en_attente).into_iter().filter_map(|c| self.attribuer(c, membres)).collect()
     }
 
-    /// Toutes les clés connues, par participant et index croissant
-    /// (`reemitEncryptionKeys`), pour un moteur média qui (re)démarre.
+    /// Les clés à remettre à un moteur média qui (re)démarre, ou à chaque
+    /// changement de participants (`reemitEncryptionKeys`) : celles des
+    /// autres dans leur ordre d'arrivée, et de la nôtre SEULEMENT celle en
+    /// usage. Le moteur chiffre avec la dernière clé qu'il reçoit pour nous :
+    /// rejouer les anciennes le ferait chiffrer un instant avec une clé que
+    /// les arrivants n'ont jamais eue (constaté le 27/09 : bascule 0 → 1 à
+    /// chaque arrivée), et l'ordre des index se trompe quand ils bouclent.
     pub fn toutes(&self) -> Vec<CleMedia> {
+        let propre = self.identite_propre();
         let mut liste = Vec::new();
         for (identite, anneau) in &self.anneaux {
-            let mut tri = anneau.clone();
-            tri.sort_by_key(|(i, _)| *i);
-            liste.extend(tri.into_iter().map(|(index, cle)| CleMedia { identite: identite.clone(), index, cle }));
+            let cles = if *identite == propre { &anneau[anneau.len().saturating_sub(1)..] } else { &anneau[..] };
+            liste.extend(cles.iter().map(|(index, cle)| CleMedia { identite: identite.clone(), index: *index, cle: cle.clone() }));
         }
         liste
     }
@@ -642,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn anneau_borne_et_rejoue_dans_l_ordre() {
+    fn anneau_borne_et_rejoue_dans_l_ordre_d_arrivee() {
         let mut g = GestionCles::nouveau("@moi:hs", "M");
         let membres = [membre("@b:hs", "B", T)];
         for i in (0..20u8).rev() {
@@ -651,7 +655,24 @@ mod tests {
         }
         let toutes = g.toutes();
         assert_eq!(toutes.len(), TAILLE_ANNEAU);
-        // Les plus anciennes reçues (index élevés) ont été évincées.
-        assert_eq!(toutes.iter().map(|c| c.index).collect::<Vec<_>>(), (0..16).collect::<Vec<_>>());
+        // Les plus anciennes reçues (index élevés) ont été évincées ; les
+        // autres dans l'ordre où elles sont arrivées.
+        assert_eq!(toutes.iter().map(|c| c.index).collect::<Vec<_>>(), (0..16).rev().collect::<Vec<_>>());
+        // Une clé renvoyée à l'identique passe en dernier.
+        let c = CleRecue { utilisateur: "@b:hs".into(), appareil: "B".into(), index: 9, cle: vec![9; 16] };
+        g.recevoir(c, T + 100, &membres);
+        assert_eq!(g.toutes().last().map(|c| c.index), Some(9));
+    }
+
+    #[test]
+    fn de_la_notre_seule_la_cle_en_usage_est_rejouee() {
+        let mut g = GestionCles::nouveau("@moi:hs", "M");
+        g.utiliser(0, &[1; 16]);
+        g.utiliser(1, &[2; 16]);
+        assert_eq!(g.toutes(), vec![CleMedia { identite: "@moi:hs:M".into(), index: 1, cle: vec![2; 16] }]);
+        // L'index boucle : 0 vient APRÈS 255, c'est lui qui est en usage.
+        g.utiliser(255, &[3; 16]);
+        g.utiliser(0, &[4; 16]);
+        assert_eq!(g.toutes(), vec![CleMedia { identite: "@moi:hs:M".into(), index: 0, cle: vec![4; 16] }]);
     }
 }

@@ -50,12 +50,21 @@ fn nombre(v: Option<&Value>) -> Option<i64> {
 
 /// Une adhésion (entrée de `memberships[]`, ou le contenu entier au nouveau
 /// format) est-elle encore valable à l'instant `maintenant` ?
+///
+/// `expires` court depuis la JONCTION (`created_ts`), comme pour MatrixRTC
+/// (`CallMembership.getAbsoluteExpiry`), pas depuis la dernière réécriture :
+/// chaque renouvellement ajoute une heure à `expires` en gardant
+/// `created_ts`. Compté depuis l'événement, un client parti sans le dire
+/// restait affiché des heures après que l'appel l'avait oublié (picsou, 27/09 :
+/// `expires` 6 h, jonction il y a 7,5 h, réécrit il y a 2,5 h). Le moteur JS
+/// (`extractVoiceUsers`) a encore ce défaut.
 fn valable(adhesion: &Value, ts_origine: i64, maintenant: i64) -> bool {
     if let Some(fin) = nombre(adhesion.get("expires_ts")) {
         return fin > maintenant;
     }
-    if let (Some(duree), true) = (nombre(adhesion.get("expires")), ts_origine != 0) {
-        return ts_origine + duree > maintenant;
+    let jonction = nombre(adhesion.get("created_ts")).unwrap_or(ts_origine);
+    if let (Some(duree), true) = (nombre(adhesion.get("expires")), jonction != 0) {
+        return jonction + duree > maintenant;
     }
     true // aucune expiration connue : présumé actif
 }
@@ -176,6 +185,19 @@ mod tests {
                 deafened: false,
             }]
         );
+    }
+
+    #[test]
+    fn expiration_comptee_depuis_la_jonction() {
+        // Renouvelée : `expires` de 6 h depuis une jonction il y a 7,5 h,
+        // réécrite il y a 2,5 h — expirée depuis 1,5 h.
+        let h = 3_600_000;
+        let mut e = ev("@picsou:hs", json!({ "application": "m.call", "device_id": "dev1", "expires": 6 * h, "created_ts": NOW - 15 * h / 2 }));
+        e.ts = NOW - 5 * h / 2;
+        assert!(liste(&[e.clone()]).is_empty());
+        // Toujours dans les temps : jonction il y a 5 h.
+        e.contenu["created_ts"] = json!(NOW - 5 * h);
+        assert_eq!(liste(&[e]).len(), 1);
     }
 
     #[test]
