@@ -754,6 +754,14 @@ fn run_share_capture(
     let mut conv_ms_total: u128 = 0;
     let mut stat_since = std::time::Instant::now();
     let mut temp_errors: u64 = 0;
+    // Sans aucune image au bout de ce délai, le portail ne répondra plus : il
+    // a pu mourir en ouvrant son sélecteur (xdg-desktop-portal-kde, erreur de
+    // protocole Wayland, 27/09). WebRTC n'en saura rien — il ne voit que des
+    // erreurs temporaires, à l'infini — et Sion restait « en partage » sans
+    // image. Assez long pour laisser choisir un écran.
+    const DELAI_PREMIERE_IMAGE: std::time::Duration = std::time::Duration::from_secs(120);
+    let debut_capture = std::time::Instant::now();
+    let mut premiere_image = false;
     let stop_cb = std::sync::Arc::clone(&stop);
     let capture_armed_outer = std::sync::Arc::clone(&capture_armed);
     let mut ready_tx = Some(ready_tx);
@@ -764,9 +772,12 @@ fn run_share_capture(
     // journalisée, le partage se dépublie proprement et l'application vit.
     capturer.start_capture(Some(source), move |result| {
         let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let sans_reponse = matches!(result, Err(CaptureError::Temporary))
+                && !premiere_image
+                && debut_capture.elapsed() >= DELAI_PREMIERE_IMAGE;
             let frame = match result {
                 Ok(f) => f,
-                Err(CaptureError::Temporary) => {
+                Err(CaptureError::Temporary) if !sans_reponse => {
                     temp_errors += 1;
                     if temp_errors == 1 || temp_errors % 150 == 0 {
                         log::info!(
@@ -776,8 +787,17 @@ fn run_share_capture(
                     }
                     return;
                 }
-                Err(CaptureError::Permanent) => {
-                    log::warn!("[Sion][voix-native] capture écran en erreur permanente — arrêt");
+                Err(_) => {
+                    let raison = if sans_reponse {
+                        log::warn!(
+                            "[Sion][voix-native] aucune image en {} s : le sélecteur d'écran n'a jamais répondu — arrêt",
+                            DELAI_PREMIERE_IMAGE.as_secs()
+                        );
+                        "Le sélecteur d'écran n'a jamais répondu : partage arrêté, réessayez"
+                    } else {
+                        log::warn!("[Sion][voix-native] capture écran en erreur permanente — arrêt");
+                        "La capture d'écran s'est interrompue"
+                    };
                     capture_failed.store(true, std::sync::atomic::Ordering::Release);
                     stop_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                     if let Some(tx) = ready_tx.take() {
@@ -785,19 +805,19 @@ fn run_share_capture(
                             "KDE/Wayland n'a fourni aucune image (sélection annulée ou source invalide)"
                                 .to_string(),
                         ));
-                    } else if capture_armed.load(std::sync::atomic::Ordering::Acquire) {
+                    }
+                    if capture_armed.load(std::sync::atomic::Ordering::Acquire) {
                         if let Some(app) = app.as_ref() {
                             let _ = app.emit(
                                 "voice-native-local-share-failed",
-                                &serde_json::json!({
-                                    "reason": "La capture d'écran s'est interrompue"
-                                }),
+                                &serde_json::json!({ "reason": raison }),
                             );
                         }
                     }
                     return;
                 }
             };
+            premiere_image = true;
             let (w, h) = (frame.width().max(0) as u32, frame.height().max(0) as u32);
             if w < 2 || h < 2 {
                 return;
