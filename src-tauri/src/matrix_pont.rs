@@ -93,6 +93,7 @@ mod actif {
         let mut etat = coeur.etat();
         let mut salons = coeur.salons();
         let mut messages = coeur.messages();
+        let mut verification = coeur.verification();
         let _ = COEUR.set(coeur);
         log::info!("[Sion][matrix] moteur Rust actif");
 
@@ -113,6 +114,14 @@ mod actif {
             while salons.changed().await.is_ok() {
                 let liste = salons.borrow_and_update().clone();
                 let _ = app_salons.emit("matrix-salons", &liste);
+            }
+        });
+        // Étapes de la vérification par emojis (T5).
+        let app_verification = app.clone();
+        tauri::async_runtime::spawn(async move {
+            while verification.changed().await.is_ok() {
+                let etat = verification.borrow_and_update().clone();
+                let _ = app_verification.emit("matrix-verification", &etat);
             }
         });
         // Fil d'un salon, à chaque changement. En retard sur le cœur : on
@@ -545,6 +554,67 @@ pub mod commandes {
     pub async fn matrix_commande_admin(commande: String) -> Result<String, String> {
         coeur()?.commande_admin(&commande).await.map_err(erreur)
     }
+    // ── Chiffrement et confiance (T5) ─────────────────────────────────────────
+
+    #[tauri::command]
+    pub fn matrix_verification() -> Result<serde_json::Value, String> {
+        serde_json::to_value(coeur()?.verification_actuelle()).map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_demarrer_verification() -> Result<(), String> {
+        coeur()?.demarrer_verification().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_confirmer_emojis() -> Result<(), String> {
+        coeur()?.confirmer_emojis().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_refuser_emojis() -> Result<(), String> {
+        coeur()?.refuser_emojis().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_annuler_verification() -> Result<(), String> {
+        coeur()?.annuler_verification().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_appareil_verifie() -> Result<bool, String> {
+        coeur()?.appareil_verifie().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub fn matrix_messages_indechiffrables() -> Result<bool, String> {
+        Ok(coeur()?.messages_indechiffrables())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_restaurer_par_cle(cle: String) -> Result<usize, String> {
+        coeur()?.restaurer_par_cle(&cle).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_restaurer_automatiquement() -> Result<usize, String> {
+        coeur()?.restaurer_automatiquement().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_a_besoin_amorcage() -> Result<bool, String> {
+        coeur()?.a_besoin_amorcage().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_amorcer(mot_de_passe: Option<String>) -> Result<String, String> {
+        coeur()?.amorcer(mot_de_passe.as_deref()).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_nouvelle_cle_recuperation() -> Result<String, String> {
+        coeur()?.nouvelle_cle_recuperation().await.map_err(erreur)
+    }
 }
 
 #[cfg(not(feature = "moteur-matrix-rust"))]
@@ -813,6 +883,65 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_commande_admin(_commande: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+    #[tauri::command]
+    pub fn matrix_verification() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_demarrer_verification() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_confirmer_emojis() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_refuser_emojis() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_annuler_verification() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_appareil_verifie() -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub fn matrix_messages_indechiffrables() -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_restaurer_par_cle(_cle: String) -> Result<usize, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_restaurer_automatiquement() -> Result<usize, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_a_besoin_amorcage() -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_amorcer(_mot_de_passe: Option<String>) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_nouvelle_cle_recuperation() -> Result<String, String> {
         Err(INACTIF.into())
     }
 }

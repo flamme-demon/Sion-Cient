@@ -298,8 +298,8 @@ d'un côté alors qu'il est dans la fenêtre chargée de l'autre est un écart.
 Appris en route (27/09) :
 
 - **Le cache d'événements n'écoute que les synchros qui suivent son
-  activation** : il est activé dès la construction du client, sinon le fil de
-  la première synchro lui échappait.
+  activation** : il est activé avant la première synchro, sinon le fil de
+  celle-ci lui échappait — mais APRÈS l'authentification (voir T5).
 - `getEvents()` de matrix-js-sdk rend le tableau interne, qui grandit en place
   pendant un `scrollback` : noter sa longueur avant.
 - Les futurs de matrix-sdk sont si imbriqués que le compilateur dépasse sa
@@ -414,6 +414,62 @@ Appris en route (27/09) :
 - Chaque méthode publique de `gestion.rs` rend un futur en boîte (enveloppe
   + jumelle suffixée `_`) : sans cela, le crate de l'appli dépassait sa
   profondeur de requêtes.
+
+### État — T5 (branche `feat/matrix-rust`, 27/09/2026)
+
+Fait (`confiance.rs`) :
+
+- Vérification par emojis entre deux appareils du compte, avec la machine à
+  états de `useMatrixStore` (`requesting` → `waiting` → `comparing` →
+  `confirmed` → `done`, ou `cancelled` / `error`) : demande émise
+  (`startCrossDeviceVerification`) ou reçue d'un autre appareil (acceptée
+  d'office, comme le JS), emojis publiés par l'événement
+  `matrix-verification`, confirmation, refus, annulation ; à l'issue,
+  restauration de la sauvegarde avec les secrets reçus.
+- Récupération par clé (`restoreKeyBackup`) : secrets importés, appareil
+  vérifié, clés de la sauvegarde restaurées salon par salon.
+- Amorçage d'un compte neuf (`bootstrapAll`) : signature croisée (UIA par mot
+  de passe), stockage de secrets et sauvegarde, clé de récupération rendue ;
+  nouvelle clé (`regenerateRecoveryKey`, la sauvegarde est gardée) ; état
+  (`checkDeviceVerified`, `checkNeedsBootstrap`, `hasUndecryptableMessages`).
+- Pont : 12 commandes et l'événement `matrix-verification` ; façade.
+
+**Banc local** (`tests/banc_local.rs`, Continuwuity jetable en conteneur,
+commande en tête du fichier) — deux passages verts de bout en bout :
+inscription par jeton d'un compte neuf ; amorçage, second amorçage REFUSÉ ;
+message chiffré sauvegardé ; second appareil qui le lit indéchiffrable puis le
+déchiffre après la clé de récupération ; troisième appareil vérifié par
+emojis avec le premier (mêmes 7 emojis des deux côtés) et lisant l'historique
+grâce aux secrets reçus ; nouvelle clé (l'ancienne refusée). Et ce que T4 ne
+pouvait pas vérifier sur le compte de test : commandes au robot
+(`list-users`), API d'administration (200), suspension (MSC4323), salon public
+ouvert d'office à un utilisateur par le robot, niveau, expulsion, invitation
+acceptée, bannissement, nom / avatar / mot de passe d'un compte.
+
+**Compte de test réel** : avec sa clé de récupération (facultative dans
+`tests/compte_reel.rs`), l'appareil devient vérifié et la sauvegarde
+re-déchiffre l'historique — les 17 messages chiffrés de Limonadistant
+deviennent lisibles (indéchiffrables 58 → 41, le reste venant des appareils
+éphémères des tests, sans sauvegarde).
+
+Trois défauts trouvés et corrigés grâce au banc :
+
+- **Le re-déchiffreur du cache d'événements (« R2D2 ») était mort-né** :
+  activé avant l'authentification, il ne trouvait pas de machine de
+  chiffrement et s'arrêtait pour de bon. Aucune clé arrivée en retard, ni
+  restaurée, ne re-déchiffrait le fil. Le cache est désormais activé juste
+  après l'authentification, avant la première synchro (`activer_cache`).
+- **Le garde-fou de l'amorçage lisait le magasin local**, qui n'apprend
+  l'account data qu'à la synchro suivante : un second amorçage, juste après le
+  premier, PASSAIT (il aurait remplacé l'identité du compte). Il interroge
+  maintenant le serveur (stockage de secrets ET identité de signature
+  croisée), et refuse dans le doute.
+- Après un import depuis la sauvegarde, le cœur redemande explicitement le
+  déchiffrement des messages en échec du salon (`request_decryption`).
+
+À savoir : une demande de vérification part vers TOUS les appareils du
+compte ; chacun l'accepte et ceux qui ne sont pas retenus sont annulés (le JS
+se comporte pareil).
 
 ## Les étapes suivantes
 

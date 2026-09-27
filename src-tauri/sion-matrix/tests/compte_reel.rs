@@ -105,6 +105,23 @@ async fn connexion_reprise_deconnexion() {
         std::fs::write(&sortie, serde_json::to_vec_pretty(&fils).unwrap()).unwrap();
         println!("   messages écrits dans {sortie}");
     }
+    // T5 : avec la clé de récupération du compte (facultative), l'appareil
+    // devient vérifié et la sauvegarde re-déchiffre l'historique. `recover`
+    // importe les secrets existants : rien n'est créé ni remplacé.
+    if let Ok(cle) = std::env::var("SION_TEST_CLE_RECUPERATION") {
+        let avant = premier.fils_actuels().iter().flat_map(|f| &f.messages).filter(|m| m.msgtype.as_deref() == Some("m.encrypted")).count();
+        let salons_restaures = premier.restaurer_par_cle(&cle).await.expect("récupération par clé");
+        assert!(premier.appareil_verifie().await.unwrap(), "appareil vérifié par la clé");
+        let mut apres = avant;
+        for _ in 0..60 {
+            apres = premier.fils_actuels().iter().flat_map(|f| &f.messages).filter(|m| m.msgtype.as_deref() == Some("m.encrypted")).count();
+            if apres < avant {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        println!("   T5 : clé de récupération → vérifié, {salons_restaures} salon(s) restauré(s), indéchiffrables {avant} → {apres}");
+    }
     // T4 : membres et niveaux de chaque salon.
     if let Ok(sortie) = std::env::var("SION_TEST_SORTIE_DETAILS") {
         let mut details = Vec::new();

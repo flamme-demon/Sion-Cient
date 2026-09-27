@@ -11,6 +11,8 @@
  * l'identifiant serveur de l'événement, le message revenant par le fil.
  * T4 : membres, niveaux, gestion des salons, profil, appareils, inscription,
  * administration (API du serveur par un mandataire : le jeton reste en Rust).
+ * T5 : vérification par emojis (mêmes étapes que `useMatrixStore`),
+ * récupération par clé, restauration de la sauvegarde, amorçage.
  * Le jeton d'accès ne passe jamais par ici : il reste côté Rust.
  */
 
@@ -310,3 +312,46 @@ export async function requeteAdmin<T>(
 export const salonAdmin = () => invoquer<string | null>("matrix_salon_admin");
 /** Commande au robot d'administration ; rend sa réponse (`sendAdminCommand`). */
 export const commandeAdmin = (commande: string) => invoquer<string>("matrix_commande_admin", { commande });
+
+// ── Chiffrement et confiance (T5) ───────────────────────────────────────────
+
+/** Étapes de la vérification, identiques à `verificationStep` du store JS. */
+export type EtapeVerification = "idle" | "requesting" | "waiting" | "comparing" | "confirmed" | "done" | "cancelled" | "error";
+
+export interface EtatVerification {
+  etape: EtapeVerification;
+  /** Les 7 emojis à comparer (`EmojiData` : `{ emoji, name }`). */
+  emojis: { emoji: string; name: string }[];
+  erreur?: string;
+}
+
+export const verification = () => invoquer<EtatVerification>("matrix_verification");
+
+/** Suit la vérification (demande reçue d'un autre appareil comprise). */
+export async function surVerification(rappel: (etat: EtatVerification) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<EtatVerification>("matrix-verification", (evenement) => rappel(evenement.payload));
+}
+
+/** Vérifier cet appareil par un autre appareil du compte (`startCrossDeviceVerification`). */
+export const demarrerVerification = () => invoquer<void>("matrix_demarrer_verification");
+export const confirmerEmojis = () => invoquer<void>("matrix_confirmer_emojis");
+export const refuserEmojis = () => invoquer<void>("matrix_refuser_emojis");
+export const annulerVerification = () => invoquer<void>("matrix_annuler_verification");
+
+/** `checkDeviceVerified`. */
+export const appareilVerifie = () => invoquer<boolean>("matrix_appareil_verifie");
+/** `hasUndecryptableMessages`. */
+export const messagesIndechiffrables = () => invoquer<boolean>("matrix_messages_indechiffrables");
+/** Clé de récupération → appareil vérifié et clés restaurées ; rend le nombre
+ *  de salons restaurés. Les fils se re-déchiffrent d'eux-mêmes. */
+export const restaurerParCle = (cle: string) => invoquer<number>("matrix_restaurer_par_cle", { cle });
+/** `tryAutoRestoreKeyBackup`, après une vérification. */
+export const restaurerAutomatiquement = () => invoquer<number>("matrix_restaurer_automatiquement");
+/** `checkNeedsBootstrap`. */
+export const aBesoinAmorcage = () => invoquer<boolean>("matrix_a_besoin_amorcage");
+/** Amorçage d'un compte neuf (`bootstrapAll`) ; rend la clé de récupération.
+ *  Refusé par le cœur si le compte a déjà une identité ou un stockage de secrets. */
+export const amorcer = (motDePasse?: string) => invoquer<string>("matrix_amorcer", { motDePasse: motDePasse ?? null });
+/** `regenerateRecoveryKey` (la sauvegarde est gardée, seule la clé change). */
+export const nouvelleCleRecuperation = () => invoquer<string>("matrix_nouvelle_cle_recuperation");

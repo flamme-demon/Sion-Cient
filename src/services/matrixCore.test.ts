@@ -4,7 +4,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import {
-  moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier, requeteAdmin, ErreurApiAdmin, appareils, detailsSalon,
+  moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier, requeteAdmin, ErreurApiAdmin, appareils, detailsSalon, amorcer,
 } from "./matrixCore";
 
 describe("matrixCore", () => {
@@ -90,6 +90,12 @@ describe("matrixCore", () => {
     });
     const d = await detailsSalon("!a:hs");
     expect([d.moi, d.membres[0].powerLevel, d.membres[1].powerLevel]).toEqual([Infinity, Infinity, 50]);
+  });
+
+  it("amorçage sans mot de passe : null, jamais undefined (Tauri l'exige)", async () => {
+    invoke.mockResolvedValue("EsTc 1234");
+    expect(await amorcer()).toBe("EsTc 1234");
+    expect(invoke).toHaveBeenLastCalledWith("matrix_amorcer", { motDePasse: null });
   });
 
   it("rend les appareils sous la forme de getDevices", async () => {

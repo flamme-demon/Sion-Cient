@@ -14,6 +14,7 @@ use serde::Serialize;
 use tokio::sync::{watch, Mutex};
 
 use crate::fil::{self, FilSalon, Fils};
+use crate::confiance::Confiance;
 use crate::epingles::ResumeEpingle;
 use crate::horloge::Horloge;
 use crate::medias::{Medias, PREFIXE_PAR_DEFAUT};
@@ -41,6 +42,7 @@ pub struct CoeurMatrix {
     salons: watch::Sender<Vec<Salon>>,
     horloge: Arc<Horloge>,
     fils: Fils,
+    pub(crate) confiance: Arc<Confiance>,
     /// Boucle de synchro : elle tient les magasins SQLite ouverts, elle doit
     /// donc s'arrêter AVANT tout effacement ou nouvelle connexion.
     synchro: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -55,6 +57,18 @@ fn reglages_chiffrement() -> EncryptionSettings {
         backup_download_strategy: BackupDownloadStrategy::Manual,
         auto_enable_backups: false,
     }
+}
+
+/// Active le cache d'événements APRÈS l'authentification et AVANT la
+/// première synchro :
+/// - avant la synchro, sinon le fil de la première lui échappe (il n'écoute
+///   que les synchros qui suivent) ;
+/// - après l'authentification, sinon son re-déchiffreur (« R2D2 ») ne trouve
+///   pas de machine de chiffrement et s'arrête pour de bon : une clé arrivée
+///   en retard ou restaurée de la sauvegarde ne re-déchiffrait plus rien
+///   (constaté sur le banc local, 27/09).
+fn activer_cache(client: &Client) -> Resultat<()> {
+    client.event_cache().subscribe().map_err(|e| Erreur::Autre(e.to_string()))
 }
 
 fn synchro_immediate() -> SyncSettings {
@@ -73,6 +87,7 @@ impl CoeurMatrix {
             salons: watch::Sender::new(Vec::new()),
             horloge: Arc::new(Horloge::default()),
             fils: Fils::nouveau(Arc::new(Medias::nouveau(PREFIXE_PAR_DEFAUT))),
+            confiance: Confiance::nouvelle(),
             synchro: std::sync::Mutex::new(None),
         }
     }
@@ -194,10 +209,7 @@ impl CoeurMatrix {
             .with_enable_share_history_on_invite(true)
             .build()
             .await?;
-        // Le cache d'événements n'écoute que les synchros qui suivent son
-        // activation : dès la construction, sinon le fil de la première
-        // synchro lui échappe.
-        client.event_cache().subscribe().map_err(|e| Erreur::Autre(e.to_string()))?;
+        self.confiance.brancher(&client);
         Ok(client)
     }
 
@@ -217,6 +229,7 @@ impl CoeurMatrix {
         session::effacer(&self.dossier, &*self.coffre)?;
         self.salons.send_replace(Vec::new());
         self.fils.vider();
+        self.confiance.oublier();
         self.etat.send_replace(EtatConnexion::Connexion);
 
         let phrase = session::phrase_aleatoire()?;
@@ -229,6 +242,7 @@ impl CoeurMatrix {
                 .initial_device_display_name(&self.nom_appareil)
                 .await?;
             client_connecte = Some(client.clone());
+            activer_cache(&client)?;
             let s = client.matrix_auth().session().ok_or(Erreur::PasDeSession)?;
             Session {
                 serveur: client.homeserver().to_string(),
@@ -303,6 +317,7 @@ impl CoeurMatrix {
                 },
             })
             .await?;
+        activer_cache(&client)?;
 
         match client.sync_once(synchro_immediate()).await {
             Ok(_) => {
@@ -342,6 +357,7 @@ impl CoeurMatrix {
         session::effacer(&self.dossier, &*self.coffre)?;
         self.salons.send_replace(Vec::new());
         self.fils.vider();
+        self.confiance.oublier();
         self.etat.send_replace(EtatConnexion::Deconnecte);
         Ok(())
     }
