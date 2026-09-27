@@ -685,6 +685,41 @@ des synchros chargées ; ici, au démarrage du moteur JS, les « compteurs de
 clés » coûtaient encore 384 à 524 ms chacun sur le fil de l'interface — un
 coût qui n'existe plus avec le cœur.
 
+### État — étape 4, migration et 2.0.0-beta.2 (28/09/2026)
+
+Le cœur Rust est le moteur Matrix par défaut (feature `moteur-matrix-rust`
+dans les features par défaut sur ordinateur ; `SION_MATRIX_MOTEUR=js` en
+secours) et part avec la 2.0.0-beta.2.
+
+Migration au premier lancement (`migrationMoteur.ts`, `migration.rs`) :
+l'ancien moteur exporte une dernière fois son paquet de secrets et ses clés de
+salons ; le cœur ouvre un nouvel appareil par mot de passe et les importe
+avant sa première synchro (`connecter_et_migrer`) ; l'ancien appareil est
+déconnecté et ses données effacées. Le mot de passe reste nécessaire :
+Continuwuity exige une authentification (UIA) pour délivrer un jeton de
+connexion (`/login/get_token` → 401, étape `m.login.password`). Si le cœur a
+déjà une session (cas du développeur), l'ancienne session du même compte est
+retirée à la reprise.
+
+Vérifié : `build-scripts/migration-croisee.sh` (compte réel : secrets importés,
+appareil vérifié d'emblée, 105/105 clés de salons) ; logique de connexion
+couverte par `useAuthStore.migration.test.ts` ; version release (origine
+`tauri://`) lancée sur le compte de test : interface, reprise, entrée en
+vocal (jeton, SFU en 86 ms).
+
+Pièges rencontrés en route :
+- une autre origine web n'isole PAS un essai : le miroir de session
+  (`sessionPersist`) et les fichiers du dossier de données sont communs — un
+  essai sur le port 5174 a réinjecté la session JS de l'utilisateur et
+  supprimé son fond de panneau (régénéré) ; `SION_MATRIX_DOSSIER` isole le
+  cœur, pas le reste ;
+- `GDK_BACKEND=x11` + écran en veille : le fil principal attend des
+  événements de présentation X11 qui n'arrivent plus, les réponses
+  asynchrones (fichiers `tauri://`, commandes async) restent bloquées — ce
+  n'est pas un défaut de la version, en Wayland tout répond ;
+- l'inspecteur distant de WebKit (`WEBKIT_INSPECTOR_HTTP_SERVER`) permet
+  d'interroger la page sans écran (script Bun sur le WebSocket).
+
 ## Bilan de l'étape 2 (27/09/2026)
 
 T0 à T6 sont faites dans `sion-matrix`, exposées par le pont et la façade
