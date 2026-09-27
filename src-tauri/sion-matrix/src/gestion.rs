@@ -139,10 +139,23 @@ pub(crate) async fn http(methode: &str, url: &str, jeton: Option<&str>, corps: O
     if let Some(corps) = corps {
         requete = requete.body(corps.to_string());
     }
-    let reponse = requete.send().await.map_err(|e| Erreur::Autre(e.to_string()))?;
+    let reponse = requete.send().await.map_err(|e| Erreur::Autre(avec_causes(&e)))?;
     let status = reponse.status().as_u16();
     let octets = reponse.bytes().await.map_err(|e| Erreur::Autre(e.to_string()))?;
     Ok(ReponseServeur { status, corps: serde_json::from_slice(&octets).unwrap_or(Value::Null) })
+}
+
+/// Une erreur et ses causes : « error sending request » seul ne dit pas si
+/// c'est le DNS, la connexion ou le TLS.
+fn avec_causes(e: &dyn std::error::Error) -> String {
+    let mut texte = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        texte.push_str(" : ");
+        texte.push_str(&c.to_string());
+        cause = c.source();
+    }
+    texte
 }
 
 /// URL du serveur, découverte comme à la connexion (`.well-known`).

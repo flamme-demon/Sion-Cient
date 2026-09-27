@@ -15,6 +15,10 @@ type Set = (partiel: Partial<MatrixState> | ((s: MatrixState) => Partial<MatrixS
 type Get = () => MatrixState;
 
 let demarre = false;
+
+/** Diagnostic (dev) : mises à jour poussées par le cœur et temps passé à les
+ *  appliquer au store, relevés par memoryDiagnostics toutes les 30 s. */
+export const mesuresRust = { fils: 0, messagesFils: 0, filsMs: 0, salons: 0, salonsMs: 0 };
 /** Utilisateur de la session dont les tâches de démarrage ont été faites. */
 let sessionPreparee: string | null = null;
 
@@ -60,17 +64,24 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
   };
 
   const appliquerSalons = (liste: Channel[], premier: boolean) => {
+    const t0 = performance.now();
     cache.definirSalons(liste);
     set({ channels: liste });
     if (premier || liste.length > 0) selectionnerSalonParDefaut(liste);
+    mesuresRust.salons += 1;
+    mesuresRust.salonsMs += performance.now() - t0;
   };
 
   const appliquerFil = (fil: FilSalon, initial: boolean) => {
+    const t0 = performance.now();
+    mesuresRust.fils += 1;
+    mesuresRust.messagesFils += fil.messages.length;
     const avant = get().messages[fil.salon] ?? [];
     if (!initial) sonnerNouveaux(fil, avant, get, APP_SESSION_START_TS);
     const epinglesChanges = cache.definirEpingles(fil.salon, fil.epingles);
+    const fusionne = conserverInchanges(avant, fil.messages);
     set((s) => {
-      const messages = { ...s.messages, [fil.salon]: fil.messages };
+      const messages = { ...s.messages, [fil.salon]: fusionne };
       return {
         messages,
         roomHasMore: { ...s.roomHasMore, [fil.salon]: fil.aPlus },
@@ -78,6 +89,7 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
         ...(epinglesChanges ? { pinnedVersion: s.pinnedVersion + 1 } : {}),
       };
     });
+    mesuresRust.filsMs += performance.now() - t0;
   };
 
   const appliquerVerification = (v: EtatVerification) => {
@@ -99,6 +111,24 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
   appliquerSalons(await core.salons().catch(() => []), true);
   for (const fil of await core.fils().catch(() => [])) appliquerFil(fil, true);
   appliquerVerification(await core.verification().catch(() => ({ etape: "idle" as const, emojis: [] })));
+}
+
+/** Le cœur republie le fil ENTIER à chaque changement, en objets neufs :
+ *  chaque message aurait été redessiné (`Message` est mémoïsé par identité),
+ *  soit 400 à 600 ms de gel à l'arrivée d'un seul message (mesuré le 27/09).
+ *  Un message identique au précédent garde donc son objet, et un fil
+ *  identique garde son tableau. */
+export function conserverInchanges<T extends { id: number | string }>(avant: T[], apres: T[]): T[] {
+  if (avant.length === 0) return apres;
+  const parId = new Map(avant.map((m) => [m.id, m]));
+  let identique = avant.length === apres.length;
+  const fusion = apres.map((m, i) => {
+    const ancien = parId.get(m.id);
+    const garde = ancien !== undefined && JSON.stringify(ancien) === JSON.stringify(m) ? ancien : m;
+    if (garde !== avant[i]) identique = false;
+    return garde;
+  });
+  return identique ? avant : fusion;
 }
 
 /** Choisit le salon d'ouverture, une fois (même règle que le moteur JS). */

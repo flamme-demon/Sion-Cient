@@ -59,10 +59,15 @@ export function installMemoryDiagnostics(): void {
   let gels100 = 0;
   let gels250 = 0;
   let bloqueMs = 0;
+  let pasMasques = 0;
   setInterval(() => {
     const maintenant = performance.now();
     const retard = maintenant - attendu;
-    if (retard > 0) {
+    // Page masquée (fenêtre réduite) : WebKit bride les minuteurs à 1 Hz,
+    // le retard mesuré serait ce bridage et non un gel.
+    if (document.hidden) {
+      pasMasques += 1;
+    } else if (retard > 0) {
       gelMax = Math.max(gelMax, retard);
       if (retard > 100) gels100 += 1;
       if (retard > 250) gels250 += 1;
@@ -71,7 +76,8 @@ export function installMemoryDiagnostics(): void {
     attendu = maintenant + PAS_MS;
   }, PAS_MS);
   const resumeGels = () => {
-    const r = `gel(max=${Math.round(gelMax)} ms, >100 ms=${gels100}, >250 ms=${gels250}, bloqué=${Math.round(bloqueMs)} ms/30 s)`;
+    const r = `gel(max=${Math.round(gelMax)} ms, >100 ms=${gels100}, >250 ms=${gels250}, bloqué=${Math.round(bloqueMs)} ms/30 s${pasMasques ? `, page masquée ${pasMasques} pas` : ""})`;
+    pasMasques = 0;
     gelMax = 0;
     gels100 = 0;
     gels250 = 0;
@@ -96,6 +102,9 @@ export function installMemoryDiagnostics(): void {
   // 2. Échantillon périodique.
   setInterval(() => {
     void import("../stores/useMatrixStore").then(async ({ useMatrixStore }) => {
+      // Ce diagnostic occupe lui-même le fil principal (parcours du DOM,
+      // sérialisation des messages) : chronométré, pour le retrancher des gels.
+      const debutDiag = performance.now();
       const messages = useMatrixStore.getState().messages;
       let total = 0;
       let rooms = 0;
@@ -159,11 +168,24 @@ export function installMemoryDiagnostics(): void {
       // fois sa forme JSON — mais l'ordre de grandeur répond à la question
       // « les données pèsent-elles des mégaoctets ou des centaines ? ».
       let donneesMo = "?";
+      const debutJson = performance.now();
       try {
         donneesMo = String(Math.round(JSON.stringify(messages).length / (1024 * 1024)));
       } catch { /* structure cyclique ou trop grosse */ }
+      const jsonMs = Math.round(performance.now() - debutJson);
+      // Moteur Rust : ce que le cœur a poussé depuis le dernier relevé.
+      let rust = "";
+      try {
+        const { moteurRust } = await import("./moteur");
+        if (moteurRust()) {
+          const { mesuresRust: m } = await import("../stores/moteurRustStore");
+          rust = ` · cœur(fils=${m.fils} [${m.messagesFils} msg] ${Math.round(m.filsMs)} ms, salons=${m.salons} ${Math.round(m.salonsMs)} ms)`;
+          Object.assign(m, { fils: 0, messagesFils: 0, filsMs: 0, salons: 0, salonsMs: 0 });
+        }
+      } catch { /* moteur JS */ }
+      const diagMs = Math.round(performance.now() - debutDiag);
 
-      const line = `[Sion][mémoire] ${resumeGels()} · messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · images=${images.length} (~${imagesMb} Mo décodés) · données=${donneesMo} Mo · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
+      const line = `[Sion][mémoire] ${resumeGels()} · diag=${diagMs} ms (json ${jsonMs} ms)${rust} · messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · images=${images.length} (~${imagesMb} Mo décodés) · données=${donneesMo} Mo · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
       console.info(line);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(line))

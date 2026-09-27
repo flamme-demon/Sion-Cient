@@ -142,15 +142,31 @@ async fn jeton_media(client: &Client, foyer: &Foyer) -> Resultat<(String, String
     let service = foyer.service.trim_end_matches('/');
     let corps = json!({ "room": foyer.alias, "openid_token": jeton_openid, "device_id": appareil });
     for chemin in ["/sfu/get", "/get_token"] {
-        match http("POST", &format!("{service}{chemin}"), None, Some(&corps)).await {
-            Ok(r) if (200..300).contains(&r.status) => {
-                if let Some(jwt) = r.corps.get("jwt").and_then(Value::as_str) {
-                    return Ok((rtc::adresse_media(service), jwt.to_owned()));
+        // Un raté réseau passager (constaté le 27/09 : « error sending
+        // request ») privait de voix : trois essais, espacés, avant de passer
+        // à la route suivante. Une réponse du service, même en erreur, est
+        // définitive.
+        for essai in 1..=3u64 {
+            match http("POST", &format!("{service}{chemin}"), None, Some(&corps)).await {
+                Ok(r) if (200..300).contains(&r.status) => {
+                    if let Some(jwt) = r.corps.get("jwt").and_then(Value::as_str) {
+                        return Ok((rtc::adresse_media(service), jwt.to_owned()));
+                    }
+                    log::warn!("[Sion][voix] {service}{chemin} : réponse sans jeton");
+                    break;
                 }
-                log::warn!("[Sion][voix] {service}{chemin} : réponse sans jeton");
+                Ok(r) if r.status >= 500 && essai < 3 => {
+                    log::warn!("[Sion][voix] {service}{chemin} : HTTP {} (essai {essai}/3)", r.status);
+                }
+                Ok(r) => {
+                    log::warn!("[Sion][voix] {service}{chemin} : HTTP {}", r.status);
+                    break;
+                }
+                Err(e) => log::warn!("[Sion][voix] {service}{chemin} : {e} (essai {essai}/3)"),
             }
-            Ok(r) => log::warn!("[Sion][voix] {service}{chemin} : HTTP {}", r.status),
-            Err(e) => log::warn!("[Sion][voix] {service}{chemin} : {e}"),
+            if essai < 3 {
+                tokio::time::sleep(Duration::from_millis(700 * essai)).await;
+            }
         }
     }
     Err(Erreur::Autre("le service LiveKit n'a délivré aucun jeton".into()))

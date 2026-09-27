@@ -43,14 +43,28 @@ function perimee<T>(e: Entree<T> | null | undefined): boolean {
   return !e || Date.now() - e.date > FRAICHEUR_MS;
 }
 
-/** Lance une demande une seule fois à la fois par clé. */
-function demander(cle: string, requete: () => Promise<void>): void {
+/** Lance une demande une seule fois à la fois par clé. `requete` rend vrai si
+ *  la valeur a changé : c'est seulement alors que l'interface est prévenue.
+ *  Chaque prévenance redessine TOUS les messages (compteur `pinnedVersion`,
+ *  lu par chacun) ; la relecture périodique des membres, des versions ou des
+ *  admins, presque toujours identique, gelait l'interface 200 à 400 ms
+ *  toutes les 30 s (mesuré le 27/09). */
+function demander(cle: string, requete: () => Promise<boolean>): void {
   if (enCours.has(cle)) return;
   enCours.add(cle);
   requete()
-    .then(() => prevenir())
+    .then((change) => {
+      if (change) prevenir();
+    })
     .catch((e) => console.warn(`[Sion][rust] ${cle} :`, e))
     .finally(() => enCours.delete(cle));
+}
+
+/** Range une valeur ; vrai si elle diffère de la précédente. */
+function ranger<T>(carte: Map<string, Entree<T>>, cle: string, valeur: T): boolean {
+  const avant = carte.get(cle);
+  carte.set(cle, { valeur, date: Date.now() });
+  return !avant || JSON.stringify(avant.valeur) !== JSON.stringify(valeur);
 }
 
 /** Membres et niveaux d'un salon, dernière valeur connue. */
@@ -59,7 +73,7 @@ export function detailsSalon(salon: string): DetailsSalon | undefined {
   if (perimee(e)) {
     demander(`details:${salon}`, async () => {
       const { detailsSalon: lire } = await import("./matrixCore");
-      details.set(salon, { valeur: await lire(salon), date: Date.now() });
+      return ranger(details, salon, await lire(salon));
     });
   }
   return e?.valeur;
@@ -76,7 +90,7 @@ export function versionsSalon(salon: string): SionMemberVersion[] {
   if (perimee(e)) {
     demander(`versions:${salon}`, async () => {
       const { versionsSalon: lire } = await import("./matrixCore");
-      versions.set(salon, { valeur: await lire(salon), date: Date.now() });
+      return ranger(versions, salon, await lire(salon));
     });
   }
   return e?.valeur ?? [];
@@ -86,7 +100,10 @@ export function adminsServeur(): string[] {
   if (perimee(admins)) {
     demander("admins", async () => {
       const { adminsServeur: lire } = await import("./matrixCore");
-      admins = { valeur: await lire(), date: Date.now() };
+      const valeur = await lire();
+      const change = !admins || JSON.stringify(admins.valeur) !== JSON.stringify(valeur);
+      admins = { valeur, date: Date.now() };
+      return change;
     });
   }
   return admins?.valeur ?? [];
@@ -119,7 +136,10 @@ export function salonAdmin(): string | null {
   if (perimee(salonAdminConnu)) {
     demander("salon-admin", async () => {
       const { salonAdmin: lire } = await import("./matrixCore");
-      salonAdminConnu = { valeur: await lire(), date: Date.now() };
+      const valeur = await lire();
+      const change = !salonAdminConnu || salonAdminConnu.valeur !== valeur;
+      salonAdminConnu = { valeur, date: Date.now() };
+      return change;
     });
   }
   return salonAdminConnu?.valeur ?? null;
