@@ -25,6 +25,7 @@ vi.mock("@tauri-apps/plugin-log", () => ({ info: vi.fn(() => Promise.resolve()) 
 vi.mock("../services/matrixService", () => ({
   fetchDisplayName: vi.fn(async () => "Alice (serveur)"),
   getAvatarUrl: vi.fn(async () => null),
+  checkSuspended: vi.fn(async () => false),
 }));
 vi.mock("../services/migrationMoteur", () => ({
   ancienneSession: () => sessionJs,
@@ -47,6 +48,7 @@ vi.mock("../services/matrixCore", () => ({
     return { secretsImportes: true, clesImportees: 3, clesTotal: 3 };
   }),
   etatConnexion: vi.fn(async () => ({ etat: "connecte", utilisateur: "@alice:sionchat.fr", appareil: "NOUVEAU" })),
+  reprendre: vi.fn(async () => true),
 }));
 
 // localStorage simulé (l'environnement de test n'en fournit pas ici).
@@ -104,5 +106,20 @@ describe("migration à la connexion (moteur Rust)", () => {
     sessionJs = null;
     await useAuthStore.getState().login("https://sionchat.fr", "alice", "mdp");
     expect(appels).toEqual(["connecter"]);
+  });
+
+  it("reprise d'une session Rust : l'ancienne du même compte est retirée", async () => {
+    await useAuthStore.getState().restoreSession();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(appels).toEqual(["terminer"]);
+    // Nom local repris de l'ancien moteur.
+    expect(useAuthStore.getState().credentials?.displayName).toBe("Alice 🌸");
+  });
+
+  it("reprise : l'ancienne session d'un AUTRE compte n'est pas touchée", async () => {
+    sessionJs = { ...ancienne, userId: "@bob:sionchat.fr" };
+    await useAuthStore.getState().restoreSession();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(appels).toEqual([]);
   });
 });

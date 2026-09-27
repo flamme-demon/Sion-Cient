@@ -239,7 +239,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           set({ isLoading: false, credentials: null });
           return;
         }
-        const precedents = loadCredentials();
+        const migration = await import("../services/migrationMoteur");
+        const ancienne = migration.ancienneSession();
+        // À défaut d'identifiants du moteur Rust, ceux de l'ancien moteur
+        // (nom local avec emojis, réglages LiveKit) — écartés par
+        // `identifiantsRust` s'ils sont d'un autre compte.
+        const precedents = loadCredentials() ?? ancienne;
         const { info } = await import("@tauri-apps/plugin-log");
         void info(`[Sion][auth] reprise (moteur Rust) : identifiants locaux de ${precedents?.userId ?? "personne"}`).catch(() => {});
         const credentials = await identifiantsRust(undefined, precedents);
@@ -249,6 +254,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
         saveCredentials(credentials);
         set({ credentials, isLoading: false });
+        // Une session de l'ancien moteur du MÊME compte qui traîne encore (le
+        // cœur avait déjà sa session) : son appareil ne servira plus, il est
+        // déconnecté et ses données effacées, comme après une migration.
+        if (ancienne && ancienne.userId === credentials.userId && ancienne.deviceId !== credentials.deviceId) {
+          void info(`[Sion][migration] ancien appareil ${ancienne.deviceId} retiré (session Rust déjà présente)`).catch(() => {});
+          void migration.terminerAncienneSession(ancienne);
+        }
         if (await matrixService.checkSuspended().catch(() => false)) set({ isSuspended: true });
       } catch (err) {
         set({ error: mapMatrixError(err), isLoading: false, credentials: null });
