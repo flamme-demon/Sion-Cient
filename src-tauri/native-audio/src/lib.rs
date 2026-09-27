@@ -3,7 +3,8 @@
 //! one atomic settings word, never transports PCM or locks the audio callback.
 use nnnoiseless::DenoiseState;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
+use std::time::Instant;
 
 pub const FRAME_SIZE: usize = 480;
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,10 +90,31 @@ pub fn clear_soundboard_audio() {
         .clear();
 }
 
+/// Dernier passage du rendu WebRTC, en ms depuis `ORIGINE_RENDU` (0 : jamais).
+static DERNIER_RENDU_MS: AtomicU64 = AtomicU64::new(0);
+static ORIGINE_RENDU: OnceLock<Instant> = OnceLock::new();
+
+fn ms_depuis_origine() -> u64 {
+    ORIGINE_RENDU.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// Le rendu WebRTC tourne-t-il, c'est-à-dire un clip mis en file ici
+/// sortira-t-il ? WebRTC ne rend l'audio que s'il reçoit au moins une piste
+/// distante : seul dans un appel (comme en sourdine), le rendu s'arrête et un
+/// clip est accepté puis jamais joué — soundboard, sons du salon et test du
+/// haut-parleur muets (27/09). L'appelant se replie alors sur une sortie
+/// locale.
+pub fn rendu_actif() -> bool {
+    let dernier = DERNIER_RENDU_MS.load(Ordering::Relaxed);
+    // Trames de 10 ms : 250 ms sans passage, c'est un rendu arrêté.
+    dernier != 0 && ms_depuis_origine().saturating_sub(dernier) < 250
+}
+
 /// Mixes the next mono frame into WebRTC's signed-16-bit-range float buffer.
 /// Called from render pre-processing, before the frame becomes the AEC render
 /// reference. The audio callback takes one short mutex and allocates nothing.
 pub fn mix_soundboard_render(samples: &mut [f32]) {
+    DERNIER_RENDU_MS.store(ms_depuis_origine(), Ordering::Relaxed);
     let mut clips = SOUNDBOARD_CLIPS.lock().unwrap_or_else(|e| e.into_inner());
     for out in samples.iter_mut() {
         let mut mixed = if out.is_finite() { *out } else { 0.0 };
@@ -316,6 +338,15 @@ impl CaptureProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendu_actif_seulement_pendant_que_webrtc_rend() {
+        let mut trame = [0.0_f32; 480];
+        mix_soundboard_render(&mut trame);
+        assert!(rendu_actif(), "rendu qui vient de passer");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!rendu_actif(), "plus de passage depuis 300 ms : rendu arrêté");
+    }
     #[test]
     fn disabled_is_exact_passthrough_and_invalid_frames_are_untouched() {
         let mut processor = ChannelProcessor::default();

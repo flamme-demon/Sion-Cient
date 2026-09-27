@@ -1807,9 +1807,9 @@ pub fn voice_native_test_speaker(output_device: String) -> Result<(), String> {
     }
     #[cfg(feature = "native-voice")]
     {
-        if manager().lock().unwrap_or_else(|e| e.into_inner()).state
-            == VoiceConnectionState::Disconnected
-        {
+        let hors_appel = manager().lock().unwrap_or_else(|e| e.into_inner()).state
+            == VoiceConnectionState::Disconnected;
+        if hors_appel {
             stop_speaker_test_force();
             let factory =
                 webrtc_sys::peer_connection_factory::ffi::create_peer_connection_factory();
@@ -1842,6 +1842,12 @@ pub fn voice_native_test_speaker(output_device: String) -> Result<(), String> {
                 let fade = ((note_samples - index) as f32 / note_samples as f32).max(0.01);
                 samples.push((phase.sin() * fade * 9_000.0) as i16);
             }
+        }
+        // En appel mais seul, le rendu WebRTC ne tourne pas (`rendu_actif`) :
+        // la mélodie sort par la sortie locale.
+        if !hors_appel && !sion_native_audio::rendu_actif() {
+            crate::cue_playback::jouer_clip_local(samples, 1.0);
+            return Ok(());
         }
         if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, 1.0) {
             Ok(())
@@ -2203,7 +2209,7 @@ pub(crate) fn jouer_clip_de_pair(
         // — un envoi de curseur — concluait à une session morte et vidait
         // l'interface en plein appel. On attend seulement qu'il soit revenu
         // s'il est emprunté : ce fil n'est pas celui de l'interface.
-        if wait_for_engine(holder_is_connected) {
+        if wait_for_engine(holder_is_connected) && sion_native_audio::rendu_actif() {
             if !webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
                 log::warn!("[Sion][voix-native] clip de pair refusé");
             }
@@ -2278,6 +2284,13 @@ pub fn voice_native_play_soundboard(
         let _ = &app;
         if !wait_for_engine(holder_has_engine) {
             return Err("pas de moteur natif".into());
+        }
+        // Seul dans l'appel, le rendu WebRTC ne tourne pas (voir
+        // `rendu_actif`) : même repli qu'en sourdine. Personne à qui renvoyer
+        // un écho, la référence d'annulation ne manque à rien.
+        if !sion_native_audio::rendu_actif() {
+            crate::cue_playback::jouer_clip_local(samples, gain);
+            return Ok(());
         }
         if webrtc_sys::sion_audio::ffi::queue_soundboard_audio(&samples, gain) {
             Ok(())
