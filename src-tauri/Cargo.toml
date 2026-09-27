@@ -84,6 +84,10 @@ keyring = "3"
 # la feature `moteur-matrix-rust`, désactivée tant que le moteur n'est pas
 # livrable — ni les bêtas ni la CI ne payent la compilation de matrix-sdk.
 sion-matrix = { path = "sion-matrix", optional = true }
+# Moteur Matrix Rust : matrix-sdk active rustls avec aws-lc-rs, l'appli et
+# LiveKit avec ring — deux fournisseurs, rustls ne choisit plus seul et la
+# connexion de LiveKit paniquait. `run()` installe ring par défaut.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 # keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-native", "apple-native"] }
 # Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
 # les images dans `clipboardData.items`, contrairement à CEF/Chromium.
@@ -236,7 +240,7 @@ default = ["native-voice"]
 native-voice = ["dep:sion-native-audio", "dep:webrtc-sys", "dep:livekit", "dep:tokio", "dep:futures-util", "dep:jpeg-rusturbo"]
 # Moteur Matrix Rust (développement) : `run-native.sh --features moteur-matrix-rust`,
 # puis lancer avec SION_MATRIX_MOTEUR=rust.
-moteur-matrix-rust = ["dep:sion-matrix"]
+moteur-matrix-rust = ["dep:sion-matrix", "dep:rustls"]
 
 # serde_json is on the IPC hot path; keep it optimized even in dev builds.
 [profile.dev.package.serde_json]

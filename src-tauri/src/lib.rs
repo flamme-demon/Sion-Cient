@@ -3545,6 +3545,10 @@ fn install_window_state_resilience(app: &tauri::App<TauriRuntime>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Voir la dépendance `rustls` : deux fournisseurs avec le moteur Matrix
+    // Rust, celui de l'appli et de LiveKit (ring) fait foi.
+    #[cfg(feature = "moteur-matrix-rust")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(target_os = "linux")]
     let shortcuts: SharedShortcuts = Arc::new(Mutex::new(ShortcutState {
         mute_keys: vec![],

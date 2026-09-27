@@ -7461,6 +7461,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rfd",
  "rustix 0.38.44",
+ "rustls",
  "scraper",
  "serde",
  "serde_json",
