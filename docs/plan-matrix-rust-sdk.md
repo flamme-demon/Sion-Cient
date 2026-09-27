@@ -355,9 +355,9 @@ aussi dans le moteur JS tant qu'il reste celui livré.
 Écart voulu, conséquence du défaut ci-dessus : un message indéchiffrable dont
 l'édition (en clair) est lisible affiche le texte de l'édition, comme le JS.
 
-Pas encore vu à l'écran : la saisie de l'écran de développement (l'écran était
-en veille pendant la nuit) ; le chemin qu'elle emprunte est celui de
-l'aller-retour.
+Vu à l'écran le 27/09 au matin (écran de développement, piloté par
+`xdotool`) : message tapé et envoyé par Entrée, poke, réaction 👍 — chacun
+revenu par la synchro.
 
 ### État — T4 (branche `feat/matrix-rust`, 27/09/2026)
 
@@ -514,6 +514,16 @@ sur `com.sion.transcript` ne voit rien dans un salon chiffré).
 
 À savoir : une édition de son sans emoji garde l'emoji d'origine (règle du JS,
 qui ne sait pas l'effacer par édition).
+
+### Salons fantômes (27/09)
+
+Un salon quitté PUIS oublié depuis un autre appareil pendant que celui-ci est
+éteint n'est plus jamais renvoyé par le serveur dans la synchro : cet appareil
+le croyait encore rejoint (vu sur l'appareil de l'écran de développement, deux
+salons de test restés affichés). Au démarrage de la synchro, puis toutes les
+10 minutes, le cœur compare ses salons à `/joined_rooms` ; un fantôme est
+quitté (matrix-sdk le marque alors quitté pour de bon), ou à défaut écarté de
+la liste et des fils. Vérifié : les deux fantômes marqués quittés au lancement.
 
 ## Bilan de l'étape 2 (27/09/2026)
 

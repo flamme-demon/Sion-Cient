@@ -14,6 +14,7 @@ use futures_util::StreamExt;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::deserialized_responses::{RawAnySyncOrStrippedState, SyncOrStrippedState};
 use matrix_sdk::room::MessagesOptions;
+use matrix_sdk::ruma::api::client::membership::joined_rooms;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::StateEventType;
 use matrix_sdk::ruma::{uint, OwnedRoomId};
@@ -47,24 +48,56 @@ pub(crate) struct Publication {
     pub fils: Fils,
 }
 
+/// Salons rejoints selon le magasin local, moins les fantômes.
+fn rejoints(client: &Client, fantomes: &HashSet<OwnedRoomId>) -> Vec<Room> {
+    client.joined_rooms().into_iter().filter(|s| !fantomes.contains(s.room_id())).collect()
+}
+
+/// Salons que le magasin croit rejoints mais que le serveur ne compte plus
+/// (`/joined_rooms`) : quittés PUIS oubliés depuis un autre appareil pendant
+/// que celui-ci était éteint — le serveur ne renvoie jamais un salon oublié
+/// dans la synchro, cet appareil ne l'apprenait donc jamais (vu le 27/09 : deux
+/// salons de test restés affichés). On tente de le quitter (matrix-sdk le
+/// marque alors quitté pour de bon) ; sinon, il est seulement écarté. En cas
+/// d'échec de la requête, l'ensemble précédent est gardé.
+async fn chercher_fantomes(client: &Client, precedents: HashSet<OwnedRoomId>) -> HashSet<OwnedRoomId> {
+    let Ok(reponse) = client.send(joined_rooms::v3::Request::new()).await else { return precedents };
+    let serveur: HashSet<OwnedRoomId> = reponse.joined_rooms.into_iter().collect();
+    let mut fantomes = HashSet::new();
+    for salon in client.joined_rooms() {
+        if serveur.contains(salon.room_id()) {
+            continue;
+        }
+        match salon.leave().await {
+            Ok(()) => log::info!("[Sion][matrix] salon fantôme {} marqué quitté", salon.room_id()),
+            Err(e) => {
+                log::info!("[Sion][matrix] salon fantôme {} écarté ({e})", salon.room_id());
+                fantomes.insert(salon.room_id().to_owned());
+            }
+        }
+    }
+    fantomes
+}
+
 /// Un fil suivi par salon rejoint ; un salon quitté cesse d'être suivi. Les
 /// tâches vivent dans un `JoinSet` : elles s'arrêtent avec la boucle.
 fn suivre_les_salons(
     client: &Client,
+    fantomes: &HashSet<OwnedRoomId>,
     fils: &Fils,
     taches: &mut tokio::task::JoinSet<()>,
     suivis: &mut HashMap<OwnedRoomId, tokio::task::AbortHandle>,
 ) {
-    let rejoints: HashSet<OwnedRoomId> = client.joined_rooms().iter().map(|s| s.room_id().to_owned()).collect();
+    let rejoints_ids: HashSet<OwnedRoomId> = rejoints(client, fantomes).iter().map(|s| s.room_id().to_owned()).collect();
     suivis.retain(|id, tache| {
-        let garde = rejoints.contains(id);
+        let garde = rejoints_ids.contains(id);
         if !garde {
             tache.abort();
             fils.oublier(id.as_str());
         }
         garde
     });
-    for salon in client.joined_rooms() {
+    for salon in rejoints(client, fantomes) {
         if !suivis.contains_key(salon.room_id()) {
             let id = salon.room_id().to_owned();
             suivis.insert(id, taches.spawn(fils.clone().suivre(salon)));
@@ -188,12 +221,12 @@ async fn lire(salon: &Room, moi: &str, base: &str, activite: i64, horloge: &Horl
 
 /// La liste des salons rejoints. Un salon illisible est sauté (avec trace)
 /// plutôt que de vider toute la barre latérale — comme `safeMapRoomToChannel`.
-async fn tous_les_salons(client: &Client, activites: &Activites, horloge: &Horloge) -> Vec<Salon> {
+async fn tous_les_salons(client: &Client, fantomes: &HashSet<OwnedRoomId>, activites: &Activites, horloge: &Horloge) -> Vec<Salon> {
     let moi = client.user_id().map(|u| u.to_string()).unwrap_or_default();
     let base = client.homeserver().to_string();
     let maintenant = horloge.maintenant_serveur();
     let mut liste = Vec::new();
-    for salon in client.joined_rooms() {
+    for salon in rejoints(client, fantomes) {
         match lire(&salon, &moi, &base, activites.get(salon.room_id().as_str()), horloge).await {
             Ok(entrees) => liste.push(salons::classer(&entrees, maintenant)),
             Err(e) => log::error!("[Sion][matrix] salon ignoré ({}) : {e}", salon.room_id()),
@@ -262,8 +295,8 @@ async fn amorcer_activites(client: &Client, activites: &mut Activites) {
     }
 }
 
-async fn publier(client: &Client, activites: &Activites, publication: &Publication) {
-    let liste = tous_les_salons(client, activites, &publication.horloge).await;
+async fn publier(client: &Client, fantomes: &HashSet<OwnedRoomId>, activites: &Activites, publication: &Publication) {
+    let liste = tous_les_salons(client, fantomes, activites, &publication.horloge).await;
     publication.salons.send_if_modified(|actuelle| {
         if *actuelle == liste {
             false
@@ -289,11 +322,12 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
         publication.horloge.sonder(&base).await;
         let mut invitations_tentees = HashSet::new();
         accepter_invitations(&client, &mut invitations_tentees).await;
+        let mut fantomes = chercher_fantomes(&client, HashSet::new()).await;
         amorcer_activites(&client, &mut activites).await;
-        publier(&client, &activites, &publication).await;
+        publier(&client, &fantomes, &activites, &publication).await;
         let mut taches = tokio::task::JoinSet::new();
         let mut suivis = HashMap::new();
-        suivre_les_salons(&client, &publication.fils, &mut taches, &mut suivis);
+        suivre_les_salons(&client, &fantomes, &publication.fils, &mut taches, &mut suivis);
 
         let mut flux = Box::pin(client.sync_stream(reglages(Duration::from_secs(30))).await);
         while let Some(reponse) = flux.next().await {
@@ -316,9 +350,11 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
                     accepter_invitations(&client, &mut invitations_tentees).await;
                     if publication.horloge.perimee() {
                         publication.horloge.sonder(&base).await;
+                        // Même cadence (10 min) pour les salons fantômes.
+                        fantomes = chercher_fantomes(&client, fantomes).await;
                     }
-                    publier(&client, &activites, &publication).await;
-                    suivre_les_salons(&client, &publication.fils, &mut taches, &mut suivis);
+                    publier(&client, &fantomes, &activites, &publication).await;
+                    suivre_les_salons(&client, &fantomes, &publication.fils, &mut taches, &mut suivis);
                 }
                 Err(e) => {
                     log::warn!("[Sion][matrix] synchro : {e}");

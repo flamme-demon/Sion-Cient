@@ -3,12 +3,22 @@
 //! compte neuf (inscription par jeton), son amorçage, la vérification entre
 //! appareils, et l'administration par un vrai compte administrateur.
 //!
+//! Premier lancement (crée le compte `admin`, mot de passe dans les journaux,
+//! à la ligne qui suit « Created user @admin ») :
+//!
 //! ```sh
-//! docker run -d --name sion-banc-matrix -p 127.0.0.1:6167:8008 \
+//! docker run -d --name sion-banc-matrix -p 127.0.0.1:6167:8008 -v sion_banc_matrix:/var/lib/continuwuity \
 //!   -e CONTINUWUITY_SERVER_NAME=sion.test -e CONTINUWUITY_DATABASE_PATH=/var/lib/continuwuity \
 //!   -e CONTINUWUITY_ADDRESS=0.0.0.0 -e CONTINUWUITY_ALLOW_REGISTRATION=true \
 //!   -e CONTINUWUITY_REGISTRATION_TOKEN=<jeton> -e CONTINUWUITY_ALLOW_FEDERATION=false \
 //!   forgejo.ellis.link/continuwuation/continuwuity:latest /sbin/conduwuit --execute "users create-user admin"
+//! ```
+//!
+//! Ensuite, recréer le conteneur SANS `--execute` (même volume, même jeton) :
+//! rejouée, la création échoue (le compte existe) et arrête le serveur. Après
+//! quoi `docker start sion-banc-matrix` suffit.
+//!
+//! ```sh
 //! SION_BANC_SERVEUR=http://127.0.0.1:6167 SION_BANC_JETON=<jeton> SION_BANC_ADMIN_MDP=<mot de passe admin> \
 //!   cargo test -p sion-matrix --test banc_local -- --ignored --nocapture
 //! ```
