@@ -49,6 +49,36 @@ export function installMemoryDiagnostics(): void {
   const wasmTotalMb = () =>
     Math.round(wasmMemories.reduce((sum, m) => sum + m.buffer.byteLength, 0) / (1024 * 1024));
 
+  // 0. Gels du fil principal : un minuteur de 50 ms mesure son propre
+  // retard. Tout ce qui occupe le fil (déchiffrement wasm, rendu, gros
+  // traitement de /sync) le repousse d'autant — c'est ce que l'utilisateur
+  // ressent comme un gel. Comparaison des moteurs Matrix JS et Rust, 27/09.
+  const PAS_MS = 50;
+  let attendu = performance.now() + PAS_MS;
+  let gelMax = 0;
+  let gels100 = 0;
+  let gels250 = 0;
+  let bloqueMs = 0;
+  setInterval(() => {
+    const maintenant = performance.now();
+    const retard = maintenant - attendu;
+    if (retard > 0) {
+      gelMax = Math.max(gelMax, retard);
+      if (retard > 100) gels100 += 1;
+      if (retard > 250) gels250 += 1;
+      if (retard > 16) bloqueMs += retard;
+    }
+    attendu = maintenant + PAS_MS;
+  }, PAS_MS);
+  const resumeGels = () => {
+    const r = `gel(max=${Math.round(gelMax)} ms, >100 ms=${gels100}, >250 ms=${gels250}, bloqué=${Math.round(bloqueMs)} ms/30 s)`;
+    gelMax = 0;
+    gels100 = 0;
+    gels250 = 0;
+    bloqueMs = 0;
+    return r;
+  };
+
   // 1. Compteurs d'object URLs.
   let created = 0;
   let revoked = 0;
@@ -133,7 +163,7 @@ export function installMemoryDiagnostics(): void {
         donneesMo = String(Math.round(JSON.stringify(messages).length / (1024 * 1024)));
       } catch { /* structure cyclique ou trop grosse */ }
 
-      const line = `[Sion][mémoire] messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · images=${images.length} (~${imagesMb} Mo décodés) · données=${donneesMo} Mo · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
+      const line = `[Sion][mémoire] ${resumeGels()} · messages=${total} (salons=${rooms}, max=${biggest}) · blobs vivants=${created - revoked} · canvas=${canvases.length} (~${canvasMb} Mo) · nœuds=${nodes} · images=${images.length} (~${imagesMb} Mo décodés) · données=${donneesMo} Mo · voix=${voice} · wasm=${wasmMemories.length} module(s) ${wasmTotalMb()} Mo · sdk(salons=${sdkRooms}) ${listeners}`;
       console.info(line);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(line))
