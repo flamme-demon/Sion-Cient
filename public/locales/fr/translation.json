@@ -404,6 +404,7 @@
     "username": "Nom d'utilisateur",
     "password": "Mot de passe",
     "displayName": "Nom affiché",
+    "migrationNotice": "Sion passe à son nouveau moteur. Saisissez votre mot de passe une dernière fois : cet appareil restera vérifié et vos messages chiffrés resteront lisibles.",
     "loginButton": "Connexion",
     "registerButton": "Inscription",
     "loggingIn": "Connexion en cours...",

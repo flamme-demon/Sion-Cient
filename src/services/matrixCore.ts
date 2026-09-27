@@ -492,5 +492,23 @@ export const quitterVoix = () => invoquer<void>("matrix_quitter_voix");
 export const etatVoix = (muet: boolean, sourd: boolean) => invoquer<boolean>("matrix_etat_voix", { muet, sourd });
 /** « On ne m'entend pas » : appartenance republiée, clé renouvelée ; `false` hors appel. */
 export const republierVoix = () => invoquer<boolean>("matrix_republier_voix");
+// ── Migration de l'ancien moteur (étape 4) ─────────────────────────────────
+
+export interface RapportMigration {
+  /** Signature croisée reprise : le nouvel appareil est vérifié d'emblée. */
+  secretsImportes: boolean;
+  clesImportees: number;
+  clesTotal: number;
+}
+
+/** Connexion d'un nouvel appareil qui reprend l'export de l'ancien moteur. */
+export const connecterMigration = (
+  serveur: string,
+  identifiant: string,
+  motDePasse: string,
+  secrets: Record<string, unknown> | null,
+  cles: string | null,
+) => invoquer<RapportMigration>("matrix_connecter_migration", { serveur, identifiant, motDePasse, secrets, cles });
+
 /** Remet toutes les clés connues au moteur vocal qui vient de se connecter. */
 export const rejouerClesVoix = () => invoquer<number>("matrix_rejouer_cles_voix");

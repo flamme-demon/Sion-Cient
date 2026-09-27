@@ -4,6 +4,8 @@ import i18n from "../i18n";
 import { useAuthStore } from "../stores/useAuthStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { EyeIcon, EyeOffIcon } from "../components/icons";
+import { moteurRust } from "../services/moteur";
+import { ancienneSession } from "../services/migrationMoteur";
 
 type AuthMode = "login" | "register";
 
@@ -22,6 +24,9 @@ export function LoginPage() {
     return saved;
   });
   const [password, setPassword] = useState("");
+  // Première connexion sur le moteur Rust d'un compte de l'ancien moteur : le
+  // mot de passe est redemandé une fois (voir migrationMoteur.ts).
+  const [migration] = useState(() => moteurRust() && ancienneSession() !== null);
   const [displayName, setDisplayName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [regToken, setRegToken] = useState("");
@@ -223,6 +228,15 @@ export function LoginPage() {
       transition: "opacity 200ms",
       opacity: isLoading ? 0.7 : 1,
     } as React.CSSProperties,
+    noticeBox: {
+      background: "var(--color-primary-container)",
+      color: "var(--color-on-primary-container)",
+      borderRadius: 16,
+      padding: "12px 16px",
+      fontSize: 13,
+      lineHeight: 1.45,
+      marginBottom: 16,
+    },
     errorBox: {
       background: "var(--color-error-container)",
       color: "var(--color-on-error-container)",
@@ -276,6 +290,7 @@ export function LoginPage() {
           </button>
         </div>
 
+        {migration && mode === "login" && <div style={styles.noticeBox}>{t("auth.migrationNotice")}</div>}
         {error && <div style={styles.errorBox}>{error}</div>}
 
         <form onSubmit={handleSubmit} autoComplete="off">

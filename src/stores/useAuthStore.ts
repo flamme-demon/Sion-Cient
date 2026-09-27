@@ -111,9 +111,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (moteurRust()) {
       try {
         cachedLoginPassword = password;
-        const { connecter } = await import("../services/matrixCore");
-        await connecter(homeserver, username, password);
-        const credentials = await identifiantsRust(homeserver, getLiveKitFromExisting(get().credentials));
+        const core = await import("../services/matrixCore");
+        const migration = await import("../services/migrationMoteur");
+        let precedents: Partial<AuthCredentials> | null = getLiveKitFromExisting(get().credentials);
+        const ancienne = migration.ancienneSession();
+        const saisi = username.trim();
+        const memeCompte = ancienne !== null
+          && (saisi.startsWith("@") ? ancienne.userId === saisi : ancienne.userId.startsWith(`@${saisi}:`));
+        if (ancienne && memeCompte) {
+          // Étape 4 : le nouvel appareil reprend l'ancien (secrets, clés des
+          // salons), puis l'ancien est déconnecté et effacé.
+          const exporte = await migration.exporterAncienneSession(ancienne);
+          const rapport = await core.connecterMigration(homeserver, username, password, exporte.secrets, exporte.cles);
+          const { info } = await import("@tauri-apps/plugin-log");
+          void info(`[Sion][migration] ancien appareil ${ancienne.deviceId} repris : secrets ${rapport.secretsImportes ? "oui" : "non"}, clés ${rapport.clesImportees}/${rapport.clesTotal}`).catch(() => {});
+          await migration.terminerAncienneSession(ancienne);
+          precedents = { ...precedents, displayName: ancienne.displayName, avatarUrl: ancienne.avatarUrl, livekitUrl: ancienne.livekitUrl, livekitApiKey: ancienne.livekitApiKey, livekitApiSecret: ancienne.livekitApiSecret, userId: ancienne.userId };
+        } else {
+          await core.connecter(homeserver, username, password);
+        }
+        const credentials = await identifiantsRust(homeserver, precedents);
         if (!credentials) throw new Error("connexion sans utilisateur");
         saveCredentials(credentials);
         set({ credentials, isLoading: false });

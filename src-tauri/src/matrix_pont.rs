@@ -354,6 +354,21 @@ pub mod commandes {
         coeur()?.reprendre().await.map_err(|e| e.to_string())
     }
 
+    /// Connexion qui reprend l'appareil de l'ancien moteur (étape 4) : son
+    /// paquet de secrets et ses clés de salons, exportés par l'interface.
+    #[tauri::command]
+    pub async fn matrix_connecter_migration(
+        serveur: String,
+        identifiant: String,
+        mot_de_passe: String,
+        secrets: Option<serde_json::Value>,
+        cles: Option<String>,
+    ) -> Result<serde_json::Value, String> {
+        let import = sion_matrix::ImportMigration { secrets, cles_salons: cles };
+        let rapport = coeur()?.connecter_et_migrer(&serveur, &identifiant, &mot_de_passe, &import).await.map_err(|e| e.to_string())?;
+        serde_json::to_value(rapport).map_err(|e| e.to_string())
+    }
+
     #[tauri::command]
     pub async fn matrix_deconnecter() -> Result<(), String> {
         coeur()?.deconnecter().await.map_err(|e| e.to_string())
@@ -896,6 +911,17 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_reprendre() -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_connecter_migration(
+        _serveur: String,
+        _identifiant: String,
+        _mot_de_passe: String,
+        _secrets: Option<serde_json::Value>,
+        _cles: Option<String>,
+    ) -> Result<serde_json::Value, String> {
         Err(INACTIF.into())
     }
 

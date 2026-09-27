@@ -404,6 +404,7 @@
     "username": "Username",
     "password": "Password",
     "displayName": "Display Name",
+    "migrationNotice": "Sion is moving to its new engine. Enter your password one last time: this device stays verified and your encrypted messages stay readable.",
     "loginButton": "Log in",
     "registerButton": "Sign up",
     "loggingIn": "Logging in...",
