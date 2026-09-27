@@ -22,6 +22,7 @@ mod fil;
 mod fonctions_sion;
 mod gestion;
 mod horloge;
+mod rtc;
 mod medias;
 mod membres;
 mod messages;
@@ -29,6 +30,7 @@ mod salons;
 mod session;
 mod sion;
 mod synchro;
+mod voix;
 
 pub use appels::UtilisateurVocal;
 pub use coeur::{CoeurMatrix, EtatConnexion};
@@ -41,8 +43,10 @@ pub use fonctions_sion::{EtatSalon, EvenementSion, ResultatSoundboard, SonAjoute
 pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
 pub use medias::{type_mime, FormatMedia, PREFIXE_PAR_DEFAUT};
 pub use messages::Message;
+pub use rtc::CleMedia;
 pub use salons::Salon;
 pub use sion::{ChampVoix, Meme, Son, VersionMembre, Voix};
+pub use voix::ConnexionVoix;
 
 /// Erreurs du cœur, présentables telles quelles à l'interface.
 #[derive(Debug, thiserror::Error)]

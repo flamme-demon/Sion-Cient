@@ -467,3 +467,30 @@ export const definirPousseur = (pousseur: Record<string, unknown>) => invoquer<v
 /** `client.deletePushRule`. */
 export const supprimerReglePush = (portee: string, genre: string, regle: string) =>
   invoquer<void>("matrix_supprimer_regle_push", { portee, genre, regle });
+
+// ── Voix (étape 3) ─────────────────────────────────────────────────────────
+// Le cœur tient l'appartenance à l'appel et les clés des médias, qu'il remet
+// lui-même au moteur vocal natif : l'interface ne voit que l'adresse et le
+// jeton du serveur média.
+
+export interface ConnexionVoix {
+  salon: string;
+  /** `wss://…` du serveur média. */
+  url: string;
+  jeton: string;
+  /** Salon chiffré : médias chiffrés avec les clés du cœur. */
+  chiffre: boolean;
+  /** Notre identité sur le serveur média (`@moi:serveur:APPAREIL`). */
+  identite: string;
+}
+
+/** Rejoint l'appel d'un salon (la session précédente est quittée). */
+export const rejoindreVoix = (salon: string) => invoquer<ConnexionVoix>("matrix_rejoindre_voix", { salon });
+/** Quitte l'appel (départ publié dans l'état du salon). */
+export const quitterVoix = () => invoquer<void>("matrix_quitter_voix");
+/** Mute et sourdine annoncés dans l'appartenance ; `false` hors appel. */
+export const etatVoix = (muet: boolean, sourd: boolean) => invoquer<boolean>("matrix_etat_voix", { muet, sourd });
+/** « On ne m'entend pas » : appartenance republiée, clé renouvelée ; `false` hors appel. */
+export const republierVoix = () => invoquer<boolean>("matrix_republier_voix");
+/** Remet toutes les clés connues au moteur vocal qui vient de se connecter. */
+export const rejouerClesVoix = () => invoquer<number>("matrix_rejouer_cles_voix");

@@ -7,13 +7,16 @@ description = "Cœur Matrix de Sion (matrix-rust-sdk), indépendant de l'interfa
 publish = false
 
 [dependencies]
-matrix-sdk = { version = "=0.19.1", features = ["bundled-sqlite"] }
+matrix-sdk = { version = "=0.19.1", features = ["bundled-sqlite", "experimental-send-custom-to-device"] }
 tokio = { version = "1", features = ["sync", "fs", "rt", "time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 thiserror = "2"
 getrandom = "0.3"
+base64 = "0.22"
+# `CollectStrategy`, que matrix-sdk ne réexporte pas (même version que lui).
+matrix-sdk-crypto = { version = "=0.19.1", default-features = false }
 httpdate = "1"
 futures-util = "0.3"
 mime = "0.3"

@@ -2430,6 +2430,22 @@ pub fn voice_native_set_e2ee_key(
                 return false;
             }
         };
+        return importer_cle_e2ee(&identity, key_index, bytes);
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&identity, &key_index, &key_b64);
+        false
+    }
+}
+
+/// Importe une clé E2EE dans le moteur en cours (voir
+/// `voice_native_set_e2ee_key`). Aussi appelée directement par le pont du
+/// moteur Matrix Rust, qui tient les clés lui-même : elles ne passent plus
+/// par la webview. Bloquante (attend un moteur prêté ailleurs).
+pub(crate) fn importer_cle_e2ee(identity: &str, key_index: i32, bytes: Vec<u8>) -> bool {
+    #[cfg(feature = "native-voice")]
+    {
         if !validate_e2ee_key(&bytes) {
             log::warn!(
                 "[Sion][voix-native][E2EE] clé {} index={} rejetée : {} octets (attendu 16 ou 32)",
@@ -2443,7 +2459,7 @@ pub fn voice_native_set_e2ee_key(
         // comme `with_engine` — mais on repose le moteur nous-mêmes SANS
         // `drop_dead_session` si absent (voir doc ci-dessus).
         if let Some(engine) = take_engine_wait() {
-            let ok = engine.set_e2ee_key(&identity, key_index, bytes);
+            let ok = engine.set_e2ee_key(identity, key_index, bytes);
             store_engine(Some(engine));
             return ok;
         }
@@ -2455,7 +2471,7 @@ pub fn voice_native_set_e2ee_key(
     }
     #[allow(unreachable_code)]
     {
-        let _ = (&identity, &key_index, &key_b64);
+        let _ = (identity, key_index, bytes);
         false
     }
 }

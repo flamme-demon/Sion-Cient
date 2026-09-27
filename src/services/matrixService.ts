@@ -931,6 +931,12 @@ export function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: 
 }
 
 async function writeCallMember(roomId: string): Promise<void> {
+  if (moteurRust()) {
+    // Le cœur réécrit l'appartenance lui-même (même contenu, date de
+    // jonction gardée).
+    if (callMemberCache.has(roomId)) await core.etatVoix(localVoiceState.muted, localVoiceState.deafened);
+    return;
+  }
   if (!matrixClient) return;
   const cache = callMemberCache.get(roomId);
   if (!cache) return;
@@ -958,7 +964,7 @@ export function sendCallMemberEvent(
   livekitServiceUrl: string,
   livekitAlias: string,
 ): void {
-  if (!matrixClient) throw new Error("Matrix client not initialized");
+  if (!moteurRust() && !matrixClient) throw new Error("Matrix client not initialized");
   callMemberCache.set(roomId, { livekitServiceUrl, livekitAlias });
 }
 
@@ -1022,6 +1028,10 @@ export function publishLocalVoiceState(state: { muted?: boolean; deafened?: bool
  */
 export async function republishCallMember(): Promise<number> {
   if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
+  if (moteurRust()) {
+    // Appartenance republiée ET clé renouvelée pour tous, par le cœur.
+    return (await core.republierVoix()) ? 1 : 0;
+  }
   const roomIds = Array.from(callMemberCache.keys());
   for (const roomId of roomIds) {
     await writeCallMember(roomId);

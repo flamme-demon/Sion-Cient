@@ -15,6 +15,7 @@ import * as matrixService from "../../services/matrixService";
 import type { Channel, UserRole } from "../../types/matrix";
 import { moteurRust } from "../../services/moteur";
 import { leaveRoom as matrixServiceLeave } from "../../services/matrixService";
+import * as cacheRust from "../../services/cacheRust";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -40,6 +41,15 @@ function getParticipantInfo(identity: string, roomId: string | null, localUserId
   // Extract Matrix user ID from identity (format: @user:server.com or @user:server.com:deviceId)
   const userIdMatch = identity.match(/^(@[^:]+:[^:]+)/);
   const userId = userIdMatch ? userIdMatch[1] : identity;
+
+  if (moteurRust() && roomId) {
+    // Moteur Rust : participants de l'appel et membres du salon, tenus par
+    // le cœur.
+    const vocal = cacheRust.salonsConnus().find((c) => c.id === roomId)?.voiceUsers?.find((u) => u.id === userId);
+    if (vocal) return { name: vocal.name, avatarUrl: vocal.avatarUrl, isLocal: false };
+    const membre = cacheRust.detailsSalon(roomId)?.membres.find((m) => m.userId === userId);
+    if (membre) return { name: membre.displayName, avatarUrl: membre.avatarUrl ?? undefined, isLocal: false };
+  }
 
   const client = getMatrixClient();
   if (client) {

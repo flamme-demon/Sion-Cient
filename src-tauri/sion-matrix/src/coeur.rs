@@ -22,6 +22,7 @@ use crate::medias::{FormatMedia, Medias, PREFIXE_PAR_DEFAUT};
 use crate::salons::Salon;
 use crate::session::{self, Secrets, Session, DOSSIER_MAGASIN};
 use crate::synchro::{self, Publication};
+use crate::voix::Voix;
 use crate::{Coffre, Erreur, Resultat};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -41,9 +42,10 @@ pub struct CoeurMatrix {
     client: Mutex<Option<Client>>,
     etat: watch::Sender<EtatConnexion>,
     salons: watch::Sender<Vec<Salon>>,
-    horloge: Arc<Horloge>,
+    pub(crate) horloge: Arc<Horloge>,
     fils: Fils,
     pub(crate) confiance: Arc<Confiance>,
+    pub(crate) voix: Arc<Voix>,
     pub(crate) sion: Arc<Sion>,
     /// Boucle de synchro : elle tient les magasins SQLite ouverts, elle doit
     /// donc s'arrêter AVANT tout effacement ou nouvelle connexion.
@@ -91,6 +93,7 @@ impl CoeurMatrix {
             fils: Fils::nouveau(Arc::new(Medias::nouveau(PREFIXE_PAR_DEFAUT))),
             confiance: Confiance::nouvelle(),
             sion: Sion::nouveau(),
+            voix: Voix::nouvelle(),
             synchro: std::sync::Mutex::new(None),
         }
     }
@@ -173,6 +176,7 @@ impl CoeurMatrix {
             etat: self.etat.clone(),
             horloge: self.horloge.clone(),
             fils: self.fils.clone(),
+            rtc: self.voix.evenements(),
         };
         let tache = synchro::demarrer(client, self.dossier.clone(), publication);
         if let Some(ancienne) = self.synchro.lock().unwrap().replace(tache) {
@@ -191,6 +195,7 @@ impl CoeurMatrix {
 
     /// Fermeture de l'appli : la session est gardée pour la reprise suivante.
     pub async fn fermer(&self) {
+        self.quitter_voix().await;
         self.arreter_synchro().await;
         *self.client.lock().await = None;
     }
@@ -237,6 +242,7 @@ impl CoeurMatrix {
     /// Connexion par mot de passe, toujours comme **nouvel appareil** avec des
     /// magasins neufs : tout état local précédent est effacé.
     pub async fn connecter(&self, serveur: &str, identifiant: &str, mot_de_passe: &str) -> Resultat<()> {
+        self.quitter_voix().await;
         self.arreter_synchro().await;
         let mut garde = self.client.lock().await;
         drop(garde.take()); // libère SQLite avant d'effacer les magasins
@@ -362,6 +368,7 @@ impl CoeurMatrix {
     /// Déconnexion : l'appareil est supprimé côté serveur, puis la session et
     /// les magasins locaux sont effacés.
     pub async fn deconnecter(&self) -> Resultat<()> {
+        self.quitter_voix().await;
         self.arreter_synchro().await;
         let mut garde = self.client.lock().await;
         if let Some(client) = garde.take() {

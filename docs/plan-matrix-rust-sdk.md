@@ -581,13 +581,50 @@ défaut, son chemin inchangé :
   commandes au robot), écrans d'admin, membres, en-tête : aiguillés.
 - Lecteur vidéo natif et memeboard : une URL `sion-media` ou un `mxc://`
   est résolu en fichier par le cœur (`fichier_media_matrix`).
-- La voix affiche « pas encore disponible » (étape 3).
+- La voix passe par le cœur (étape 3, voir plus haut).
 - Les erreurs JS non rattrapées partent dans le journal Rust.
 
 Trouvé en route : en développement, les deux moteurs partagent le même
 `localStorage` ; des identifiants d'une autre session ont renommé le compte de
 test (nom repris de la session JS). Les identifiants d'un autre compte sont
 désormais ignorés, et le nom n'est poussé que pour le compte connecté.
+
+### État — étape 3, la voix (branche `feat/matrix-rust`, 27/09/2026)
+
+MatrixRTC porté dans le cœur, limité à ce que Sion emploie :
+- `rtc.rs` (pur) : appartenance `call.member` (même contenu que
+  `MembershipManager.makeMyMembership`, plus `sion_muted` / `sion_deafened`),
+  participants valables (`sessionMembershipsForSlot`), service LiveKit annoncé,
+  clés en to-device (`ToDeviceKeyTransport`) et leur gestion
+  (`RTCEncryptionManager` : clé partagée aux arrivants pendant 10 s,
+  renouvelée au départ d'un participant, utilisée 1 s après sa
+  distribution, index modulo 256). 13 tests.
+- `voix.rs` : service trouvé comme `getMatrixRTCToken` (salon, autres
+  salons, `.well-known`), jeton OpenID échangé contre un jeton LiveKit
+  (`/sfu/get`), appartenance publiée et renouvelée (une heure de plus avant
+  chaque échéance, même `created_ts`), mute et sourdine, départ ; clés reçues
+  par la synchro (DÉCHIFFRÉES seulement, expéditeur garanti par Olm) et
+  envoyées par `encrypt_and_send_raw_to_device`.
+- Pont : les clés vont du cœur au moteur vocal natif SANS passer par la
+  webview (`voice_native::importer_cle_e2ee`) ; départ publié aussi par le
+  cœur à la fermeture de la fenêtre. Interface : branche Rust de
+  `useVoiceChannel` (le reste du parcours — moteur natif, sons, mute — est
+  inchangé), entrée automatique en vocal comme le moteur JS.
+
+Vérifié :
+- `tests/voix_locale.rs` (banc local, deux comptes, salon chiffré) : clés
+  échangées sous les identités LiveKit, mute vu depuis l'autre compte,
+  rotation au départ (la clé neuve ne va pas à celui qui part), retour
+  servi avec la clé en usage, appel vide à la fin.
+- `build-scripts/voix-croisee.sh` (compte réel) : le VRAI `MatrixRTCSession`
+  de matrix-js-sdk voit l'appareil Rust comme participant, sous
+  `@compte:serveur:APPAREIL` ; clés à l'identique dans les deux sens ; le
+  jeton délivré par le service de sionchat.fr porte cette identité
+  (`sub`). Le service hache le nom de la salle : même nom envoyé que le
+  moteur JS, donc même salle.
+
+Reste : l'essai en vrai, avec du son, entre un Sion sur le moteur Rust et un
+Sion habituel.
 
 ## Bilan de l'étape 2 (27/09/2026)
 
@@ -606,6 +643,9 @@ Outils de vérification, à relancer à chaque changement du cœur :
   parallèle dans un salon chiffré, envoi et lecture croisés ;
 - `build-scripts/verification-croisee.sh` (compte réel) : un appareil JS
   vérifié vérifie par emojis un nouvel appareil Rust ;
+- `build-scripts/voix-croisee.sh` (compte réel) : la voix entre le vrai
+  `MatrixRTCSession` et le cœur (appartenances, clés, jeton LiveKit) ;
+- `tests/voix_locale.rs` (banc local) : la voix entre deux comptes ;
 - `tests/compte_reel.rs`, `tests/gestion_reelle.rs` (compte réel) ;
 - `tests/banc_local.rs` (Continuwuity jetable en conteneur) : compte neuf,
   chiffrement et confiance, administration, fonctions propres à Sion.

@@ -112,9 +112,9 @@ function selectionnerSalonParDefaut(channels: Channel[]): void {
     const vue = app.mobileView;
     app.setActiveChannel(choisi.id, choisi.hasVoice);
     app.setMobileView(vue);
-    // La voix n'existe pas encore sur ce moteur (étape 3) : pas d'entrée
-    // automatique dans un salon vocal.
-    void autoJoinVoice;
+    // Entrée automatique en vocal : même marqueur que le moteur JS, le join
+    // réel reste à App.tsx.
+    if (autoJoinVoice && choisi.hasVoice && !app.connectedVoiceChannel) app.setPendingAutoJoinVoice(choisi.id);
   });
 }
 

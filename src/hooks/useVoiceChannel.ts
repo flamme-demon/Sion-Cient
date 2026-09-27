@@ -25,6 +25,18 @@ let activeKeyProvider: MatrixKeyProvider | null = null;
 let activeRTCRoomId: string | null = null;
 // Track E2EE reemit resources for cleanup.
 let reemitMembershipHandler: (() => void) | null = null;
+// Moteur Matrix Rust : salon de l'appel tenu par le cœur (appartenance et
+// clés y vivent ; il n'y a pas de MatrixRTCSession côté JS).
+let activeRustRoomId: string | null = null;
+
+/** Moteur Rust : départ de l'appel publié par le cœur. */
+async function quitterAppelRust(): Promise<void> {
+  if (!activeRustRoomId) return;
+  removeCallMemberEvent(activeRustRoomId);
+  activeRustRoomId = null;
+  const { quitterVoix } = await import("../services/matrixCore");
+  await quitterVoix().catch((err) => console.warn("[Sion] départ de l'appel (moteur Rust) :", err));
+}
 
 // In-flight join tracking for the double-click guard. These are set ONLY when
 // joinVoiceChannel actually starts a join, and always together — so the age is
@@ -57,6 +69,7 @@ function gracefulVoiceShutdown(_reason: string) {
   import("../services/voiceNativeService").then(({ voiceNativeDisconnect }) => {
     voiceNativeDisconnect().catch(() => {});
   }).catch(() => {});
+  void quitterAppelRust();
   if (activeRTCRoomId) {
     removeCallMemberEvent(activeRTCRoomId);
     activeRTCRoomId = null;
@@ -89,6 +102,7 @@ if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
 }
 
 async function cleanupActiveSession() {
+  await quitterAppelRust();
   if (reemitMembershipHandler && activeRTCSession) {
     activeRTCSession.off(MatrixRTCSessionEvent.MembershipsChanged, reemitMembershipHandler);
     reemitMembershipHandler = null;
@@ -192,13 +206,6 @@ export function useVoiceChannel() {
 
   const joinVoiceChannelInner = useCallback(
     async (matrixRoomId: string) => {
-      if (moteurRust()) {
-        // La voix dépend de MatrixRTC, pas encore porté sur le cœur Rust
-        // (docs/plan-matrix-rust-sdk.md, étape 3).
-        const { default: i18n } = await import("../i18n");
-        window.alert(i18n.t("voice.rustEngineUnavailable"));
-        return;
-      }
       await waitForNativeSessionCleanup();
       // Déconnecter le canal vocal actif avant d'en rejoindre un autre
       const currentChannel = useAppStore.getState().connectedVoiceChannel;
@@ -238,7 +245,7 @@ export function useVoiceChannel() {
       // see the ghost-leak fix below). Without this, the new join stacks
       // on top of an orphan and we re-create a second membership event in
       // the same room, leaving peers with a double-reference participant.
-      if (activeRTCSession) {
+      if (activeRTCSession || activeRustRoomId) {
         console.warn("[Sion] joinVoiceChannel found a lingering RTC session — cleaning up before new join");
         await cleanupActiveSession();
       }
@@ -247,6 +254,40 @@ export function useVoiceChannel() {
       connectingRoomId = matrixRoomId;
       connectingStartedAt = performance.now();
       try {
+
+      if (moteurRust()) {
+        // Moteur Matrix Rust (étape 3) : le cœur trouve le service, obtient
+        // le jeton, publie l'appartenance et échange les clés, qu'il remet
+        // lui-même au moteur vocal natif.
+        const core = await import("../services/matrixCore");
+        const connexion = await core.rejoindreVoix(matrixRoomId);
+        activeRustRoomId = matrixRoomId;
+        // Cible des réécritures mute / sourdine (`publishLocalVoiceState`).
+        sendCallMemberEvent(matrixRoomId, "", "");
+        await joinRoom(matrixRoomId);
+        if (!(await isVoiceNativeAvailable())) {
+          throw new Error("moteur vocal natif indisponible (build sans --features native-voice)");
+        }
+        const displayName = credentials?.displayName || credentials?.userId || useMatrixStore.getState().currentUserId || "";
+        await connectNative(connexion.url, connexion.jeton, matrixRoomId, displayName, connexion.chiffre, onNativeSessionDisconnected);
+        if (connexion.chiffre) {
+          // Clés arrivées avant la connexion : refusées par un moteur absent.
+          const n = await core.rejouerClesVoix();
+          console.info(`[Sion][voix-native][E2EE] ${n} clé(s) du cœur remise(s) après connect (${connexion.identite})`);
+        }
+        setConnectedVoice(matrixRoomId);
+        useAppStore.getState().setConnectingVoice(null);
+        connectingStartedAt = 0;
+        connectingRoomId = null;
+        const nomSalon = useMatrixStore.getState().channels.find((c) => c.id === matrixRoomId)?.name || "Voice";
+        startVoiceService(nomSalon, false, false);
+        const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (joinMuted || mobile) {
+          await new Promise((r) => setTimeout(r, 500));
+          if (!useAppStore.getState().isMuted) useAppStore.getState().toggleMute();
+        }
+        return;
+      }
 
       // 1. Essayer MatrixRTC (foci_preferred dans org.matrix.msc3401.call)
       const client = getMatrixClient();
@@ -449,7 +490,7 @@ export function useVoiceChannel() {
         // for the full TTL (currently 1 h) — they open peer connections,
         // push to-device E2EE keys to a dead device, and show a phantom
         // participant in the member list.
-        if (activeRTCSession) {
+        if (activeRTCSession || activeRustRoomId) {
           try {
             await cleanupActiveSession();
           } catch (cleanupErr) {

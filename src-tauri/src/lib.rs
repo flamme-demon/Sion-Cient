@@ -3646,6 +3646,11 @@ pub fn run() {
         matrix_pont::commandes::matrix_url_media,
         matrix_pont::commandes::matrix_definir_pousseur,
         matrix_pont::commandes::matrix_supprimer_regle_push,
+        matrix_pont::commandes::matrix_rejoindre_voix,
+        matrix_pont::commandes::matrix_quitter_voix,
+        matrix_pont::commandes::matrix_etat_voix,
+        matrix_pont::commandes::matrix_republier_voix,
+        matrix_pont::commandes::matrix_rejouer_cles_voix,
         update_shortcuts,
         get_shortcut_ws_port,
         open_url,
@@ -3840,6 +3845,11 @@ pub fn run() {
         matrix_pont::commandes::matrix_url_media,
         matrix_pont::commandes::matrix_definir_pousseur,
         matrix_pont::commandes::matrix_supprimer_regle_push,
+        matrix_pont::commandes::matrix_rejoindre_voix,
+        matrix_pont::commandes::matrix_quitter_voix,
+        matrix_pont::commandes::matrix_etat_voix,
+        matrix_pont::commandes::matrix_republier_voix,
+        matrix_pont::commandes::matrix_rejouer_cles_voix,
         open_url,
         open_file_default,
         download_file,
@@ -4177,6 +4187,7 @@ pub fn run() {
                 }
             }
             let _ = window.emit("sion-graceful-shutdown", ());
+            matrix_pont::quitter_voix_a_la_fermeture();
             // Give JS ~1.5s to flush the LiveKit WS leave + MatrixRTC
             // membership state event before forcing the close.
             std::thread::spawn(move || {

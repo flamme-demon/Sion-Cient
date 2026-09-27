@@ -97,6 +97,7 @@ mod actif {
         let mut messages = coeur.messages();
         let mut verification = coeur.verification();
         let mut evenements_sion = coeur.evenements_sion();
+        let mut cles_voix = coeur.cles_voix();
         let _ = COEUR.set(coeur);
         log::info!("[Sion][matrix] moteur Rust actif");
 
@@ -128,6 +129,23 @@ mod actif {
                         let _ = app_sion.emit("matrix-evenement-sion", &ev);
                     }
                     Err(RecvError::Lagged(n)) => log::warn!("[Sion][matrix] {n} événement(s) Sion perdu(s) en route"),
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+        // Clés des médias de l'appel (étape 3) : du cœur au moteur vocal
+        // natif, directement — elles ne passent plus par la webview.
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match cles_voix.recv().await {
+                    Ok(c) => {
+                        remettre_cles(vec![c]).await;
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        if let Ok(coeur) = self::coeur() {
+                            remettre_cles(coeur.cles_voix_connues().await).await;
+                        }
+                    }
                     Err(RecvError::Closed) => break,
                 }
             }
@@ -257,6 +275,26 @@ mod actif {
         )
     }
 
+    /// Fermeture de la fenêtre : départ de l'appel publié par le cœur, sans
+    /// compter sur une webview qui s'en va.
+    pub fn quitter_voix_a_la_fermeture() {
+        if let Ok(coeur) = coeur() {
+            let coeur = coeur.clone();
+            tauri::async_runtime::spawn(async move { coeur.quitter_voix().await });
+        }
+    }
+
+    /// Remet des clés au moteur vocal natif ; renvoie combien il en a
+    /// acceptées (aucune hors appel). L'import attend un moteur prêté
+    /// ailleurs : hors du runtime async.
+    pub async fn remettre_cles(cles: Vec<sion_matrix::CleMedia>) -> usize {
+        tauri::async_runtime::spawn_blocking(move || {
+            cles.into_iter().filter(|c| crate::voice_native::importer_cle_e2ee(&c.identite, i32::from(c.index), c.cle.clone())).count()
+        })
+        .await
+        .unwrap_or(0)
+    }
+
     pub fn coeur() -> Result<&'static Arc<CoeurMatrix>, String> {
         COEUR.get().ok_or_else(|| "moteur Matrix Rust inactif".to_string())
     }
@@ -281,9 +319,11 @@ mod actif {
             log::warn!("[Sion][matrix] SION_MATRIX_MOTEUR=rust ignoré : Sion compilé sans la feature moteur-matrix-rust");
         }
     }
+
+    pub fn quitter_voix_a_la_fermeture() {}
 }
 
-pub use actif::{deposer_media, fichier_media_matrix, initialiser};
+pub use actif::{deposer_media, fichier_media_matrix, initialiser, quitter_voix_a_la_fermeture};
 
 /// Protocole `sion-media` (médias des messages du moteur Rust). Sans la
 /// feature, il n'existe pas : le moteur JS n'en produit aucune URL.
@@ -805,6 +845,39 @@ pub mod commandes {
     pub async fn matrix_supprimer_regle_push(portee: String, genre: String, regle: String) -> Result<(), String> {
         coeur()?.supprimer_regle_push(&portee, &genre, &regle).await.map_err(erreur)
     }
+
+    // ── Voix (étape 3) ───────────────────────────────────────────────────
+
+    /// Rejoint l'appel d'un salon : adresse et jeton du serveur média, salon
+    /// chiffré ou non, notre identité. Les clés suivent par le relais.
+    #[tauri::command]
+    pub async fn matrix_rejoindre_voix(salon: String) -> Result<serde_json::Value, String> {
+        json(coeur()?.rejoindre_voix(&salon).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_quitter_voix() -> Result<(), String> {
+        coeur()?.quitter_voix().await;
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_etat_voix(muet: bool, sourd: bool) -> Result<bool, String> {
+        Ok(coeur()?.etat_voix(muet, sourd).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_republier_voix() -> Result<bool, String> {
+        Ok(coeur()?.republier_voix().await)
+    }
+
+    /// Toutes les clés connues de l'appel, au moteur vocal qui vient de se
+    /// connecter (celles arrivées avant lui ont été refusées).
+    #[tauri::command]
+    pub async fn matrix_rejouer_cles_voix() -> Result<usize, String> {
+        let cles = coeur()?.cles_voix_connues().await;
+        Ok(super::actif::remettre_cles(cles).await)
+    }
 }
 
 #[cfg(not(feature = "moteur-matrix-rust"))]
@@ -1234,6 +1307,31 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_supprimer_regle_push(_portee: String, _genre: String, _regle: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_rejoindre_voix(_salon: String) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_quitter_voix() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_etat_voix(_muet: bool, _sourd: bool) -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_republier_voix() -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_rejouer_cles_voix() -> Result<usize, String> {
         Err(INACTIF.into())
     }
 }

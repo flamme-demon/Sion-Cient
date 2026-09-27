@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use matrix_sdk::config::SyncSettings;
-use matrix_sdk::deserialized_responses::{RawAnySyncOrStrippedState, SyncOrStrippedState};
+use matrix_sdk::deserialized_responses::{ProcessedToDeviceEvent, RawAnySyncOrStrippedState, SyncOrStrippedState};
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::api::client::membership::joined_rooms;
 use matrix_sdk::ruma::events::room::member::MembershipState;
@@ -20,7 +20,7 @@ use matrix_sdk::ruma::events::StateEventType;
 use matrix_sdk::ruma::{uint, OwnedRoomId};
 use matrix_sdk::{Client, Room, RoomDisplayName, RoomMemberships};
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use crate::appels::EvenementAppel;
 use crate::fil::Fils;
@@ -28,6 +28,7 @@ use crate::horloge::Horloge;
 use crate::medias::Medias;
 use crate::salons::{self, EntreesSalon, Salon};
 use crate::session::FICHIER_ACTIVITE;
+use crate::voix::EvenementRtc;
 use crate::EtatConnexion;
 
 /// Réglages de synchro : 20 événements par salon, comme le
@@ -47,6 +48,8 @@ pub(crate) struct Publication {
     pub etat: watch::Sender<EtatConnexion>,
     pub horloge: Arc<Horloge>,
     pub fils: Fils,
+    /// Vers la session vocale : synchros et clés d'appel reçues.
+    pub rtc: broadcast::Sender<EvenementRtc>,
 }
 
 /// Salons rejoints selon le magasin local, moins les fantômes.
@@ -153,6 +156,24 @@ fn json_etat(brut: &RawAnySyncOrStrippedState) -> Option<Value> {
     serde_json::from_str(texte).ok()
 }
 
+/// Les appartenances à l'appel du salon (`call.member`), par clé d'état.
+pub(crate) async fn evenements_appel(salon: &Room) -> matrix_sdk::Result<Vec<EvenementAppel>> {
+    let mut liste: Vec<EvenementAppel> = salon
+        .get_state_events(StateEventType::CallMember)
+        .await?
+        .iter()
+        .filter_map(json_etat)
+        .map(|v| EvenementAppel {
+            expediteur: chaine(v.get("sender")),
+            cle_etat: chaine(v.get("state_key")),
+            ts: v.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0),
+            contenu: v.get("content").cloned().unwrap_or(Value::Null),
+        })
+        .collect();
+    liste.sort_by(|a, b| a.cle_etat.cmp(&b.cle_etat));
+    Ok(liste)
+}
+
 async fn etat_unique(salon: &Room, type_: StateEventType) -> Option<Value> {
     salon.get_state_event(type_, "").await.ok().flatten().as_ref().and_then(json_etat)
 }
@@ -169,19 +190,7 @@ async fn lire(salon: &Room, moi: &str, medias: &Medias, activite: i64, horloge: 
     let creation = etat_unique(salon, StateEventType::RoomCreate).await;
     let type_personnalise = etat_unique(salon, StateEventType::from("m.room.type")).await;
 
-    let mut membres_appel: Vec<EvenementAppel> = salon
-        .get_state_events(StateEventType::CallMember)
-        .await?
-        .iter()
-        .filter_map(json_etat)
-        .map(|v| EvenementAppel {
-            expediteur: chaine(v.get("sender")),
-            cle_etat: chaine(v.get("state_key")),
-            ts: v.get("origin_server_ts").and_then(Value::as_i64).unwrap_or(0),
-            contenu: v.get("content").cloned().unwrap_or(Value::Null),
-        })
-        .collect();
-    membres_appel.sort_by(|a, b| a.cle_etat.cmp(&b.cle_etat));
+    let membres_appel = evenements_appel(salon).await?;
     for ev in &membres_appel {
         horloge.noter_horodatage(ev.ts);
     }
@@ -315,6 +324,30 @@ fn connecte(client: &Client) -> EtatConnexion {
 }
 
 /// Lance la boucle de synchro. Elle vit jusqu'à `abort()` (déconnexion).
+/// Clés d'appel reçues, puis le signal « synchro arrivée », vers la session
+/// vocale. Seules les clés DÉCHIFFRÉES comptent : en clair, n'importe qui
+/// pourrait en glisser une.
+fn transmettre_rtc(to_device: &[ProcessedToDeviceEvent], rtc: &broadcast::Sender<EvenementRtc>) {
+    for ev in to_device {
+        let brut = ev.as_raw();
+        if brut.get_field::<String>("type").ok().flatten().as_deref() != Some(crate::rtc::TYPE_CLES) {
+            continue;
+        }
+        match ev {
+            ProcessedToDeviceEvent::Decrypted { raw, encryption_info } => {
+                let contenu = raw.get_field::<Value>("content").ok().flatten().unwrap_or(Value::Null);
+                let _ = rtc.send(EvenementRtc::Cle {
+                    expediteur: encryption_info.sender.to_string(),
+                    appareil: encryption_info.sender_device.as_ref().map(|d| d.to_string()),
+                    contenu,
+                });
+            }
+            _ => log::warn!("[Sion][voix] clé d'appel non chiffrée ou indéchiffrable, ignorée"),
+        }
+    }
+    let _ = rtc.send(EvenementRtc::Synchro);
+}
+
 pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publication) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut activites = Activites::charger(dossier.join(FICHIER_ACTIVITE));
@@ -347,6 +380,7 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
                     if change {
                         activites.enregistrer();
                     }
+                    transmettre_rtc(&reponse.to_device, &publication.rtc);
                     accepter_invitations(&client, &mut invitations_tentees).await;
                     if publication.horloge.perimee() {
                         publication.horloge.sonder(&base).await;
