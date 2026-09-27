@@ -7,6 +7,8 @@
  * connexion. T1 : liste des salons, au format `Channel` du moteur JS.
  * T2 : fil de messages de chaque salon, au format `ChatMessage` ; les médias
  * arrivent en URL `sion-media`, servies (et déchiffrées) par Rust.
+ * T3 : envoi, mêmes contenus que `matrixService.ts` ; chaque envoi rend
+ * l'identifiant serveur de l'événement, le message revenant par le fil.
  * Le jeton d'accès ne passe jamais par ici : il reste côté Rust.
  */
 
@@ -119,3 +121,68 @@ export async function urlLecture(url: string): Promise<string | null> {
   const port = await invoquer<number>("media_server_port");
   return port ? `http://127.0.0.1:${port}/matrix/${cle}` : null;
 }
+
+// ── Envoi (T3) ──────────────────────────────────────────────────────────────
+
+/** Message texte, mentions `@Nom` reconnues comme le JS (`sendTextMessage`). */
+export const envoyerTexte = (salon: string, corps: string) => invoquer<string>("matrix_envoyer_texte", { salon, corps });
+
+export const repondre = (salon: string, cible: string, corps: string) =>
+  invoquer<string>("matrix_repondre", { salon, cible, corps });
+
+/** Édition — chiffrée dans un salon chiffré (le moteur JS l'envoyait en clair). */
+export const editer = (salon: string, cible: string, texte: string) =>
+  invoquer<string>("matrix_editer", { salon, cible, texte });
+
+/** Suppression d'un message, d'une réaction (son `eventIds[userId]`), d'un vote… */
+export const supprimer = (salon: string, cible: string) => invoquer<void>("matrix_supprimer", { salon, cible });
+
+export const reagir = (salon: string, cible: string, cle: string) => invoquer<string>("matrix_reagir", { salon, cible, cle });
+
+export const poker = (salon: string) => invoquer<string>("matrix_poker", { salon });
+
+/** Sondage ; `fin` : échéance Sion en ms depuis l'epoch (`app.sion.poll_ends_ts`). */
+export const creerSondage = (
+  salon: string,
+  question: string,
+  options: string[],
+  { secret = false, max = 1, fin }: { secret?: boolean; max?: number; fin?: number } = {},
+) => invoquer<string>("matrix_creer_sondage", { salon, question, options, secret, max, fin: fin ?? null });
+
+/** Vote ; remplace le précédent, `[]` le retire. */
+export const voter = (salon: string, sondage: string, reponses: string[]) =>
+  invoquer<string>("matrix_voter", { salon, sondage, reponses });
+
+export const cloreSondage = (salon: string, sondage: string) => invoquer<string>("matrix_clore_sondage", { salon, sondage });
+
+/** Épingle, ou désépingle s'il l'était. */
+export const epingler = (salon: string, cible: string) => invoquer<void>("matrix_epingler", { salon, cible });
+
+/** Fichier : déposé par `stage_media` (octets bruts, sans base64), puis
+ *  envoyé — chiffré si le salon l'est. Une vidéo doit déjà être préparée
+ *  (`prepareVideoForSend`), dimensions et durée fournies ici. */
+export async function envoyerFichier(
+  salon: string,
+  fichier: File,
+  infos: { largeur?: number; hauteur?: number; dureeMs?: number } = {},
+): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const octets = new Uint8Array(await fichier.arrayBuffer());
+  const ext = (fichier.name.split(".").pop() || "bin").toLowerCase();
+  const chemin = await invoke<string>("stage_media", octets, { headers: { "x-sion-ext": ext } });
+  return invoquer<string>("matrix_envoyer_fichier", {
+    salon,
+    chemin,
+    nom: fichier.name,
+    mime: fichier.type || "application/octet-stream",
+    largeur: infos.largeur ?? null,
+    hauteur: infos.hauteur ?? null,
+    dureeMs: infos.dureeMs ?? null,
+  });
+}
+
+/** GIF du sélecteur, téléchargé et téléversé par le cœur (`sendImageUrl`). */
+export const envoyerImageUrl = (salon: string, url: string) => invoquer<string>("matrix_envoyer_image_url", { salon, url });
+
+/** Taille maximale d'un envoi annoncée par le serveur (`getMaxUploadSize`). */
+export const tailleMaxEnvoi = () => invoquer<number>("matrix_taille_max_envoi");

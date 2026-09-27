@@ -316,6 +316,49 @@ reçoit aujourd'hui une URL http ou un fichier ; il devra accepter un média
 `sion-media` (via `/matrix/<clé>`, ou le fichier déposé). `resolveServerEventId`
 (échos locaux `~…`) relève de T3 (envoi).
 
+### État — T3 (branche `feat/matrix-rust`, 27/09/2026)
+
+Fait :
+
+- `envoi.rs` — contenus construits À L'IDENTIQUE de `matrixService.ts` :
+  texte (mentions `@Nom` → `formatted_body` + `m.mentions`, port de
+  `parseMentions` et de ses tests), réponse, édition, réaction, poke, sondage
+  (+ échéance Sion), vote, clôture, épinglage (bascule), fichier.
+- `emission.rs` — envoi par `send_raw` (matrix-sdk chiffre d'office dans un
+  salon chiffré), suppression, épinglage par l'état `m.room.pinned_events`,
+  fichier téléversé chiffré si le salon l'est, GIF téléchargé par le cœur,
+  taille maximale d'envoi. Chaque envoi rend l'identifiant serveur : pas
+  d'écho local `~…`, donc rien à porter de `resolveServerEventId`.
+- `membres.rs` — noms des membres calculés comme matrix-js-sdk
+  (`shouldDisambiguate`) : matrix-sdk jugeait ambigu tout nom contenant un
+  caractère invisible (« pierre 🏳️‍⚧️ » et son ZWJ).
+- Pont : 13 commandes `matrix_envoyer_texte` … `matrix_taille_max_envoi` ; le
+  fichier passe par `stage_media` (octets bruts) et doit être dans le dossier
+  média ; façade `matrixCore.ts` ; saisie dans l'écran de développement.
+
+**Aller-retour vérifié sur le compte de test** (`build-scripts/aller-retour.sh`) :
+les deux moteurs tournent EN MÊME TEMPS, comme deux appareils, dans un salon
+de test privé et chiffré (« Sion — banc d'essai des moteurs », réutilisé).
+Chacun envoie la série complète — texte avec mention, réponse, édition,
+réaction, poke, sondage + vote + clôture, fichier, message supprimé,
+épinglage — et vérifie celle de l'autre ; côté JS, par les VRAIES fonctions de
+`matrixService.ts`. Le fichier chiffré par Rust et le fichier du JS sont relus
+octet pour octet. La parité T1/T2 reste à 0 écart (9 salons, 146 messages).
+
+**Défaut du moteur JS actuel, trouvé en route** : `editMessage` envoie
+l'édition par une requête REST brute, qui contourne le chiffrement du SDK — dans
+un salon chiffré, **le nouveau texte d'un message édité part en clair** (le
+serveur le lit). Même contournement pour les fichiers : `sendFileMessage` et
+`sendImageUrl` téléversent en clair. Le cœur Rust chiffre les trois. À corriger
+aussi dans le moteur JS tant qu'il reste celui livré.
+
+Écart voulu, conséquence du défaut ci-dessus : un message indéchiffrable dont
+l'édition (en clair) est lisible affiche le texte de l'édition, comme le JS.
+
+Pas encore vu à l'écran : la saisie de l'écran de développement (l'écran était
+en veille pendant la nuit) ; le chemin qu'elle emprunte est celui de
+l'aller-retour.
+
 ## Les étapes suivantes
 
 - **Étape 3 — MatrixRTC en Rust.** Port maison depuis

@@ -7503,6 +7503,7 @@ dependencies = [
  "httpdate",
  "log",
  "matrix-sdk",
+ "mime",
  "serde",
  "serde_json",
  "tempfile",

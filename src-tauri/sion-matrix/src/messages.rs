@@ -410,6 +410,19 @@ pub(crate) fn extraire(evenements: &[EvenementBrut], ctx: &Contexte) -> Vec<Mess
         if type_ == "m.room.message" && ev.echec_dechiffrement {
             let mut m = nouveau(ev, ctx, TEXTE_INDECHIFFRABLE.into());
             m.msgtype = Some("m.encrypted".into());
+            // Indéchiffrable, mais une édition de l'auteur est lisible (le
+            // moteur JS envoyait ses éditions en clair) : son texte remplace
+            // le substitut, le type reste « m.encrypted » — comme le JS.
+            if let Some(r) = &remplace {
+                if let Some(t) = chaine(r.get("body")) {
+                    m.text = t;
+                }
+                m.formatted_body = r
+                    .get("formatted_body")
+                    .filter(|_| r.get("format").and_then(Value::as_str) == Some("org.matrix.custom.html"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
             msgs.push(m);
             continue;
         }
@@ -688,6 +701,15 @@ mod tests {
         let m = extraire_(&[orig, rep, edit]);
         assert_eq!((m.len(), m[1].text.as_str()), (2, "réponse corrigée"));
         assert_eq!(m[1].reply_to.as_ref().map(|r| r.event_id.as_str()), Some("$q"));
+    }
+
+    #[test]
+    fn edition_lisible_d_un_message_indechiffrable() {
+        let mut orig = avec_id(ev("m.room.message", json!({})), "$o");
+        orig.echec_dechiffrement = true;
+        let m = extraire_(&[orig, edition("$o", json!({ "msgtype": "m.text", "body": "lisible" }))]);
+        assert_eq!((m.len(), m[0].text.as_str(), m[0].edited), (1, "lisible", Some(true)));
+        assert_eq!(m[0].msgtype.as_deref(), Some("m.encrypted"));
     }
 
     #[test]

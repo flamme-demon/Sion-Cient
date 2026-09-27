@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  chargerHistorique, connecter, deconnecter, ecartHorloge, epingles as lireEpingles, fils as lireFils, reprendre,
+  chargerHistorique, connecter, deconnecter, ecartHorloge, envoyerTexte, epingles as lireEpingles, fils as lireFils, poker,
+  reagir, reprendre,
   salons as lireSalons, surEtat, surMessages, surSalons, urlLecture, type EtatConnexion, type FilSalon,
 } from "../../services/matrixCore";
 import type { PinnedSummary } from "../../services/matrixService";
@@ -15,7 +16,8 @@ import type { Channel, ChatMessage } from "../../types/matrix";
  * session au lancement suivant, déconnexion — avant que le reste de
  * l'interface ne soit branché sur ce moteur ; T1 y ajoute la liste des
  * salons (texte, vocaux avec leurs participants, MP), T2 le fil d'un salon
- * (médias servis par `sion-media`, historique, épinglés). Textes non
+ * (médias servis par `sion-media`, historique, épinglés), T3 la saisie
+ * (texte, poke, réaction 👍). Textes non
  * traduits : c'est un outil de développement, pas un écran livré.
  */
 export function MoteurRustApercu() {
@@ -252,13 +254,59 @@ function Fil({ id, salon, fil }: { id: string; salon?: Channel; fil?: FilSalon }
           <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--color-on-surface-variant)' }}>Début du salon</div>
         )}
         {erreur && <div style={{ fontSize: 12, color: 'var(--color-error)' }}>{erreur}</div>}
-        {fil?.messages.map((m) => <Bulle key={m.eventId ?? m.id} m={m} epingle={fil.epingles.includes(String(m.eventId))} />)}
+        {fil?.messages.map((m) => (
+          <Bulle
+            key={m.eventId ?? m.id}
+            m={m}
+            epingle={fil.epingles.includes(String(m.eventId))}
+            reagir={() => m.eventId && reagir(id, m.eventId, "👍").catch((e) => setErreur(String(e)))}
+          />
+        ))}
       </div>
+      <Saisie salon={id} signaler={setErreur} />
     </div>
   );
 }
 
-function Bulle({ m, epingle }: { m: ChatMessage; epingle: boolean }) {
+/** Saisie : Entrée envoie ; le message revient par le fil, comme tout autre. */
+function Saisie({ salon, signaler }: { salon: string; signaler: (e: string | null) => void }) {
+  const [texte, setTexte] = useState("");
+  const [envoi, setEnvoi] = useState(false);
+  const envoyer = () => {
+    const corps = texte.trim();
+    if (!corps || envoi) return;
+    setEnvoi(true);
+    signaler(null);
+    envoyerTexte(salon, corps)
+      .then(() => setTexte(""))
+      .catch((e) => signaler(String(e)))
+      .finally(() => setEnvoi(false));
+  };
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      <input
+        value={texte}
+        onChange={(e) => setTexte(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") envoyer(); }}
+        placeholder="Message (moteur Rust)"
+        disabled={envoi}
+        style={{
+          flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--color-outline-variant)',
+          background: 'var(--color-surface-container-high)', color: 'var(--color-on-surface)', fontSize: 14,
+        }}
+      />
+      <button
+        onClick={() => poker(salon).catch((e) => signaler(String(e)))}
+        title="Poke"
+        style={{ padding: '8px 12px', borderRadius: 999, border: '1px solid var(--color-outline-variant)', background: 'transparent', color: 'inherit', cursor: 'pointer' }}
+      >
+        👉
+      </button>
+    </div>
+  );
+}
+
+function Bulle({ m, epingle, reagir }: { m: ChatMessage; epingle: boolean; reagir: () => void }) {
   const discret = { fontSize: 11, color: 'var(--color-on-surface-variant)' };
   return (
     <div style={{ display: 'flex', gap: 8, fontSize: 14 }}>
@@ -268,6 +316,14 @@ function Bulle({ m, epingle }: { m: ChatMessage; epingle: boolean }) {
       <div style={{ minWidth: 0 }}>
         <div>
           <b>{m.user}</b> <span style={discret}>{m.time}{m.edited && " (modifié)"}{epingle && " 📌"}{m.msgtype && m.msgtype !== "m.text" && ` ${m.msgtype}`}</span>
+          {" "}
+          <button
+            onClick={reagir}
+            title="Réagir 👍"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 11, opacity: 0.5, padding: 0 }}
+          >
+            +👍
+          </button>
         </div>
         {m.replyTo && (
           <div style={{ ...discret, borderLeft: '2px solid var(--color-outline-variant)', paddingLeft: 6 }}>

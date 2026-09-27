@@ -301,6 +301,104 @@ pub mod commandes {
         let resumes = coeur()?.epingles(&salon).await.map_err(|e| e.to_string())?;
         serde_json::to_value(resumes).map_err(|e| e.to_string())
     }
+
+    // ── Envoi (T3) : chaque commande rend l'identifiant serveur de l'événement.
+
+    fn erreur(e: sion_matrix::Erreur) -> String {
+        e.to_string()
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_texte(salon: String, corps: String) -> Result<String, String> {
+        coeur()?.envoyer_texte(&salon, &corps).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_repondre(salon: String, cible: String, corps: String) -> Result<String, String> {
+        coeur()?.repondre(&salon, &cible, &corps).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_editer(salon: String, cible: String, texte: String) -> Result<String, String> {
+        coeur()?.editer(&salon, &cible, &texte).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer(salon: String, cible: String) -> Result<(), String> {
+        coeur()?.supprimer(&salon, &cible).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_reagir(salon: String, cible: String, cle: String) -> Result<String, String> {
+        coeur()?.reagir(&salon, &cible, &cle).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_poker(salon: String) -> Result<String, String> {
+        coeur()?.poker(&salon).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_creer_sondage(
+        salon: String,
+        question: String,
+        options: Vec<String>,
+        secret: bool,
+        max: u32,
+        fin: Option<i64>,
+    ) -> Result<String, String> {
+        coeur()?.creer_sondage(&salon, &question, &options, secret, max, fin).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_voter(salon: String, sondage: String, reponses: Vec<String>) -> Result<String, String> {
+        coeur()?.voter(&salon, &sondage, &reponses).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_clore_sondage(salon: String, sondage: String) -> Result<String, String> {
+        coeur()?.clore_sondage(&salon, &sondage).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_epingler(salon: String, cible: String) -> Result<(), String> {
+        coeur()?.epingler(&salon, &cible).await.map_err(erreur)
+    }
+
+    /// Fichier déposé par `stage_media` : il doit être DANS le dossier média
+    /// (sinon la commande lirait n'importe quel fichier du disque), et il est
+    /// effacé une fois envoyé.
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn matrix_envoyer_fichier(
+        salon: String,
+        chemin: String,
+        nom: String,
+        mime: String,
+        largeur: Option<u32>,
+        hauteur: Option<u32>,
+        duree_ms: Option<u64>,
+    ) -> Result<String, String> {
+        let dossier = crate::sion_media_dir().canonicalize().map_err(|e| format!("dossier média : {e}"))?;
+        let fichier = std::path::PathBuf::from(&chemin).canonicalize().map_err(|e| format!("fichier introuvable : {e}"))?;
+        if !fichier.starts_with(&dossier) {
+            return Err("chemin hors du dossier média".into());
+        }
+        let octets = std::fs::read(&fichier).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&fichier);
+        let infos = sion_matrix::InfosMedia { largeur, hauteur, duree_ms };
+        coeur()?.envoyer_fichier(&salon, octets, &nom, &mime, infos).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_image_url(salon: String, url: String) -> Result<String, String> {
+        coeur()?.envoyer_image_url(&salon, &url).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_taille_max_envoi() -> Result<u64, String> {
+        coeur()?.taille_max_envoi().await.map_err(erreur)
+    }
 }
 
 #[cfg(not(feature = "moteur-matrix-rust"))]
@@ -354,6 +452,87 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_epingles(_salon: String) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_texte(_salon: String, _corps: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_repondre(_salon: String, _cible: String, _corps: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_editer(_salon: String, _cible: String, _texte: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer(_salon: String, _cible: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_reagir(_salon: String, _cible: String, _cle: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_poker(_salon: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_creer_sondage(
+        _salon: String,
+        _question: String,
+        _options: Vec<String>,
+        _secret: bool,
+        _max: u32,
+        _fin: Option<i64>,
+    ) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_voter(_salon: String, _sondage: String, _reponses: Vec<String>) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_clore_sondage(_salon: String, _sondage: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_epingler(_salon: String, _cible: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn matrix_envoyer_fichier(
+        _salon: String,
+        _chemin: String,
+        _nom: String,
+        _mime: String,
+        _largeur: Option<u32>,
+        _hauteur: Option<u32>,
+        _duree_ms: Option<u64>,
+    ) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_image_url(_salon: String, _url: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_taille_max_envoi() -> Result<u64, String> {
         Err(INACTIF.into())
     }
 }

@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-import { moteurMatrix, connecter, fils, chargerHistorique, urlLecture } from "./matrixCore";
+import { moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier } from "./matrixCore";
 
 describe("matrixCore", () => {
   it("retombe sur le moteur JS si le pont ne répond pas (hors Tauri)", async () => {
@@ -45,6 +45,26 @@ describe("matrixCore", () => {
     expect(await urlLecture("https://ailleurs/son.mp3")).toBe("https://ailleurs/son.mp3");
     invoke.mockResolvedValue(0);
     expect(await urlLecture("sion-media://localhost/00ff00ff00ff00ff")).toBeNull();
+  });
+
+  it("passe les options de sondage sous les noms attendus, échéance absente = null", async () => {
+    invoke.mockResolvedValue("$s");
+    await creerSondage("!a:hs", "On y va ?", ["Oui", "Non"]);
+    expect(invoke).toHaveBeenLastCalledWith("matrix_creer_sondage", {
+      salon: "!a:hs", question: "On y va ?", options: ["Oui", "Non"], secret: false, max: 1, fin: null,
+    });
+  });
+
+  it("dépose le fichier en octets bruts puis l'envoie par son chemin", async () => {
+    invoke.mockImplementation((commande: string) => Promise.resolve(commande === "stage_media" ? "/tmp/sion-media/x.png" : "$f"));
+    const id = await envoyerFichier("!a:hs", new File([new Uint8Array([1, 2, 3])], "x.png", { type: "image/png" }));
+    expect(id).toBe("$f");
+    const depot = invoke.mock.calls.find((c) => c[0] === "stage_media");
+    expect(depot?.[1]).toBeInstanceOf(Uint8Array);
+    expect(depot?.[2]).toEqual({ headers: { "x-sion-ext": "png" } });
+    expect(invoke).toHaveBeenLastCalledWith("matrix_envoyer_fichier", {
+      salon: "!a:hs", chemin: "/tmp/sion-media/x.png", nom: "x.png", mime: "image/png", largeur: null, hauteur: null, dureeMs: null,
+    });
   });
 
   it("désigne le salon sous le nom attendu par Tauri", async () => {

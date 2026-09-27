@@ -21,6 +21,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::epingles::{self, ResumeEpingle};
 use crate::medias::Medias;
+use crate::membres;
 use crate::messages::{self, Contexte, EvenementBrut, Message};
 use crate::salons::mxc_vers_http;
 use crate::{Erreur, Resultat};
@@ -210,14 +211,14 @@ impl Fils {
 /// Nom affiché et avatar (URL http, comme le JS) de chaque membre.
 async fn profils(salon: &Room) -> HashMap<String, (Option<String>, Option<String>)> {
     let base = salon.client().homeserver().to_string();
-    salon
-        .members_no_sync(RoomMemberships::all())
-        .await
-        .unwrap_or_default()
-        .iter()
+    let tous = salon.members_no_sync(RoomMemberships::all()).await.unwrap_or_default();
+    let mut noms = membres::noms_du_salon(&tous);
+    tous.iter()
         .map(|m| {
             let avatar = m.avatar_url().and_then(|u| mxc_vers_http(&base, u.as_str()));
-            (m.user_id().to_string(), (Some(m.name().to_owned()), avatar))
+            let id = m.user_id().to_string();
+            let nom = noms.remove(&id);
+            (id, (nom, avatar))
         })
         .collect()
 }
@@ -254,7 +255,7 @@ impl Fils {
                 Err(e) => log::debug!("[Sion][matrix] épinglé {id} illisible : {e}"),
             }
         }
-        resumes.sort_by(|a, b| b.ts.cmp(&a.ts));
+        resumes.sort_by_key(|r| std::cmp::Reverse(r.ts));
         resumes
     }
 }

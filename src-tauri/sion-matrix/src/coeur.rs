@@ -94,7 +94,7 @@ impl CoeurMatrix {
         self.fils.tous()
     }
 
-    async fn salon(&self, id: &str) -> Resultat<matrix_sdk::Room> {
+    pub(crate) async fn salon(&self, id: &str) -> Resultat<matrix_sdk::Room> {
         let client = self.client().await.ok_or(Erreur::PasDeSession)?;
         let id = RoomId::parse(id).map_err(|e| Erreur::Autre(e.to_string()))?;
         client.get_room(&id).ok_or_else(|| Erreur::Autre(format!("salon inconnu : {id}")))

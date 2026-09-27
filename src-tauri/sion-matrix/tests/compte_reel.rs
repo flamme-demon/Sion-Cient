@@ -8,6 +8,9 @@
 //! SION_TEST_SERVEUR=sionchat.fr SION_TEST_IDENTIFIANT=… SION_TEST_MOT_DE_PASSE=… \
 //!   cargo test -p sion-matrix --test compte_reel -- --ignored --nocapture
 //! ```
+// Même raison que dans lib.rs : ce test attend directement des futurs du
+// cœur, dont la taille dépasse la profondeur de calcul par défaut.
+#![recursion_limit = "256"]
 use std::sync::Arc;
 
 use sion_matrix::{CoeurMatrix, CoffreMemoire, EtatConnexion};
