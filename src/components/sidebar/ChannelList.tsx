@@ -8,6 +8,9 @@ import { ChannelItem } from "./ChannelItem";
 import { MatrixRain, MATRIX_GREEN } from "./MatrixRain";
 import { findAdminRoom } from "../../services/adminCommandService";
 import { getMatrixClient } from "../../services/matrixService";
+import * as cacheRust from "../../services/cacheRust";
+import { moteurRust } from "../../services/moteur";
+import { leaveRoom } from "../../services/matrixService";
 
 const SORT_OPTIONS: ChannelSortMode[] = ["created", "name", "activity"];
 
@@ -153,6 +156,10 @@ export function ChannelList({ compact = false }: { compact?: boolean }) {
               && !!myUserId
               // Only "empty" DMs: ours is the sole surviving member
               && (() => {
+                if (moteurRust()) {
+                  const membres = cacheRust.detailsSalon(ch.id)?.membres ?? [];
+                  return membres.length === 1 && membres[0].userId === myUserId;
+                }
                 try {
                   const cli = getMatrixClient();
                   const room = cli?.getRoom(ch.id);
@@ -173,7 +180,8 @@ export function ChannelList({ compact = false }: { compact?: boolean }) {
             const cli = getMatrixClient();
             for (const ch of empties) {
               try {
-                await cli?.leave(ch.id);
+                if (moteurRust()) await leaveRoom(ch.id);
+                else await cli?.leave(ch.id);
               } catch (err) {
                 console.warn("[Sion][DM] bulk leave failed for", ch.id, err);
               }

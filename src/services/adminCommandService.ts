@@ -1,9 +1,14 @@
 import { getMatrixClient } from "./matrixService";
+import * as cacheRust from "./cacheRust";
+import { moteurRust } from "./moteur";
 
 /**
  * Find the admin room (Continuwuity's admin room).
  */
 export function findAdminRoom(): string | null {
+  if (moteurRust()) {
+    return cacheRust.salonAdmin();
+  }
   const client = getMatrixClient();
   if (!client) return null;
 
@@ -59,6 +64,12 @@ function getBotId(): string {
  * Send an admin command and wait for the bot's response by polling the timeline.
  */
 export async function sendAdminCommand(command: string, timeoutMs = 15000): Promise<string> {
+  if (moteurRust()) {
+    // Envoi et attente de la réponse du robot par le cœur (15 s).
+    void timeoutMs;
+    const { commandeAdmin } = await import("./matrixCore");
+    return commandeAdmin(command);
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
 

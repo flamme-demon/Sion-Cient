@@ -10,6 +10,8 @@
 // soundboard ; l'affichage est natif (`meme_pop.rs`), dans une petite fenêtre
 // au premier plan que la vue web ne pourrait pas offrir.
 import { findSoundboardRoom, getMatrixClient, mxcToHttp, uploadFile } from "./matrixService";
+import * as core from "./matrixCore";
+import { moteurRust } from "./moteur";
 import { fetchSoundboardMessages } from "./soundboardService";
 import {
   bytesToB64,
@@ -96,6 +98,9 @@ function lireMeme(ev: {
 
 /** Tous les memes du salon, du plus récent au plus ancien. */
 export async function listMemes(): Promise<MemeEntry[]> {
+  if (moteurRust()) {
+    return core.memes();
+  }
   const client = getMatrixClient();
   if (!client) return [];
   const roomId = await findSoundboardRoom();
@@ -114,6 +119,10 @@ export async function listMemes(): Promise<MemeEntry[]> {
 /** URL que Rust rapatrie puis donne à ffmpeg — jamais passée à ffmpeg telle
  *  quelle, voir `lecteur_video::ramener_en_local`. */
 export function urlMedia(mxc: string): string | null {
+  if (moteurRust()) {
+    // Le lecteur natif résout lui-même un mxc par le cœur.
+    return mxc;
+  }
   return mxcToHttp(mxc);
 }
 
@@ -271,6 +280,9 @@ export async function blobPrepare(chemin: string, type: string): Promise<Blob> {
 
 /** Envoie un meme préparé dans le salon de la soundboard. */
 export async function envoyerMeme(prepare: MemePrepare, label: string, emoji: string | null): Promise<string> {
+  if (moteurRust()) {
+    return core.envoyerMeme(prepare, label, emoji);
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();
@@ -309,6 +321,9 @@ export async function envoyerMeme(prepare: MemePrepare, label: string, emoji: st
 
 /** Supprime un meme (rédaction Matrix) — l'auteur, ou un modérateur. */
 export async function supprimerMeme(eventId: string): Promise<void> {
+  if (moteurRust()) {
+    return core.supprimerDuSoundboard(eventId);
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();

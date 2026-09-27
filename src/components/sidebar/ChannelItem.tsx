@@ -13,6 +13,8 @@ import { findAdminRoom } from "../../services/adminCommandService";
 import { getMatrixClient } from "../../services/matrixService";
 import * as matrixService from "../../services/matrixService";
 import type { Channel, UserRole } from "../../types/matrix";
+import { moteurRust } from "../../services/moteur";
+import { leaveRoom as matrixServiceLeave } from "../../services/matrixService";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -256,6 +258,10 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
     if (!channel.isDM) return;
     if (!window.confirm(`Quitter la conversation avec ${channel.name} ?`)) return;
     try {
+      if (moteurRust()) {
+        await matrixServiceLeave(channel.id);
+        return;
+      }
       const client = getMatrixClient();
       if (!client) return;
       await client.leave(channel.id);

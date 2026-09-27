@@ -4,13 +4,24 @@ import "highlight.js/styles/github-dark.css";
 import "./index.css";
 import { openExternalUrl } from "./utils/openExternal";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
-import { attachConsole } from "@tauri-apps/plugin-log";
+import { attachConsole, error as journalErreur } from "@tauri-apps/plugin-log";
 import { installMemoryDiagnostics } from "./services/memoryDiagnostics";
 
 // Route Rust `log::*` records into the webview console — the only way to see
 // them on the shipped Windows build (no terminal). Pairs with the Rust
 // logger's Webview target. No-op outside Tauri.
 attachConsole().catch(() => {});
+
+// Et l'inverse : une erreur JS non rattrapée (rendu React compris) part dans le
+// journal Rust — le seul lisible sans outils de développement. Sans cela, une
+// page blanche au démarrage ne laissait aucune trace.
+window.addEventListener("error", (e) => {
+  journalErreur(`[Sion][js] ${e.message} (${e.filename}:${e.lineno})\n${e.error?.stack ?? ""}`).catch(() => {});
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const raison = e.reason as { stack?: string } | undefined;
+  journalErreur(`[Sion][js] promesse rejetée : ${raison?.stack ?? String(e.reason)}`).catch(() => {});
+});
 
 // DIAGNOSTIC DEV : compteurs mémoire (messages retenus, blobs vivants) dans la
 // console/le log — pour expliquer la courbe RSS du processus WebKit.
@@ -70,11 +81,16 @@ async function bootstrap() {
 
   // i18n lit directement sion-settings à l'évaluation du module.
   await import("./i18n");
-  // Moteur Matrix Rust (développement, docs/plan-matrix-rust-sdk.md) : tant
-  // que l'interface n'y est pas branchée, un écran dédié remplace l'appli.
-  // Moteur JS (par défaut) : un seul aller-retour IPC, puis rien ne change.
-  const { moteurMatrix } = await import("./services/matrixCore");
-  if ((await moteurMatrix()) === "rust") {
+  // Moteur Matrix (docs/plan-matrix-rust-sdk.md) : JS par défaut ; le cœur
+  // Rust avec `SION_MATRIX_MOTEUR=rust` (l'appli) ou `=rust-apercu` (l'écran
+  // de diagnostic du cœur, à la place de l'appli). Un seul aller-retour IPC.
+  const [{ moteurDemande }, { definirMoteur }] = await Promise.all([
+    import("./services/matrixCore"),
+    import("./services/moteur"),
+  ]);
+  const moteur = await moteurDemande();
+  definirMoteur(moteur === "rust" ? "rust" : "js");
+  if (moteur === "rust-apercu") {
     const [{ MoteurRustApercu }, { installThemeSync: synchroniserTheme }] = await Promise.all([
       import("./components/dev/MoteurRustApercu"),
       import("./services/themeService"),

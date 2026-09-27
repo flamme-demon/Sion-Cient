@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { moteurRust } from "../services/moteur";
 import {
   initAdminService,
   getServerVersion,
@@ -110,7 +111,7 @@ export const useAdminStore = create<AdminState>((set, get) => ({
       adminCheckInterval = setTimeout(tick, delay);
     };
     const tick = async () => {
-      if (!savedHomeserverUrl || !savedAccessToken) { scheduleNext(); return; }
+      if (!savedHomeserverUrl || (!savedAccessToken && !moteurRust())) { scheduleNext(); return; }
       const wasAdmin = get().isAdmin;
       try {
         await getRoomsList();

@@ -1,3 +1,5 @@
+import { moteurRust } from "./moteur";
+
 interface AdminConfig {
   homeserverUrl: string;
   accessToken: string;
@@ -21,6 +23,19 @@ export function initAdminService(adminConfig: AdminConfig) {
 
 async function fetchJson<T>(url: string, opts: { auth?: boolean; method?: string; body?: unknown } = {}): Promise<T> {
   if (!config) throw new Error("Admin service not initialized");
+
+  if (moteurRust()) {
+    // Le jeton reste dans le cœur : la requête part de Rust, par son
+    // mandataire (limité à l'API d'administration).
+    const { requeteAdmin, ErreurApiAdmin } = await import("./matrixCore");
+    const chemin = url.startsWith(config.homeserverUrl) ? url.slice(config.homeserverUrl.length) : new URL(url).pathname;
+    try {
+      return await requeteAdmin<T>(chemin, { methode: opts.method, corps: opts.body, authentifiee: opts.auth });
+    } catch (err) {
+      if (err instanceof ErreurApiAdmin) throw new AdminApiError(err.status, "", err.errcode);
+      throw err;
+    }
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

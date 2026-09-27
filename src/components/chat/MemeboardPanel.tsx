@@ -16,6 +16,8 @@ import {
   getMemberPowerLevel,
   mxcToHttp,
 } from "../../services/matrixService";
+import { moteurRust } from "../../services/moteur";
+import { useMatrixStore } from "../../stores/useMatrixStore";
 import {
   analyserMeme,
   declencherMeme,
@@ -153,6 +155,24 @@ export function MemeboardPanel() {
     };
     rafraichirRef.current = () => { void rafraichir(); };
     void rafraichir();
+    if (moteurRust()) {
+      let arreter: (() => void) | null = null;
+      void import("../../services/matrixCore").then(({ surMessages }) =>
+        surMessages((fil) => {
+          if (!salon || fil.salon !== salon) return;
+          if (minuterie) clearTimeout(minuterie);
+          minuterie = setTimeout(() => { void rafraichir(); }, 200);
+        }).then((stop) => {
+          if (annule) stop();
+          else arreter = stop;
+        }),
+      );
+      return () => {
+        annule = true;
+        if (minuterie) clearTimeout(minuterie);
+        arreter?.();
+      };
+    }
     const client = getMatrixClient();
     if (!client) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -181,8 +201,25 @@ export function MemeboardPanel() {
     return () => clearInterval(id);
   }, [roomId]);
 
+  // Moteur Rust : les aperçus passent par le cœur (URL sion-media), résolus
+  // une fois par meme.
+  const [apercusRust, setApercusRust] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!moteurRust()) return;
+    const manquants = memes.map((m) => m.apercuMxc).filter((x): x is string => !!x && !(x in apercusRust));
+    if (manquants.length === 0) return;
+    let vivant = true;
+    void import("../../services/matrixCore").then(async ({ urlMedia }) => {
+      const paires = await Promise.all(manquants.map(async (mxc) => [mxc, await urlMedia(mxc).catch(() => null)] as const));
+      const trouves = Object.fromEntries(paires.filter((p): p is readonly [string, string] => !!p[1]));
+      if (vivant) setApercusRust((avant) => ({ ...avant, ...trouves }));
+    });
+    return () => { vivant = false; };
+  }, [memes, apercusRust]);
+
   const client = getMatrixClient();
-  const moi = client?.getUserId() || "";
+  const currentUserId = useMatrixStore((s) => s.currentUserId);
+  const moi = client?.getUserId() || currentUserId || "";
   const peutEnvoyer = roomId ? canSendMessage(roomId) : false;
   const peutModerer = roomId && moi ? getMemberPowerLevel(roomId, moi) >= NIVEAU_MODERATION : false;
 
@@ -341,7 +378,7 @@ export function MemeboardPanel() {
           gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))',
         }}>
           {visibles.map((m) => {
-            const apercu = m.apercuMxc ? mxcToHttp(m.apercuMxc) : null;
+            const apercu = m.apercuMxc ? (moteurRust() ? (apercusRust[m.apercuMxc] ?? null) : mxcToHttp(m.apercuMxc)) : null;
             const peutSupprimer = m.senderId === moi || peutModerer;
             return (
               <div

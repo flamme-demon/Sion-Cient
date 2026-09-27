@@ -94,7 +94,8 @@
     "connecting": "Connexion...",
     "reconnect": "Reconnecter",
     "republishPresence": "Republier ma présence (si on ne m'entend pas)",
-    "clockSkew": "Horloge de votre machine décalée d'environ {{minutes}} min par rapport au serveur — la voix ne fonctionnera pas correctement. Vérifiez le FUSEAU HORAIRE puis activez la synchronisation automatique : l'heure affichée peut être juste alors que le réglage est faux."
+    "clockSkew": "Horloge de votre machine décalée d'environ {{minutes}} min par rapport au serveur — la voix ne fonctionnera pas correctement. Vérifiez le FUSEAU HORAIRE puis activez la synchronisation automatique : l'heure affichée peut être juste alors que le réglage est faux.",
+    "rustEngineUnavailable": "La voix n'est pas encore disponible avec le moteur Matrix Rust : elle arrive avec le portage de MatrixRTC (étape 3). Relancez Sion sur le moteur habituel pour rejoindre un salon vocal."
   },
   "controls": {
     "mute": "Mute",

@@ -2,6 +2,9 @@ import { create } from "zustand";
 import { getMatrixClient } from "../services/matrixService";
 import { checkUserSuspended } from "../services/adminService";
 import { sendAdminCommand, parseUserList, findAdminRoom } from "../services/adminCommandService";
+import * as cacheRust from "../services/cacheRust";
+import { moteurRust } from "../services/moteur";
+import { useMatrixStore } from "./useMatrixStore";
 
 interface PendingUsersState {
   pendingCount: number;
@@ -29,6 +32,18 @@ const FULL_DISCOVER_INTERVAL_MS = 5 * 60 * 1000;
 
 /** Discover all local users from rooms + SDK store */
 function discoverLocalUsers(): Set<string> {
+  if (moteurRust()) {
+    // Membres déjà connus du cache (la découverte complète passe par
+    // `list-users`, plus bas).
+    const domaine = (useMatrixStore.getState().currentUserId ?? "").split(":")[1] ?? "";
+    const ids = new Set<string>();
+    for (const salon of cacheRust.salonsConnus()) {
+      for (const m of cacheRust.detailsSalon(salon.id)?.membres ?? []) {
+        if (m.userId.endsWith(`:${domaine}`) && !m.userId.includes("conduit")) ids.add(m.userId);
+      }
+    }
+    return ids;
+  }
   const client = getMatrixClient();
   if (!client) return new Set();
 
@@ -66,6 +81,13 @@ function discoverLocalUsers(): Set<string> {
  *  integrated iff they're joined to at least one room that the approve
  *  flow would actually force-join them into. */
 export function getPublicRoomIds(): string[] {
+  if (moteurRust()) {
+    const admin = findAdminRoom();
+    return cacheRust
+      .salonsConnus()
+      .filter((c) => c.id !== admin && !c.isDM && cacheRust.detailsSalon(c.id)?.regleAcces === "public")
+      .map((c) => c.id);
+  }
   const client = getMatrixClient();
   if (!client) return [];
   const adminRoomId = findAdminRoom();
@@ -99,6 +121,9 @@ export function getPublicRoomIds(): string[] {
  *  in. Pass the precomputed list from `getPublicRoomIds()` to avoid
  *  re-walking the room graph for every user during a batch check. */
 export function isInAnyPublicRoom(userId: string, publicRoomIds: string[]): boolean {
+  if (moteurRust()) {
+    return publicRoomIds.some((id) => cacheRust.detailsSalon(id)?.membres.some((m) => m.userId === userId));
+  }
   const client = getMatrixClient();
   if (!client) return false;
   for (const roomId of publicRoomIds) {

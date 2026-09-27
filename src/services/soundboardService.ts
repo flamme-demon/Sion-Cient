@@ -1,6 +1,8 @@
 import { Filter, Direction } from "matrix-js-sdk";
 import { getSharedAudioContext } from "./audioContext";
 import { getMatrixClient, findSoundboardRoom, uploadFile } from "./matrixService";
+import * as core from "./matrixCore";
+import { moteurRust } from "./moteur";
 import { voiceNativePublishData, extendVoiceNativeSoundboardBadge, bytesToB64 } from "./voiceNativeService";
 import { useAppStore } from "../stores/useAppStore";
 
@@ -173,6 +175,9 @@ export async function fetchSoundboardMessages(
  * message-only filtered pagination (see fetchSoundboardMessages).
  */
 export async function listSounds(): Promise<SoundEntry[]> {
+  if (moteurRust()) {
+    return core.sons();
+  }
   const client = getMatrixClient();
   if (!client) return [];
   const roomId = await findSoundboardRoom();
@@ -264,6 +269,17 @@ export async function uploadSound(
   /** Modèle audio.cpp à mémoriser, pour une voix comme pour un son généré. */
   ttsModel?: string,
 ): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
+  if (moteurRust()) {
+    if (file.size > SOUNDBOARD_MAX_FILE_SIZE) {
+      throw new Error(`Fichier trop lourd (max ${Math.round(SOUNDBOARD_MAX_FILE_SIZE / 1024)} KB)`);
+    }
+    if (!file.type.startsWith("audio/")) throw new Error("Le fichier doit être un audio");
+    const duree = await probeDuration(file).catch(() => null);
+    if (duree !== null && duree > SOUNDBOARD_MAX_DURATION_MS) {
+      throw new Error(`Son trop long (max ${Math.round(SOUNDBOARD_MAX_DURATION_MS / 1000)}s)`);
+    }
+    return core.ajouterSon(file, label, category, emoji, gain, voice, ttsModel, duree);
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();
@@ -347,6 +363,14 @@ async function resolveBlobUrl(mxcUrl: string): Promise<string> {
     blobCache.set(mxcUrl, cached);
     return cached;
   }
+  if (moteurRust()) {
+    // Le cœur télécharge (authentifié) et sert le son par sion-media.
+    const url = await core.urlMedia(mxcUrl);
+    if (!url) throw new Error("Cannot resolve mxc URL");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+    return garderEnCache(mxcUrl, URL.createObjectURL(await res.blob()));
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const httpUrl = client.mxcUrlToHttp(mxcUrl, undefined, undefined, undefined, true, true, true);
@@ -359,9 +383,13 @@ async function resolveBlobUrl(mxcUrl: string): Promise<string> {
   });
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   const blob = await res.blob();
-  const blobUrl = URL.createObjectURL(blob);
+  return garderEnCache(mxcUrl, URL.createObjectURL(blob));
+}
+
+/** Met un son en cache ; éviction LRU : la plus ancienne sort, son URL est
+ *  révoquée. */
+function garderEnCache(mxcUrl: string, blobUrl: string): string {
   blobCache.set(mxcUrl, blobUrl);
-  // Éviction LRU : la plus ancienne sort, son URL est révoquée.
   while (blobCache.size > BLOB_CACHE_MAX) {
     const oldest = blobCache.keys().next().value;
     if (oldest === undefined || oldest === mxcUrl) break;
@@ -406,6 +434,9 @@ export async function editSound(
    *  inchangée ; la passer à null l'efface. */
   voice?: { refText?: string | null; avatar?: string | null },
 ): Promise<void> {
+  if (moteurRust()) {
+    return core.modifierSon(original.eventId, label, category, emoji, gain, voice ?? {});
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();
@@ -463,6 +494,9 @@ export async function editSound(
 }
 
 export async function deleteSound(eventId: string): Promise<void> {
+  if (moteurRust()) {
+    return core.supprimerDuSoundboard(eventId);
+  }
   const client = getMatrixClient();
   if (!client) throw new Error("Matrix client not initialized");
   const roomId = await findSoundboardRoom();

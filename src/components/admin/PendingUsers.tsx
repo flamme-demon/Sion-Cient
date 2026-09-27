@@ -8,6 +8,8 @@ import {
   getPublicRoomIds,
   isInAnyPublicRoom,
 } from "../../stores/usePendingUsersStore";
+import * as cacheRust from "../../services/cacheRust";
+import { moteurRust } from "../../services/moteur";
 
 interface UserEntry {
   userId: string;
@@ -104,12 +106,13 @@ export function PendingUsers() {
         // Fallback : rooms visibles par le client
         const client = getMatrixClient();
         if (client) roomIds = client.getRooms().map((r) => r.roomId);
+        if (moteurRust()) roomIds = cacheRust.salonsConnus().map((c) => c.id);
       }
 
       // 3. Joindre toutes les rooms sauf l'admin room et les DM
       const client = getMatrixClient();
       // Collecter les room IDs qui sont des DM
-      const dmRoomIds = new Set<string>();
+      const dmRoomIds = new Set<string>(moteurRust() ? cacheRust.salonsConnus().filter((c) => c.isDM).map((c) => c.id) : []);
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const directEvent = client?.getAccountData("m.direct" as any);
@@ -131,7 +134,9 @@ export function PendingUsers() {
           // must stay invite-only — a newly approved user shouldn't be
           // force-joined into a private channel they were never invited to.
           const joinRuleEvent = room?.currentState.getStateEvents("m.room.join_rules", "");
-          const joinRule = joinRuleEvent?.getContent?.()?.join_rule;
+          const joinRule = moteurRust()
+            ? (await cacheRust.detailsFrais(roomId).catch(() => null))?.regleAcces
+            : joinRuleEvent?.getContent?.()?.join_rule;
           if (joinRule !== "public") continue;
           await sendAdminCommand(`!admin users force-join-room ${userId} ${roomId}`);
         } catch {

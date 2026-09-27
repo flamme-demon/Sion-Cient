@@ -5,8 +5,14 @@ import * as matrixService from "../services/matrixService";
 import type { RegistrationFlowInfo } from "../services/matrixService";
 import { useAdminStore } from "./useAdminStore";
 import { mirrorSessionToAppData } from "../services/sessionPersist";
+import { moteurRust } from "../services/moteur";
 
 const STORAGE_KEY = "sion_auth_credentials";
+/** Moteur Rust : clé distincte, sans jeton (il reste dans le cœur), jamais
+ *  recopiée hors de la webview (`sessionPersist` ne connaît que la clé JS).
+ *  En développement, les deux moteurs partagent le même `localStorage`. */
+const STORAGE_KEY_RUST = "sion_auth_credentials_rust";
+const cleStockage = () => (moteurRust() ? STORAGE_KEY_RUST : STORAGE_KEY);
 
 // Module-level password cache for UIA callback during cross-signing bootstrap
 // NEVER persisted — only kept in memory during the login flow
@@ -37,15 +43,15 @@ interface AuthState {
 }
 
 function saveCredentials(credentials: AuthCredentials) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
+  localStorage.setItem(cleStockage(), JSON.stringify(credentials));
   // Mirror outside the webview profile so a localStorage purge
   // doesn't force a re-login. Fire-and-forget; no-op on web.
-  void mirrorSessionToAppData();
+  if (!moteurRust()) void mirrorSessionToAppData();
 }
 
 function loadCredentials(): AuthCredentials | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(cleStockage());
     if (!raw) return null;
     return JSON.parse(raw) as AuthCredentials;
   } catch {
@@ -54,10 +60,40 @@ function loadCredentials(): AuthCredentials | null {
 }
 
 function clearCredentials() {
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(cleStockage());
   // Reflect the cleared state in the app-data mirror too (logout must not
   // leave a stale session that re-hydrates on next boot).
-  void mirrorSessionToAppData();
+  if (!moteurRust()) void mirrorSessionToAppData();
+}
+
+/** Moteur Rust : identifiants de l'interface une fois le cœur connecté (après
+ *  connexion, inscription ou reprise). Le jeton reste dans le cœur. */
+async function identifiantsRust(homeserver: string | undefined, precedents: Partial<AuthCredentials> | null): Promise<AuthCredentials | null> {
+  const { etatConnexion } = await import("../services/matrixCore");
+  const etat = await etatConnexion();
+  // Hors ligne à la reprise : la session est gardée, on repart des derniers
+  // identifiants connus.
+  const userId = etat.etat === "connecte" ? etat.utilisateur : precedents?.userId;
+  if (!userId) return null;
+  // Des identifiants d'un AUTRE compte ne servent à rien ici — et leur nom
+  // d'affichage finirait poussé sur celui-ci (vu le 27/09 : le compte de test
+  // renommé du nom de la session JS, en développement où les deux moteurs
+  // partagent le même stockage).
+  if (precedents?.userId && precedents.userId !== userId) precedents = null;
+  const deviceId = etat.etat === "connecte" ? etat.appareil : (precedents?.deviceId ?? "");
+  const displayName = precedents?.displayName && precedents.displayName !== userId
+    ? precedents.displayName
+    : ((await matrixService.fetchDisplayName(userId)) ?? userId);
+  const avatarUrl = (await matrixService.getAvatarUrl(userId)) ?? precedents?.avatarUrl;
+  return {
+    ...precedents,
+    homeserverUrl: homeserver || precedents?.homeserverUrl || `https://${userId.split(":")[1] ?? ""}`,
+    userId,
+    accessToken: "",
+    deviceId,
+    displayName,
+    avatarUrl: avatarUrl || undefined,
+  };
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -72,6 +108,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (homeserver, username, password) => {
     set({ isLoading: true, error: null });
+    if (moteurRust()) {
+      try {
+        cachedLoginPassword = password;
+        const { connecter } = await import("../services/matrixCore");
+        await connecter(homeserver, username, password);
+        const credentials = await identifiantsRust(homeserver, getLiveKitFromExisting(get().credentials));
+        if (!credentials) throw new Error("connexion sans utilisateur");
+        saveCredentials(credentials);
+        set({ credentials, isLoading: false });
+      } catch (err) {
+        set({ error: mapMatrixError(err), isLoading: false });
+        throw err;
+      }
+      return;
+    }
     try {
       // Cache password for UIA callback during cross-signing bootstrap
       cachedLoginPassword = password;
@@ -112,6 +163,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   register: async (homeserver, username, password, displayName, token, captchaResponse) => {
     set({ isLoading: true, error: null, isRegistering: true });
+    if (moteurRust()) {
+      // Le cœur s'inscrit puis se connecte comme nouvel appareil.
+      try {
+        cachedLoginPassword = password;
+        const { inscrire } = await import("../services/matrixCore");
+        await inscrire(homeserver, username, password, token, captchaResponse);
+        const credentials = await identifiantsRust(homeserver, displayName ? { displayName } : null);
+        if (!credentials) throw new Error("inscription sans utilisateur");
+        saveCredentials(credentials);
+        set({ credentials, isLoading: false, isRegistering: false });
+        if (await matrixService.checkSuspended()) set({ isSuspended: true });
+      } catch (err) {
+        set({ error: mapMatrixError(err), isLoading: false, isRegistering: false });
+        throw err;
+      }
+      return;
+    }
     try {
       await matrixService.registerUser(homeserver, username, password, displayName, token, captchaResponse);
       set({ isRegistering: false });
@@ -144,6 +212,32 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   restoreSession: async () => {
+    if (moteurRust()) {
+      // La session fait foi dans le cœur (fichier + coffre du système).
+      set({ isLoading: true, error: null });
+      try {
+        const { reprendre } = await import("../services/matrixCore");
+        if (!(await reprendre())) {
+          clearCredentials();
+          set({ isLoading: false, credentials: null });
+          return;
+        }
+        const precedents = loadCredentials();
+        const { info } = await import("@tauri-apps/plugin-log");
+        void info(`[Sion][auth] reprise (moteur Rust) : identifiants locaux de ${precedents?.userId ?? "personne"}`).catch(() => {});
+        const credentials = await identifiantsRust(undefined, precedents);
+        if (!credentials) {
+          set({ isLoading: false, credentials: null });
+          return;
+        }
+        saveCredentials(credentials);
+        set({ credentials, isLoading: false });
+        if (await matrixService.checkSuspended().catch(() => false)) set({ isSuspended: true });
+      } catch (err) {
+        set({ error: mapMatrixError(err), isLoading: false, credentials: null });
+      }
+      return;
+    }
     const saved = loadCredentials();
     if (!saved || !saved.accessToken) return;
 
@@ -226,7 +320,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 /** Map Matrix error codes to i18n keys */
 function mapMatrixError(err: unknown): string {
   const e = err as { errcode?: string; data?: { errcode?: string }; message?: string };
-  const code = e.errcode || e.data?.errcode;
+  // Moteur Rust : l'erreur arrive en texte (« …[403 / M_FORBIDDEN] … »).
+  const texte = typeof err === "string" ? err : undefined;
+  const code = e.errcode || e.data?.errcode || texte?.match(/\bM_[A-Z_]+\b/)?.[0];
   const t = i18n.t.bind(i18n);
 
   switch (code) {
@@ -255,7 +351,10 @@ function mapMatrixError(err: unknown): string {
       if (err instanceof Error && /fetch|network|ECONNREFUSED/i.test(err.message)) {
         return t("auth.errorServerUnreachable");
       }
-      return err instanceof Error ? err.message : t("auth.errorGeneric");
+      if (texte && /error sending request|connection refused|dns error|timed out/i.test(texte)) {
+        return t("auth.errorServerUnreachable");
+      }
+      return err instanceof Error ? err.message : (texte ?? t("auth.errorGeneric"));
   }
 }
 

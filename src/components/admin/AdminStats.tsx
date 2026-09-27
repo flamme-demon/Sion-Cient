@@ -4,6 +4,8 @@ import { useAdminStore } from "../../stores/useAdminStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { getMatrixClient } from "../../services/matrixService";
 import { sendAdminCommand } from "../../services/adminCommandService";
+import * as cacheRust from "../../services/cacheRust";
+import { moteurRust } from "../../services/moteur";
 
 interface StatItem {
   label: string;
@@ -39,6 +41,8 @@ export function AdminStats() {
   // wiring than this admin-only stat warrants.
    
   const onlineCount = useMemo(() => {
+    // Moteur Rust : la présence n'est pas synchronisée.
+    if (moteurRust()) return null;
     const client = getMatrixClient();
     if (!client) return null;
     const users = client.getUsers();
@@ -55,6 +59,21 @@ export function AdminStats() {
   };
 
   const showRegisteredUsers = () => {
+    if (moteurRust()) {
+      void (async () => {
+        const domaine = (useMatrixStore.getState().currentUserId ?? "").split(":")[1] ?? "";
+        const vus = new Map<string, string>();
+        for (const salon of cacheRust.salonsConnus()) {
+          const d = await cacheRust.detailsFrais(salon.id).catch(() => null);
+          for (const m of d?.membres ?? []) {
+            if (m.userId.endsWith(`:${domaine}`) && !m.userId.includes("conduit")) vus.set(m.userId, m.displayName);
+          }
+        }
+        const users = [...vus].map(([userId, name]) => ({ userId, name })).sort((a, b) => a.name.localeCompare(b.name));
+        setUserModal({ title: t("admin.users.registered"), users });
+      })();
+      return;
+    }
     const client = getMatrixClient();
     if (!client) return;
     const serverName = client.getDomain() || "";

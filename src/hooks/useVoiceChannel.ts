@@ -13,6 +13,7 @@ import { isVoiceNativeAvailable } from "../services/voiceNativeService";
 import { disconnectNativeSession, waitForNativeSessionCleanup } from "../services/nativeVoiceSession";
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
+import { moteurRust } from "../services/moteur";
 
 // Module-level tracking — survives component unmount/remount
 let activeRTCSession: MatrixRTCSession | null = null;
@@ -191,6 +192,13 @@ export function useVoiceChannel() {
 
   const joinVoiceChannelInner = useCallback(
     async (matrixRoomId: string) => {
+      if (moteurRust()) {
+        // La voix dépend de MatrixRTC, pas encore porté sur le cœur Rust
+        // (docs/plan-matrix-rust-sdk.md, étape 3).
+        const { default: i18n } = await import("../i18n");
+        window.alert(i18n.t("voice.rustEngineUnavailable"));
+        return;
+      }
       await waitForNativeSessionCleanup();
       // Déconnecter le canal vocal actif avant d'en rejoindre un autre
       const currentChannel = useAppStore.getState().connectedVoiceChannel;

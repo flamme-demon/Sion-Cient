@@ -7,7 +7,6 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { usePendingUsersStore } from "../../stores/usePendingUsersStore";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import * as matrixService from "../../services/matrixService";
-import { getMatrixClient } from "../../services/matrixService";
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { LayoutPresetsMenu } from "../layout/LayoutPresetsMenu";
 
@@ -17,6 +16,7 @@ const ScreenShareOptionsModal = lazy(() =>
   import("./ScreenShareOptionsModal").then((m) => ({ default: m.ScreenShareOptionsModal })),
 );
 import { useLayoutStore } from "../../stores/useLayoutStore";
+import { estMembre, monId, regleAcces } from "../../services/vueSalon";
 
 function buildWavePath(amplitude: number, phase: number): string {
   if (amplitude < 0.01) return "M0,10 L400,10";
@@ -150,10 +150,7 @@ export function ChatHeader() {
 
   const isInviteOnly = (() => {
     if (!activeChannel) return false;
-    const client = getMatrixClient();
-    const room = client?.getRoom(activeChannel);
-    const jr = room?.currentState.getStateEvents("m.room.join_rules", "")?.getContent?.()?.join_rule;
-    return jr === "invite";
+    return regleAcces(activeChannel) === "invite";
   })();
 
   const openEditModal = () => {
@@ -162,11 +159,7 @@ export function ChatHeader() {
     remplacerApercuAvatar(null);
     // Lire le join_rule actuel
     if (activeChannel) {
-      const client = getMatrixClient();
-      const room = client?.getRoom(activeChannel);
-      const jrEvent = room?.currentState.getStateEvents("m.room.join_rules", "");
-      const jr = jrEvent?.getContent?.()?.join_rule;
-      setEditJoinRule(jr === "invite" ? "invite" : "public");
+      setEditJoinRule(regleAcces(activeChannel) === "invite" ? "invite" : "public");
     }
     setShowEditModal(true);
   };
@@ -193,9 +186,7 @@ export function ChatHeader() {
         await matrixService.setRoomTopic(activeChannel, editTopic);
       }
       // Sauvegarder le join rule
-      const client = getMatrixClient();
-      const room = client?.getRoom(activeChannel);
-      const currentJr = room?.currentState.getStateEvents("m.room.join_rules", "")?.getContent?.()?.join_rule;
+      const currentJr = regleAcces(activeChannel);
       if (editJoinRule !== currentJr) {
         await matrixService.setRoomJoinRule(activeChannel, editJoinRule);
       }
@@ -264,8 +255,7 @@ export function ChatHeader() {
           {canInvite && !isMobile && isInviteOnly && !channel?.isDM && (
             <button
               onClick={() => {
-                const client = getMatrixClient();
-                const myId = client?.getUserId() || "";
+                const myId = monId();
                 // Utiliser les users connus du store (inclut les suspendus)
                 const ids = [...knownUserIds].filter((id) => id !== myId).sort();
                 setServerUsers(ids);
@@ -711,9 +701,7 @@ export function ChatHeader() {
               ) : serverUsers.map((userId) => {
                 const name = userId.match(/^@([^:]+):/)?.[1] || userId;
                 // Vérifier si déjà membre
-                const client = getMatrixClient();
-                const room = client?.getRoom(activeChannel);
-                const alreadyMember = room?.getJoinedMembers().some((m) => m.userId === userId);
+                const alreadyMember = activeChannel ? estMembre(activeChannel, userId) : false;
                 return (
                   <div
                     key={userId}

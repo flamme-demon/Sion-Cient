@@ -34,14 +34,22 @@ async function invoquer<T>(commande: string, args?: Record<string, unknown>): Pr
   return invoke<T>(commande, args);
 }
 
-/** Moteur Matrix de ce lancement. Hors Tauri, ou si le pont ne répond pas :
- *  le moteur JS, toujours disponible. */
-export async function moteurMatrix(): Promise<"js" | "rust"> {
+/** Moteur Matrix demandé pour ce lancement : l'appli sur le cœur Rust
+ *  (« rust »), l'écran de diagnostic du cœur (« rust-apercu »), ou le moteur
+ *  JS. Hors Tauri, ou si le pont ne répond pas : le moteur JS. */
+export async function moteurDemande(): Promise<"js" | "rust" | "rust-apercu"> {
   try {
-    return (await invoquer<string>("matrix_moteur")) === "rust" ? "rust" : "js";
+    const m = await invoquer<string>("matrix_moteur");
+    return m === "rust" || m === "rust-apercu" ? m : "js";
   } catch {
     return "js";
   }
+}
+
+/** Moteur Matrix de ce lancement (le cœur Rust, pour l'appli comme pour
+ *  l'écran de diagnostic). */
+export async function moteurMatrix(): Promise<"js" | "rust"> {
+  return (await moteurDemande()) === "js" ? "js" : "rust";
 }
 
 export const etatConnexion = () => invoquer<EtatConnexion>("matrix_etat");

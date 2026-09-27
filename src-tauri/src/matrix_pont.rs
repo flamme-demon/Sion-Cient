@@ -23,11 +23,13 @@ mod actif {
 
     static COEUR: OnceLock<Arc<CoeurMatrix>> = OnceLock::new();
 
+    /// « rust » : l'appli sur le cœur Rust ; « rust-apercu » : l'écran de
+    /// diagnostic du cœur ; sinon « js ».
     pub fn moteur() -> &'static str {
-        if std::env::var("SION_MATRIX_MOTEUR").as_deref() == Ok("rust") {
-            "rust"
-        } else {
-            "js"
+        match std::env::var("SION_MATRIX_MOTEUR").as_deref() {
+            Ok("rust") => "rust",
+            Ok("rust-apercu") => "rust-apercu",
+            _ => "js",
         }
     }
 
@@ -77,7 +79,7 @@ mod actif {
     }
 
     pub fn initialiser<R: Runtime>(app: &AppHandle<R>) {
-        if moteur() != "rust" {
+        if moteur() == "js" {
             return;
         }
         let dossier = match app.path().app_data_dir() {
@@ -233,6 +235,28 @@ mod actif {
         Some((nom, sion_matrix::type_mime(&octets)))
     }
 
+    /// Fichier local d'un média du cœur, désigné par une URL `sion-media` ou
+    /// un `mxc://` : ce que le lecteur vidéo natif et la memeboard donnent à
+    /// ffmpeg (jamais une URL). `None` si la source n'est ni l'un ni l'autre.
+    /// Le dépôt se fait sur un fil à part : l'appelant peut être n'importe où,
+    /// y compris dans un runtime async (où `block_on` paniquerait).
+    pub fn fichier_media_matrix(source: &str) -> Option<Result<String, String>> {
+        let cle_de = |url: &str| url.rsplit('/').next().unwrap_or("").split('?').next().unwrap_or("").to_owned();
+        let cle = if source.starts_with(sion_matrix::PREFIXE_PAR_DEFAUT) || source.starts_with("http://sion-media.localhost/") {
+            cle_de(source)
+        } else if source.starts_with("mxc://") {
+            cle_de(&coeur().ok()?.url_media(source)?)
+        } else {
+            return None;
+        };
+        let depose = std::thread::spawn(move || deposer_media(&cle)).join().ok().flatten();
+        Some(
+            depose
+                .map(|(nom, _)| crate::sion_media_dir().join(nom).to_string_lossy().into_owned())
+                .ok_or_else(|| format!("média Matrix indisponible : {source}")),
+        )
+    }
+
     pub fn coeur() -> Result<&'static Arc<CoeurMatrix>, String> {
         COEUR.get().ok_or_else(|| "moteur Matrix Rust inactif".to_string())
     }
@@ -248,14 +272,18 @@ mod actif {
         None
     }
 
+    pub fn fichier_media_matrix(_source: &str) -> Option<Result<String, String>> {
+        None
+    }
+
     pub fn initialiser<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {
-        if std::env::var("SION_MATRIX_MOTEUR").as_deref() == Ok("rust") {
+        if std::env::var("SION_MATRIX_MOTEUR").is_ok_and(|m| m.starts_with("rust")) {
             log::warn!("[Sion][matrix] SION_MATRIX_MOTEUR=rust ignoré : Sion compilé sans la feature moteur-matrix-rust");
         }
     }
 }
 
-pub use actif::{deposer_media, initialiser};
+pub use actif::{deposer_media, fichier_media_matrix, initialiser};
 
 /// Protocole `sion-media` (médias des messages du moteur Rust). Sans la
 /// feature, il n'existe pas : le moteur JS n'en produit aucune URL.

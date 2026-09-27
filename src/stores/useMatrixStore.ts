@@ -6,6 +6,8 @@ import type { VerificationRequest, ShowSasCallbacks } from "matrix-js-sdk/lib/cr
 import { VerificationPhase, VerifierEvent, VerificationRequestEvent } from "matrix-js-sdk/lib/crypto-api/verification";
 import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser, PollData } from "../types/matrix";
 import * as matrixService from "../services/matrixService";
+import { moteurRust } from "../services/moteur";
+import { demarrerMoteurRust } from "./moteurRustStore";
 import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
@@ -29,7 +31,7 @@ export interface EmojiData {
   name: string;
 }
 
-interface MatrixState {
+export interface MatrixState {
   channels: Channel[];
   messages: Record<string, ChatMessage[]>;
   roomHasMore: Record<string, boolean>;
@@ -54,6 +56,8 @@ interface MatrixState {
   bootstrapE2EE: (password?: string) => Promise<void>;
   dismissRecoveryKey: () => void;
   initSync: (client: MatrixClient) => void;
+  /** Moteur Rust : abonne le store au cœur (l'équivalent d'`initSync`). */
+  initRust: () => void;
   loadRoomHistory: (roomId: string) => Promise<void>;
   reloadAllMessages: () => void;
   restoreWithRecoveryKey: (recoveryKey: string) => Promise<void>;
@@ -690,6 +694,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
 
   dismissRecoveryKey: () => {
     set({ bootstrapStep: "done", generatedRecoveryKey: null });
+  },
+
+  initRust: () => {
+    void demarrerMoteurRust(set, get);
   },
 
   initSync: (client: MatrixClient) => {
@@ -1998,6 +2006,22 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     if (roomLoadingHistory[roomId]) return;
     if (hasMoreVal !== true && hasMoreVal !== undefined) return;
 
+    if (moteurRust()) {
+      // Le cœur remonte ~30 messages, envoie l'accusé de lecture, et le fil
+      // mis à jour revient par `surMessages`.
+      set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: true } }));
+      try {
+        const { chargerHistorique } = await import("../services/matrixCore");
+        const reste = await chargerHistorique(roomId);
+        set((s) => ({ roomHasMore: { ...s.roomHasMore, [roomId]: reste } }));
+      } catch (err) {
+        console.warn("[Sion] Historique (moteur Rust) :", err);
+      } finally {
+        set((s) => ({ roomLoadingHistory: { ...s.roomLoadingHistory, [roomId]: false } }));
+      }
+      return;
+    }
+
     const client = matrixService.getMatrixClient();
     if (!client) return;
     const room = client.getRoom(roomId);
@@ -2156,6 +2180,8 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   },
 
   reloadAllMessages: () => {
+    // Moteur Rust : les fils se re-déchiffrent et se republient d'eux-mêmes.
+    if (moteurRust()) return;
     const client = matrixService.getMatrixClient();
     if (!client) return;
     const rooms = getJoinedRooms(client);
@@ -2186,6 +2212,12 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   },
 
   startCrossDeviceVerification: async () => {
+    if (moteurRust()) {
+      // Les étapes et les emojis arrivent par `surVerification`.
+      const { demarrerVerification } = await import("../services/matrixCore");
+      await demarrerVerification().catch((err) => set({ verificationStep: "error", verificationError: String(err) }));
+      return;
+    }
     set({ verificationStep: "requesting", verificationError: null, verificationEmojis: [] });
 
     // Cleanup previous verification
@@ -2268,6 +2300,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   },
 
   confirmVerificationEmojis: async () => {
+    if (moteurRust()) {
+      const { confirmerEmojis } = await import("../services/matrixCore");
+      await confirmerEmojis().catch((err) => set({ verificationStep: "error", verificationError: String(err) }));
+      return;
+    }
     if (!activeSasCallbacks) return;
     set({ verificationStep: "confirmed" });
     try {
@@ -2279,6 +2316,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   },
 
   rejectVerificationEmojis: () => {
+    if (moteurRust()) {
+      void import("../services/matrixCore").then(({ refuserEmojis }) => refuserEmojis()).catch(() => {});
+      return;
+    }
     if (activeSasCallbacks) {
       activeSasCallbacks.mismatch();
     }
@@ -2289,6 +2330,10 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   },
 
   cancelVerification: () => {
+    if (moteurRust()) {
+      void import("../services/matrixCore").then(({ annulerVerification }) => annulerVerification()).catch(() => {});
+      return;
+    }
     if (activeVerificationRequest) {
       activeVerificationRequest.cancel().catch(() => {});
     }

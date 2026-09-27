@@ -5,6 +5,9 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useLayoutStore } from "../../stores/useLayoutStore";
 import { getMatrixClient, getMemberPowerLevel, getRoomClientVersions } from "../../services/matrixService";
 import { UserAvatar } from "../sidebar/UserAvatar";
+import * as cacheRust from "../../services/cacheRust";
+import { moteurRust } from "../../services/moteur";
+import { getRoomMembers } from "../../services/matrixService";
 
 type Role = "admin" | "moderator" | "user";
 
@@ -35,10 +38,19 @@ export function MemberPanel() {
   const channels = useMatrixStore((s) => s.channels);
   const channel = channels.find((c) => c.id === activeChannel);
   const [tick, setTick] = useState(0);
+  // Moteur Rust : une réponse du cœur arrivée dans le cache fait redessiner.
+  const versionCache = useMatrixStore((s) => s.pinnedVersion);
 
   // Refresh list on Matrix state events (member joins/leaves, power level changes)
   useEffect(() => {
     if (!activeChannel) return;
+    if (moteurRust()) {
+      // Pas d'événements de salon ici : les membres sont redemandés au cœur
+      // tant que le panneau est ouvert (l'arrivée fait redessiner).
+      cacheRust.oublierDetails(activeChannel);
+      const minuterie = setInterval(() => cacheRust.oublierDetails(activeChannel), 15_000);
+      return () => clearInterval(minuterie);
+    }
     const client = getMatrixClient();
     if (!client) return;
     const room = client.getRoom(activeChannel);
@@ -58,7 +70,22 @@ export function MemberPanel() {
 
   const entries = useMemo<Entry[]>(() => {
     void tick;
+    void versionCache;
     if (!activeChannel) return [];
+    if (moteurRust()) {
+      const moi = useMatrixStore.getState().currentUserId;
+      const spectateurAdmin = !!moi && getMemberPowerLevel(activeChannel, moi) >= 100;
+      const versions: Record<string, string> = {};
+      if (spectateurAdmin) {
+        for (const v of getRoomClientVersions(activeChannel)) versions[v.userId] = v.version;
+      }
+      return getRoomMembers(activeChannel)
+        .map((m) => {
+          const pl = getMemberPowerLevel(activeChannel, m.userId);
+          return { userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl, role: plToRole(pl), pl, version: versions[m.userId] ?? null };
+        })
+        .sort((a, b) => (a.pl !== b.pl ? b.pl - a.pl : a.displayName.localeCompare(b.displayName)));
+    }
     const client = getMatrixClient();
     if (!client) return [];
     const room = client.getRoom(activeChannel);
@@ -89,7 +116,7 @@ export function MemberPanel() {
       return a.displayName.localeCompare(b.displayName);
     });
     return list;
-  }, [activeChannel, tick]);
+  }, [activeChannel, tick, versionCache]);
 
   if (!activeChannel || channel?.isDM) return null;
 

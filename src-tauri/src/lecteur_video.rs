@@ -528,6 +528,10 @@ pub(crate) fn ramener_en_local(
     app: &tauri::AppHandle<crate::TauriRuntime>,
     source: &str,
 ) -> Result<String, String> {
+    // Moteur Matrix Rust : média du cœur, téléchargé (et déchiffré) par lui.
+    if let Some(fichier) = crate::matrix_pont::fichier_media_matrix(source) {
+        return fichier;
+    }
     if !source.starts_with("http://") && !source.starts_with("https://") {
         return Ok(source.to_string());
     }
@@ -548,6 +552,9 @@ pub(crate) fn ramener_en_local_plafonne(
     source: &str,
     plafond: u64,
 ) -> Result<String, String> {
+    if let Some(fichier) = crate::matrix_pont::fichier_media_matrix(source) {
+        return fichier;
+    }
     if !source.starts_with("http://") && !source.starts_with("https://") {
         return Ok(source.to_string());
     }
@@ -575,6 +582,9 @@ fn ramener_tete(
     source: &str,
     limite: u64,
 ) -> Option<std::path::PathBuf> {
+    if let Some(fichier) = crate::matrix_pont::fichier_media_matrix(source) {
+        return fichier.ok().map(std::path::PathBuf::from);
+    }
     let cible = dossier_cache().join(format!("tete_{}", empreinte(source)));
     if cible.metadata().map(|m| m.len() > 0).unwrap_or(false) {
         return Some(cible);

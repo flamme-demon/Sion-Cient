@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "../../services/matrixService";
+import * as cacheRust from "../../services/cacheRust";
+import { adminsServeur } from "../../services/matrixCore";
+import { moteurRust } from "../../services/moteur";
 import { getRoomsList, banRoom } from "../../services/adminService";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { getMatrixClient } from "../../services/matrixService";
@@ -49,6 +52,30 @@ export function AdminActions() {
   // Load users + detect admin status for permissions modal
   const loadPermUsers = useCallback(async () => {
     setPermLoading(true);
+    if (moteurRust()) {
+      // Utilisateurs locaux de tous les salons rejoints, et administrateurs
+      // du serveur (niveau ≥ 100 dans le salon d'administration) par le cœur.
+      try {
+        const moi = useMatrixStore.getState().currentUserId ?? "";
+        const domaine = moi.split(":")[1] ?? "";
+        const connus = new Set<string>();
+        for (const salon of cacheRust.salonsConnus()) {
+          const d = await cacheRust.detailsFrais(salon.id).catch(() => null);
+          for (const m of d?.membres ?? []) if (m.userId.endsWith(`:${domaine}`)) connus.add(m.userId);
+        }
+        const admins = new Set(await adminsServeur().catch(() => [] as string[]));
+        for (const a of admins) connus.add(a);
+        const robot = (id: string) => ["@conduit", "@conduwuit", "@continuwuity", "@server", "@admin"].includes(id.split(":")[0].toLowerCase());
+        const entries = [...connus].filter((id) => !robot(id)).map((userId) => ({ userId, isAdmin: admins.has(userId) }));
+        entries.sort((a, b) => (a.isAdmin === b.isAdmin ? a.userId.localeCompare(b.userId) : a.isAdmin ? -1 : 1));
+        setPermUsers(entries);
+      } catch (err) {
+        console.error("[Sion] Failed to load permissions:", err);
+      } finally {
+        setPermLoading(false);
+      }
+      return;
+    }
     try {
       const client = getMatrixClient();
       if (!client) return;
@@ -145,6 +172,15 @@ export function AdminActions() {
           targetRoomIds.push(room.roomId);
         }
       }
+      if (moteurRust()) {
+        // Salons rejoints, hors MP et salon d'administration, où l'on est
+        // administrateur (créateur d'un salon v12 : niveau infini).
+        for (const salon of cacheRust.salonsConnus()) {
+          if (salon.id === adminRoomId || salon.isDM) continue;
+          const d = await cacheRust.detailsFrais(salon.id).catch(() => null);
+          if ((d?.moi ?? 0) >= 100) targetRoomIds.push(salon.id);
+        }
+      }
 
       if (makeAdmin) {
         // Promouvoir : flag homeserver + join admin room + set PL 100 partout
@@ -157,7 +193,21 @@ export function AdminActions() {
         // Continuwuity has no `force-promote` bot command, so we set PL via
         // the Matrix API. targetRoomIds is already pre-filtered to rooms
         // where we have admin powers, so M_FORBIDDEN errors should be rare.
-        if (promoteClient) {
+        if (moteurRust()) {
+          for (const roomId of targetRoomIds) {
+            const d = await cacheRust.detailsFrais(roomId).catch(() => null);
+            if (!d?.membres.some((m) => m.userId === userId)) {
+              try {
+                await sendAdminCommand(`!admin users force-join-room ${userId} ${roomId}`);
+              } catch { /* ignore — already member or cannot join */ }
+            }
+            try {
+              await matrixService.setUserPowerLevel(roomId, userId, 100);
+            } catch (err) {
+              console.warn(`[Sion] Could not set PL 100 for ${userId} in ${roomId}:`, err);
+            }
+          }
+        } else if (promoteClient) {
           for (const roomId of targetRoomIds) {
             // Force-join the target user if they aren't already a member,
             // otherwise setPowerLevel can't grant anything.
@@ -205,6 +255,15 @@ export function AdminActions() {
     setDeletingRoom(roomId);
     try {
       // Kick tous les membres du salon
+      if (moteurRust()) {
+        const d = await cacheRust.detailsFrais(roomId).catch(() => null);
+        for (const member of d?.membres ?? []) {
+          if (member.userId.includes("conduit")) continue;
+          try {
+            await sendAdminCommand(`!admin users force-leave-room ${member.userId} ${roomId}`);
+          } catch { /* ignore */ }
+        }
+      }
       const client = getMatrixClient();
       const room = client?.getRoom(roomId);
       if (room) {
@@ -364,7 +423,9 @@ export function AdminActions() {
                 {/* Séparer canaux et MPs */}
                 {(() => {
                   const client = getMatrixClient();
-                  const dmRoomIds = new Set<string>();
+                  const dmRoomIds = new Set<string>(
+                    moteurRust() ? cacheRust.salonsConnus().filter((c) => c.isDM).map((c) => c.id) : [],
+                  );
                   try {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const directEvent = client?.getAccountData("m.direct" as any);

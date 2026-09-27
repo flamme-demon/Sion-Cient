@@ -69,6 +69,7 @@ import { MatrixRain, MATRIX_GREEN } from "./components/sidebar/MatrixRain";
 import { updateVoiceService } from "./services/androidVoiceService";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "./services/matrixService";
+import { moteurRust } from "./services/moteur";
 
 export default function App() {
   const { t } = useTranslation();
@@ -86,6 +87,7 @@ export default function App() {
   const isSuspended = useAuthStore((s) => s.isSuspended);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const initSync = useMatrixStore((s) => s.initSync);
+  const initRust = useMatrixStore((s) => s.initRust);
   // Préchauffe les écrans paresseux peu après la connexion (le survol du
   // bouton Réglages les prend encore plus tôt — cf. services/lazyScreens).
   // Seulement une fois connecté — rien à précharger sur l'écran de connexion.
@@ -262,12 +264,16 @@ export default function App() {
   // Init Matrix sync when credentials are available
   useEffect(() => {
     if (credentials && connectionStatus === "disconnected") {
+      if (moteurRust()) {
+        initRust();
+        return;
+      }
       const client = matrixService.getMatrixClient();
       if (client) {
         initSync(client);
       }
     }
-  }, [credentials, connectionStatus, initSync]);
+  }, [credentials, connectionStatus, initSync, initRust]);
 
   // Restore the soundboard panel open/closed state from the previous
   // session. Fires once on mount; subsequent toggles are already synced to
@@ -310,7 +316,9 @@ export default function App() {
 
   // Fetch admin data early to know if user is admin
   useEffect(() => {
-    if (credentials?.homeserverUrl && credentials?.accessToken && !adminInitialized) {
+    // Moteur Rust : pas de jeton côté interface, l'API d'administration passe
+    // par le cœur.
+    if (credentials?.homeserverUrl && (credentials?.accessToken || moteurRust()) && !adminInitialized) {
       fetchAdminData(credentials.homeserverUrl, credentials.accessToken);
     }
   }, [credentials, adminInitialized, fetchAdminData]);

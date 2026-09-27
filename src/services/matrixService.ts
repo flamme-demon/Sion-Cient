@@ -1,6 +1,9 @@
 import * as sdk from "matrix-js-sdk";
 import type { MatrixClient } from "matrix-js-sdk";
 import { parseMentions } from "../utils/mentions";
+import * as core from "./matrixCore";
+import * as cacheRust from "./cacheRust";
+import { moteurRust } from "./moteur";
 
 let matrixClient: MatrixClient | null = null;
 
@@ -94,6 +97,11 @@ export interface SionMemberVersion {
  * l'historique à chaque démarrage.
  */
 export async function publishClientVersion(): Promise<void> {
+  if (moteurRust()) {
+    const os = getDeviceDisplayName().replace(/^.*\(/, "").replace(/\)$/, "");
+    await core.publierVersion(__APP_VERSION__, os).catch(() => 0);
+    return;
+  }
   if (!matrixClient) return;
   const userId = matrixClient.getUserId();
   if (!userId) return;
@@ -135,6 +143,10 @@ export async function publishClientVersion(): Promise<void> {
  * démarrage d'un administrateur.
  */
 export async function ouvrirDroitAnnonceVersion(): Promise<void> {
+  if (moteurRust()) {
+    await core.ouvrirDroitVersion().catch(() => 0);
+    return;
+  }
   if (!matrixClient) return;
   const moi = matrixClient.getUserId();
   if (!moi) return;
@@ -177,6 +189,9 @@ export async function ouvrirDroitAnnonceVersion(): Promise<void> {
  * ancien, ou un autre client Matrix, n'écrit pas cet événement.
  */
 export function getRoomClientVersions(roomId: string): SionMemberVersion[] {
+  if (moteurRust()) {
+    return cacheRust.versionsSalon(roomId);
+  }
   if (!matrixClient) return [];
   const room = matrixClient.getRoom(roomId);
   const evts = room?.currentState?.getStateEvents(SION_VERSION_EVENT) ?? [];
@@ -200,6 +215,10 @@ export function getRoomClientVersions(roomId: string): SionMemberVersion[] {
  * quand rien ne bouge.
  */
 export async function refreshDeviceVersionLabel(): Promise<void> {
+  if (moteurRust()) {
+    await core.rafraichirNomAppareil(`${getDeviceDisplayName()} — moteur Rust`).catch(() => false);
+    return;
+  }
   if (!matrixClient) return;
   const deviceId = matrixClient.getDeviceId();
   if (!deviceId) return;
@@ -237,6 +256,9 @@ export interface RegistrationFlowInfo {
 
 /** Check if the current user account is suspended */
 export async function checkSuspended(): Promise<boolean> {
+  if (moteurRust()) {
+    return core.estSuspendu();
+  }
   if (!matrixClient) return false;
   const userId = matrixClient.getUserId();
   if (!userId) return false;
@@ -259,6 +281,9 @@ export async function checkSuspended(): Promise<boolean> {
 
 /** Detect registration flows supported by the homeserver */
 export async function getRegistrationFlows(homeserver: string): Promise<RegistrationFlowInfo> {
+  if (moteurRust()) {
+    return core.etapesInscription(homeserver);
+  }
   try {
     const resp = await fetch(`${homeserver}/_matrix/client/v3/register`, {
       method: "POST",
@@ -363,6 +388,9 @@ export async function registerUser(
 }
 
 export function mxcToHttp(mxcUrl: string): string | null {
+  if (moteurRust()) {
+    return null;
+  }
   if (!matrixClient || !mxcUrl) return null;
   return matrixClient.mxcUrlToHttp(mxcUrl) || null;
 }
@@ -385,6 +413,9 @@ export function mxcToHttp(mxcUrl: string): string | null {
  * traitée à part.
  */
 export function mxcToThumbnail(mxcUrl: string, width = 600, height = 400): string | null {
+  if (moteurRust()) {
+    return null;
+  }
   if (!matrixClient || !mxcUrl) return null;
   // Mêmes options que `mxcToHttp` : une URL AUTHENTIFIÉE exige un en-tête que
   // `<img src>` ne sait pas envoyer, et l'image ne s'affiche pas du tout
@@ -393,6 +424,9 @@ export function mxcToThumbnail(mxcUrl: string, width = 600, height = 400): strin
 }
 
 export async function getAvatarUrl(userId: string): Promise<string | null> {
+  if (moteurRust()) {
+    return core.avatarUtilisateur(userId).catch(() => null);
+  }
   if (!matrixClient) return null;
   try {
     const profile = await matrixClient.getProfileInfo(userId);
@@ -618,6 +652,9 @@ export async function startSync() {
 }
 
 export async function checkDeviceVerified(): Promise<boolean> {
+  if (moteurRust()) {
+    return core.appareilVerifie().catch(() => false);
+  }
   if (!matrixClient) {
     return false;
   }
@@ -649,6 +686,9 @@ export async function checkDeviceVerified(): Promise<boolean> {
 }
 
 export async function hasUndecryptableMessages(): Promise<boolean> {
+  if (moteurRust()) {
+    return core.messagesIndechiffrables().catch(() => false);
+  }
   if (!matrixClient) return false;
 
   const crypto = matrixClient.getCrypto();
@@ -700,6 +740,9 @@ async function clearCryptoStores(): Promise<void> {
 }
 
 export async function restoreKeyBackup(recoveryKey: string): Promise<number> {
+  if (moteurRust()) {
+    return core.restaurerParCle(recoveryKey);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const crypto = matrixClient.getCrypto();
   if (!crypto) {
@@ -744,6 +787,9 @@ export async function restoreKeyBackup(recoveryKey: string): Promise<number> {
  * checkKeyBackupAndEnable() picks it up and enables automatic backup restore.
  */
 export async function tryAutoRestoreKeyBackup(): Promise<number> {
+  if (moteurRust()) {
+    return core.restaurerAutomatiquement();
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const crypto = matrixClient.getCrypto();
   if (!crypto) throw new Error("Crypto not initialized");
@@ -773,11 +819,17 @@ export async function requestOwnUserVerification() {
 }
 
 export async function setDisplayName(name: string): Promise<void> {
+  if (moteurRust()) {
+    return core.changerNom(name);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setDisplayName(name);
 }
 
 export async function setAvatar(file: File): Promise<string> {
+  if (moteurRust()) {
+    return (await core.changerAvatar(file)) ?? "";
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const mxcUrl = await uploadFile(file);
   await matrixClient.setAvatarUrl(mxcUrl);
@@ -785,6 +837,9 @@ export async function setAvatar(file: File): Promise<string> {
 }
 
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  if (moteurRust()) {
+    return core.changerMotDePasse(oldPassword, newPassword);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setPassword(
     { type: "m.login.password", user: matrixClient.getUserId() ?? undefined, password: oldPassword },
@@ -793,6 +848,9 @@ export async function changePassword(oldPassword: string, newPassword: string): 
 }
 
 export async function fetchDisplayName(userId: string): Promise<string | null> {
+  if (moteurRust()) {
+    return core.nomUtilisateur(userId).catch(() => null);
+  }
   if (!matrixClient) return null;
   try {
     const profile = await matrixClient.getProfileInfo(userId);
@@ -803,11 +861,17 @@ export async function fetchDisplayName(userId: string): Promise<string | null> {
 }
 
 export async function joinRoom(roomId: string) {
+  if (moteurRust()) {
+    return core.rejoindre(roomId);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   return matrixClient.joinRoom(roomId);
 }
 
 export async function leaveRoom(roomId: string) {
+  if (moteurRust()) {
+    return core.quitter(roomId);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   return matrixClient.leave(roomId);
 }
@@ -966,6 +1030,9 @@ export async function republishCallMember(): Promise<number> {
 }
 
 export async function sendTextMessage(roomId: string, body: string) {
+  if (moteurRust()) {
+    return { event_id: await core.envoyerTexte(roomId, body) };
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const room = matrixClient.getRoom(roomId);
   const parsed = room ? parseMentions(body, room) : null;
@@ -990,6 +1057,9 @@ const DEFAULT_MAX_UPLOAD = 100 * 1024 * 1024;
 let cachedMaxUploadSize = 0;
 
 export async function getMaxUploadSize(): Promise<number> {
+  if (moteurRust()) {
+    return core.tailleMaxEnvoi().catch(() => DEFAULT_MAX_UPLOAD);
+  }
   if (cachedMaxUploadSize > 0) return cachedMaxUploadSize;
   if (!matrixClient) return DEFAULT_MAX_UPLOAD;
   try {
@@ -1020,6 +1090,9 @@ export async function uploadFile(file: File): Promise<string> {
  * sent yet (no server id), or the input unchanged if it's already a server id.
  */
 export function resolveServerEventId(roomId: string, eventId: string): string | null {
+  if (moteurRust()) {
+    return eventId.startsWith("$") ? eventId : null;
+  }
   if (!eventId.startsWith("~")) return eventId;
   const room = matrixClient?.getRoom(roomId);
   if (!room) return null;
@@ -1053,6 +1126,9 @@ function requireServerEventId(roomId: string, eventId: string): string {
 }
 
 export async function redactMessage(roomId: string, eventId: string) {
+  if (moteurRust()) {
+    return core.supprimer(roomId, eventId);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   eventId = requireServerEventId(roomId, eventId);
   // Use REST API directly to avoid SDK pendingEventOrdering bug
@@ -1070,6 +1146,21 @@ export async function redactMessage(roomId: string, eventId: string) {
 }
 
 export async function sendFileMessage(roomId: string, file: File) {
+  if (moteurRust()) {
+    let sortant = file;
+    const infos: { largeur?: number; hauteur?: number; dureeMs?: number } = {};
+    if (file.type.startsWith("video/")) {
+      const { prepareVideoForSend } = await import("./videoPrepare");
+      const prepare = await prepareVideoForSend(file);
+      sortant = prepare.file;
+      if (prepare.width > 0 && prepare.height > 0) {
+        infos.largeur = prepare.width;
+        infos.hauteur = prepare.height;
+      }
+      if (prepare.durationMs > 0) infos.dureeMs = prepare.durationMs;
+    }
+    return { event_id: await core.envoyerFichier(roomId, sortant, infos) };
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
 
   const isImage = file.type.startsWith("image/");
@@ -1119,6 +1210,10 @@ export async function sendFileMessage(roomId: string, file: File) {
 }
 
 export async function sendPoke(roomId: string): Promise<void> {
+  if (moteurRust()) {
+    await core.poker(roomId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendEvent(roomId, "m.room.message" as any, {
@@ -1128,6 +1223,10 @@ export async function sendPoke(roomId: string): Promise<void> {
 }
 
 export async function sendImageUrl(roomId: string, imageUrl: string): Promise<void> {
+  if (moteurRust()) {
+    await core.envoyerImageUrl(roomId, imageUrl);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // Download the image and upload to Matrix media server
   const resp = await fetch(imageUrl);
@@ -1152,6 +1251,10 @@ export async function sendImageUrl(roomId: string, imageUrl: string): Promise<vo
  *  automatically by the SDK when the room is. `session` ties the segment to
  *  its transcription session (uuid). */
 export async function sendTranscriptSegment(roomId: string, text: string, t0: number, t1: number, session?: string): Promise<void> {
+  if (moteurRust()) {
+    await core.envoyerEvenement(roomId, "com.sion.transcript", { text, t0, t1, v: 1, ...(session ? { session } : {}) });
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendEvent(roomId, "com.sion.transcript" as any, { text, t0, t1, v: 1, ...(session ? { session } : {}) });
@@ -1164,6 +1267,10 @@ export async function sendTranscriptSegment(roomId: string, text: string, t0: nu
 /** Post a meeting summary as a regular chat message, tagged with the
  *  transcription session it covers so the history view can find it back. */
 export async function sendSummaryMessage(roomId: string, body: string, sessionId?: string): Promise<void> {
+  if (moteurRust()) {
+    await core.envoyerEvenement(roomId, "m.room.message", { msgtype: "m.text", body, ...(sessionId ? { "com.sion.transcript.summary_of": sessionId } : {}) });
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendEvent(roomId, "m.room.message" as any, {
@@ -1174,6 +1281,10 @@ export async function sendSummaryMessage(roomId: string, body: string, sessionId
 }
 
 export async function sendTranscriptSession(roomId: string, action: "start" | "end", id: string, ts: number): Promise<void> {
+  if (moteurRust()) {
+    await core.envoyerEvenement(roomId, "com.sion.transcript.session", { action, id, ts, v: 1 });
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await matrixClient.sendEvent(roomId, "com.sion.transcript.session" as any, { action, id, ts, v: 1 });
@@ -1264,6 +1375,9 @@ export async function backfillTranscript(roomId: string, sinceTs: number, maxPag
 }
 
 export async function createOrGetDMRoom(userId: string): Promise<string> {
+  if (moteurRust()) {
+    return core.mpAvec(userId);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const client = matrixClient;
 
@@ -1384,6 +1498,10 @@ export async function createOrGetDMRoom(userId: string): Promise<string> {
 }
 
 export async function editMessage(roomId: string, originalEventId: string, newText: string) {
+  if (moteurRust()) {
+    await core.editer(roomId, originalEventId, newText);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   originalEventId = requireServerEventId(roomId, originalEventId);
   // Use REST API directly to avoid SDK pendingEventOrdering bug
@@ -1410,6 +1528,9 @@ export async function editMessage(roomId: string, originalEventId: string, newTe
 }
 
 export function getUserPowerLevel(roomId: string): number {
+  if (moteurRust()) {
+    return cacheRust.detailsSalon(roomId)?.moi ?? 0;
+  }
   if (!matrixClient) return 0;
   const room = matrixClient.getRoom(roomId);
   if (!room) return 0;
@@ -1420,6 +1541,9 @@ export function getUserPowerLevel(roomId: string): number {
 }
 
 export function getStatePowerLevel(roomId: string): number {
+  if (moteurRust()) {
+    return cacheRust.detailsSalon(roomId)?.niveauEtat ?? 50;
+  }
   if (!matrixClient) return 50;
   const room = matrixClient.getRoom(roomId);
   if (!room) return 50;
@@ -1432,6 +1556,9 @@ export function getStatePowerLevel(roomId: string): number {
 
 /** Power level required to invite a new user. Matrix default is 0. */
 export function getInvitePowerLevel(roomId: string): number {
+  if (moteurRust()) {
+    return cacheRust.detailsSalon(roomId)?.niveauInvitation ?? 0;
+  }
   if (!matrixClient) return 0;
   const room = matrixClient.getRoom(roomId);
   if (!room) return 0;
@@ -1443,6 +1570,9 @@ export function getInvitePowerLevel(roomId: string): number {
 }
 
 export function getRoomMembers(roomId: string): { userId: string; displayName: string; avatarUrl: string | null }[] {
+  if (moteurRust()) {
+    return (cacheRust.detailsSalon(roomId)?.membres ?? []).map((m) => ({ userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl }));
+  }
   if (!matrixClient) return [];
   const room = matrixClient.getRoom(roomId);
   if (!room) return [];
@@ -1458,6 +1588,10 @@ export function getRoomMembers(roomId: string): { userId: string; displayName: s
  *  to the raw user id when the member isn't known locally. Synchronous — reads
  *  the in-memory room state, safe to call during render. */
 export function getRoomMemberInfo(roomId: string, userId: string): { displayName: string; avatarUrl: string | null } {
+  if (moteurRust()) {
+    const m = cacheRust.detailsSalon(roomId)?.membres.find((x) => x.userId === userId);
+    return { displayName: m?.displayName ?? userId, avatarUrl: m?.avatarUrl ?? null };
+  }
   if (!matrixClient) return { displayName: userId, avatarUrl: null };
   const m = matrixClient.getRoom(roomId)?.getMember(userId);
   if (!m) return { displayName: userId, avatarUrl: null };
@@ -1468,6 +1602,9 @@ export function getRoomMemberInfo(roomId: string, userId: string): { displayName
 }
 
 export async function createChannel(name: string, isVoice: boolean, isPublic = true, encrypted = false): Promise<string> {
+  if (moteurRust()) {
+    return core.creerSalon(name, isVoice, isPublic, encrypted);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
 
   // Pre-populate the power_levels users map with all current server admins so
@@ -1619,6 +1756,11 @@ async function fanOutPublicInvites(roomId: string): Promise<void> {
 }
 
 export async function setRoomJoinRule(roomId: string, joinRule: "public" | "invite"): Promise<void> {
+  if (moteurRust()) {
+    await core.changerRegleAcces(roomId, joinRule === "public");
+    cacheRust.oublierDetails(roomId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   // Detect whether this is a transition from invite → public, so we can
   // fan out invites to users who weren't members of the previously-private
@@ -1638,6 +1780,11 @@ export async function setRoomJoinRule(roomId: string, joinRule: "public" | "invi
 }
 
 export async function inviteUser(roomId: string, userId: string): Promise<void> {
+  if (moteurRust()) {
+    await core.inviter(roomId, userId);
+    cacheRust.oublierDetails(roomId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.invite(roomId, userId);
   await shareHistoricKeys(roomId, userId);
@@ -1667,16 +1814,31 @@ export async function shareHistoricKeys(roomId: string, userId: string): Promise
 }
 
 export async function kickUser(roomId: string, userId: string, reason?: string): Promise<void> {
+  if (moteurRust()) {
+    await core.expulser(roomId, userId, reason);
+    cacheRust.oublierDetails(roomId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.kick(roomId, userId, reason);
 }
 
 export async function banUser(roomId: string, userId: string, reason?: string): Promise<void> {
+  if (moteurRust()) {
+    await core.bannir(roomId, userId, reason);
+    cacheRust.oublierDetails(roomId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.ban(roomId, userId, reason);
 }
 
 export async function setUserPowerLevel(roomId: string, userId: string, level: number): Promise<void> {
+  if (moteurRust()) {
+    await core.changerNiveau(roomId, userId, level);
+    cacheRust.oublierDetails(roomId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setPowerLevel(roomId, userId, level);
 }
@@ -1687,6 +1849,9 @@ export async function setUserPowerLevel(roomId: string, userId: string, level: n
  * Used to skip DMs when applying admin promotions across rooms.
  */
 export function isDMRoom(roomId: string): boolean {
+  if (moteurRust()) {
+    return cacheRust.estMp(roomId);
+  }
   if (!matrixClient) return false;
   const room = matrixClient.getRoom(roomId);
   if (!room) return false;
@@ -1708,6 +1873,9 @@ export function isDMRoom(roomId: string): boolean {
  * server admin. Bot accounts (conduit / conduwuit / continuwuity) are excluded.
  */
 export function getServerAdminUserIds(): string[] {
+  if (moteurRust()) {
+    return cacheRust.adminsServeur();
+  }
   if (!matrixClient) return [];
   const serverName = matrixClient.getDomain() || "";
 
@@ -1772,6 +1940,9 @@ let soundboardLookupInflight: Promise<string | null> | null = null;
  * is cached for the session and de-duplicated across concurrent callers.
  */
 export async function findSoundboardRoom(): Promise<string | null> {
+  if (moteurRust()) {
+    return core.salonSoundboard().catch(() => null);
+  }
   if (!matrixClient) return null;
   const domain = matrixClient.getDomain();
   if (!domain) return null;
@@ -1818,6 +1989,9 @@ export interface SoundboardCreationResult {
  * to newcomers so no-one is left behind after admin promotions or signups.
  */
 export async function createOrSyncSoundboardRoom(): Promise<SoundboardCreationResult> {
+  if (moteurRust()) {
+    return core.creerOuSynchroniserSoundboard();
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const client = matrixClient;
   const domain = client.getDomain();
@@ -1902,6 +2076,9 @@ async function inviteAllServerUsers(roomId: string): Promise<number> {
 }
 
 export function getMemberPowerLevel(roomId: string, userId: string): number {
+  if (moteurRust()) {
+    return cacheRust.detailsSalon(roomId)?.membres.find((m) => m.userId === userId)?.powerLevel ?? 0;
+  }
   if (!matrixClient) return 0;
   const room = matrixClient.getRoom(roomId);
   if (!room) return 0;
@@ -1915,6 +2092,9 @@ export function getMemberPowerLevel(roomId: string, userId: string): number {
  * for `m.room.message` (falls back to events_default if not overridden).
  */
 export function canSendMessage(roomId: string): boolean {
+  if (moteurRust()) {
+    return cacheRust.detailsSalon(roomId)?.peutEcrire ?? true;
+  }
   if (!matrixClient) return false;
   const room = matrixClient.getRoom(roomId);
   if (!room) return false;
@@ -1932,16 +2112,25 @@ export function canSendMessage(roomId: string): boolean {
 }
 
 export async function setRoomName(roomId: string, name: string): Promise<void> {
+  if (moteurRust()) {
+    return core.renommerSalon(roomId, name);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setRoomName(roomId, name);
 }
 
 export async function setRoomTopic(roomId: string, topic: string): Promise<void> {
+  if (moteurRust()) {
+    return core.changerSujet(roomId, topic);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   await matrixClient.setRoomTopic(roomId, topic);
 }
 
 export async function setRoomAvatar(roomId: string, file: File): Promise<void> {
+  if (moteurRust()) {
+    return core.changerAvatarSalon(roomId, file);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const contentUri = await uploadFile(file);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1949,6 +2138,9 @@ export async function setRoomAvatar(roomId: string, file: File): Promise<void> {
 }
 
 export function getPinnedEventIds(roomId: string): string[] {
+  if (moteurRust()) {
+    return cacheRust.epinglesSalon(roomId);
+  }
   if (!matrixClient) return [];
   const room = matrixClient.getRoom(roomId);
   if (!room) return [];
@@ -2022,6 +2214,9 @@ function pinnedMediaKind(msgtype: unknown): PinnedSummary["media"] {
 }
 
 export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[]> {
+  if (moteurRust()) {
+    return core.epingles(roomId);
+  }
   if (!matrixClient) return [];
   const room = matrixClient.getRoom(roomId);
   const ids = getPinnedEventIds(roomId);
@@ -2069,6 +2264,9 @@ export async function getPinnedSummaries(roomId: string): Promise<PinnedSummary[
 }
 
 export async function pinMessage(roomId: string, eventId: string): Promise<void> {
+  if (moteurRust()) {
+    return core.epingler(roomId, eventId);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   eventId = requireServerEventId(roomId, eventId);
   const room = matrixClient.getRoom(roomId);
@@ -2081,6 +2279,10 @@ export async function pinMessage(roomId: string, eventId: string): Promise<void>
 }
 
 export async function sendReaction(roomId: string, eventId: string, emoji: string): Promise<void> {
+  if (moteurRust()) {
+    await core.reagir(roomId, eventId, emoji);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   eventId = requireServerEventId(roomId, eventId);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2105,6 +2307,10 @@ export async function createPoll(
   maxSelections = 1,
   endsTs?: number,
 ): Promise<void> {
+  if (moteurRust()) {
+    await core.creerSondage(roomId, question, options, { secret: kind === "undisclosed", max: maxSelections, fin: endsTs });
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const answers = options.map((text, i) => ({ id: `${i}`, "m.text": text }));
   const fallback = `${question}\n${options.map((o, i) => `${i + 1}. ${o}`).join("\n")}`;
@@ -2126,6 +2332,10 @@ export async function createPoll(
 
 /** Cast a vote (replaces the voter's previous vote). Empty array = spoil/retract. */
 export async function votePoll(roomId: string, pollStartId: string, answerIds: string[]): Promise<void> {
+  if (moteurRust()) {
+    await core.voter(roomId, pollStartId, answerIds);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const target = requireServerEventId(roomId, pollStartId);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2136,6 +2346,10 @@ export async function votePoll(roomId: string, pollStartId: string, answerIds: s
 }
 
 export async function endPoll(roomId: string, pollStartId: string): Promise<void> {
+  if (moteurRust()) {
+    await core.cloreSondage(roomId, pollStartId);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const target = requireServerEventId(roomId, pollStartId);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2148,6 +2362,10 @@ export async function endPoll(roomId: string, pollStartId: string): Promise<void
 
 /** Mark a room as read — sends read receipt for the latest event */
 export async function markRoomAsRead(roomId: string): Promise<void> {
+  if (moteurRust()) {
+    await core.marquerLu(roomId).catch(() => {});
+    return;
+  }
   if (!matrixClient) return;
   try {
     const room = matrixClient.getRoom(roomId);
@@ -2163,6 +2381,10 @@ export async function markRoomAsRead(roomId: string): Promise<void> {
 }
 
 export async function sendReply(roomId: string, inReplyToEventId: string, body: string): Promise<void> {
+  if (moteurRust()) {
+    await core.repondre(roomId, inReplyToEventId, body);
+    return;
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   inReplyToEventId = requireServerEventId(roomId, inReplyToEventId);
   const room = matrixClient.getRoom(roomId);
@@ -2191,6 +2413,9 @@ export async function sendReply(roomId: string, inReplyToEventId: string, body: 
  * — they need verification, not a fresh bootstrap (which would overwrite existing keys).
  */
 export async function checkNeedsBootstrap(): Promise<boolean> {
+  if (moteurRust()) {
+    return core.aBesoinAmorcage().catch(() => false);
+  }
   if (!matrixClient) return false;
   const crypto = matrixClient.getCrypto();
   if (!crypto) return false;
@@ -2218,6 +2443,9 @@ export async function checkNeedsBootstrap(): Promise<boolean> {
  * Returns the encoded recovery key.
  */
 export async function bootstrapAll(password?: string): Promise<string> {
+  if (moteurRust()) {
+    return core.amorcer(password);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const crypto = matrixClient.getCrypto();
   if (!crypto) throw new Error("Crypto not initialized");
@@ -2268,6 +2496,9 @@ export async function bootstrapAll(password?: string): Promise<string> {
  * Creates new secret storage with a new recovery key.
  */
 export async function regenerateRecoveryKey(): Promise<string> {
+  if (moteurRust()) {
+    return core.nouvelleCleRecuperation();
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const crypto = matrixClient.getCrypto();
   if (!crypto) throw new Error("Crypto not initialized");
@@ -2290,11 +2521,17 @@ export async function regenerateRecoveryKey(): Promise<string> {
 }
 
 export async function getDevices(): Promise<{ devices: { device_id: string; display_name?: string; last_seen_ts?: number; last_seen_ip?: string }[] }> {
+  if (moteurRust()) {
+    return core.appareils();
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   return matrixClient.getDevices();
 }
 
 export async function deleteDevice(deviceId: string, password: string): Promise<void> {
+  if (moteurRust()) {
+    return core.supprimerAppareil(deviceId, password);
+  }
   if (!matrixClient) throw new Error("Matrix client not initialized");
   const userId = matrixClient.getUserId();
   if (!userId) throw new Error("No user ID");
@@ -2306,6 +2543,11 @@ export async function deleteDevice(deviceId: string, password: string): Promise<
 }
 
 export async function logout() {
+  if (moteurRust()) {
+    await core.deconnecter().catch((err) => console.warn("[Sion] Déconnexion (moteur Rust) :", err));
+    cacheRust.vider();
+    return;
+  }
   if (matrixClient) {
     matrixClient.stopClient();
     try {

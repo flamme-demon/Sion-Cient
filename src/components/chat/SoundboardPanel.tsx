@@ -15,7 +15,9 @@ import {
   SOUNDBOARD_MAX_FILE_SIZE,
   type SoundEntry,
 } from "../../services/soundboardService";
-import { canSendMessage, getMatrixClient, getMemberPowerLevel } from "../../services/matrixService";
+import { canSendMessage, getMatrixClient, getMemberPowerLevel, getRoomMembers } from "../../services/matrixService";
+import { moteurRust } from "../../services/moteur";
+import { useMatrixStore } from "../../stores/useMatrixStore";
 import { SoundboardUploadModal } from "./SoundboardUploadModal";
 import { VoicePanel } from "./VoicePanel";
 import { TTS_MODEL_LABELS } from "../../services/ttsService";
@@ -143,6 +145,27 @@ export function SoundboardPanel() {
     refreshRef.current = refresh;
     refresh();
 
+    if (moteurRust()) {
+      // Le fil du salon de la soundboard, republié par le cœur à chaque
+      // changement (ajout, édition, suppression).
+      let arreter: (() => void) | null = null;
+      void import("../../services/matrixCore").then(({ surMessages }) =>
+        surMessages((fil) => {
+          if (!cachedRoomId || fil.salon !== cachedRoomId) return;
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => { void refresh(); }, 200);
+        }).then((stop) => {
+          if (cancelled) stop();
+          else arreter = stop;
+        }),
+      );
+      return () => {
+        cancelled = true;
+        if (debounceTimer) clearTimeout(debounceTimer);
+        arreter?.();
+      };
+    }
+
     const client = getMatrixClient();
     if (!client) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -184,13 +207,20 @@ export function SoundboardPanel() {
   const canUpload = roomId ? canSendMessage(roomId) : false;
 
   const client = getMatrixClient();
-  const myUserId = client?.getUserId() || "";
+  const currentUserId = useMatrixStore((s) => s.currentUserId);
+  const myUserId = client?.getUserId() || currentUserId || "";
   const myPl = roomId && myUserId ? getMemberPowerLevel(roomId, myUserId) : 0;
   const canManageMembers = myPl >= 100 && !!roomId;
 
   const members = useMemo(() => {
     void sounds; // re-evaluate when roomId changes
-    if (!roomId || !client) return [];
+    if (!roomId) return [];
+    if (moteurRust()) {
+      return getRoomMembers(roomId)
+        .map((m) => ({ userId: m.userId, name: m.displayName, avatarUrl: m.avatarUrl, pl: getMemberPowerLevel(roomId, m.userId) }))
+        .sort((a, b) => b.pl - a.pl || a.name.localeCompare(b.name));
+    }
+    if (!client) return [];
     const room = client.getRoom(roomId);
     if (!room) return [];
     return room.getJoinedMembers()

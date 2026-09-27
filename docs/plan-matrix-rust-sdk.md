@@ -541,6 +541,34 @@ salons de test restés affichés). Au démarrage de la synchro, puis toutes les
 quitté (matrix-sdk le marque alors quitté pour de bon), ou à défaut écarté de
 la liste et des fils. Vérifié : les deux fantômes marqués quittés au lancement.
 
+### Branchement de l'interface (27/09, en cours)
+
+`SION_MATRIX_MOTEUR=rust` lance désormais la VRAIE interface de Sion sur le
+cœur Rust (`=rust-apercu` garde l'écran de diagnostic). Le moteur JS reste le
+défaut, son chemin inchangé :
+
+- `services/moteur.ts` — drapeau du moteur, fixé au démarrage ; chaque
+  fonction exportée de `matrixService.ts` s'y aiguille vers `matrixCore`.
+- `services/cacheRust.ts` — ce que l'interface lit de façon synchrone
+  (niveaux, membres, épinglés, versions, MP, salon d'administration),
+  rafraîchi en arrière-plan ; une réponse fait redessiner.
+- `stores/moteurRustStore.ts` — l'équivalent d'`initSync` : salons, fils,
+  sons de réception, salon par défaut, épinglés, vérification, tâches de
+  début de session.
+- `useAuthStore` — connexion, inscription, reprise par le cœur ; identifiants
+  sous une clé distincte, sans jeton.
+- Soundboard et memeboard, administration (API par le mandataire du cœur,
+  commandes au robot), écrans d'admin, membres, en-tête : aiguillés.
+- Lecteur vidéo natif et memeboard : une URL `sion-media` ou un `mxc://`
+  est résolu en fichier par le cœur (`fichier_media_matrix`).
+- La voix affiche « pas encore disponible » (étape 3).
+- Les erreurs JS non rattrapées partent dans le journal Rust.
+
+Trouvé en route : en développement, les deux moteurs partagent le même
+`localStorage` ; des identifiants d'une autre session ont renommé le compte de
+test (nom repris de la session JS). Les identifiants d'un autre compte sont
+désormais ignorés, et le nom n'est poussé que pour le compte connecté.
+
 ## Bilan de l'étape 2 (27/09/2026)
 
 T0 à T6 sont faites dans `sion-matrix`, exposées par le pont et la façade

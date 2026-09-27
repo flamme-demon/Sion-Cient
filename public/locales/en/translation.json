@@ -94,7 +94,8 @@
     "connecting": "Connecting...",
     "reconnect": "Reconnect",
     "republishPresence": "Re-publish my presence (if others can't hear me)",
-    "clockSkew": "Your system clock is about {{minutes}} min off from the server — voice will not work properly. Check your TIME ZONE, then turn on automatic time sync: the displayed time can look right while the setting is wrong."
+    "clockSkew": "Your system clock is about {{minutes}} min off from the server — voice will not work properly. Check your TIME ZONE, then turn on automatic time sync: the displayed time can look right while the setting is wrong.",
+    "rustEngineUnavailable": "Voice is not available yet with the Rust Matrix engine: it comes with the MatrixRTC port (step 3). Restart Sion on the regular engine to join a voice channel."
   },
   "controls": {
     "mute": "Mute",
