@@ -651,6 +651,40 @@ liste de salons — donc avant toute entrée automatique en vocal —, le cœur
 retire les appartenances laissées par SON appareil
 (`liberer_appartenances_orphelines`).
 
+### Performances comparées (27/09/2026)
+
+Même appli de dev, même compte (flamme), fenêtre visible, appel à deux,
+10 min de relevés après 2 min de chauffe ; sonde de gels du fil principal
+dans le diagnostic mémoire (minuteur de 50 ms, retard mesuré ; page masquée
+exclue — WebKit bride alors les minuteurs à 1 Hz), CPU par `pidstat`, PSS.
+
+| | Moteur JS | Moteur Rust |
+|---|---|---|
+| Gel le plus long par 30 s (moyenne) | 141 ms | 59 ms |
+| Pire gel | 289 ms | 110 ms |
+| Gels > 100 ms | 32 | 2 |
+| Gels > 250 ms | 1 | 0 |
+| Temps bloqué par 30 s | 488 ms | 216 ms |
+| CPU webview | 25,1 % | 19,1 % |
+| CPU processus Sion | 16,8 % | 14,5 % |
+| PSS total | 754 Mo | 805 Mo |
+
+Avant correction, le moteur Rust faisait PIRE que le JS (gels de 300 à
+600 ms) — à cause de la couche qui relie le cœur à l'interface, pas du cœur,
+dont l'application des mises à jour coûte 1 à 2 ms par 30 s : le cache
+synchrone redessinait tous les messages à chaque relecture, et un fil
+republié en objets neufs redessinait tout le fil (`0021657`). Le reste des
+gels est commun aux deux moteurs (rendu, fond animé). La mémoire : le cœur
+ajoute ~90 Mo au processus Sion (magasins SQLite, caches), la webview en perd
+~30 (plus de module wasm de chiffrement) ; le moteur JS ne gardait que 67
+messages sur 3 salons, le Rust ceux des 9 salons.
+
+À relativiser : une séance de 10 min chacun, appel calme. Les gels du moteur
+JS mesurés le 26/09 (0,4 à 0,9 s par synchro) venaient du chiffrement lors
+des synchros chargées ; ici, au démarrage du moteur JS, les « compteurs de
+clés » coûtaient encore 384 à 524 ms chacun sur le fil de l'interface — un
+coût qui n'existe plus avec le cœur.
+
 ## Bilan de l'étape 2 (27/09/2026)
 
 T0 à T6 sont faites dans `sion-matrix`, exposées par le pont et la façade
