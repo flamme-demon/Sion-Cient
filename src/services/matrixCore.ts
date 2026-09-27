@@ -13,11 +13,15 @@
  * administration (API du serveur par un mandataire : le jeton reste en Rust).
  * T5 : vérification par emojis (mêmes étapes que `useMatrixStore`),
  * récupération par clé, restauration de la sauvegarde, amorçage.
+ * T6 : soundboard et memeboard, événements et états `com.sion.*` (relayés en
+ * direct), versions de client, notifications push, URL de médias mxc.
  * Le jeton d'accès ne passe jamais par ici : il reste côté Rust.
  */
 
 import type { Channel, ChatMessage } from "../types/matrix";
-import type { PinnedSummary, RegistrationFlowInfo } from "./matrixService";
+import type { PinnedSummary, RegistrationFlowInfo, SionMemberVersion, SoundboardCreationResult } from "./matrixService";
+import type { SoundEntry } from "./soundboardService";
+import type { MemeEntry } from "./memeboardService";
 
 export type EtatConnexion =
   | { etat: "deconnecte" }
@@ -355,3 +359,103 @@ export const aBesoinAmorcage = () => invoquer<boolean>("matrix_a_besoin_amorcage
 export const amorcer = (motDePasse?: string) => invoquer<string>("matrix_amorcer", { motDePasse: motDePasse ?? null });
 /** `regenerateRecoveryKey` (la sauvegarde est gardée, seule la clé change). */
 export const nouvelleCleRecuperation = () => invoquer<string>("matrix_nouvelle_cle_recuperation");
+
+// ── Fonctions propres à Sion (T6) ───────────────────────────────────────────
+
+/** Salon de la soundboard (`findSoundboardRoom`). */
+export const salonSoundboard = () => invoquer<string | null>("matrix_salon_soundboard");
+/** `createOrSyncSoundboardRoom`. */
+export const creerOuSynchroniserSoundboard = () => invoquer<SoundboardCreationResult>("matrix_creer_ou_synchroniser_soundboard");
+/** `listSounds`, au format `SoundEntry`. */
+export const sons = () => invoquer<SoundEntry[]>("matrix_sons");
+/** `listMemes`, au format `MemeEntry`. */
+export const memes = () => invoquer<MemeEntry[]>("matrix_memes");
+
+/** `uploadSound` : même contrôles (audio, 1 Mo, 20 s ; la durée est mesurée ici). */
+export async function ajouterSon(
+  fichier: File,
+  label: string,
+  categorie: string,
+  emoji: string | null,
+  gain = 1.0,
+  voix?: { refText?: string; avatar?: string },
+  modele?: string,
+  duree?: number | null,
+): Promise<{ eventId: string; mxcUrl: string; duration: number | null }> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const octets = new Uint8Array(await fichier.arrayBuffer());
+  const ext = (fichier.name.split(".").pop() || "bin").toLowerCase();
+  const chemin = await invoke<string>("stage_media", octets, { headers: { "x-sion-ext": ext } });
+  return invoquer("matrix_ajouter_son", {
+    chemin, nomFichier: fichier.name, mime: fichier.type, duree: duree ?? null, label, categorie,
+    emoji, gain, voix: voix ? { refText: voix.refText ?? null, avatar: voix.avatar ?? null } : null, modele: modele ?? null,
+  });
+}
+
+/** `editSound` ; dans `voix`, une clé absente laisse le champ, `null` l'efface. */
+export const modifierSon = (
+  eventId: string,
+  label: string,
+  categorie: string,
+  emoji: string | null,
+  gain: number,
+  voix: { refText?: string | null; avatar?: string | null } = {},
+) => invoquer<void>("matrix_modifier_son", { eventId, label, categorie, emoji, gain, changements: voix });
+
+/** `deleteSound` / `supprimerMeme`. */
+export const supprimerDuSoundboard = (eventId: string) => invoquer<void>("matrix_supprimer_du_soundboard", { eventId });
+
+/** `envoyerMeme`, à partir de ce que rend `memeboard_preparer`. */
+export const envoyerMeme = (
+  prepare: { video: string; mime: string; largeur: number; hauteur: number; duree_ms: number; apercu?: string | null; apercu_mime?: string | null },
+  label: string,
+  emoji: string | null,
+) =>
+  invoquer<string>("matrix_envoyer_meme", {
+    chemin: prepare.video, mime: prepare.mime, largeur: prepare.largeur, hauteur: prepare.hauteur, dureeMs: prepare.duree_ms,
+    apercu: prepare.apercu ?? null, apercuMime: prepare.apercu_mime ?? null, label, emoji,
+  });
+
+/** Un événement `com.sion.*` du fil, tel que le cœur le relaie. */
+export interface EvenementSion {
+  salon: string;
+  eventId: string;
+  type: string;
+  sender: string;
+  ts: number;
+  content: Record<string, unknown>;
+}
+
+/** Suit les événements `com.sion.*` (transcriptions, éjection vocale…). */
+export async function surEvenementsSion(rappel: (ev: EvenementSion) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<EvenementSion>("matrix-evenement-sion", (evenement) => rappel(evenement.payload));
+}
+
+/** Événement quelconque (`com.sion.transcript`, `com.sion.voice_kick`…). */
+export const envoyerEvenement = (salon: string, typeEvenement: string, contenu: Record<string, unknown>) =>
+  invoquer<string>("matrix_envoyer_evenement", { salon, typeEvenement, contenu });
+export const envoyerEtat = (salon: string, typeEvenement: string, cle: string, contenu: Record<string, unknown>) =>
+  invoquer<void>("matrix_envoyer_etat", { salon, typeEvenement, cle, contenu });
+export const etats = (salon: string, typeEvenement: string) =>
+  invoquer<{ stateKey: string; content: Record<string, unknown> }[]>("matrix_etats", { salon, typeEvenement });
+/** Historique filtré par types, du plus ancien au plus récent (`backfillTranscript`). */
+export const historiqueFiltre = (salon: string, types: string[]) => invoquer<EvenementSion[]>("matrix_historique_filtre", { salon, types });
+
+/** `getRoomClientVersions`. */
+export const versionsSalon = (salon: string) => invoquer<SionMemberVersion[]>("matrix_versions_salon", { salon });
+/** `publishClientVersion` ; rend le nombre de salons où la version a été annoncée. */
+export const publierVersion = (version: string, os: string) => invoquer<number>("matrix_publier_version", { version, os, ts: Date.now() });
+/** `ouvrirDroitAnnonceVersion`. */
+export const ouvrirDroitVersion = () => invoquer<number>("matrix_ouvrir_droit_version");
+/** `refreshDeviceVersionLabel`. */
+export const rafraichirNomAppareil = (nom: string) => invoquer<boolean>("matrix_rafraichir_nom_appareil", { nom });
+
+/** URL `sion-media` d'un mxc (sons, voix, memes), téléchargé authentifié par le cœur. */
+export const urlMedia = (mxc: string) => invoquer<string | null>("matrix_url_media", { mxc });
+
+/** `client.setPusher` (JSON du protocole ; `kind: null` retire le pousseur). */
+export const definirPousseur = (pousseur: Record<string, unknown>) => invoquer<void>("matrix_definir_pousseur", { pousseur });
+/** `client.deletePushRule`. */
+export const supprimerReglePush = (portee: string, genre: string, regle: string) =>
+  invoquer<void>("matrix_supprimer_regle_push", { portee, genre, regle });

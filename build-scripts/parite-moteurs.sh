@@ -28,14 +28,14 @@ fi
 
 echo "▶ moteur JS"
 SION_TEST_SORTIE_SALONS_JS="$tmp/js.json" SION_TEST_SORTIE_MESSAGES_JS="$tmp/js-messages.json" \
-  SION_TEST_SORTIE_DETAILS_JS="$tmp/js-details.json" \
+  SION_TEST_SORTIE_DETAILS_JS="$tmp/js-details.json" SION_TEST_SORTIE_SONS_JS="$tmp/js-sons.json" \
   bunx vitest run src/stores/pariteSalons.test.ts >/dev/null
 echo "▶ moteur Rust"
 (cd src-tauri && SION_TEST_SORTIE_SALONS="$tmp/rust.json" SION_TEST_SORTIE_MESSAGES="$tmp/rust-messages.json" \
-  SION_TEST_SORTIE_DETAILS="$tmp/rust-details.json" RUST_LOG=off \
+  SION_TEST_SORTIE_DETAILS="$tmp/rust-details.json" SION_TEST_SORTIE_SONS="$tmp/rust-sons.json" RUST_LOG=off \
   cargo test -q -j4 -p sion-matrix --test compte_reel -- --ignored >/dev/null)
 
-python3 - "$tmp/js.json" "$tmp/rust.json" "$tmp/js-messages.json" "$tmp/rust-messages.json" "$tmp/js-details.json" "$tmp/rust-details.json" <<'PY'
+python3 - "$tmp/js.json" "$tmp/rust.json" "$tmp/js-messages.json" "$tmp/rust-messages.json" "$tmp/js-details.json" "$tmp/rust-details.json" "$tmp/js-sons.json" "$tmp/rust-sons.json" <<'PY'
 import json, sys
 js = {s["id"]: s for s in json.load(open(sys.argv[1]))}
 rs = {s["id"]: s for s in json.load(open(sys.argv[2]))}
@@ -166,5 +166,33 @@ for sid in sorted(set(djs) | set(drs)):
         print(f"    {d}")
     decarts += len(diff)
 print(f"\n{len(djs)} salons — {decarts} écart(s) sur les membres et niveaux")
-sys.exit(1 if (ecarts or necarts or decarts) else 0)
+
+# ── Soundboard et memes (T6) ──────────────────────────────────────────────────
+print("\n── Soundboard et memes")
+sjs, srs = json.load(open(sys.argv[7])), json.load(open(sys.argv[8]))
+secarts = 0
+for genre, champs in (
+    ("sons", ["mxcUrl", "label", "category", "emoji", "body", "mimetype", "size", "duration", "senderId", "timestamp", "gain", "refText", "avatarUrl", "kind", "ttsModel"]),
+    ("memes", ["mxcUrl", "apercuMxc", "label", "emoji", "gain", "durationMs", "largeur", "hauteur", "senderId", "timestamp"]),
+):
+    a = [x["eventId"] for x in sjs[genre]]
+    b = [x["eventId"] for x in srs[genre]]
+    if a != b:
+        print(f"✗ {genre} : ordre ou présence — JS seul={sorted(set(a) - set(b))} Rust seul={sorted(set(b) - set(a))}")
+        secarts += 1
+    pa = {x["eventId"]: x for x in sjs[genre]}
+    pb = {x["eventId"]: x for x in srs[genre]}
+    for i in sorted(set(pa) & set(pb)):
+        for c in champs:
+            va, vb = pa[i].get(c), pb[i].get(c)
+            if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+                egal = abs(va - vb) < 1e-9
+            else:
+                egal = va == vb
+            if not egal:
+                print(f"    {genre} {i} {c}: JS={va!r} Rust={vb!r}")
+                secarts += 1
+    print(f"{'✓' if secarts == 0 else '✗'} {len(a)} {genre} côté JS, {len(b)} côté Rust")
+print(f"\n{secarts} écart(s) sur la soundboard et les memes")
+sys.exit(1 if (ecarts or necarts or decarts or secarts) else 0)
 PY

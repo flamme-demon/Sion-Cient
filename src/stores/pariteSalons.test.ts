@@ -28,7 +28,10 @@ async function ecrireFichier(chemin: string, donnees: string): Promise<void> {
 // modules à l'import.
 // Médias résolus (sinon le moteur JS ignore les messages de médias) ; l'URL
 // elle-même n'est pas comparée, elle diffère par construction.
-vi.mock("../services/matrixService", () => ({
+// Le vrai module, sauf les URL de médias (non comparées : elles diffèrent par
+// construction) ; ses fonctions servent à T4 et T6 (soundboard, memes).
+vi.mock("../services/matrixService", async () => ({
+  ...(await vi.importActual<typeof import("../services/matrixService")>("../services/matrixService")),
   mxcToHttp: (mxc: string) => (mxc ? `https://parite/${mxc}` : null),
   mxcToThumbnail: (mxc: string) => (mxc ? `https://parite/vignette/${mxc}` : null),
 }));
@@ -54,6 +57,7 @@ const MDP = process.env.SION_TEST_MOT_DE_PASSE;
 const SORTIE = process.env.SION_TEST_SORTIE_SALONS_JS;
 const SORTIE_MESSAGES = process.env.SION_TEST_SORTIE_MESSAGES_JS;
 const SORTIE_DETAILS = process.env.SION_TEST_SORTIE_DETAILS_JS;
+const SORTIE_SONS = process.env.SION_TEST_SORTIE_SONS_JS;
 
 describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte réel)", () => {
   it("écrit la liste des salons du moteur JS", async () => {
@@ -143,6 +147,16 @@ describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte 
           }));
         reel.__setMatrixClientForTest(null);
         await ecrireFichier(SORTIE_DETAILS, JSON.stringify(details, null, 2));
+      }
+      if (SORTIE_SONS) {
+        // T6 : soundboard et memes par les VRAIES fonctions de l'appli.
+        const reel = await vi.importActual<typeof import("../services/matrixService")>("../services/matrixService");
+        reel.__setMatrixClientForTest(client);
+        const { listSounds } = await import("../services/soundboardService");
+        const { listMemes } = await import("../services/memeboardService");
+        const resultat = { sons: await listSounds(), memes: await listMemes() };
+        reel.__setMatrixClientForTest(null);
+        await ecrireFichier(SORTIE_SONS, JSON.stringify(resultat, null, 2));
       }
       expect(salons.length).toBeGreaterThan(0);
     } finally {

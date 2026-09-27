@@ -236,6 +236,107 @@ async fn banc_local_t4_t5() {
     admin.coeur.bannir(&public, &id_alice, Some("banc")).await.expect("bannissement");
     println!("7. salon public : ajout d'office, niveau 50, expulsion, invitation acceptée, bannissement");
 
+    // ── Fonctions propres à Sion (T6).
+    let sb = admin.coeur.creer_ou_synchroniser_soundboard().await.expect("soundboard");
+    // Créé au premier passage sur ce serveur, repris ensuite ; la nouvelle
+    // Alice y est ajoutée d'office dans les deux cas.
+    assert!(sb.invited_count >= 1, "{sb:?}");
+    assert!(admin.coeur.creer_ou_synchroniser_soundboard().await.unwrap().already_existed);
+    attendre("Alice dans la soundboard", || a1.coeur.salons_actuels().into_iter().find(|s| s.id == sb.room_id)).await;
+    assert_eq!(a1.coeur.salon_soundboard().await.unwrap().as_deref(), Some(sb.room_id.as_str()));
+    // Refus de l'ajout : trop lourd, pas un audio, trop long.
+    assert!(admin.coeur.ajouter_son(vec![0; 1024 * 1024 + 1], "gros.mp3", "audio/mpeg", None, "", "", None, 1.0, None, None).await.is_err());
+    assert!(admin.coeur.ajouter_son(vec![1, 2], "x.png", "image/png", None, "", "", None, 1.0, None, None).await.is_err());
+    assert!(admin.coeur.ajouter_son(vec![1, 2], "long.ogg", "audio/ogg", Some(25_000), "", "", None, 1.0, None, None).await.is_err());
+    let ajoute = admin
+        .coeur
+        .ajouter_son(b"OggS-son-de-test".to_vec(), "ding.ogg", "audio/ogg", Some(800), " Ding ", "Réactions", Some("🔔"), 2.0, None, None)
+        .await
+        .expect("ajout d'un son");
+    admin.coeur.modifier_son(&ajoute.event_id, "Ding !", "Réactions/Courts", None, 1.5, None, None).await.expect("édition");
+    let mut vu = None;
+    for _ in 0..40 {
+        vu = a1.coeur.sons().await.unwrap().into_iter().find(|x| x.event_id == ajoute.event_id);
+        if vu.as_ref().is_some_and(|x| x.label == "Ding !") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let vu = vu.expect("son vu par Alice");
+    // Une édition sans emoji n'écrit pas la clé : l'emoji d'origine reste
+    // (règle du JS, qui ne sait pas l'effacer par une édition).
+    assert_eq!((vu.label.as_str(), vu.category.as_str(), vu.gain, vu.emoji.as_deref(), vu.duration), ("Ding !", "Réactions/Courts", 1.5, Some("🔔"), Some(800)));
+    // Le fichier du son se lit par le cœur, à l'identique.
+    let url = a1.coeur.url_media(&vu.mxc_url).expect("URL du son");
+    let cle = url.strip_prefix(sion_matrix::PREFIXE_PAR_DEFAUT).unwrap().to_owned();
+    assert_eq!(a1.coeur.media(&cle, false).await.unwrap(), b"OggS-son-de-test");
+    let meme = admin
+        .coeur
+        .envoyer_meme(b"video".to_vec(), "video/mp4", 640, 360, 3000, Some((b"apercu".to_vec(), "image/webp".into())), "Chat !", Some("🐱"))
+        .await
+        .expect("meme");
+    let memes = admin.coeur.memes().await.unwrap();
+    let m = memes.iter().find(|x| x.event_id == meme).expect("meme relu");
+    assert_eq!((m.label.as_str(), m.largeur, m.duration_ms, m.apercu_mxc.is_some()), ("Chat !", Some(640), Some(3000), true));
+    assert!(admin.coeur.sons().await.unwrap().iter().all(|x| x.event_id != meme), "un meme n'est pas un son");
+    admin.coeur.supprimer_du_soundboard(&ajoute.event_id).await.expect("suppression du son");
+    admin.coeur.supprimer_du_soundboard(&meme).await.expect("suppression du meme");
+    assert!(admin.coeur.sons().await.unwrap().iter().all(|x| x.event_id != ajoute.event_id));
+    println!("9. soundboard : salon créé (Alice ajoutée d'office), refus, son ajouté/édité/lu/supprimé, meme");
+
+    // Transcription : relayée en direct à l'autre appareil, déchiffrée.
+    let mut relais = a3.coeur.evenements_sion();
+    let segment = serde_json::json!({ "text": format!("bonjour {nonce}"), "t0": 0, "t1": 1200, "v": 1 });
+    a1.coeur.envoyer_evenement(&salon, "com.sion.transcript", segment.clone()).await.expect("segment");
+    let recu = tokio::time::timeout(ATTENTE, async {
+        loop {
+            let ev = relais.recv().await.expect("relais");
+            if ev.type_ == "com.sion.transcript" && ev.salon == salon {
+                return ev;
+            }
+        }
+    })
+    .await
+    .expect("segment relayé");
+    assert_eq!(recu.content["text"], segment["text"]);
+    let historique = a3.coeur.historique_filtre(&salon, &["com.sion.transcript".to_owned()]).await.expect("historique");
+    assert!(historique.iter().any(|e| e.content["text"] == segment["text"]), "segment relu dans l'historique");
+    println!("10. transcription relayée en direct (salon chiffré) et relue dans l'historique");
+
+    // Versions et nom d'appareil.
+    let annonces = a1.coeur.publier_version("2.0.0-banc", "Linux", 42).await.expect("version");
+    assert!(annonces >= 1);
+    // L'état publié revient par la synchro ; ensuite, rien à republier.
+    let mut v = Vec::new();
+    for _ in 0..80 {
+        v = a1.coeur.versions_salon(&salon).await.unwrap();
+        if v.iter().any(|x| x.user_id == id_alice && x.version == "2.0.0-banc") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(v.iter().any(|x| x.user_id == id_alice && x.version == "2.0.0-banc"), "{v:?}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(a1.coeur.publier_version("2.0.0-banc", "Linux", 43).await.unwrap(), 0, "rien à republier");
+    let ouverts = admin.coeur.ouvrir_droit_version().await.expect("droit d'annonce");
+    assert!(a1.coeur.rafraichir_nom_appareil("Sion — Alice 1 (2.0.0)").await.unwrap());
+    assert!(!a1.coeur.rafraichir_nom_appareil("Sion — Alice 1 (2.0.0)").await.unwrap());
+    // Push : une règle absente → erreur (le JS l'ignore) ; pas d'écriture hasardeuse.
+    assert!(a1.coeur.supprimer_regle_push("global", "override", "fr.sionchat.suppress_messages").await.is_err());
+    assert!(a1.coeur.supprimer_regle_push("global", "override", "../x").await.is_err());
+    // Pousseur déclaré puis retiré (`kind: null`), au format du JS.
+    let pousseur = |kind: serde_json::Value| {
+        serde_json::json!({
+            "app_display_name": "Sion Client", "app_id": "fr.sionchat.client",
+            "data": { "url": "https://push.sion.test/_matrix/push/v1/notify", "format": "event_id_only" },
+            "device_display_name": "Sion — banc", "kind": kind, "lang": "fr",
+            "pushkey": format!("https://push.sion.test/sion_{nonce}"), "append": false,
+        })
+    };
+    a1.coeur.definir_pousseur(pousseur("http".into())).await.expect("pousseur déclaré");
+    a1.coeur.definir_pousseur(pousseur(serde_json::Value::Null)).await.expect("pousseur retiré");
+    println!("11. versions annoncées ({annonces} salon(s)), droit ouvert dans {ouverts} salon(s), nom d'appareil, push");
+
     // ── Compte d'Alice : nom, avatar, mot de passe.
     a1.coeur.changer_nom("Alice du banc").await.expect("nom");
     assert_eq!(admin.coeur.nom_utilisateur(&id_alice).await.unwrap().as_deref(), Some("Alice du banc"));
@@ -252,7 +353,7 @@ async fn banc_local_t4_t5() {
     let a5 = appareil("Sion — Alice 5");
     a5.coeur.connecter(&serveur, &alice, &nouveau_mdp).await.expect("connexion avec le nouveau mot de passe");
     assert!(!a5.coeur.est_suspendu().await.unwrap());
-    println!("8. compte : nom, avatar, mot de passe changés ; non suspendu");
+    println!("12. compte : nom, avatar, mot de passe changés ; non suspendu");
 
     for a in [&a5, &a4, &a3, &admin] {
         let _ = a.coeur.deconnecter().await;

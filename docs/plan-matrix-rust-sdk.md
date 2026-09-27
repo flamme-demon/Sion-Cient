@@ -471,6 +471,75 @@ Trois défauts trouvés et corrigés grâce au banc :
 compte ; chacun l'accepte et ceux qui ne sont pas retenus sont annulés (le JS
 se comporte pareil).
 
+### État — T6 (branche `feat/matrix-rust`, 27/09/2026)
+
+Inventaire des événements propres à Sion, dressé avant d'écrire du code :
+`com.sion.soundboard` (métadonnées d'un son `m.audio`), `com.sion.meme`
+(`m.video` / `m.image`, dans le salon de la soundboard), `com.sion.transcript`,
+`com.sion.transcript.session`, `com.sion.transcript.summary_of` (clé d'un
+message de résumé), `com.sion.voice_kick`, `com.sion.client_version` (état,
+clé = utilisateur), `app.sion.poll_ends_ts` (fait en T3), `m.poke` (fait en
+T3). Plus les notifications push (pousseur ntfy, règles) et les médias mxc lus
+par la soundboard et la synthèse vocale.
+
+Fait :
+
+- `sion.rs` (pur) — lecture des sons (`listSounds` : métadonnées, dernière
+  édition appliquée, gain ancien et nouveau format, voix), contenus d'ajout et
+  d'édition de son, lecture et contenu des memes, versions des membres,
+  ouverture du droit d'annonce de version.
+- `fonctions_sion.rs` — salon de la soundboard (alias, création avec les
+  niveaux du JS, ajout d'office de tout le serveur), sons et memes par
+  pagination filtrée côté serveur (types voulus + `m.room.encrypted`, triés
+  après déchiffrement), ajout (mêmes refus : 1 Mo, audio, 20 s), édition,
+  suppression, envoi d'un meme préparé ; événements et états quelconques ;
+  RELAIS EN DIRECT des événements `com.sion.*` (déchiffrés) vers l'interface,
+  qui garde sa logique (transcriptions, éjection vocale) ; historique filtré
+  (`backfillTranscript`) ; version publiée seulement si elle a changé ; nom
+  d'appareil ; pousseur et règles de notification ; URL `sion-media` d'un mxc
+  (remplace `mxcUrlToHttp` + jeton).
+- Pont : 19 commandes et l'événement `matrix-evenement-sion` ; façade.
+
+Vérifié : parité sur le compte réel, **227 sons et 25 memes identiques champ par
+champ** entre `listSounds` / `listMemes` du JS et le cœur ; banc local —
+salon de la soundboard créé et utilisateur ajouté d'office, refus d'ajout,
+son ajouté / édité / relu octet pour octet / supprimé, meme, transcription
+relayée en direct dans un salon chiffré et relue dans l'historique, versions,
+droit d'annonce, nom d'appareil, pousseur déclaré puis retiré.
+
+Écarts voulus : le droit d'annonce de version s'ouvre aussi dans un salon v12
+dont on est créateur (le JS lisait la table des niveaux et s'y croyait à 0) ;
+l'historique filtré demande aussi les événements chiffrés (un filtre serveur
+sur `com.sion.transcript` ne voit rien dans un salon chiffré).
+
+À savoir : une édition de son sans emoji garde l'emoji d'origine (règle du JS,
+qui ne sait pas l'effacer par édition).
+
+## Bilan de l'étape 2 (27/09/2026)
+
+T0 à T6 sont faites dans `sion-matrix`, exposées par le pont et la façade
+`matrixCore.ts`. **L'interface de Sion, elle, tourne toujours sur le moteur
+JS** : seul l'écran de développement (`SION_MATRIX_MOTEUR=rust`) parle au cœur
+Rust. Le branchement de la vraie interface — `useMatrixStore` et les services
+qui appellent `getMatrixClient()` — reste à faire, avec la voix (étape 3),
+qui en dépend.
+
+Outils de vérification, à relancer à chaque changement du cœur :
+
+- `build-scripts/parite-moteurs.sh` (compte réel) : salons, messages, membres
+  et niveaux, soundboard et memes, les deux moteurs comparés champ par champ ;
+- `build-scripts/aller-retour.sh` (compte réel) : les deux moteurs en
+  parallèle dans un salon chiffré, envoi et lecture croisés ;
+- `tests/compte_reel.rs`, `tests/gestion_reelle.rs` (compte réel) ;
+- `tests/banc_local.rs` (Continuwuity jetable en conteneur) : compte neuf,
+  chiffrement et confiance, administration, fonctions propres à Sion.
+
+Défauts du moteur JS actuel trouvés en route, à corriger de son côté tant
+qu'il est livré : éditions, fichiers et GIF envoyés EN CLAIR dans un salon
+chiffré (T3) ; `checkSuspended` qui réécrit le nom d'affichage, `registerUser`
+qui laisse un appareil orphelin (T4) ; une « édition » par un autre que
+l'auteur affichée (T2).
+
 ## Les étapes suivantes
 
 - **Étape 3 — MatrixRTC en Rust.** Port maison depuis

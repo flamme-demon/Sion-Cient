@@ -131,7 +131,7 @@ fn auth_mot_de_passe(moi: &str, mot_de_passe: &str, session: Option<&str>) -> Re
 
 /// Requête HTTP brute (inscription, mandataire) : JSON en entrée, statut et
 /// JSON (ou `null`) en sortie.
-async fn http(methode: &str, url: &str, jeton: Option<&str>, corps: Option<&Value>) -> Resultat<ReponseServeur> {
+pub(crate) async fn http(methode: &str, url: &str, jeton: Option<&str>, corps: Option<&Value>) -> Resultat<ReponseServeur> {
     let methode = matrix_sdk::reqwest::Method::from_bytes(methode.as_bytes()).map_err(|e| Erreur::Autre(e.to_string()))?;
     let mut requete = matrix_sdk::reqwest::Client::new().request(methode, url).header("Content-Type", "application/json");
     if let Some(jeton) = jeton {
@@ -754,7 +754,7 @@ impl CoeurMatrix {
 
     /// Utilisateurs humains du serveur (`getServerUserIds`) : par le robot
     /// (`list-users`), sinon par les salons partagés ; sans moi ni robots.
-    async fn utilisateurs_du_serveur(&self, client: &Client) -> Vec<String> {
+    pub(crate) async fn utilisateurs_du_serveur(&self, client: &Client) -> Vec<String> {
         let Some(moi) = client.user_id() else { return Vec::new() };
         let suffixe = format!(":{}", moi.server_name());
         let garder = |id: &str| id != moi.as_str() && id.ends_with(&suffixe) && !administration::est_robot(id, false);

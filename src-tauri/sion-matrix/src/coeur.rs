@@ -15,6 +15,7 @@ use tokio::sync::{watch, Mutex};
 
 use crate::fil::{self, FilSalon, Fils};
 use crate::confiance::Confiance;
+use crate::fonctions_sion::Sion;
 use crate::epingles::ResumeEpingle;
 use crate::horloge::Horloge;
 use crate::medias::{Medias, PREFIXE_PAR_DEFAUT};
@@ -43,6 +44,7 @@ pub struct CoeurMatrix {
     horloge: Arc<Horloge>,
     fils: Fils,
     pub(crate) confiance: Arc<Confiance>,
+    pub(crate) sion: Arc<Sion>,
     /// Boucle de synchro : elle tient les magasins SQLite ouverts, elle doit
     /// donc s'arrêter AVANT tout effacement ou nouvelle connexion.
     synchro: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -88,6 +90,7 @@ impl CoeurMatrix {
             horloge: Arc::new(Horloge::default()),
             fils: Fils::nouveau(Arc::new(Medias::nouveau(PREFIXE_PAR_DEFAUT))),
             confiance: Confiance::nouvelle(),
+            sion: Sion::nouveau(),
             synchro: std::sync::Mutex::new(None),
         }
     }
@@ -97,6 +100,11 @@ impl CoeurMatrix {
     pub fn avec_prefixe_medias(mut self, prefixe: impl Into<String>) -> Self {
         self.fils = Fils::nouveau(Arc::new(Medias::nouveau(prefixe)));
         self
+    }
+
+    /// Registre des médias servis par `sion-media`.
+    pub(crate) fn medias(&self) -> &Medias {
+        &self.fils.medias
     }
 
     /// Messages d'un salon, publiés à chaque changement.
@@ -210,6 +218,7 @@ impl CoeurMatrix {
             .build()
             .await?;
         self.confiance.brancher(&client);
+        self.sion.brancher(&client);
         Ok(client)
     }
 
@@ -230,6 +239,7 @@ impl CoeurMatrix {
         self.salons.send_replace(Vec::new());
         self.fils.vider();
         self.confiance.oublier();
+        self.sion.oublier();
         self.etat.send_replace(EtatConnexion::Connexion);
 
         let phrase = session::phrase_aleatoire()?;
@@ -358,6 +368,7 @@ impl CoeurMatrix {
         self.salons.send_replace(Vec::new());
         self.fils.vider();
         self.confiance.oublier();
+        self.sion.oublier();
         self.etat.send_replace(EtatConnexion::Deconnecte);
         Ok(())
     }

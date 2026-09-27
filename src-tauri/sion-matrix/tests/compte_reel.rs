@@ -122,6 +122,12 @@ async fn connexion_reprise_deconnexion() {
         }
         println!("   T5 : clé de récupération → vérifié, {salons_restaures} salon(s) restauré(s), indéchiffrables {avant} → {apres}");
     }
+    // T6 : soundboard et memes.
+    if let Ok(sortie) = std::env::var("SION_TEST_SORTIE_SONS") {
+        let resultat = serde_json::json!({ "sons": premier.sons().await.expect("sons"), "memes": premier.memes().await.expect("memes") });
+        std::fs::write(&sortie, serde_json::to_vec_pretty(&resultat).unwrap()).unwrap();
+        println!("   soundboard : {} son(s), {} meme(s)", resultat["sons"].as_array().unwrap().len(), resultat["memes"].as_array().unwrap().len());
+    }
     // T4 : membres et niveaux de chaque salon.
     if let Ok(sortie) = std::env::var("SION_TEST_SORTIE_DETAILS") {
         let mut details = Vec::new();

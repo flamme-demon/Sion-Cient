@@ -58,7 +58,7 @@ pub(crate) struct Fils {
 
 /// Un événement du cache, en entrée du port pur. Un échec de déchiffrement
 /// devient un `m.room.message` en échec, comme le présente matrix-js-sdk.
-fn brut(ev: &TimelineEvent) -> Option<EvenementBrut> {
+pub(crate) fn brut(ev: &TimelineEvent) -> Option<EvenementBrut> {
     let json: Value = serde_json::from_str(ev.raw().json().get()).ok()?;
     Some(depuis_json(&json, matches!(ev.kind, TimelineEventKind::UnableToDecrypt { .. })))
 }

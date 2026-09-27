@@ -19,6 +19,7 @@ mod emission;
 mod envoi;
 mod epingles;
 mod fil;
+mod fonctions_sion;
 mod gestion;
 mod horloge;
 mod medias;
@@ -26,6 +27,7 @@ mod membres;
 mod messages;
 mod salons;
 mod session;
+mod sion;
 mod synchro;
 
 pub use appels::UtilisateurVocal;
@@ -35,10 +37,12 @@ pub use confiance::{EmojiSas, EtatVerification};
 pub use envoi::InfosMedia;
 pub use epingles::ResumeEpingle;
 pub use fil::FilSalon;
+pub use fonctions_sion::{EtatSalon, EvenementSion, ResultatSoundboard, SonAjoute};
 pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
 pub use medias::{type_mime, PREFIXE_PAR_DEFAUT};
 pub use messages::Message;
 pub use salons::Salon;
+pub use sion::{ChampVoix, Meme, Son, VersionMembre, Voix};
 
 /// Erreurs du cœur, présentables telles quelles à l'interface.
 #[derive(Debug, thiserror::Error)]

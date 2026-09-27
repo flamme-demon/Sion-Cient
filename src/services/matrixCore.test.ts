@@ -4,7 +4,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import {
-  moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier, requeteAdmin, ErreurApiAdmin, appareils, detailsSalon, amorcer,
+  moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier, requeteAdmin, ErreurApiAdmin, appareils, detailsSalon, amorcer, modifierSon,
 } from "./matrixCore";
 
 describe("matrixCore", () => {
@@ -96,6 +96,14 @@ describe("matrixCore", () => {
     invoke.mockResolvedValue("EsTc 1234");
     expect(await amorcer()).toBe("EsTc 1234");
     expect(invoke).toHaveBeenLastCalledWith("matrix_amorcer", { motDePasse: null });
+  });
+
+  it("édition d'un son : clé absente = inchangé, null = effacé", async () => {
+    invoke.mockResolvedValue(undefined);
+    await modifierSon("$s", "Ouf", "A", null, 1, { refText: null });
+    expect(invoke).toHaveBeenLastCalledWith("matrix_modifier_son", {
+      eventId: "$s", label: "Ouf", categorie: "A", emoji: null, gain: 1, changements: { refText: null },
+    });
   });
 
   it("rend les appareils sous la forme de getDevices", async () => {

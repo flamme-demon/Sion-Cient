@@ -94,6 +94,7 @@ mod actif {
         let mut salons = coeur.salons();
         let mut messages = coeur.messages();
         let mut verification = coeur.verification();
+        let mut evenements_sion = coeur.evenements_sion();
         let _ = COEUR.set(coeur);
         log::info!("[Sion][matrix] moteur Rust actif");
 
@@ -114,6 +115,19 @@ mod actif {
             while salons.changed().await.is_ok() {
                 let liste = salons.borrow_and_update().clone();
                 let _ = app_salons.emit("matrix-salons", &liste);
+            }
+        });
+        // Événements `com.sion.*` (transcriptions, éjection vocale) (T6).
+        let app_sion = app.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match evenements_sion.recv().await {
+                    Ok(ev) => {
+                        let _ = app_sion.emit("matrix-evenement-sion", &ev);
+                    }
+                    Err(RecvError::Lagged(n)) => log::warn!("[Sion][matrix] {n} événement(s) Sion perdu(s) en route"),
+                    Err(RecvError::Closed) => break,
+                }
             }
         });
         // Étapes de la vérification par emojis (T5).
@@ -615,6 +629,153 @@ pub mod commandes {
     pub async fn matrix_nouvelle_cle_recuperation() -> Result<String, String> {
         coeur()?.nouvelle_cle_recuperation().await.map_err(erreur)
     }
+    // ── Fonctions propres à Sion (T6) ─────────────────────────────────────────
+
+    /// Métadonnées d'une voix de référence à l'ajout d'un son.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct VoixJs {
+        ref_text: Option<String>,
+        avatar: Option<String>,
+    }
+
+    /// Champs de voix à l'édition : absents = inchangés, `null` = effacés.
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ChangementsVoix {
+        #[serde(default, deserialize_with = "present")]
+        ref_text: Option<Option<String>>,
+        #[serde(default, deserialize_with = "present")]
+        avatar: Option<Option<String>>,
+    }
+
+    impl ChangementsVoix {
+        fn ref_text(&self) -> sion_matrix::ChampVoix {
+            self.ref_text.clone()
+        }
+        fn avatar(&self) -> sion_matrix::ChampVoix {
+            self.avatar.clone()
+        }
+    }
+
+    /// Une clé présente (même à `null`) donne `Some(..)`.
+    fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+        Ok(Some(serde::Deserialize::deserialize(d)?))
+    }
+
+    /// Octets d'un fichier du dossier média, SANS l'effacer (un meme préparé
+    /// reste testable après l'envoi).
+    fn lire_fichier_media(chemin: &str) -> Result<Vec<u8>, String> {
+        let dossier = crate::sion_media_dir().canonicalize().map_err(|e| format!("dossier média : {e}"))?;
+        let fichier = std::path::PathBuf::from(chemin).canonicalize().map_err(|e| format!("fichier introuvable : {e}"))?;
+        if !fichier.starts_with(&dossier) {
+            return Err("chemin hors du dossier média".into());
+        }
+        std::fs::read(&fichier).map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_salon_soundboard() -> Result<Option<String>, String> {
+        coeur()?.salon_soundboard().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_creer_ou_synchroniser_soundboard() -> Result<serde_json::Value, String> {
+        json(coeur()?.creer_ou_synchroniser_soundboard().await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_sons() -> Result<serde_json::Value, String> {
+        json(coeur()?.sons().await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_memes() -> Result<serde_json::Value, String> {
+        json(coeur()?.memes().await)
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn matrix_ajouter_son(chemin: String, nom_fichier: String, mime: String, duree: Option<i64>, label: String, categorie: String, emoji: Option<String>, gain: f64, voix: Option<VoixJs>, modele: Option<String>) -> Result<serde_json::Value, String> {
+        let voix = voix.map(|v| sion_matrix::Voix { ref_text: v.ref_text, avatar: v.avatar });
+        json(coeur()?.ajouter_son(lire_depot(&chemin)?, &nom_fichier, &mime, duree, &label, &categorie, emoji.as_deref(), gain, voix, modele.as_deref()).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_modifier_son(event_id: String, label: String, categorie: String, emoji: Option<String>, gain: f64, changements: ChangementsVoix) -> Result<(), String> {
+        coeur()?.modifier_son(&event_id, &label, &categorie, emoji.as_deref(), gain, changements.ref_text(), changements.avatar()).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_du_soundboard(event_id: String) -> Result<(), String> {
+        coeur()?.supprimer_du_soundboard(&event_id).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn matrix_envoyer_meme(chemin: String, mime: String, largeur: i64, hauteur: i64, duree_ms: i64, apercu: Option<String>, apercu_mime: Option<String>, label: String, emoji: Option<String>) -> Result<String, String> {
+        let video = lire_fichier_media(&chemin)?;
+        let apercu = match (apercu, apercu_mime) {
+            (Some(c), Some(m)) => Some((lire_fichier_media(&c)?, m)),
+            _ => None,
+        };
+        coeur()?.envoyer_meme(video, &mime, largeur, hauteur, duree_ms, apercu, &label, emoji.as_deref()).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_evenement(salon: String, type_evenement: String, contenu: serde_json::Value) -> Result<String, String> {
+        coeur()?.envoyer_evenement(&salon, &type_evenement, contenu).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_etat(salon: String, type_evenement: String, cle: String, contenu: serde_json::Value) -> Result<(), String> {
+        coeur()?.envoyer_etat(&salon, &type_evenement, &cle, contenu).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_etats(salon: String, type_evenement: String) -> Result<serde_json::Value, String> {
+        json(coeur()?.etats(&salon, &type_evenement).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_versions_salon(salon: String) -> Result<serde_json::Value, String> {
+        json(coeur()?.versions_salon(&salon).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_publier_version(version: String, os: String, ts: i64) -> Result<usize, String> {
+        coeur()?.publier_version(&version, &os, ts).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ouvrir_droit_version() -> Result<usize, String> {
+        coeur()?.ouvrir_droit_version().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_rafraichir_nom_appareil(nom: String) -> Result<bool, String> {
+        coeur()?.rafraichir_nom_appareil(&nom).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_historique_filtre(salon: String, types: Vec<String>) -> Result<serde_json::Value, String> {
+        json(coeur()?.historique_filtre(&salon, &types).await)
+    }
+
+    #[tauri::command]
+    pub fn matrix_url_media(mxc: String) -> Result<Option<String>, String> {
+        Ok(coeur()?.url_media(&mxc))
+    }
+
+    #[tauri::command]
+    pub async fn matrix_definir_pousseur(pousseur: serde_json::Value) -> Result<(), String> {
+        coeur()?.definir_pousseur(pousseur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_regle_push(portee: String, genre: String, regle: String) -> Result<(), String> {
+        coeur()?.supprimer_regle_push(&portee, &genre, &regle).await.map_err(erreur)
+    }
 }
 
 #[cfg(not(feature = "moteur-matrix-rust"))]
@@ -942,6 +1103,108 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_nouvelle_cle_recuperation() -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+    #[derive(serde::Deserialize)]
+    pub struct VoixJs {}
+
+    #[derive(serde::Deserialize)]
+    pub struct ChangementsVoix {}
+
+    #[tauri::command]
+    pub async fn matrix_salon_soundboard() -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_creer_ou_synchroniser_soundboard() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_sons() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_memes() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn matrix_ajouter_son(_chemin: String, _nom_fichier: String, _mime: String, _duree: Option<i64>, _label: String, _categorie: String, _emoji: Option<String>, _gain: f64, _voix: Option<VoixJs>, _modele: Option<String>) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_modifier_son(_event_id: String, _label: String, _categorie: String, _emoji: Option<String>, _gain: f64, _changements: ChangementsVoix) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_du_soundboard(_event_id: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn matrix_envoyer_meme(_chemin: String, _mime: String, _largeur: i64, _hauteur: i64, _duree_ms: i64, _apercu: Option<String>, _apercu_mime: Option<String>, _label: String, _emoji: Option<String>) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_evenement(_salon: String, _type_evenement: String, _contenu: serde_json::Value) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_envoyer_etat(_salon: String, _type_evenement: String, _cle: String, _contenu: serde_json::Value) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_etats(_salon: String, _type_evenement: String) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_versions_salon(_salon: String) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_publier_version(_version: String, _os: String, _ts: i64) -> Result<usize, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ouvrir_droit_version() -> Result<usize, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_rafraichir_nom_appareil(_nom: String) -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_historique_filtre(_salon: String, _types: Vec<String>) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub fn matrix_url_media(_mxc: String) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_definir_pousseur(_pousseur: serde_json::Value) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_regle_push(_portee: String, _genre: String, _regle: String) -> Result<(), String> {
         Err(INACTIF.into())
     }
 }
