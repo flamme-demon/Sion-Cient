@@ -356,6 +356,7 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
         let mut invitations_tentees = HashSet::new();
         accepter_invitations(&client, &mut invitations_tentees).await;
         let mut fantomes = chercher_fantomes(&client, HashSet::new()).await;
+        crate::voix::liberer_appartenances_orphelines(&client, &rejoints(&client, &fantomes)).await;
         amorcer_activites(&client, &mut activites).await;
         publier(&client, &fantomes, &activites, &publication).await;
         let mut taches = tokio::task::JoinSet::new();

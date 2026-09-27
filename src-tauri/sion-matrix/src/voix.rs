@@ -156,6 +156,29 @@ async fn jeton_media(client: &Client, foyer: &Foyer) -> Resultat<(String, String
     Err(Erreur::Autre("le service LiveKit n'a délivré aucun jeton".into()))
 }
 
+/// Au démarrage de la synchro, AVANT la première liste de salons (donc avant
+/// toute entrée automatique en vocal) : retire les appartenances que CET
+/// appareil a laissées en partant sans le dire (plantage, processus tué). Le
+/// serveur n'a pas les événements différés qui s'en chargent d'habitude :
+/// sans cela, on reste affiché dans l'appel jusqu'à l'expiration (1 h).
+pub(crate) async fn liberer_appartenances_orphelines(client: &Client, salons: &[Room]) {
+    let (Some(moi), Some(appareil)) = (client.user_id(), client.device_id()) else { return };
+    let (moi, appareil) = (moi.as_str(), appareil.as_str());
+    for salon in salons {
+        let Ok(evenements) = evenements_appel(salon).await else { continue };
+        for ev in evenements {
+            let a_nous = ev.expediteur == moi && ev.contenu.get("device_id").and_then(Value::as_str) == Some(appareil);
+            if !a_nous || !crate::appels::a_contenu_appel(&ev) {
+                continue;
+            }
+            match salon.send_state_event_raw("org.matrix.msc3401.call.member", &ev.cle_etat, json!({})).await {
+                Ok(_) => log::info!("[Sion][voix] appartenance orpheline retirée de {}", salon.room_id()),
+                Err(e) => log::warn!("[Sion][voix] appartenance orpheline dans {} : {e}", salon.room_id()),
+            }
+        }
+    }
+}
+
 fn aleatoire() -> [u8; 16] {
     let mut cle = [0u8; 16];
     getrandom::fill(&mut cle).expect("générateur aléatoire du système");

@@ -644,6 +644,13 @@ mêmes :
   Chihuahuatistant, expiré depuis 1 h 30 pour MatrixRTC, affiché encore
   3 h 30).
 
+Et un troisième, propre à l'absence d'événements différés sur le serveur :
+un appareil qui part sans le dire (plantage, processus tué) restait affiché
+dans l'appel jusqu'à l'expiration (1 h). Au démarrage, avant la première
+liste de salons — donc avant toute entrée automatique en vocal —, le cœur
+retire les appartenances laissées par SON appareil
+(`liberer_appartenances_orphelines`).
+
 ## Bilan de l'étape 2 (27/09/2026)
 
 T0 à T6 sont faites dans `sion-matrix`, exposées par le pont et la façade
