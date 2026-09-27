@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
 import { UserAvatar } from "../sidebar/UserAvatar";
@@ -132,7 +133,10 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  // Portail sous <body> : rendue dans le fil, la visionneuse restait prise
+  // dans son contexte d'empilement (le fond animé impose `isolation`), et le
+  // panneau de la soundboard passait devant malgré son z-index (27/09).
+  return createPortal(
     <div
       onClick={onClose}
       style={{
@@ -180,7 +184,8 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
           color: LIGHTBOX_INK, fontSize: 18, lineHeight: '36px', textAlign: 'center',
         }}
       >✕</button>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
