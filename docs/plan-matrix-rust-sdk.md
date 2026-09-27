@@ -625,8 +625,12 @@ Vérifié :
   (`sub`). Le service hache le nom de la salle : même nom envoyé que le
   moteur JS, donc même salle.
 
-Reste : l'essai en vrai, avec du son, entre un Sion sur le moteur Rust et un
-Sion habituel.
+Essai en vrai le 27/09 : conversation sans difficulté entre flamme (moteur
+Rust) et flammemob (Sion habituel), dans un salon vocal en clair — après un
+correctif : avec matrix-sdk compilé, rustls avait deux fournisseurs et
+LiveKit paniquait à la connexion (ring installé par défaut, `d0a34a7`).
+Reste l'essai dans un salon vocal chiffré (clés des médias en conditions
+réelles ; couvert pour l'instant par les deux tests ci-dessus).
 
 ## Bilan de l'étape 2 (27/09/2026)
 
