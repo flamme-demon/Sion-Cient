@@ -28,12 +28,14 @@ fi
 
 echo "▶ moteur JS"
 SION_TEST_SORTIE_SALONS_JS="$tmp/js.json" SION_TEST_SORTIE_MESSAGES_JS="$tmp/js-messages.json" \
+  SION_TEST_SORTIE_DETAILS_JS="$tmp/js-details.json" \
   bunx vitest run src/stores/pariteSalons.test.ts >/dev/null
 echo "▶ moteur Rust"
-(cd src-tauri && SION_TEST_SORTIE_SALONS="$tmp/rust.json" SION_TEST_SORTIE_MESSAGES="$tmp/rust-messages.json" RUST_LOG=off \
+(cd src-tauri && SION_TEST_SORTIE_SALONS="$tmp/rust.json" SION_TEST_SORTIE_MESSAGES="$tmp/rust-messages.json" \
+  SION_TEST_SORTIE_DETAILS="$tmp/rust-details.json" RUST_LOG=off \
   cargo test -q -j4 -p sion-matrix --test compte_reel -- --ignored >/dev/null)
 
-python3 - "$tmp/js.json" "$tmp/rust.json" "$tmp/js-messages.json" "$tmp/rust-messages.json" <<'PY'
+python3 - "$tmp/js.json" "$tmp/rust.json" "$tmp/js-messages.json" "$tmp/rust-messages.json" "$tmp/js-details.json" "$tmp/rust-details.json" <<'PY'
 import json, sys
 js = {s["id"]: s for s in json.load(open(sys.argv[1]))}
 rs = {s["id"]: s for s in json.load(open(sys.argv[2]))}
@@ -130,5 +132,39 @@ for sid in sorted(set(fjs) | set(frs)):
         print(f"    {e}")
     necarts += len(ecarts_salon)
 print(f"\n{nmessages} messages comparés — {necarts} écart(s) strict(s), {infos} écart(s) voulu(s) signalé(s)")
-sys.exit(1 if (ecarts or necarts) else 0)
+
+# ── Membres et niveaux (T4) ───────────────────────────────────────────────────
+print("\n── Membres et niveaux")
+djs = {d["salon"]: d for d in json.load(open(sys.argv[5]))}
+drs = {d["salon"]: d["details"] for d in json.load(open(sys.argv[6]))}
+decarts = 0
+for sid in sorted(set(djs) | set(drs)):
+    a, b = djs.get(sid), drs.get(sid)
+    if a is None or b is None:
+        print(f"✗ {noms.get(sid, sid)} : détails d'un seul côté"); decarts += 1; continue
+    # Infini (créateur d'un salon v12) : `Infinity` → null en JSON côté JS,
+    # i64::MAX côté Rust.
+    inf = lambda v: "∞" if v is None or (isinstance(v, int) and v >= 2**53) else v
+    for m in a["membres"]:
+        m["powerLevel"] = inf(m.get("powerLevel"))
+    for m in b["membres"]:
+        m["powerLevel"] = inf(m.get("powerLevel"))
+    a["moi"], b["moi"] = inf(a.get("moi")), inf(b.get("moi"))
+    diff = [f"{c}: JS={a.get(c)!r} Rust={b.get(c)!r}" for c in ["moi", "niveauEtat", "niveauInvitation", "peutEcrire", "regleAcces"] if a.get(c) != b.get(c)]
+    ma = {m["userId"]: m for m in a["membres"]}
+    mb = {m["userId"]: m for m in b["membres"]}
+    if set(ma) != set(mb):
+        diff.append(f"membres: JS seul={sorted(set(ma) - set(mb))} Rust seul={sorted(set(mb) - set(ma))}")
+    for uid in sorted(set(ma) & set(mb)):
+        for c in ["displayName", "powerLevel"]:
+            if ma[uid].get(c) != mb[uid].get(c):
+                diff.append(f"{uid} {c}: JS={ma[uid].get(c)!r} Rust={mb[uid].get(c)!r}")
+        if ma[uid]["avatar"] != bool(mb[uid].get("avatarUrl")):
+            diff.append(f"{uid} avatar: JS={ma[uid]['avatar']} Rust={bool(mb[uid].get('avatarUrl'))}")
+    print(f"{'✓' if not diff else '✗'} {noms.get(sid, sid)} — {len(ma)} membres")
+    for d in diff[:10]:
+        print(f"    {d}")
+    decarts += len(diff)
+print(f"\n{len(djs)} salons — {decarts} écart(s) sur les membres et niveaux")
+sys.exit(1 if (ecarts or necarts or decarts) else 0)
 PY

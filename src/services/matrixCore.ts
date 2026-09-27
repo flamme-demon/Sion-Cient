@@ -9,11 +9,13 @@
  * arrivent en URL `sion-media`, servies (et déchiffrées) par Rust.
  * T3 : envoi, mêmes contenus que `matrixService.ts` ; chaque envoi rend
  * l'identifiant serveur de l'événement, le message revenant par le fil.
+ * T4 : membres, niveaux, gestion des salons, profil, appareils, inscription,
+ * administration (API du serveur par un mandataire : le jeton reste en Rust).
  * Le jeton d'accès ne passe jamais par ici : il reste côté Rust.
  */
 
 import type { Channel, ChatMessage } from "../types/matrix";
-import type { PinnedSummary } from "./matrixService";
+import type { PinnedSummary, RegistrationFlowInfo } from "./matrixService";
 
 export type EtatConnexion =
   | { etat: "deconnecte" }
@@ -186,3 +188,125 @@ export const envoyerImageUrl = (salon: string, url: string) => invoquer<string>(
 
 /** Taille maximale d'un envoi annoncée par le serveur (`getMaxUploadSize`). */
 export const tailleMaxEnvoi = () => invoquer<number>("matrix_taille_max_envoi");
+
+// ── Membres, salons, compte, administration (T4) ────────────────────────────
+
+export interface MembreSalon {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  powerLevel: number;
+}
+
+/** Ce que les écrans de gestion lisent d'un salon (`getRoomMembers`,
+ *  `getUserPowerLevel`, `getStatePowerLevel`, `getInvitePowerLevel`,
+ *  `canSendMessage`, règle d'accès). */
+export interface DetailsSalon {
+  membres: MembreSalon[];
+  moi: number;
+  niveauEtat: number;
+  niveauInvitation: number;
+  peutEcrire: boolean;
+  regleAcces: string | null;
+}
+
+/** Le cœur code l'infini (créateur d'un salon v12) par `i64::MAX` ; le JS
+ *  donne `Infinity`. */
+const niveauJs = (n: number) => (n >= Number.MAX_SAFE_INTEGER ? Infinity : n);
+
+export async function detailsSalon(salon: string): Promise<DetailsSalon> {
+  const d = await invoquer<DetailsSalon>("matrix_details_salon", { salon });
+  return { ...d, moi: niveauJs(d.moi), membres: d.membres.map((m) => ({ ...m, powerLevel: niveauJs(m.powerLevel) })) };
+}
+export const adminsServeur = () => invoquer<string[]>("matrix_admins_serveur");
+export const nomUtilisateur = (utilisateur: string) => invoquer<string | null>("matrix_nom_utilisateur", { utilisateur });
+export const avatarUtilisateur = (utilisateur: string) => invoquer<string | null>("matrix_avatar_utilisateur", { utilisateur });
+
+export const inviter = (salon: string, utilisateur: string) => invoquer<void>("matrix_inviter", { salon, utilisateur });
+export const expulser = (salon: string, utilisateur: string, raison?: string) =>
+  invoquer<void>("matrix_expulser", { salon, utilisateur, raison: raison ?? null });
+export const bannir = (salon: string, utilisateur: string, raison?: string) =>
+  invoquer<void>("matrix_bannir", { salon, utilisateur, raison: raison ?? null });
+export const changerNiveau = (salon: string, utilisateur: string, niveau: number) =>
+  invoquer<void>("matrix_changer_niveau", { salon, utilisateur, niveau });
+
+export const rejoindre = (salon: string) => invoquer<void>("matrix_rejoindre", { salon });
+export const quitter = (salon: string) => invoquer<void>("matrix_quitter", { salon });
+export const renommerSalon = (salon: string, nom: string) => invoquer<void>("matrix_renommer_salon", { salon, nom });
+export const changerSujet = (salon: string, sujet: string) => invoquer<void>("matrix_changer_sujet", { salon, sujet });
+/** Règle d'accès ; un salon qui devient public est ouvert à tout le serveur. */
+export const changerRegleAcces = (salon: string, publique: boolean) =>
+  invoquer<void>("matrix_changer_regle_acces", { salon, publique });
+/** Création d'un salon (`createChannel`) ; public, il est ouvert à tout le serveur. */
+export const creerSalon = (nom: string, vocal: boolean, publique = true, chiffre = false) =>
+  invoquer<string>("matrix_creer_salon", { nom, vocal, publique, chiffre });
+/** MP avec un utilisateur, réutilisé s'il existe (`createOrGetDMRoom`). */
+export const mpAvec = (utilisateur: string) => invoquer<string>("matrix_mp_avec", { utilisateur });
+
+/** Dépose un fichier (octets bruts) pour une commande qui le lit en Rust. */
+async function deposer(fichier: File): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const octets = new Uint8Array(await fichier.arrayBuffer());
+  const ext = (fichier.name.split(".").pop() || "bin").toLowerCase();
+  return invoke<string>("stage_media", octets, { headers: { "x-sion-ext": ext } });
+}
+
+export const changerAvatarSalon = async (salon: string, fichier: File) =>
+  invoquer<void>("matrix_changer_avatar_salon", { salon, chemin: await deposer(fichier), mime: fichier.type || "application/octet-stream" });
+export const changerNom = (nom: string) => invoquer<void>("matrix_changer_nom", { nom });
+/** Avatar du compte ; rend son URL http. */
+export const changerAvatar = async (fichier: File) =>
+  invoquer<string | null>("matrix_changer_avatar", { chemin: await deposer(fichier), mime: fichier.type || "application/octet-stream" });
+export const changerMotDePasse = (ancien: string, nouveau: string) =>
+  invoquer<void>("matrix_changer_mot_de_passe", { ancien, nouveau });
+
+export interface Appareil {
+  device_id: string;
+  display_name?: string;
+  last_seen_ts?: number;
+  last_seen_ip?: string;
+}
+/** Même forme que `getDevices` : `{ devices }`. */
+export const appareils = async () => ({ devices: await invoquer<Appareil[]>("matrix_appareils") });
+export const supprimerAppareil = (appareil: string, motDePasse: string) =>
+  invoquer<void>("matrix_supprimer_appareil", { appareil, motDePasse });
+/** Compte suspendu ? (sans changer le nom d'affichage, contrairement au JS). */
+export const estSuspendu = () => invoquer<boolean>("matrix_est_suspendu");
+
+/** Étapes d'inscription (`getRegistrationFlows`), sans session. */
+export const etapesInscription = (serveur: string) => invoquer<RegistrationFlowInfo>("matrix_etapes_inscription", { serveur });
+/** Inscription puis connexion comme nouvel appareil (`registerUser` + `login`). */
+export const inscrire = (serveur: string, identifiant: string, motDePasse: string, jeton?: string, captcha?: string) =>
+  invoquer<void>("matrix_inscrire", { serveur, identifiant, motDePasse, jeton: jeton ?? null, captcha: captcha ?? null });
+
+/** Même erreur que `adminService.ts`, pour que les écrans d'administration
+ *  n'aient rien à changer. */
+export class ErreurApiAdmin extends Error {
+  status: number;
+  errcode?: string;
+  constructor(status: number, errcode?: string) {
+    super(`Admin API error: ${status}${errcode ? ` (${errcode})` : ""}`);
+    this.status = status;
+    this.errcode = errcode;
+  }
+}
+
+/** Mandataire de l'API d'administration du serveur (`/_continuwuity/…`,
+ *  suspension MSC4323) : la requête part de Rust, jeton compris. */
+export async function requeteAdmin<T>(
+  chemin: string,
+  { methode = "GET", corps, authentifiee = false }: { methode?: string; corps?: unknown; authentifiee?: boolean } = {},
+): Promise<T> {
+  const r = await invoquer<{ status: number; corps: unknown }>("matrix_requete_admin", {
+    methode, chemin, corps: corps ?? null, authentifiee,
+  });
+  if (r.status < 200 || r.status >= 300) {
+    throw new ErreurApiAdmin(r.status, (r.corps as { errcode?: string } | null)?.errcode);
+  }
+  return r.corps as T;
+}
+
+/** Salon d'administration (`findAdminRoom`). */
+export const salonAdmin = () => invoquer<string | null>("matrix_salon_admin");
+/** Commande au robot d'administration ; rend sa réponse (`sendAdminCommand`). */
+export const commandeAdmin = (commande: string) => invoquer<string>("matrix_commande_admin", { commande });

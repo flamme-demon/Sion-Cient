@@ -365,9 +365,7 @@ pub mod commandes {
         coeur()?.epingler(&salon, &cible).await.map_err(erreur)
     }
 
-    /// Fichier déposé par `stage_media` : il doit être DANS le dossier média
-    /// (sinon la commande lirait n'importe quel fichier du disque), et il est
-    /// effacé une fois envoyé.
+    /// Fichier déposé par `stage_media` (voir `lire_depot`).
     #[tauri::command]
     #[allow(clippy::too_many_arguments)]
     pub async fn matrix_envoyer_fichier(
@@ -379,13 +377,7 @@ pub mod commandes {
         hauteur: Option<u32>,
         duree_ms: Option<u64>,
     ) -> Result<String, String> {
-        let dossier = crate::sion_media_dir().canonicalize().map_err(|e| format!("dossier média : {e}"))?;
-        let fichier = std::path::PathBuf::from(&chemin).canonicalize().map_err(|e| format!("fichier introuvable : {e}"))?;
-        if !fichier.starts_with(&dossier) {
-            return Err("chemin hors du dossier média".into());
-        }
-        let octets = std::fs::read(&fichier).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&fichier);
+        let octets = lire_depot(&chemin)?;
         let infos = sion_matrix::InfosMedia { largeur, hauteur, duree_ms };
         coeur()?.envoyer_fichier(&salon, octets, &nom, &mime, infos).await.map_err(erreur)
     }
@@ -398,6 +390,160 @@ pub mod commandes {
     #[tauri::command]
     pub async fn matrix_taille_max_envoi() -> Result<u64, String> {
         coeur()?.taille_max_envoi().await.map_err(erreur)
+    }
+    // ── Membres, salons, compte, administration (T4) ─────────────────────────
+
+    fn json<T: serde::Serialize>(r: Result<T, sion_matrix::Erreur>) -> Result<serde_json::Value, String> {
+        serde_json::to_value(r.map_err(erreur)?).map_err(|e| e.to_string())
+    }
+
+    /// Octets d'un fichier déposé par `stage_media`, effacé une fois lu. Il
+    /// doit être DANS le dossier média : sinon la commande lirait n'importe
+    /// quel fichier du disque.
+    fn lire_depot(chemin: &str) -> Result<Vec<u8>, String> {
+        let dossier = crate::sion_media_dir().canonicalize().map_err(|e| format!("dossier média : {e}"))?;
+        let fichier = std::path::PathBuf::from(chemin).canonicalize().map_err(|e| format!("fichier introuvable : {e}"))?;
+        if !fichier.starts_with(&dossier) {
+            return Err("chemin hors du dossier média".into());
+        }
+        let octets = std::fs::read(&fichier).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&fichier);
+        Ok(octets)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_details_salon(salon: String) -> Result<serde_json::Value, String> {
+        json(coeur()?.details_salon(&salon).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_admins_serveur() -> Result<Vec<String>, String> {
+        coeur()?.admins_serveur().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_nom_utilisateur(utilisateur: String) -> Result<Option<String>, String> {
+        coeur()?.nom_utilisateur(&utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_avatar_utilisateur(utilisateur: String) -> Result<Option<String>, String> {
+        coeur()?.avatar_utilisateur(&utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_appareils() -> Result<serde_json::Value, String> {
+        json(coeur()?.appareils().await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_inviter(salon: String, utilisateur: String) -> Result<(), String> {
+        coeur()?.inviter(&salon, &utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_expulser(salon: String, utilisateur: String, raison: Option<String>) -> Result<(), String> {
+        coeur()?.expulser(&salon, &utilisateur, raison.as_deref()).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_bannir(salon: String, utilisateur: String, raison: Option<String>) -> Result<(), String> {
+        coeur()?.bannir(&salon, &utilisateur, raison.as_deref()).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_niveau(salon: String, utilisateur: String, niveau: i64) -> Result<(), String> {
+        coeur()?.changer_niveau(&salon, &utilisateur, niveau).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_rejoindre(salon: String) -> Result<(), String> {
+        coeur()?.rejoindre(&salon).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_quitter(salon: String) -> Result<(), String> {
+        coeur()?.quitter(&salon).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_renommer_salon(salon: String, nom: String) -> Result<(), String> {
+        coeur()?.renommer_salon(&salon, &nom).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_sujet(salon: String, sujet: String) -> Result<(), String> {
+        coeur()?.changer_sujet(&salon, &sujet).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_avatar_salon(salon: String, chemin: String, mime: String) -> Result<(), String> {
+        coeur()?.changer_avatar_salon(&salon, lire_depot(&chemin)?, &mime).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_regle_acces(salon: String, publique: bool) -> Result<(), String> {
+        coeur()?.changer_regle_acces(&salon, publique).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_creer_salon(nom: String, vocal: bool, publique: bool, chiffre: bool) -> Result<String, String> {
+        coeur()?.creer_salon(&nom, vocal, publique, chiffre).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_mp_avec(utilisateur: String) -> Result<String, String> {
+        coeur()?.mp_avec(&utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_nom(nom: String) -> Result<(), String> {
+        coeur()?.changer_nom(&nom).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_avatar(chemin: String, mime: String) -> Result<Option<String>, String> {
+        coeur()?.changer_avatar(lire_depot(&chemin)?, &mime).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_mot_de_passe(ancien: String, nouveau: String) -> Result<(), String> {
+        coeur()?.changer_mot_de_passe(&ancien, &nouveau).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_appareil(appareil: String, mot_de_passe: String) -> Result<(), String> {
+        coeur()?.supprimer_appareil(&appareil, &mot_de_passe).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_est_suspendu() -> Result<bool, String> {
+        coeur()?.est_suspendu().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_etapes_inscription(serveur: String) -> Result<serde_json::Value, String> {
+        serde_json::to_value(sion_matrix::CoeurMatrix::etapes_inscription(&serveur).await).map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_inscrire(serveur: String, identifiant: String, mot_de_passe: String, jeton: Option<String>, captcha: Option<String>) -> Result<(), String> {
+        coeur()?.inscrire(&serveur, &identifiant, &mot_de_passe, jeton.as_deref(), captcha.as_deref()).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_requete_admin(methode: String, chemin: String, corps: Option<serde_json::Value>, authentifiee: bool) -> Result<serde_json::Value, String> {
+        json(coeur()?.requete_admin(&methode, &chemin, corps, authentifiee).await)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_salon_admin() -> Result<Option<String>, String> {
+        coeur()?.salon_admin().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_commande_admin(commande: String) -> Result<String, String> {
+        coeur()?.commande_admin(&commande).await.map_err(erreur)
     }
 }
 
@@ -533,6 +679,140 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_taille_max_envoi() -> Result<u64, String> {
+        Err(INACTIF.into())
+    }
+    #[tauri::command]
+    pub async fn matrix_details_salon(_salon: String) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_admins_serveur() -> Result<Vec<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_nom_utilisateur(_utilisateur: String) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_avatar_utilisateur(_utilisateur: String) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_appareils() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_inviter(_salon: String, _utilisateur: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_expulser(_salon: String, _utilisateur: String, _raison: Option<String>) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_bannir(_salon: String, _utilisateur: String, _raison: Option<String>) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_niveau(_salon: String, _utilisateur: String, _niveau: i64) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_rejoindre(_salon: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_quitter(_salon: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_renommer_salon(_salon: String, _nom: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_sujet(_salon: String, _sujet: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_avatar_salon(_salon: String, _chemin: String, _mime: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_regle_acces(_salon: String, _publique: bool) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_creer_salon(_nom: String, _vocal: bool, _publique: bool, _chiffre: bool) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_mp_avec(_utilisateur: String) -> Result<String, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_nom(_nom: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_avatar(_chemin: String, _mime: String) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_mot_de_passe(_ancien: String, _nouveau: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_appareil(_appareil: String, _mot_de_passe: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_est_suspendu() -> Result<bool, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_etapes_inscription(_serveur: String) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_inscrire(_serveur: String, _identifiant: String, _mot_de_passe: String, _jeton: Option<String>, _captcha: Option<String>) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_requete_admin(_methode: String, _chemin: String, _corps: Option<serde_json::Value>, _authentifiee: bool) -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_salon_admin() -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_commande_admin(_commande: String) -> Result<String, String> {
         Err(INACTIF.into())
     }
 }

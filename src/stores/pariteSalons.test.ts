@@ -53,6 +53,7 @@ const ID = process.env.SION_TEST_IDENTIFIANT;
 const MDP = process.env.SION_TEST_MOT_DE_PASSE;
 const SORTIE = process.env.SION_TEST_SORTIE_SALONS_JS;
 const SORTIE_MESSAGES = process.env.SION_TEST_SORTIE_MESSAGES_JS;
+const SORTIE_DETAILS = process.env.SION_TEST_SORTIE_DETAILS_JS;
 
 describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte réel)", () => {
   it("écrit la liste des salons du moteur JS", async () => {
@@ -117,6 +118,31 @@ describe.skipIf(!SERVEUR || !ID || !MDP || !SORTIE)("parité des salons (compte 
           }))
           .sort((a, b) => a.salon.localeCompare(b.salon));
         await ecrireFichier(SORTIE_MESSAGES, JSON.stringify(fils, null, 2));
+      }
+      if (SORTIE_DETAILS) {
+        // T4 : membres et niveaux par les VRAIES fonctions de matrixService
+        // (le module est simulé plus haut pour useMatrixStore).
+        const reel = await vi.importActual<typeof import("../services/matrixService")>("../services/matrixService");
+        reel.__setMatrixClientForTest(client);
+        const details = client
+          .getRooms()
+          .filter((r) => r.getMyMembership() === "join")
+          .map((r) => ({
+            salon: r.roomId,
+            membres: reel.getRoomMembers(r.roomId).map((m) => ({
+              userId: m.userId,
+              displayName: m.displayName,
+              avatar: !!m.avatarUrl,
+              powerLevel: reel.getMemberPowerLevel(r.roomId, m.userId),
+            })),
+            moi: reel.getUserPowerLevel(r.roomId),
+            niveauEtat: reel.getStatePowerLevel(r.roomId),
+            niveauInvitation: reel.getInvitePowerLevel(r.roomId),
+            peutEcrire: reel.canSendMessage(r.roomId),
+            regleAcces: r.getJoinRule() ?? null,
+          }));
+        reel.__setMatrixClientForTest(null);
+        await ecrireFichier(SORTIE_DETAILS, JSON.stringify(details, null, 2));
       }
       expect(salons.length).toBeGreaterThan(0);
     } finally {

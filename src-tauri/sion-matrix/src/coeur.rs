@@ -189,6 +189,9 @@ impl CoeurMatrix {
         let client = constructeur
             .sqlite_store(self.dossier.join(DOSSIER_MAGASIN), Some(phrase))
             .with_encryption_settings(reglages_chiffrement())
+            // Partage de l'historique des clés avec un invité (MSC4268),
+            // comme `shareHistoricKeys` du moteur JS.
+            .with_enable_share_history_on_invite(true)
             .build()
             .await?;
         // Le cache d'événements n'écoute que les synchros qui suivent son

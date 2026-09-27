@@ -3,7 +3,9 @@ import { describe, it, expect, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-import { moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier } from "./matrixCore";
+import {
+  moteurMatrix, connecter, fils, chargerHistorique, urlLecture, creerSondage, envoyerFichier, requeteAdmin, ErreurApiAdmin, appareils, detailsSalon,
+} from "./matrixCore";
 
 describe("matrixCore", () => {
   it("retombe sur le moteur JS si le pont ne répond pas (hors Tauri)", async () => {
@@ -65,6 +67,34 @@ describe("matrixCore", () => {
     expect(invoke).toHaveBeenLastCalledWith("matrix_envoyer_fichier", {
       salon: "!a:hs", chemin: "/tmp/sion-media/x.png", nom: "x.png", mime: "image/png", largeur: null, hauteur: null, dureeMs: null,
     });
+  });
+
+  it("le mandataire d'administration lève l'erreur d'adminService, errcode compris", async () => {
+    invoke.mockResolvedValue({ status: 403, corps: { errcode: "M_FORBIDDEN" } });
+    const echec = requeteAdmin("/_continuwuity/admin/rooms/list", { authentifiee: true });
+    await expect(echec).rejects.toBeInstanceOf(ErreurApiAdmin);
+    await expect(echec).rejects.toMatchObject({ status: 403, errcode: "M_FORBIDDEN" });
+    expect(invoke).toHaveBeenLastCalledWith("matrix_requete_admin", {
+      methode: "GET", chemin: "/_continuwuity/admin/rooms/list", corps: null, authentifiee: true,
+    });
+    invoke.mockResolvedValue({ status: 200, corps: { name: "continuwuity", version: "26.9.0" } });
+    expect(await requeteAdmin("/_continuwuity/server_version")).toEqual({ name: "continuwuity", version: "26.9.0" });
+  });
+
+  it("rend l'infini du créateur d'un salon v12 comme le JS", async () => {
+    // i64::MAX tel que JSON.parse le lit : 2⁶³.
+    const infini = 2 ** 63;
+    invoke.mockResolvedValue({
+      membres: [{ userId: "@a:hs", displayName: "A", avatarUrl: null, powerLevel: infini }, { userId: "@b:hs", displayName: "B", avatarUrl: null, powerLevel: 50 }],
+      moi: infini, niveauEtat: 50, niveauInvitation: 0, peutEcrire: true, regleAcces: "invite",
+    });
+    const d = await detailsSalon("!a:hs");
+    expect([d.moi, d.membres[0].powerLevel, d.membres[1].powerLevel]).toEqual([Infinity, Infinity, 50]);
+  });
+
+  it("rend les appareils sous la forme de getDevices", async () => {
+    invoke.mockResolvedValue([{ device_id: "ABC" }]);
+    expect(await appareils()).toEqual({ devices: [{ device_id: "ABC" }] });
   });
 
   it("désigne le salon sous le nom attendu par Tauri", async () => {

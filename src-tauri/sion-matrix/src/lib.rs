@@ -10,6 +10,7 @@
 // `CoeurMatrix` rendent des futurs en boîte, que l'appli attend sans rien
 // changer de son côté.
 #![recursion_limit = "256"]
+mod administration;
 mod appels;
 mod coeur;
 mod coffre;
@@ -17,6 +18,7 @@ mod emission;
 mod envoi;
 mod epingles;
 mod fil;
+mod gestion;
 mod horloge;
 mod medias;
 mod membres;
@@ -31,6 +33,7 @@ pub use coffre::{Coffre, CoffreMemoire};
 pub use envoi::InfosMedia;
 pub use epingles::ResumeEpingle;
 pub use fil::FilSalon;
+pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
 pub use medias::{type_mime, PREFIXE_PAR_DEFAUT};
 pub use messages::Message;
 pub use salons::Salon;

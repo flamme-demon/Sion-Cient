@@ -105,6 +105,16 @@ async fn connexion_reprise_deconnexion() {
         std::fs::write(&sortie, serde_json::to_vec_pretty(&fils).unwrap()).unwrap();
         println!("   messages écrits dans {sortie}");
     }
+    // T4 : membres et niveaux de chaque salon.
+    if let Ok(sortie) = std::env::var("SION_TEST_SORTIE_DETAILS") {
+        let mut details = Vec::new();
+        for salon in &liste {
+            let d = premier.details_salon(&salon.id).await.expect("détails du salon");
+            details.push(serde_json::json!({ "salon": salon.id, "details": d }));
+        }
+        std::fs::write(&sortie, serde_json::to_vec_pretty(&details).unwrap()).unwrap();
+        println!("   détails écrits dans {sortie}");
+    }
     premier.fermer().await; // « fermeture de l'appli »
     drop(premier);
 

@@ -359,6 +359,62 @@ Pas encore vu à l'écran : la saisie de l'écran de développement (l'écran é
 en veille pendant la nuit) ; le chemin qu'elle emprunte est celui de
 l'aller-retour.
 
+### État — T4 (branche `feat/matrix-rust`, 27/09/2026)
+
+Fait :
+
+- `administration.rs` (pur) — reconnaissance du salon d'administration
+  (`findAdminRoom`, et le barème un peu différent de
+  `getServerAdminUserIds`), administrateurs du serveur, lecture de
+  `list-users` (`parseUserList`), niveaux avec les valeurs par défaut du JS,
+  liste blanche du mandataire.
+- `gestion.rs` — membres et niveaux d'un salon (`details_salon` : membres
+  rejoints, niveaux, droit d'écrire, règle d'accès), invitation (avec partage
+  de l'historique des clés, MSC4268, comme `shareHistoricKeys`), expulsion,
+  bannissement, niveau d'un membre, rejoindre / quitter, nom / sujet / avatar
+  du salon, règle d'accès, création de salon (même état initial et mêmes
+  niveaux que `createChannel`, ouverture à tout le serveur si public par le
+  robot puis repli sur l'invitation), MP (`createOrGetDMRoom` : m.direct, puis
+  tout salon « en forme de MP », réinvitation, sinon création), profil,
+  mot de passe et suppression d'appareil (UIA par mot de passe), suspension,
+  inscription (étapes, puis compte et connexion), mandataire de l'API
+  d'administration, commandes au robot d'administration.
+- Pont : 27 commandes (générées avec leurs doublures « feature absente ») ;
+  façade `matrixCore.ts` dont `requeteAdmin` lève la même erreur
+  qu'`adminService.ts` (statut, errcode).
+
+**Vérifié sur le compte de test** : parité des membres et niveaux, 0 écart
+sur les 9 salons (noms, niveaux, droit d'écrire, règle d'accès, avatars) ;
+`tests/gestion_reelle.rs` — création d'un salon privé vocal (état conforme
+au JS, puis quitté), renommage et sujet aller-retour, MP existant retrouvé sans
+rien créer, second appareil supprimé par mot de passe, mandataire (version du
+serveur ; 403 sur l'API d'administration, le compte de test n'étant pas
+administrateur ; chemin hors liste blanche refusé), salon d'administration
+absent → « Admin room not found », inscription fermée sur ce serveur (403).
+
+Pas vérifiable avec ce compte, donc seulement compilé et relu : invitation,
+expulsion, bannissement (il faudrait une vraie personne à qui l'infliger),
+changement de nom / avatar du compte (visibles dans tous les salons),
+mot de passe, salon public (ouvert à tout le serveur), commandes du robot et
+API d'administration réussies (le compte n'est pas administrateur). À refaire
+avec un compte administrateur de test.
+
+Appris en route (27/09) :
+
+- **Salons en version 12 : le créateur a un niveau infini.** matrix-js-sdk le
+  rend en `Infinity` (qui devient `null` en JSON) ; le cœur le code
+  `i64::MAX`, que la façade rend en `Infinity`. matrix-sdk refuse à raison
+  d'inscrire un créateur dans la table des niveaux (`CreatorInUsersMap`).
+- L'état d'un salon tout juste créé n'arrive qu'à la synchro suivante.
+- `checkSuspended` du moteur JS teste la suspension en ÉCRIVANT la partie
+  locale de l'identifiant comme nom d'affichage ; le cœur réécrit le nom
+  actuel. `registerUser` laissait un appareil orphelin (session créée à
+  l'inscription puis nouvelle connexion) ; le cœur s'inscrit avec
+  `inhibit_login`.
+- Chaque méthode publique de `gestion.rs` rend un futur en boîte (enveloppe
+  + jumelle suffixée `_`) : sans cela, le crate de l'appli dépassait sa
+  profondeur de requêtes.
+
 ## Les étapes suivantes
 
 - **Étape 3 — MatrixRTC en Rust.** Port maison depuis
