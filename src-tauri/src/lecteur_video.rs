@@ -582,9 +582,6 @@ fn ramener_tete(
     source: &str,
     limite: u64,
 ) -> Option<std::path::PathBuf> {
-    if let Some(fichier) = crate::matrix_pont::fichier_media_matrix(source) {
-        return fichier.ok().map(std::path::PathBuf::from);
-    }
     let cible = dossier_cache().join(format!("tete_{}", empreinte(source)));
     if cible.metadata().map(|m| m.len() > 0).unwrap_or(false) {
         return Some(cible);
@@ -1040,6 +1037,18 @@ fn affiche_bloquante(
     let gere = crate::managed_ffmpeg_path(app).map(|p| p.to_string_lossy().into_owned());
     let ffmpeg = crate::resolve_ffmpeg(ffmpeg_path.as_deref(), gere.as_deref());
     let distant = chemin.starts_with("http://") || chemin.starts_with("https://");
+
+    // Moteur Matrix Rust : le fichier entier, déposé (et déchiffré) par le
+    // cœur. Il n'est pas un fragment jetable : on ne l'efface pas après coup.
+    if let Some(fichier) = crate::matrix_pont::fichier_media_matrix(chemin) {
+        let local = fichier?;
+        return extraire_image(&ffmpeg, std::path::Path::new(&local))
+            .map(|octets| {
+                let _ = std::fs::write(&cache, &octets);
+                base64::engine::general_purpose::STANDARD.encode(&octets)
+            })
+            .ok_or_else(|| "aucune image extraite".to_string());
+    }
 
     let mut garder = |octets: Vec<u8>| {
         let _ = std::fs::write(&cache, &octets);
