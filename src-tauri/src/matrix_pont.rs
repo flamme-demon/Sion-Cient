@@ -86,9 +86,10 @@ mod actif {
         }
         // `SION_MATRIX_DOSSIER` : un cœur isolé pour les essais (autre compte,
         // migration) sans toucher à la session de l'utilisateur — secrets
-        // gardés dans le fichier de session, pas dans le trousseau partagé.
+        // gardés dans le fichier de session (coffre qui refuse), pas dans le
+        // trousseau partagé.
         let (dossier, coffre): (std::path::PathBuf, Arc<dyn Coffre>) = match std::env::var_os("SION_MATRIX_DOSSIER") {
-            Some(d) => (d.into(), Arc::new(sion_matrix::CoffreMemoire::default())),
+            Some(d) => (d.into(), Arc::new(sion_matrix::CoffreMemoire::refusant())),
             None => match app.path().app_data_dir() {
                 Ok(d) => (d.join("matrix-rust"), Arc::new(CoffreSysteme)),
                 Err(e) => {
