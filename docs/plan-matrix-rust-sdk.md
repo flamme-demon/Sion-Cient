@@ -471,6 +471,14 @@ Trois défauts trouvés et corrigés grâce au banc :
 compte ; chacun l'accepte et ceux qui ne sont pas retenus sont annulés (le JS
 se comporte pareil).
 
+**Vérification croisée entre moteurs** (`build-scripts/verification-croisee.sh`,
+compte réel, 27/09) : le cas de la migration. Un appareil JS vérifié par la
+clé de récupération (même déroulé que `restoreKeyBackup`) accepte la demande
+d'un NOUVEL appareil Rust ; les deux affichent les mêmes emojis, confirment ;
+l'appareil Rust est vérifié, reçoit la clé de sauvegarde par partage de
+secrets et restaure 3 salons. Aucun autre appareil du compte ne doit tourner
+pendant le test.
+
 ### État — T6 (branche `feat/matrix-rust`, 27/09/2026)
 
 Inventaire des événements propres à Sion, dressé avant d'écrire du code :
@@ -584,6 +592,8 @@ Outils de vérification, à relancer à chaque changement du cœur :
   et niveaux, soundboard et memes, les deux moteurs comparés champ par champ ;
 - `build-scripts/aller-retour.sh` (compte réel) : les deux moteurs en
   parallèle dans un salon chiffré, envoi et lecture croisés ;
+- `build-scripts/verification-croisee.sh` (compte réel) : un appareil JS
+  vérifié vérifie par emojis un nouvel appareil Rust ;
 - `tests/compte_reel.rs`, `tests/gestion_reelle.rs` (compte réel) ;
 - `tests/banc_local.rs` (Continuwuity jetable en conteneur) : compte neuf,
   chiffrement et confiance, administration, fonctions propres à Sion.
