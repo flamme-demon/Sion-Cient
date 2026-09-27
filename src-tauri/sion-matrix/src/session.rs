@@ -131,7 +131,7 @@ pub(crate) fn phrase_aleatoire() -> Resultat<String> {
 
 /// Écrit un fichier lisible par le seul utilisateur, sans jamais exposer une
 /// version partielle : voisin temporaire, flush, puis remplacement atomique.
-fn ecrire_prive(chemin: &Path, contenu: &[u8]) -> std::io::Result<()> {
+pub(crate) fn ecrire_prive(chemin: &Path, contenu: &[u8]) -> std::io::Result<()> {
     let dossier = chemin.parent().expect("fichier de session sans dossier");
     std::fs::create_dir_all(dossier)?;
     let temporaire = dossier.join(format!(".{}.tmp-{}", FICHIER_SESSION, std::process::id()));

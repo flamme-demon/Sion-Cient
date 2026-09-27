@@ -26,6 +26,7 @@ mod rtc;
 mod medias;
 mod membres;
 mod messages;
+mod migration;
 mod salons;
 mod session;
 mod sion;
@@ -43,6 +44,7 @@ pub use fonctions_sion::{EtatSalon, EvenementSion, ResultatSoundboard, SonAjoute
 pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
 pub use medias::{type_mime, FormatMedia, PREFIXE_PAR_DEFAUT};
 pub use messages::Message;
+pub use migration::{ImportMigration, RapportMigration};
 pub use rtc::CleMedia;
 pub use salons::Salon;
 pub use sion::{ChampVoix, Meme, Son, VersionMembre, Voix};

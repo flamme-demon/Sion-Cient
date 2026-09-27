@@ -22,6 +22,7 @@ use crate::medias::{FormatMedia, Medias, PREFIXE_PAR_DEFAUT};
 use crate::salons::Salon;
 use crate::session::{self, Secrets, Session, DOSSIER_MAGASIN};
 use crate::synchro::{self, Publication};
+use crate::migration::{ImportMigration, RapportMigration};
 use crate::voix::Voix;
 use crate::{Coffre, Erreur, Resultat};
 
@@ -242,6 +243,30 @@ impl CoeurMatrix {
     /// Connexion par mot de passe, toujours comme **nouvel appareil** avec des
     /// magasins neufs : tout état local précédent est effacé.
     pub async fn connecter(&self, serveur: &str, identifiant: &str, mot_de_passe: &str) -> Resultat<()> {
+        Box::pin(self.connecter_(serveur, identifiant, mot_de_passe, None)).await.map(|_| ())
+    }
+
+    /// Connexion d'un nouvel appareil qui REPREND l'ancien, celui du moteur
+    /// JS (étape 4, migration) : paquet de secrets (signature croisée et clé
+    /// de sauvegarde, donc appareil vérifié d'emblée) et clés des salons
+    /// exportées par l'ancien moteur, importés AVANT la première synchro.
+    pub async fn connecter_et_migrer(
+        &self,
+        serveur: &str,
+        identifiant: &str,
+        mot_de_passe: &str,
+        import: &ImportMigration,
+    ) -> Resultat<RapportMigration> {
+        Box::pin(self.connecter_(serveur, identifiant, mot_de_passe, Some(import))).await
+    }
+
+    async fn connecter_(
+        &self,
+        serveur: &str,
+        identifiant: &str,
+        mot_de_passe: &str,
+        import: Option<&ImportMigration>,
+    ) -> Resultat<RapportMigration> {
         self.quitter_voix().await;
         self.arreter_synchro().await;
         let mut garde = self.client.lock().await;
@@ -255,6 +280,7 @@ impl CoeurMatrix {
 
         let phrase = session::phrase_aleatoire()?;
         let mut client_connecte: Option<Client> = None;
+        let mut rapport = RapportMigration::default();
         let resultat = async {
             let client = self.construire(serveur, &phrase, false).await?;
             client
@@ -264,6 +290,9 @@ impl CoeurMatrix {
                 .await?;
             client_connecte = Some(client.clone());
             activer_cache(&client)?;
+            if let Some(import) = import {
+                rapport = crate::migration::importer(&client, &self.dossier, import).await;
+            }
             let s = client.matrix_auth().session().ok_or(Erreur::PasDeSession)?;
             Session {
                 serveur: client.homeserver().to_string(),
@@ -292,7 +321,7 @@ impl CoeurMatrix {
                 self.publier_connecte(&client);
                 self.lancer_synchro(client.clone());
                 *garde = Some(client);
-                Ok(())
+                Ok(rapport)
             }
             Err(e) => {
                 // Connecté au serveur mais échec ensuite : ne pas laisser un

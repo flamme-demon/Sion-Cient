@@ -714,7 +714,7 @@ export async function hasUndecryptableMessages(): Promise<boolean> {
  * Clear all crypto-related IndexedDB stores
  * This is needed when switching accounts or devices to avoid conflicts
  */
-async function clearCryptoStores(): Promise<void> {
+export async function clearCryptoStores(): Promise<void> {
   try {
     const databases = await indexedDB.databases();
     const deletions: Promise<void>[] = [];
