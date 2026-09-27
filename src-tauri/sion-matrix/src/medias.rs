@@ -13,6 +13,7 @@ use std::sync::Mutex;
 
 use matrix_sdk::media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings};
 use matrix_sdk::ruma::events::room::{EncryptedFile, MediaSource};
+use matrix_sdk::ruma::media::Method;
 use matrix_sdk::ruma::{uint, OwnedMxcUri};
 use matrix_sdk::Client;
 
@@ -62,6 +63,30 @@ pub fn type_mime(octets: &[u8]) -> &'static str {
     }
 }
 
+/// Ce qu'on demande d'un média.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormatMedia {
+    Original,
+    /// Miniature 600×400 du serveur (`mxcToThumbnail`), pour le fil.
+    Vignette,
+    /// Miniature 96×96 recadrée, pour un avatar ou l'icône d'un salon.
+    Avatar,
+}
+
+impl FormatMedia {
+    /// Le format demandé par la requête d'une URL `sion-media`.
+    pub fn depuis_requete(requete: Option<&str>) -> Self {
+        let a = |cle: &str| requete.is_some_and(|q| q.split('&').any(|p| p == cle));
+        if a("avatar=1") {
+            Self::Avatar
+        } else if a("vignette=1") {
+            Self::Vignette
+        } else {
+            Self::Original
+        }
+    }
+}
+
 pub(crate) struct Medias {
     prefixe: String,
     sources: Mutex<HashMap<String, SourceMedia>>,
@@ -83,6 +108,18 @@ impl Medias {
 
     /// URL `sion-media` d'un média, `None` si la source est inexploitable.
     pub fn url(&self, source: &SourceMedia, vignette: bool) -> Option<String> {
+        self.url_format(source, if vignette { FormatMedia::Vignette } else { FormatMedia::Original })
+    }
+
+    /// URL `sion-media` d'un avatar ou d'une icône de salon. Ces images
+    /// passent par le cœur comme les autres : le serveur refuse les médias
+    /// non authentifiés (« Unauthenticated media is disabled », constaté le
+    /// 27/09 sur sionchat.fr), et un `<img>` ne sait pas s'authentifier.
+    pub fn url_avatar(&self, mxc: &str) -> Option<String> {
+        self.url_format(&SourceMedia::Mxc(mxc.to_owned()), FormatMedia::Avatar)
+    }
+
+    pub fn url_format(&self, source: &SourceMedia, format: FormatMedia) -> Option<String> {
         let valide = match source {
             SourceMedia::Mxc(m) => m.starts_with("mxc://"),
             SourceMedia::Chiffre(f) => f.get("url").and_then(|u| u.as_str()).is_some_and(|u| u.starts_with("mxc://")),
@@ -92,13 +129,18 @@ impl Medias {
         }
         let cle = cle(source);
         self.sources.lock().unwrap().insert(cle.clone(), source.clone());
-        Some(format!("{}{cle}{}", self.prefixe, if vignette { "?vignette=1" } else { "" }))
+        let suffixe = match format {
+            FormatMedia::Original => "",
+            FormatMedia::Vignette => "?vignette=1",
+            FormatMedia::Avatar => "?avatar=1",
+        };
+        Some(format!("{}{cle}{suffixe}", self.prefixe))
     }
 
     /// Contenu d'un média du registre. La miniature (600×400, comme
     /// `mxcToThumbnail`) n'existe que pour un média en clair : le serveur ne
     /// peut pas redimensionner ce qu'il ne sait pas lire.
-    pub async fn contenu(&self, client: &Client, cle: &str, vignette: bool) -> Resultat<Vec<u8>> {
+    pub async fn contenu(&self, client: &Client, cle: &str, format: FormatMedia) -> Resultat<Vec<u8>> {
         let source = self
             .sources
             .lock()
@@ -108,10 +150,10 @@ impl Medias {
             .ok_or_else(|| Erreur::Autre(format!("média inconnu : {cle}")))?;
         let (source, format) = match source {
             SourceMedia::Mxc(m) => {
-                let format = if vignette {
-                    MediaFormat::Thumbnail(MediaThumbnailSettings::new(uint!(600), uint!(400)))
-                } else {
-                    MediaFormat::File
+                let format = match format {
+                    FormatMedia::Original => MediaFormat::File,
+                    FormatMedia::Vignette => MediaFormat::Thumbnail(MediaThumbnailSettings::new(uint!(600), uint!(400))),
+                    FormatMedia::Avatar => MediaFormat::Thumbnail(MediaThumbnailSettings::with_method(Method::Crop, uint!(96), uint!(96))),
                 };
                 (MediaSource::Plain(OwnedMxcUri::from(m)), format)
             }
@@ -160,5 +202,13 @@ mod tests {
         assert!(u.starts_with("http://sion-media.localhost/") && u.ends_with("?vignette=1"));
         assert_eq!(m.url(&SourceMedia::Mxc("https://ailleurs/b".into()), false), None);
         assert_eq!(m.url(&SourceMedia::Chiffre(json!({ "key": {} })), false), None);
+        assert!(m.url_avatar("mxc://hs/a").unwrap().ends_with("?avatar=1"));
+    }
+
+    #[test]
+    fn format_lu_dans_la_requete() {
+        assert_eq!(FormatMedia::depuis_requete(Some("avatar=1")), FormatMedia::Avatar);
+        assert_eq!(FormatMedia::depuis_requete(Some("x=2&vignette=1")), FormatMedia::Vignette);
+        assert_eq!(FormatMedia::depuis_requete(None), FormatMedia::Original);
     }
 }

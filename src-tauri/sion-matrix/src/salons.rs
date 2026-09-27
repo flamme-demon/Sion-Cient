@@ -122,15 +122,6 @@ pub(crate) fn classer(e: &EntreesSalon, maintenant_serveur: i64) -> Salon {
     }
 }
 
-/// `mxc://serveur/id` → URL http de téléchargement, comme `mxcUrlToHttp` du
-/// moteur JS. Les médias passeront par `sion-media://` en T2.
-pub(crate) fn mxc_vers_http(base: &str, mxc: &str) -> Option<String> {
-    let (serveur, id) = mxc.strip_prefix("mxc://")?.split_once('/')?;
-    if serveur.is_empty() || id.is_empty() {
-        return None;
-    }
-    Some(format!("{}/_matrix/media/v3/download/{serveur}/{id}", base.trim_end_matches('/')))
-}
 
 #[cfg(test)]
 mod tests {
@@ -237,12 +228,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn mxc_converti_comme_le_moteur_js() {
-        assert_eq!(
-            mxc_vers_http("https://sionchat.fr/", "mxc://sionchat.fr/abc").as_deref(),
-            Some("https://sionchat.fr/_matrix/media/v3/download/sionchat.fr/abc")
-        );
-        assert_eq!(mxc_vers_http("https://hs", "https://pas-un-mxc"), None);
-    }
 }

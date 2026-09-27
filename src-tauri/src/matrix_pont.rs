@@ -172,10 +172,11 @@ mod actif {
     /// fixe : la réponse ne change jamais, le navigateur peut la garder.
     pub fn servir_media(requete: Request<Vec<u8>>, repondeur: UriSchemeResponder) {
         let cle = requete.uri().path().trim_start_matches('/').to_owned();
-        let vignette = requete.uri().query().is_some_and(|q| q.split('&').any(|p| p == "vignette=1"));
+        // Original, vignette du fil (`?vignette=1`) ou avatar (`?avatar=1`).
+        let format = sion_matrix::FormatMedia::depuis_requete(requete.uri().query());
         tauri::async_runtime::spawn(async move {
             let contenu = match coeur() {
-                Ok(coeur) => coeur.media(&cle, vignette).await.map_err(|e| e.to_string()),
+                Ok(coeur) => coeur.media_format(&cle, format).await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
             let reponse = Response::builder().header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");

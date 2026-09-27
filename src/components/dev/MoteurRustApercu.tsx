@@ -174,13 +174,22 @@ function ListeSalons({ liste, fils, ouvert, ouvrir }: {
                 background: c.id === ouvert ? 'var(--color-surface-container-highest)' : 'transparent',
               }}
             >
-              {c.hasVoice ? "🔊" : c.isDM ? "💬" : "#"} {c.name}
+              {c.icon
+                ? <img src={c.icon} alt="" style={{ display: 'inline-block', width: 18, height: 18, borderRadius: 5, verticalAlign: 'middle', marginRight: 6 }} />
+                : <>{c.hasVoice ? "🔊" : c.isDM ? "💬" : "#"} </>}
+              {c.name}
               <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
                 {" "}({fils[c.id]?.messages.length ?? 0})
               </span>
               {c.voiceUsers.length > 0 && (
                 <span style={{ fontSize: 12, color: 'var(--color-on-surface-variant)' }}>
-                  {" — "}{c.voiceUsers.map((u) => `${u.name}${u.muted ? " (muet)" : ""}${u.deafened ? " (sourd)" : ""}`).join(", ")}
+                  {" — "}
+                  {c.voiceUsers.map((u) => (
+                    <span key={u.id} style={{ marginRight: 6 }}>
+                      {u.avatarUrl && <img src={u.avatarUrl} alt="" style={{ display: 'inline-block', width: 14, height: 14, borderRadius: '50%', verticalAlign: 'middle', marginRight: 3 }} />}
+                      {u.name}{u.muted ? " (muet)" : ""}{u.deafened ? " (sourd)" : ""}
+                    </span>
+                  ))}
                 </span>
               )}
             </button>

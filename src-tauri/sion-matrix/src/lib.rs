@@ -39,7 +39,7 @@ pub use epingles::ResumeEpingle;
 pub use fil::FilSalon;
 pub use fonctions_sion::{EtatSalon, EvenementSion, ResultatSoundboard, SonAjoute};
 pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
-pub use medias::{type_mime, PREFIXE_PAR_DEFAUT};
+pub use medias::{type_mime, FormatMedia, PREFIXE_PAR_DEFAUT};
 pub use messages::Message;
 pub use salons::Salon;
 pub use sion::{ChampVoix, Meme, Son, VersionMembre, Voix};

@@ -515,6 +515,22 @@ sur `com.sion.transcript` ne voit rien dans un salon chiffré).
 À savoir : une édition de son sans emoji garde l'emoji d'origine (règle du JS,
 qui ne sait pas l'effacer par édition).
 
+### Avatars et icônes de salon (27/09)
+
+Le serveur refuse désormais les médias non authentifiés (403 « Unauthenticated
+media is disabled » sur `/_matrix/media/v3/…`, constaté le 27/09). Les avatars
+et icônes de salon, que le cœur fournissait jusque-là en URL de téléchargement
+comme le moteur JS (`mxcUrlToHttp`), ne s'affichaient donc pas. Ils passent
+maintenant par `sion-media` comme tous les autres médias (`?avatar=1` :
+vignette 96×96 recadrée, téléchargée authentifiée par le cœur) : membres du
+fil, participants vocaux, icônes de salon, écrans de gestion. La parité
+compare leur présence, les URL différant par construction.
+
+**Le moteur JS livré est touché de la même façon** : ses avatars, icônes et
+vignettes d'images (`mxcToHttp`, `mxcToThumbnail`) sont des URL non
+authentifiées ; seules les images déjà dans le cache de la webview peuvent
+encore s'afficher.
+
 ### Salons fantômes (27/09)
 
 Un salon quitté PUIS oublié depuis un autre appareil pendant que celui-ci est

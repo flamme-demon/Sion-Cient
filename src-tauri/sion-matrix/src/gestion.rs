@@ -21,7 +21,6 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::administration::{self, CandidatAdmin};
 use crate::coeur::CoeurMatrix;
-use crate::salons::mxc_vers_http;
 use crate::{membres, Erreur, Resultat};
 
 /// Événement d'état de la version du client (`SION_VERSION_EVENT`).
@@ -192,7 +191,6 @@ impl CoeurMatrix {
         let salon = self.salon(salon).await?;
         let client = salon.client();
         let moi = client.user_id().map(|u| u.to_string()).unwrap_or_default();
-        let base = client.homeserver().to_string();
         let niveaux = administration::niveaux(contenu_etat(&salon, StateEventType::RoomPowerLevels).await.as_ref());
         // Niveau calculé par matrix-sdk : il connaît les créateurs d'un salon
         // en version 12, de niveau infini (le JS donne `Infinity`).
@@ -210,7 +208,7 @@ impl CoeurMatrix {
                 let id = m.user_id().to_string();
                 MembreSalon {
                     display_name: noms.remove(&id).unwrap_or_else(|| id.clone()),
-                    avatar_url: m.avatar_url().and_then(|u| mxc_vers_http(&base, u.as_str())),
+                    avatar_url: m.avatar_url().and_then(|u| self.medias().url_avatar(u.as_str())),
                     power_level: niveau(&id),
                     user_id: id,
                 }
@@ -263,9 +261,8 @@ impl CoeurMatrix {
 
     async fn avatar_utilisateur_(&self, id: &str) -> Resultat<Option<String>> {
         let client = self.client_actif().await?;
-        let base = client.homeserver().to_string();
         Ok(client.account().fetch_user_profile_of(&utilisateur(id)?).await.ok().and_then(|p| {
-            p.get("avatar_url").and_then(|v| v.as_str().and_then(|u| mxc_vers_http(&base, u)))
+            p.get("avatar_url").and_then(|v| v.as_str().and_then(|u| self.medias().url_avatar(u)))
         }))
     }
 
@@ -545,7 +542,7 @@ impl CoeurMatrix {
         let client = self.client_actif().await?;
         let type_: mime::Mime = mime.parse().unwrap_or(mime::APPLICATION_OCTET_STREAM);
         let mxc = Box::pin(client.account().upload_avatar(&type_, octets)).await?;
-        Ok(mxc_vers_http(client.homeserver().as_ref(), mxc.as_str()))
+        Ok(self.medias().url_avatar(mxc.as_str()))
     }
 
     /// Changement de mot de passe (`changePassword`), authentifié par

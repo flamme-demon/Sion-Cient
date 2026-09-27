@@ -18,7 +18,7 @@ use crate::confiance::Confiance;
 use crate::fonctions_sion::Sion;
 use crate::epingles::ResumeEpingle;
 use crate::horloge::Horloge;
-use crate::medias::{Medias, PREFIXE_PAR_DEFAUT};
+use crate::medias::{FormatMedia, Medias, PREFIXE_PAR_DEFAUT};
 use crate::salons::Salon;
 use crate::session::{self, Secrets, Session, DOSSIER_MAGASIN};
 use crate::synchro::{self, Publication};
@@ -144,8 +144,13 @@ impl CoeurMatrix {
 
     /// Contenu d'un média servi par `sion-media` (déchiffré s'il le faut).
     pub async fn media(&self, cle: &str, vignette: bool) -> Resultat<Vec<u8>> {
+        self.media_format(cle, if vignette { FormatMedia::Vignette } else { FormatMedia::Original }).await
+    }
+
+    /// Contenu d'un média servi par `sion-media`, au format demandé.
+    pub async fn media_format(&self, cle: &str, format: FormatMedia) -> Resultat<Vec<u8>> {
         let client = self.client().await.ok_or(Erreur::PasDeSession)?;
-        self.fils.medias.contenu(&client, cle, vignette).await
+        self.fils.medias.contenu(&client, cle, format).await
     }
 
     /// Liste des salons rejoints, republiée à chaque changement.

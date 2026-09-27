@@ -39,15 +39,21 @@ python3 - "$tmp/js.json" "$tmp/rust.json" "$tmp/js-messages.json" "$tmp/rust-mes
 import json, sys
 js = {s["id"]: s for s in json.load(open(sys.argv[1]))}
 rs = {s["id"]: s for s in json.load(open(sys.argv[2]))}
-STRICTS = ["name", "topic", "icon", "hasVoice", "isDM", "dmUserId", "isSoundboard", "createdAt"]
+STRICTS = ["name", "topic", "hasVoice", "isDM", "dmUserId", "isSoundboard", "createdAt"]
+# Avatars et icônes : présence seulement. Le moteur JS donne des URL de
+# téléchargement non authentifiées, que le serveur refuse désormais (403
+# « Unauthenticated media is disabled ») ; le cœur Rust sert les siennes par
+# sion-media. Les URL diffèrent donc par construction.
 def vocal(s):
-    return sorted((u["id"], u.get("name"), u.get("muted"), u.get("deafened"), u.get("avatarUrl")) for u in s.get("voiceUsers", []))
+    return sorted((u["id"], u.get("name"), u.get("muted"), u.get("deafened"), bool(u.get("avatarUrl"))) for u in s.get("voiceUsers", []))
 ecarts = 0
 for sid in sorted(set(js) | set(rs)):
     a, b = js.get(sid), rs.get(sid)
     if a is None or b is None:
         print(f"✗ {sid} : présent seulement côté {'Rust' if a is None else 'JS'}"); ecarts += 1; continue
     diff = [(c, a.get(c), b.get(c)) for c in STRICTS if a.get(c) != b.get(c)]
+    if bool(a.get("icon")) != bool(b.get("icon")):
+        diff.append(("icon (présence)", bool(a.get("icon")), bool(b.get("icon"))))
     if vocal(a) != vocal(b):
         diff.append(("voiceUsers", vocal(a), vocal(b)))
     marque = "✓" if not diff else "✗"
@@ -68,7 +74,7 @@ editions_js = {f["salon"]: set(f.get("editions") or []) for f in sorties_js}
 epingles_js = {f["salon"]: f.get("epingles") or [] for f in sorties_js}
 epingles_rs = {f["salon"]: f.get("epingles") or [] for f in json.load(open(sys.argv[4]))}
 frs = {f["salon"]: f["messages"] for f in json.load(open(sys.argv[4]))}
-MSTRICTS = ["senderId", "user", "role", "avatarUrl", "ts", "text", "formattedBody", "msgtype", "edited", "replyTo", "poll"]
+MSTRICTS = ["senderId", "user", "role", "ts", "text", "formattedBody", "msgtype", "edited", "replyTo", "poll"]
 def reactions(m):
     return sorted((r["emoji"], r["count"], tuple(sorted(r["userIds"])), tuple(sorted(r["eventIds"].items()))) for r in m.get("reactions") or [])
 def pieces(m):
@@ -115,6 +121,8 @@ for sid in sorted(set(fjs) | set(frs)):
                 continue
             if m.get(c) != n.get(c):
                 ecarts_salon.append(f"{m['eventId']} {c}: JS={m.get(c)!r} Rust={n.get(c)!r}")
+        if bool(m.get("avatarUrl")) != bool(n.get("avatarUrl")):
+            ecarts_salon.append(f"{m['eventId']} avatar (présence): JS={bool(m.get('avatarUrl'))} Rust={bool(n.get('avatarUrl'))}")
         if reactions(m) != reactions(n):
             ecarts_salon.append(f"{m['eventId']} reactions: JS={reactions(m)} Rust={reactions(n)}")
         if pieces(m) != pieces(n):

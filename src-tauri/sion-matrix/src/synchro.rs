@@ -25,6 +25,7 @@ use tokio::sync::watch;
 use crate::appels::EvenementAppel;
 use crate::fil::Fils;
 use crate::horloge::Horloge;
+use crate::medias::Medias;
 use crate::salons::{self, EntreesSalon, Salon};
 use crate::session::FICHIER_ACTIVITE;
 use crate::EtatConnexion;
@@ -160,7 +161,7 @@ fn chaine(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or("").to_owned()
 }
 
-async fn lire(salon: &Room, moi: &str, base: &str, activite: i64, horloge: &Horloge) -> matrix_sdk::Result<EntreesSalon> {
+async fn lire(salon: &Room, moi: &str, medias: &Medias, activite: i64, horloge: &Horloge) -> matrix_sdk::Result<EntreesSalon> {
     let nom = match salon.display_name().await {
         Ok(RoomDisplayName::Empty) | Err(_) => String::new(),
         Ok(n) => n.to_string(),
@@ -190,7 +191,7 @@ async fn lire(salon: &Room, moi: &str, base: &str, activite: i64, horloge: &Horl
         id: salon.room_id().to_string(),
         nom,
         sujet: salon.topic(),
-        icone: salon.avatar_url().and_then(|m| salons::mxc_vers_http(base, m.as_str())),
+        icone: salon.avatar_url().and_then(|m| medias.url_avatar(m.as_str())),
         type_creation: chaine(creation.as_ref().and_then(|v| v.pointer("/content/type"))),
         type_personnalise: chaine(type_personnalise.as_ref().and_then(|v| v.pointer("/content/type"))),
         a_evenement_appel: etat_unique(salon, StateEventType::from("org.matrix.msc3401.call")).await.is_some(),
@@ -212,7 +213,7 @@ async fn lire(salon: &Room, moi: &str, base: &str, activite: i64, horloge: &Horl
         profils: membres
             .iter()
             .map(|m| {
-                let avatar = m.avatar_url().and_then(|u| salons::mxc_vers_http(base, u.as_str()));
+                let avatar = m.avatar_url().and_then(|u| medias.url_avatar(u.as_str()));
                 (m.user_id().to_string(), (Some(m.name().to_owned()), avatar))
             })
             .collect(),
@@ -221,13 +222,12 @@ async fn lire(salon: &Room, moi: &str, base: &str, activite: i64, horloge: &Horl
 
 /// La liste des salons rejoints. Un salon illisible est sauté (avec trace)
 /// plutôt que de vider toute la barre latérale — comme `safeMapRoomToChannel`.
-async fn tous_les_salons(client: &Client, fantomes: &HashSet<OwnedRoomId>, activites: &Activites, horloge: &Horloge) -> Vec<Salon> {
+async fn tous_les_salons(client: &Client, fantomes: &HashSet<OwnedRoomId>, activites: &Activites, horloge: &Horloge, medias: &Medias) -> Vec<Salon> {
     let moi = client.user_id().map(|u| u.to_string()).unwrap_or_default();
-    let base = client.homeserver().to_string();
     let maintenant = horloge.maintenant_serveur();
     let mut liste = Vec::new();
     for salon in rejoints(client, fantomes) {
-        match lire(&salon, &moi, &base, activites.get(salon.room_id().as_str()), horloge).await {
+        match lire(&salon, &moi, medias, activites.get(salon.room_id().as_str()), horloge).await {
             Ok(entrees) => liste.push(salons::classer(&entrees, maintenant)),
             Err(e) => log::error!("[Sion][matrix] salon ignoré ({}) : {e}", salon.room_id()),
         }
@@ -296,7 +296,7 @@ async fn amorcer_activites(client: &Client, activites: &mut Activites) {
 }
 
 async fn publier(client: &Client, fantomes: &HashSet<OwnedRoomId>, activites: &Activites, publication: &Publication) {
-    let liste = tous_les_salons(client, fantomes, activites, &publication.horloge).await;
+    let liste = tous_les_salons(client, fantomes, activites, &publication.horloge, &publication.fils.medias).await;
     publication.salons.send_if_modified(|actuelle| {
         if *actuelle == liste {
             false

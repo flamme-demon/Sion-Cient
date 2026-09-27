@@ -23,7 +23,6 @@ use crate::epingles::{self, ResumeEpingle};
 use crate::medias::Medias;
 use crate::membres;
 use crate::messages::{self, Contexte, EvenementBrut, Message};
-use crate::salons::mxc_vers_http;
 use crate::{Erreur, Resultat};
 
 /// Au-delà, on ne pagine plus (`MAX_HISTORY_PER_ROOM` du moteur JS).
@@ -111,7 +110,7 @@ impl Fils {
     }
 
     async fn construire(&self, salon: &Room, evenements: &[TimelineEvent]) -> Vec<Message> {
-        let membres = profils(salon).await;
+        let membres = profils(salon, &self.medias).await;
         let bruts: Vec<EvenementBrut> = evenements.iter().filter_map(brut).collect();
         let profil = |id: &str| membres.get(id).cloned().unwrap_or((None, None));
         let url = |source: &messages::SourceMedia, vignette: bool| self.medias.url(source, vignette);
@@ -208,14 +207,13 @@ impl Fils {
     }
 }
 
-/// Nom affiché et avatar (URL http, comme le JS) de chaque membre.
-async fn profils(salon: &Room) -> HashMap<String, (Option<String>, Option<String>)> {
-    let base = salon.client().homeserver().to_string();
+/// Nom affiché et avatar (URL `sion-media`) de chaque membre.
+async fn profils(salon: &Room, medias: &Medias) -> HashMap<String, (Option<String>, Option<String>)> {
     let tous = salon.members_no_sync(RoomMemberships::all()).await.unwrap_or_default();
     let mut noms = membres::noms_du_salon(&tous);
     tous.iter()
         .map(|m| {
-            let avatar = m.avatar_url().and_then(|u| mxc_vers_http(&base, u.as_str()));
+            let avatar = m.avatar_url().and_then(|u| medias.url_avatar(u.as_str()));
             let id = m.user_id().to_string();
             let nom = noms.remove(&id);
             (id, (nom, avatar))
@@ -236,7 +234,7 @@ impl Fils {
             Ok((cache, _)) => cache.events().await.unwrap_or_default().iter().filter_map(brut).collect(),
             Err(_) => Vec::new(),
         };
-        let membres = profils(salon).await;
+        let membres = profils(salon, &self.medias).await;
         let nom = |id: &str| membres.get(id).and_then(|(n, _)| n.clone());
         let url = |s: &messages::SourceMedia| self.medias.url(s, false);
         let mut resumes = Vec::new();
