@@ -14,12 +14,12 @@ export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$HOME/
 # Désactive les features desktop natives le temps du build Android.
 enable_android() {
     echo "[Sion] Mode Android..."
-    sed -i 's/^default = \["native-voice"\]/default = []/' "$CARGO_TOML"
+    sed -i 's/^default = \["native-voice", "moteur-matrix-rust"\]/default = []/' "$CARGO_TOML"
 }
 
 restore_desktop() {
     echo "[Sion] Mode Desktop..."
-    sed -i 's/^default = \[\]/default = ["native-voice"]/' "$CARGO_TOML"
+    sed -i 's/^default = \[\]/default = ["native-voice", "moteur-matrix-rust"]/' "$CARGO_TOML"
     echo "[Sion] Mise à jour Cargo.lock..."
     cd src-tauri && cargo update -p tauri --quiet 2>/dev/null || true; cd ..
 }

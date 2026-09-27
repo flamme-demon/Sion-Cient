@@ -236,10 +236,12 @@ windows-core = "0.58"
 [features]
 # Fenêtre WRY (via les features par défaut de `tauri`) + voix Rust : plus
 # aucune feature CEF. `native-voice` est désormais obligatoire pour la voix.
-default = ["native-voice"]
+# Le moteur Matrix est le cœur Rust depuis la 2.0.0-beta.2 (docs/plan-matrix-rust-sdk.md) ;
+# `build-android.sh` retire ces deux features le temps du build Android.
+default = ["native-voice", "moteur-matrix-rust"]
 native-voice = ["dep:sion-native-audio", "dep:webrtc-sys", "dep:livekit", "dep:tokio", "dep:futures-util", "dep:jpeg-rusturbo"]
-# Moteur Matrix Rust (développement) : `run-native.sh --features moteur-matrix-rust`,
-# puis lancer avec SION_MATRIX_MOTEUR=rust.
+# Moteur Matrix Rust : actif par défaut ; SION_MATRIX_MOTEUR=js relance
+# l'ancien moteur (secours), =rust-apercu l'écran de diagnostic du cœur.
 moteur-matrix-rust = ["dep:sion-matrix", "dep:rustls"]
 
 # serde_json is on the IPC hot path; keep it optimized even in dev builds.

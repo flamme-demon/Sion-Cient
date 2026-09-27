@@ -1,10 +1,11 @@
 //! Pont Tauri du cœur Matrix en Rust (`sion-matrix`).
 //!
-//! Compilé pour de vrai seulement avec la feature `moteur-matrix-rust`, et
-//! actif seulement si Sion est lancé avec `SION_MATRIX_MOTEUR=rust` : le
-//! moteur JS reste celui par défaut jusqu'à la parité (voir
-//! `docs/plan-matrix-rust-sdk.md`). Sans la feature, les commandes existent
-//! mais répondent « moteur JS », pour que l'interface n'ait qu'un seul code.
+//! Compilé avec la feature `moteur-matrix-rust` (par défaut sur ordinateur) :
+//! le cœur Rust est le moteur Matrix depuis la 2.0.0-beta.2, l'ancien moteur
+//! JS ne revient qu'avec `SION_MATRIX_MOTEUR=js` (voir
+//! `docs/plan-matrix-rust-sdk.md`). Sans la feature (Android), les commandes
+//! existent mais répondent « moteur JS », pour que l'interface n'ait qu'un
+//! seul code.
 
 /// Moteur Matrix de ce lancement : « rust » ou « js ».
 #[tauri::command]
@@ -23,13 +24,14 @@ mod actif {
 
     static COEUR: OnceLock<Arc<CoeurMatrix>> = OnceLock::new();
 
-    /// « rust » : l'appli sur le cœur Rust ; « rust-apercu » : l'écran de
-    /// diagnostic du cœur ; sinon « js ».
+    /// Le cœur Rust par défaut (2.0.0-beta.2) ; `SION_MATRIX_MOTEUR=js`
+    /// relance l'ancien moteur, en secours ; `=rust-apercu` l'écran de
+    /// diagnostic du cœur.
     pub fn moteur() -> &'static str {
         match std::env::var("SION_MATRIX_MOTEUR").as_deref() {
-            Ok("rust") => "rust",
+            Ok("js") => "js",
             Ok("rust-apercu") => "rust-apercu",
-            _ => "js",
+            _ => "rust",
         }
     }
 
@@ -82,16 +84,20 @@ mod actif {
         if moteur() == "js" {
             return;
         }
-        let dossier = match app.path().app_data_dir() {
-            Ok(d) => d.join("matrix-rust"),
-            Err(e) => {
-                log::error!("[Sion][matrix] dossier de données introuvable : {e}");
-                return;
-            }
+        // `SION_MATRIX_DOSSIER` : un cœur isolé pour les essais (autre compte,
+        // migration) sans toucher à la session de l'utilisateur — secrets
+        // gardés dans le fichier de session, pas dans le trousseau partagé.
+        let (dossier, coffre): (std::path::PathBuf, Arc<dyn Coffre>) = match std::env::var_os("SION_MATRIX_DOSSIER") {
+            Some(d) => (d.into(), Arc::new(sion_matrix::CoffreMemoire::default())),
+            None => match app.path().app_data_dir() {
+                Ok(d) => (d.join("matrix-rust"), Arc::new(CoffreSysteme)),
+                Err(e) => {
+                    log::error!("[Sion][matrix] dossier de données introuvable : {e}");
+                    return;
+                }
+            },
         };
-        let coeur = Arc::new(
-            CoeurMatrix::nouveau(dossier, "Sion (moteur Rust)", Arc::new(CoffreSysteme)).avec_prefixe_medias(PREFIXE_MEDIAS),
-        );
+        let coeur = Arc::new(CoeurMatrix::nouveau(dossier, "Sion (moteur Rust)", coffre).avec_prefixe_medias(PREFIXE_MEDIAS));
         let mut etat = coeur.etat();
         let mut salons = coeur.salons();
         let mut messages = coeur.messages();
