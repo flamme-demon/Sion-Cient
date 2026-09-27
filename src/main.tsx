@@ -90,6 +90,10 @@ async function bootstrap() {
   ]);
   const moteur = await moteurDemande();
   definirMoteur(moteur === "rust" ? "rust" : "js");
+  if (moteur !== "js") {
+    // Images servies par le cœur : voir repriseImages.ts.
+    (await import("./services/repriseImages")).installerRepriseImages();
+  }
   if (moteur === "rust-apercu") {
     const [{ MoteurRustApercu }, { installThemeSync: synchroniserTheme }] = await Promise.all([
       import("./components/dev/MoteurRustApercu"),

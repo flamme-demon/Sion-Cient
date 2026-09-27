@@ -539,6 +539,18 @@ vignettes d'images (`mxcToHttp`, `mxcToThumbnail`) sont des URL non
 authentifiées ; seules les images déjà dans le cache de la webview peuvent
 encore s'afficher.
 
+**WebKitGTK ne réutilise pas une image `sion-media://`** déjà chargée dans la
+page : un second `<img>` à la même adresse échoue aussitôt, sans redemander
+le cœur (mesuré le 27/09 : une requête servie pour un avatar, une dizaine
+d'échecs immédiats pour ses autres `<img>` ; `Cache-Control: no-store` n'y
+change rien). Symptômes : avatars du fil vides, images du fil perdues au
+défilement (`ImageDuFil` démonte et remonte), et TOUT vide après une
+déconnexion-reconnexion dans la même appli (mêmes clés, donc mêmes
+adresses). `repriseImages.ts` recharge une fois, sous une adresse unique,
+toute image du cœur qui échoue (capture de l'erreur sur `window`, avant le
+`onError` du composant) ; les aperçus de memes, décodés hors du document, le
+font eux-mêmes.
+
 ### Salons fantômes (27/09)
 
 Un salon quitté PUIS oublié depuis un autre appareil pendant que celui-ci est

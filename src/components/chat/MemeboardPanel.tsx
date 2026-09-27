@@ -35,6 +35,7 @@ import {
 import { MemeTrimmer } from "./MemeTrimmer";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { definirLecteurActif, libererLecteurActif } from "../../services/lecteurActif";
+import { adresseDeReprise } from "../../services/repriseImages";
 
 /** Identifiant de l'essai dans le registre du lecteur unique : une vidéo du
  *  fil en cours de lecture rend la main, comme quand on en lance une autre. */
@@ -82,14 +83,22 @@ function ApercuMeme({ src, anime }: { src: string; anime: boolean }) {
       if (image) return dessiner(image);
       if (chargement) return;
       chargement = true;
+      charger(src);
+    };
+    const charger = (adresse: string) => {
       const img = new Image();
-      img.src = src;
+      img.src = adresse;
       // Détachée du document, une image animée n'avance pas : on dessine sa
       // première image. Le canvas est « teinté » (autre origine) mais s'affiche.
       img.decode().then(() => {
         image = img;
         dessiner(img);
-      }).catch(() => { chargement = false; });
+      }).catch(() => {
+        // Image du cœur Rust déjà chargée dans la page : voir repriseImages.ts.
+        const reprise = adresseDeReprise(adresse);
+        if (reprise && !annule) charger(reprise);
+        else chargement = false;
+      });
     };
     // Redessiné à CHAQUE retour à l'écran, pas seulement au premier : WebKitGTK
     // vide un canvas qu'on a masqué, et les tuiles survolées redevenaient
