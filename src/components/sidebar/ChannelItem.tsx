@@ -29,6 +29,15 @@ function roleColor(role: UserRole): string {
   return "var(--color-on-surface-variant)";
 }
 
+/** Contenu d'un mini-avatar : l'image en `<img>`, pas en fond CSS. Une image
+ *  du moteur Rust déjà chargée ailleurs dans la page doit pouvoir être
+ *  rechargée (voir repriseImages.ts) ; un fond CSS qui échoue reste vide,
+ *  sans événement d'erreur. */
+function ContenuMiniAvatar({ url, nom }: { url?: string; nom: string }) {
+  if (!url) return <>{(Array.from(nom)[0] || '?').toUpperCase()}</>;
+  return <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />;
+}
+
 // Extract display name and avatar from LiveKit participant identity
 function getParticipantInfo(identity: string, roomId: string | null, localUserId: string | null, localDisplayName: string | null, localAvatarUrl: string | undefined) {
   // Check if this is the local user
@@ -360,7 +369,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
                       style={{
                         width: 20, height: 20, borderRadius: '50%',
                         border: '2px solid var(--color-surface-container-low)',
-                        background: u.avatarUrl ? `center/cover no-repeat url(${u.avatarUrl})` : 'var(--color-surface-container-highest)',
+                        background: 'var(--color-surface-container-highest)',
                         color: 'var(--color-on-surface)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: 9, fontWeight: 700, overflow: 'hidden',
@@ -368,7 +377,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
                         boxShadow: ringColor ? `0 0 0 2px ${ringColor}` : undefined,
                       }}
                     >
-                      {!u.avatarUrl && (Array.from(u.name)[0] || '?').toUpperCase()}
+                      <ContenuMiniAvatar url={u.avatarUrl} nom={u.name} />
                     </span>
                     {badge === 'sound' && (
                       <span
@@ -490,13 +499,13 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
                     width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
                     marginLeft: i === 0 ? 0 : -7,
                     border: '2px solid var(--color-surface-container-low)',
-                    background: u.avatarUrl ? `center/cover no-repeat url(${u.avatarUrl})` : 'var(--color-surface-container-highest)',
+                    background: 'var(--color-surface-container-highest)',
                     color: 'var(--color-on-surface)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 9, fontWeight: 700, overflow: 'hidden',
                   }}
                 >
-                  {!u.avatarUrl && (Array.from(u.name)[0] || '?').toUpperCase()}
+                  <ContenuMiniAvatar url={u.avatarUrl} nom={u.name} />
                 </span>
               ))}
               {voiceUsers.length > 3 && (

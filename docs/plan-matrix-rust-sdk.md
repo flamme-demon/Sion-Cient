@@ -549,7 +549,9 @@ déconnexion-reconnexion dans la même appli (mêmes clés, donc mêmes
 adresses). `repriseImages.ts` recharge une fois, sous une adresse unique,
 toute image du cœur qui échoue (capture de l'erreur sur `window`, avant le
 `onError` du composant) ; les aperçus de memes, décodés hors du document, le
-font eux-mêmes.
+font eux-mêmes. Une image du cœur ne doit donc JAMAIS être un fond CSS
+(`background: url(…)`) : son échec ne lève aucun événement, elle reste vide
+(mini-avatars du menu réduit, corrigés le 27/09).
 
 ### Salons fantômes (27/09)
 
