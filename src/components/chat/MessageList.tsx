@@ -11,6 +11,10 @@ const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
 /** Plafond de paginations pour rejoindre un message épinglé ancien. */
 const MAX_JUMP_PAGES = 25;
+/** Pages remontées au plus pour retrouver le dernier message lu à l'ouverture
+ *  d'un salon (~30 messages chacune ; le cœur Rust n'en garde de toute façon
+ *  que 300). */
+const MAX_PAGES_DERNIER_LU = 12;
 
 /** Returns true if both timestamps fall on the same calendar day (local time). */
 function isSameDay(a: number, b: number): boolean {
@@ -138,6 +142,10 @@ export function MessageList() {
   /** Jusqu'à quand garder le bandeau « nouveaux messages » en haut de la vue
    *  (horodatage ms) ; 0 = plus d'ancrage. */
   const ancreJusquaRef = useRef(0);
+  /** À l'ouverture, le dernier message lu n'était pas chargé : on remonte
+   *  l'historique jusqu'à lui pour placer le bandeau des non-lus. */
+  const chercheDernierLuRef = useRef(false);
+  const pagesDernierLuRef = useRef(0);
 
   // Track unread state (disabled for admin room)
   const isAdminRoom = activeChannel === findAdminRoom();
@@ -304,23 +312,32 @@ export function MessageList() {
     return true;
   }, []);
 
+  /** Fin du placement à l'ouverture : l'état « en bas » est relu — quand
+   *  tout tient à l'écran, aucun évènement de défilement ne le ferait — et
+   *  la lecture enregistrée si l'on y est. */
+  const finirPositionnement = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    positionneRef.current = true;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    isAtBottomRef.current = atBottom;
+    setShowScrollDown(!atBottom);
+    if (atBottom) markAsRead();
+  }, [markAsRead]);
+
+  /** Une page d'historique de plus, vue ancrée, pour retrouver le dernier lu. */
+  const remonterPourDernierLu = useCallback(() => {
+    if (!activeChannel) return;
+    const el = containerRef.current;
+    pagesDernierLuRef.current += 1;
+    if (el) prependAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    suppressScrollLoadRef.current = true;
+    loadRoomHistory(activeChannel);
+  }, [activeChannel, loadRoomHistory]);
+
   // Position the scroll on channel-open: at the unread separator if the
   // user has a backlog of unread, otherwise at the bottom.
   const positionInitialScroll = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    // After any scroll operation, re-check whether we ended up at the bottom.
-    // When the chat fits on screen, scrollToBottom produces no actual scroll
-    // event, so handleScroll never fires and the derived state
-    // (isAtBottomRef + showScrollDown) would otherwise stay stuck.
-    const syncBottomState = () => {
-      positionneRef.current = true;
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-      isAtBottomRef.current = atBottom;
-      setShowScrollDown(!atBottom);
-      if (atBottom) markAsRead();
-    };
-
     // Le bandeau fait foi : s'il est dans le fil, on y va. Il n'y est plus
     // centré puis remonté de 80 px — le premier non-lu se retrouvait à moitié
     // sous la zone de saisie —, il est en HAUT, les nouveaux messages dessous.
@@ -330,14 +347,50 @@ export function MessageList() {
       // replace pendant quelques secondes, tant que l'utilisateur ne touche
       // à rien (voir `arreterAncre` et l'observateur de hauteur).
       ancreJusquaRef.current = Date.now() + 4000;
-      requestAnimationFrame(syncBottomState);
+      requestAnimationFrame(finirPositionnement);
       return;
     }
-    // Pas de bandeau (dernier lu hors du fil chargé, ou rien de nouveau) :
-    // en bas, au moins l'utilisateur voit le plus récent.
+    // Le dernier lu n'est pas chargé (après un redémarrage, le cœur ne
+    // recharge que les messages récents) alors que d'autres ont écrit : tout
+    // le chargé est plus récent que lui, donc non lu. On remonte jusqu'à lui
+    // (effet « recherche du dernier lu »), sans rien marquer comme lu en
+    // attendant — avant, on arrivait en bas, bandeau introuvable.
+    const dernierLu = activeChannel ? lastReadMessageId[activeChannel] : undefined;
+    const charge = (id: string) => messages.some((m) => (m.eventId || String(m.id)) === id);
+    if (dernierLu && !charge(dernierLu) && hasMore && messages.some((m) => m.senderId !== currentUserId)) {
+      chercheDernierLuRef.current = true;
+      pagesDernierLuRef.current = 0;
+      scrollToBottom();
+      remonterPourDernierLu();
+      return;
+    }
+    // Rien de nouveau : en bas.
     scrollToBottom();
-    requestAnimationFrame(syncBottomState);
-  }, [placerSurSeparateur, scrollToBottom, markAsRead]);
+    requestAnimationFrame(finirPositionnement);
+  }, [placerSurSeparateur, finirPositionnement, activeChannel, lastReadMessageId, messages, hasMore, currentUserId, scrollToBottom, remonterPourDernierLu]);
+
+  // Recherche du dernier lu (voir `positionInitialScroll`) : à chaque page
+  // chargée, le bandeau est-il apparu ?
+  useEffect(() => {
+    if (!chercheDernierLuRef.current) return;
+    if (placerSurSeparateur()) {
+      chercheDernierLuRef.current = false;
+      ancreJusquaRef.current = Date.now() + 4000;
+      requestAnimationFrame(finirPositionnement);
+      return;
+    }
+    const dernierLu = activeChannel ? lastReadMessageId[activeChannel] : undefined;
+    const trouve = !!dernierLu && messages.some((m) => (m.eventId || String(m.id)) === dernierLu);
+    if (isLoading && !trouve) return;
+    if (trouve || !hasMore || pagesDernierLuRef.current >= MAX_PAGES_DERNIER_LU) {
+      // Trouvé sans non-lu d'autrui après lui, ou hors d'atteinte : en bas.
+      chercheDernierLuRef.current = false;
+      scrollToBottom();
+      requestAnimationFrame(finirPositionnement);
+      return;
+    }
+    remonterPourDernierLu();
+  }, [messages, isLoading, hasMore, activeChannel, lastReadMessageId, placerSurSeparateur, finirPositionnement, scrollToBottom, remonterPourDernierLu]);
 
   // On channel change: reset per-channel state and schedule initial scroll.
   // We do NOT call markAsRead unconditionally here — if the channel has
@@ -351,6 +404,7 @@ export function MessageList() {
       initialScrollDoneRef.current = false;
       positionneRef.current = false;
       ancreJusquaRef.current = 0;
+      chercheDernierLuRef.current = false;
     }
   }, [activeChannel, messages.length]);
 

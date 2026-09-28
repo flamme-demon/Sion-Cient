@@ -41,6 +41,9 @@ let racine: Root;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Images d'animation au rythme des minuteurs simulés.
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
   // jsdom n'a ni ResizeObserver ni mise en page : tout est « en bas du fil ».
   vi.stubGlobal(
     "ResizeObserver",
@@ -80,4 +83,29 @@ it("un message reçu en bas du fil est lu, même si le fil a bougé juste après
   act(() => vi.advanceTimersByTime(100));
 
   expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$3");
+});
+
+it("à l'ouverture, remonte l'historique jusqu'au dernier lu pour afficher le bandeau des non-lus", () => {
+  const AUTRE = "!limonadistant:sion.test";
+  const anciens = [message("$10", "@narkow:sion.test", 10), message("$11", "@picsou:sion.test", 11)];
+  const recents = [20, 21, 22, 23].map((ts) => message(`$${ts}`, "@narkow:sion.test", ts));
+  // Le dernier lu ($10) n'est pas chargé : seule une remontée le ramène.
+  const charger = vi.fn(async (salon: string) => {
+    useMatrixStore.setState((s) => ({
+      messages: { ...s.messages, [salon]: [...anciens, ...(s.messages[salon] ?? [])] },
+      roomHasMore: { ...s.roomHasMore, [salon]: false },
+    }));
+  });
+  useMatrixStore.setState((s) => ({
+    messages: { ...s.messages, [AUTRE]: recents },
+    roomHasMore: { ...s.roomHasMore, [AUTRE]: true },
+    loadRoomHistory: charger,
+  }));
+  useAppStore.setState({ lastReadMessageId: { [AUTRE]: "$10" } });
+
+  act(() => useAppStore.setState({ activeChannel: AUTRE }));
+  act(() => vi.advanceTimersByTime(200));
+
+  expect(charger).toHaveBeenCalledWith(AUTRE);
+  expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
 });
