@@ -178,6 +178,14 @@ export function MessageList() {
   const [sepAnchor, setSepAnchor] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (activeChannel && !isAdminRoom) {
+      const dernierLu = lastReadMessageId[activeChannel];
+      const liste = messagesMap[activeChannel] ?? [];
+      const rang = dernierLu ? liste.findIndex((m) => (m.eventId || String(m.id)) === dernierLu) : -1;
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(
+          `[Sion][non-lus] ouverture salon=${activeChannel} dernier lu=${dernierLu ?? "rien"} (rang ${rang} sur ${liste.length} chargés)`,
+        ))
+        .catch(() => {});
       setSepAnchor(lastReadMessageId[activeChannel]);
     } else {
       setSepAnchor(undefined);
@@ -221,7 +229,7 @@ export function MessageList() {
   }, [sepAnchor, messages, currentUserId]);
 
   // Mark messages as read when at bottom
-  const markAsRead = useCallback(() => {
+  const markAsRead = useCallback((raison: string = "?") => {
     // Personne devant l'écran : rien n'est lu (voir « Présence » plus bas).
     if (!presentRef.current) return;
     if (!activeChannel || messages.length === 0) return;
@@ -229,6 +237,14 @@ export function MessageList() {
     const lastId = lastMsg.eventId || String(lastMsg.id);
     if (lastId && lastId !== lastReadMessageId[activeChannel]) {
       setLastReadMessageId(activeChannel, lastId);
+      // Diagnostic (28/09) : qui marque lu, et d'où — la vue était-elle en bas ?
+      const el = containerRef.current;
+      const ecart = el ? Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) : -1;
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(
+          `[Sion][non-lus] lu (${raison}) salon=${activeChannel} jusqu'à ${lastId} ; avant ${lastReadMessageId[activeChannel] ?? "rien"} ; vue à ${ecart} px du bas`,
+        ))
+        .catch(() => {});
     }
   }, [activeChannel, messages, lastReadMessageId, setLastReadMessageId]);
 
@@ -240,7 +256,7 @@ export function MessageList() {
     courantRef.current = {
       salon: activeChannel && !isAdminRoom ? activeChannel : null,
       dernierLu: activeChannel ? lastReadMessageId[activeChannel] : undefined,
-      lire: markAsRead,
+      lire: () => markAsRead("retour de présence"),
     };
   });
   useEffect(() => {
@@ -376,7 +392,7 @@ export function MessageList() {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
     isAtBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
-    if (atBottom) markAsRead();
+    if (atBottom) markAsRead("placement à l'ouverture");
   }, [markAsRead]);
 
   /** Une page d'historique de plus, vue ancrée, pour retrouver le dernier lu. */
@@ -498,7 +514,7 @@ export function MessageList() {
       const lastMsg = messages[currLen - 1];
       if (lastMsg.senderId === currentUserId && (lastMsg.ts ?? 0) >= channelOpenedAtRef.current) {
         scrollToBottom();
-        markAsRead();
+        markAsRead("mon message");
         isAtBottomRef.current = true;
         setShowScrollDown(false);
         return;
@@ -562,7 +578,7 @@ export function MessageList() {
       // bandeau ; au retour, on descend lire ce qui est arrivé.
       if (!presentRef.current && placerSurSeparateur()) return;
       scrollToBottom();
-      markAsRead();
+      markAsRead("nouveau message, vue en bas");
     }
   }, [messages, scrollToBottom, markAsRead, placerSurSeparateur]);
 
@@ -663,7 +679,7 @@ export function MessageList() {
       setShowScrollDown(!atBottom);
       // Pas avant que la vue ait été placée à l'ouverture du salon : un
       // recalage du défilement n'est pas une lecture.
-      if (atBottom && positionneRef.current) markAsRead();
+      if (atBottom && positionneRef.current) markAsRead("défilement jusqu'en bas");
     }
 
     if (!atBottom) {
@@ -817,7 +833,7 @@ export function MessageList() {
             // La main à l'utilisateur : le bandeau n'est plus maintenu en vue.
             ancreJusquaRef.current = 0;
             scrollToBottom();
-            markAsRead();
+            markAsRead("flèche");
             // Force state update — when the chat fits on screen no scroll
             // event fires after scrollToBottom, so handleScroll never clears
             // showScrollDown and the banner would otherwise stay visible.
