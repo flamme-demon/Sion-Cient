@@ -44,6 +44,9 @@ beforeEach(() => {
   // Images d'animation au rythme des minuteurs simulés.
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));
   vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
+  // Quelqu'un est devant l'écran (voir « Présence » dans MessageList).
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
   // jsdom n'a ni ResizeObserver ni mise en page : tout est « en bas du fil ».
   vi.stubGlobal(
     "ResizeObserver",
@@ -70,6 +73,7 @@ afterEach(() => {
   act(() => racine.unmount());
   conteneur.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -108,4 +112,35 @@ it("à l'ouverture, remonte l'historique jusqu'au dernier lu pour afficher le ba
 
   expect(charger).toHaveBeenCalledWith(AUTRE);
   expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+});
+
+it("absent, un message reçu n'est pas lu et le bandeau l'annonce ; au retour, il est lu et le bandeau reste", () => {
+  act(() => vi.advanceTimersByTime(6000));
+  // On quitte la fenêtre de Sion (autre application).
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  act(() => { window.dispatchEvent(new Event("blur")); });
+
+  ajouter(message("$2", "@narkow:sion.test", 2));
+  act(() => vi.advanceTimersByTime(100));
+  expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$1");
+  expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+
+  // Retour : en bas du fil, le message est sous les yeux.
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  act(() => { window.dispatchEvent(new Event("focus")); });
+  act(() => vi.advanceTimersByTime(100));
+  expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$2");
+  expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+});
+
+it("sans souris ni clavier depuis une minute, un message reçu n'est pas lu", () => {
+  act(() => vi.advanceTimersByTime(61_000));
+  ajouter(message("$2", "@narkow:sion.test", 2));
+  act(() => vi.advanceTimersByTime(100));
+  expect(useAppStore.getState().lastReadMessageId[SALON]).not.toBe("$2");
+
+  // La souris bouge : on est de retour, en bas du fil.
+  act(() => { window.dispatchEvent(new Event("pointermove")); });
+  act(() => vi.advanceTimersByTime(100));
+  expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$2");
 });

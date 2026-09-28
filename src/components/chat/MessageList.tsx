@@ -15,6 +15,9 @@ const MAX_JUMP_PAGES = 25;
  *  d'un salon (~30 messages chacune ; le cœur Rust n'en garde de toute façon
  *  que 300). */
 const MAX_PAGES_DERNIER_LU = 12;
+/** Sans souris ni clavier depuis ce délai, l'utilisateur est considéré
+ *  absent : les messages qui arrivent ne sont plus « lus » d'office. */
+const DELAI_ABSENCE_MS = 60_000;
 
 /** Returns true if both timestamps fall on the same calendar day (local time). */
 function isSameDay(a: number, b: number): boolean {
@@ -153,6 +156,17 @@ export function MessageList() {
 
   const currentUserId = useMatrixStore((s) => s.currentUserId);
 
+  // ── Présence : un message n'est lu que si quelqu'un est là pour le voir.
+  // Sion ouvert sur un salon, en bas du fil, pendant qu'on est parti : chaque
+  // message arrivé était marqué lu aussitôt, et au retour rien ne distinguait
+  // ce qu'on avait manqué (28/09). Absent = fenêtre sans le focus, cachée,
+  // ou sans souris ni clavier depuis une minute.
+  const presentRef = useRef(true);
+  const [present, setPresent] = useState(true);
+  /** Dernière souris ou touche (ms) ; posée au montage, dans l'effet des
+   *  écouteurs — pas pendant le rendu, qui doit rester pur. */
+  const derniereActiviteRef = useRef(0);
+
   // Snapshot of lastReadId taken when the channel becomes active.
   // The real lastReadId is bumped to the latest message as soon as markAsRead()
   // fires, which would otherwise make the unread separator vanish instantly.
@@ -199,7 +213,8 @@ export function MessageList() {
   useEffect(() => {
     const prev = prevShowScrollDownRef.current;
     prevShowScrollDownRef.current = showScrollDown;
-    if (!sepAnchor) return;
+    // Absent : le bandeau attend le retour de l'utilisateur.
+    if (!sepAnchor || !present) return;
 
     let dismissTimer: ReturnType<typeof setTimeout> | null = null;
     // Check scrollability on the next frame so layout has settled after the
@@ -218,7 +233,7 @@ export function MessageList() {
       cancelAnimationFrame(raf);
       if (dismissTimer) clearTimeout(dismissTimer);
     };
-  }, [sepAnchor, showScrollDown]);
+  }, [sepAnchor, showScrollDown, present]);
 
   // Find the index of the unread separator (skip our own messages)
   const { unreadSepIndex, unreadCount } = useMemo(() => {
@@ -239,6 +254,8 @@ export function MessageList() {
 
   // Mark messages as read when at bottom
   const markAsRead = useCallback(() => {
+    // Personne devant l'écran : rien n'est lu (voir « Présence » plus bas).
+    if (!presentRef.current) return;
     if (!activeChannel || messages.length === 0) return;
     const lastMsg = messages[messages.length - 1];
     const lastId = lastMsg.eventId || String(lastMsg.id);
@@ -246,6 +263,55 @@ export function MessageList() {
       setLastReadMessageId(activeChannel, lastId);
     }
   }, [activeChannel, messages, lastReadMessageId, setLastReadMessageId]);
+
+  /** Valeurs du dernier rendu, pour les écouteurs de la fenêtre. */
+  const courantRef = useRef<{ salon: string | null; dernierLu: string | undefined; lire: () => void }>({
+    salon: null, dernierLu: undefined, lire: () => {},
+  });
+  useEffect(() => {
+    courantRef.current = {
+      salon: activeChannel && !isAdminRoom ? activeChannel : null,
+      dernierLu: activeChannel ? lastReadMessageId[activeChannel] : undefined,
+      lire: markAsRead,
+    };
+  });
+  useEffect(() => {
+    derniereActiviteRef.current = Date.now();
+    const evaluer = () => {
+      const p = document.visibilityState === "visible"
+        && document.hasFocus()
+        && Date.now() - derniereActiviteRef.current < DELAI_ABSENCE_MS;
+      if (p === presentRef.current) return;
+      presentRef.current = p;
+      setPresent(p);
+      const { salon, dernierLu, lire } = courantRef.current;
+      if (!p) {
+        // Départ : ce qui arrivera désormais est nouveau, le bandeau se
+        // posera juste avant (sans écraser un bandeau déjà affiché).
+        if (salon) setSepAnchor((a) => a ?? dernierLu);
+      } else if (isAtBottomRef.current) {
+        // Retour, en bas du fil : tout est sous les yeux. Le bandeau reste.
+        lire();
+      }
+    };
+    const activite = () => {
+      derniereActiviteRef.current = Date.now();
+      evaluer();
+    };
+    const evenements = ["pointermove", "pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
+    for (const e of evenements) window.addEventListener(e, activite, { passive: true });
+    window.addEventListener("blur", evaluer);
+    document.addEventListener("visibilitychange", evaluer);
+    const minuterie = window.setInterval(evaluer, 5000);
+    const premier = window.setTimeout(evaluer, 0);
+    return () => {
+      for (const e of evenements) window.removeEventListener(e, activite);
+      window.removeEventListener("blur", evaluer);
+      document.removeEventListener("visibilitychange", evaluer);
+      window.clearInterval(minuterie);
+      window.clearTimeout(premier);
+    };
+  }, []);
 
   // Scroll to bottom helper
   const scrollToBottom = useCallback(() => {
@@ -505,10 +571,13 @@ export function MessageList() {
 
     // Jamais de collage en bas pour un ajout en HAUT (historique paginé).
     if (isAtBottomRef.current && !isPrepend) {
+      // Absent : le bandeau des nouveaux messages reste en vue — en haut
+      // s'ils sont nombreux — au lieu de filer avec le bas du fil.
+      if (!presentRef.current && placerSurSeparateur()) return;
       scrollToBottom();
       markAsRead();
     }
-  }, [messages, scrollToBottom, markAsRead]);
+  }, [messages, scrollToBottom, markAsRead, placerSurSeparateur]);
 
   // ResizeObserver — observe the inner CONTENT wrapper, not the scroll viewport.
   // The viewport's box size is fixed, so observing it never fires when a child
