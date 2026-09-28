@@ -80,7 +80,10 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
     mesuresRust.fils += 1;
     mesuresRust.messagesFils += fil.messages.length;
     const avant = get().messages[fil.salon] ?? [];
-    if (!initial) sonnerNouveaux(fil, avant, get, APP_SESSION_START_TS);
+    if (!initial) {
+      sonnerNouveaux(fil, avant, get, APP_SESSION_START_TS);
+      notifierNouveaux(fil, avant, get, APP_SESSION_START_TS);
+    }
     const epinglesChanges = cache.definirEpingles(fil.salon, fil.epingles);
     const fusionne = conserverInchanges(avant, fil.messages);
     set((s) => {
@@ -151,6 +154,58 @@ function selectionnerSalonParDefaut(channels: Channel[]): void {
     // Entrée automatique en vocal : même marqueur que le moteur JS, le join
     // réel reste à App.tsx.
     if (autoJoinVoice && choisi.hasVoice && !app.connectedVoiceChannel) app.setPendingAutoJoinVoice(choisi.id);
+  });
+}
+
+/** Au-delà, une rafale (retour de connexion) ne notifie que ses derniers
+ *  messages : pas trente bulles d'un coup. */
+const NOTIFICATIONS_PAR_FIL = 3;
+
+/** Notifications système des nouveaux messages d'autrui, selon le réglage
+ *  (MP, mentions, réponses…) et seulement si Sion n'est pas au premier plan.
+ *  Le moteur JS le faisait dans `useMatrixStore` ; le cœur Rust n'en
+ *  envoyait aucune (28/09). */
+function notifierNouveaux(fil: FilSalon, avant: { id: number | string }[], get: Get, debutSession: number): void {
+  const connus = new Set(avant.map((m) => m.id));
+  const moi = get().currentUserId;
+  const nouveaux = fil.messages.filter(
+    (m) => !connus.has(m.id) && (m.ts ?? 0) > debutSession && m.senderId && m.senderId !== moi,
+  );
+  if (nouveaux.length === 0) return;
+  void Promise.all([
+    import("../services/notificationsMessages"),
+    import("../services/adminCommandService"),
+    import("./useAppStore"),
+    import("./useSettingsStore"),
+    import("./useAuthStore"),
+  ]).then(([notif, { findAdminRoom }, { useAppStore }, { useSettingsStore }, { useAuthStore }]) => {
+    if (notif.sionAuPremierPlan()) return;
+    // Salon d'administration et robot : des réponses de commandes, jamais
+    // des messages à notifier.
+    if (fil.salon === findAdminRoom()) return;
+    const robot = moi ? `@conduit:${moi.split(":")[1] ?? ""}` : "";
+    const salon = get().channels.find((c) => c.id === fil.salon);
+    const mode = useSettingsStore.getState().notificationMode;
+    const salonVocal = useAppStore.getState().connectedVoiceChannel === fil.salon;
+    const nomAffiche = useAuthStore.getState().credentials?.displayName;
+    for (const m of nouveaux.slice(-NOTIFICATIONS_PAR_FIL)) {
+      if (m.senderId === robot) continue;
+      const poke = m.msgtype === "m.poke";
+      const nature = {
+        poke,
+        mp: !!salon?.isDM,
+        mention: notif.estMention(m.text, m.formattedBody, moi, nomAffiche),
+        reponseAMoi: !!moi && m.replyTo?.senderId === moi,
+        salonVocal,
+      };
+      if (!notif.doitNotifier(nature, mode)) continue;
+      void notif.envoyerNotification({
+        titre: poke ? `👉 ${m.user}` : m.user,
+        corps: poke ? "Poke!" : m.text || "📎",
+        salon: fil.salon,
+        evenement: m.eventId,
+      });
+    }
   });
 }
 

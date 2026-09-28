@@ -6,6 +6,8 @@ import { openExternalUrl } from "./utils/openExternal";
 import { hydrateSessionFromAppData, startSettingsMirror } from "./services/sessionPersist";
 import { attachConsole, error as journalErreur } from "@tauri-apps/plugin-log";
 import { installMemoryDiagnostics } from "./services/memoryDiagnostics";
+// Suivi « Sion au premier plan » dès le démarrage (notifications système).
+import "./services/premierPlan";
 
 // Route Rust `log::*` records into the webview console — the only way to see
 // them on the shipped Windows build (no terminal). Pairs with the Rust
