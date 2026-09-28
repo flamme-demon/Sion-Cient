@@ -114,7 +114,17 @@ it("à l'ouverture, remonte l'historique jusqu'au dernier lu pour afficher le ba
   expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
 });
 
-it("absent, un message reçu n'est pas lu et le bandeau l'annonce ; au retour, il est lu et le bandeau reste", () => {
+/** Géométrie simulée du fil (jsdom n'a pas de mise en page), puis un
+ *  évènement de défilement comme en produit la molette. */
+function defiler(scrollTop: number, scrollHeight = 1000, clientHeight = 400) {
+  const fil = conteneur.querySelector<HTMLElement>(".overflow-y-auto")!;
+  Object.defineProperty(fil, "scrollHeight", { configurable: true, get: () => scrollHeight });
+  Object.defineProperty(fil, "clientHeight", { configurable: true, get: () => clientHeight });
+  Object.defineProperty(fil, "scrollTop", { configurable: true, get: () => scrollTop, set: () => {} });
+  act(() => { fil.dispatchEvent(new Event("scroll")); });
+}
+
+it("absent, un message reçu n'est pas lu ; au retour il faut descendre pour le lire", () => {
   act(() => vi.advanceTimersByTime(6000));
   // On quitte la fenêtre de Sion (autre application).
   vi.spyOn(document, "hasFocus").mockReturnValue(false);
@@ -124,16 +134,22 @@ it("absent, un message reçu n'est pas lu et le bandeau l'annonce ; au retour, i
   act(() => vi.advanceTimersByTime(100));
   expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$1");
   expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+  // La vue s'est arrêtée sur le bandeau, le nouveau message plus bas.
+  defiler(500);
 
-  // Retour : en bas du fil, le message est sous les yeux.
+  // Retour : le message n'est pas encore sous les yeux.
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   act(() => { window.dispatchEvent(new Event("focus")); });
   act(() => vi.advanceTimersByTime(100));
+  expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$1");
+
+  // On descend : lu, et le bandeau reste.
+  defiler(600);
   expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$2");
   expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
 });
 
-it("sans souris ni clavier depuis une minute, un message reçu n'est pas lu", () => {
+it("sans souris ni clavier depuis une minute, un message reçu n'est pas lu (fil qui tient à l'écran)", () => {
   act(() => vi.advanceTimersByTime(61_000));
   ajouter(message("$2", "@narkow:sion.test", 2));
   act(() => vi.advanceTimersByTime(100));

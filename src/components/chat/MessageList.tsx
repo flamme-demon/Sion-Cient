@@ -367,14 +367,18 @@ export function MessageList() {
     return false;
   }, [activeChannel, isAdminRoom, lastReadMessageId, messages, currentUserId]);
 
-  /** Place le bandeau « nouveaux messages » en haut de la vue, les non-lus
-   *  en dessous. Faux s'il n'est pas dans le fil. */
+  /** Place le bandeau « nouveaux messages » en BAS de la vue : on le voit en
+   *  arrivant, les nouveaux messages sont dessous, hors de la vue, et il faut
+   *  descendre pour les lire — c'est ce geste qui les marque lus. En haut de
+   *  la vue, peu de nouveaux messages ne pouvaient pas y monter (le fil
+   *  s'arrête à son dernier message) : on arrivait en bas, tout déjà affiché
+   *  et lu (28/09). Faux s'il n'est pas dans le fil. */
   const placerSurSeparateur = useCallback((): boolean => {
     const el = containerRef.current;
     const sep = el?.querySelector<HTMLElement>("[data-unread-sep]");
     if (!el || !sep) return false;
-    const haut = sep.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
-    el.scrollTop = Math.max(0, haut - 12);
+    const basDuBandeau = sep.getBoundingClientRect().bottom - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = Math.max(0, basDuBandeau - el.clientHeight + 8);
     return true;
   }, []);
 
@@ -404,9 +408,8 @@ export function MessageList() {
   // Position the scroll on channel-open: at the unread separator if the
   // user has a backlog of unread, otherwise at the bottom.
   const positionInitialScroll = useCallback(() => {
-    // Le bandeau fait foi : s'il est dans le fil, on y va. Il n'y est plus
-    // centré puis remonté de 80 px — le premier non-lu se retrouvait à moitié
-    // sous la zone de saisie —, il est en HAUT, les nouveaux messages dessous.
+    // Le bandeau fait foi : s'il est dans le fil, on y va — en bas de la vue,
+    // les nouveaux messages dessous (voir `placerSurSeparateur`).
     if (placerSurSeparateur()) {
       // WebKit n'ancre pas le défilement : un aperçu de lien ou une image qui
       // prend sa taille au-dessus pousserait le bandeau hors de vue. On le
@@ -571,8 +574,8 @@ export function MessageList() {
 
     // Jamais de collage en bas pour un ajout en HAUT (historique paginé).
     if (isAtBottomRef.current && !isPrepend) {
-      // Absent : le bandeau des nouveaux messages reste en vue — en haut
-      // s'ils sont nombreux — au lieu de filer avec le bas du fil.
+      // Absent : la vue ne suit plus le bas du fil, elle s'arrête sur le
+      // bandeau ; au retour, on descend lire ce qui est arrivé.
       if (!presentRef.current && placerSurSeparateur()) return;
       scrollToBottom();
       markAsRead();
