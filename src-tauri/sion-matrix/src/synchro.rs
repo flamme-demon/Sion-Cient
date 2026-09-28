@@ -267,7 +267,16 @@ async fn accepter_invitations(client: &Client, tentees: &mut HashSet<OwnedRoomId
                 SyncOrStrippedState::Sync(ev) => ev.as_original().and_then(|o| o.content.is_direct),
             })
             .unwrap_or(false);
-        match salon.join().await {
+        // Bornée : rejoindre un salon d'un autre serveur peut traîner des
+        // minutes, et la synchro attendrait avec.
+        let jointure = match tokio::time::timeout(Duration::from_secs(30), salon.join()).await {
+            Ok(r) => r,
+            Err(_) => {
+                log::warn!("[Sion][matrix] invitation {} : pas de réponse en 30 s, abandonnée", salon.room_id());
+                continue;
+            }
+        };
+        match jointure {
             Ok(()) => {
                 log::info!("[Sion][matrix] invitation acceptée : {}", salon.room_id());
                 if directe {
@@ -282,26 +291,46 @@ async fn accepter_invitations(client: &Client, tentees: &mut HashSet<OwnedRoomId
 }
 
 /// Dernière activité des salons que la carte ne connaît pas encore (premier
-/// lancement du moteur sur une session existante) : un seul événement chacun.
+/// lancement du moteur sur une session existante, ou appareil neuf) : un seul
+/// événement chacun, six salons à la fois. Chaque réponse est notée dès son
+/// arrivée : si l'étape est abandonnée en route (voir `borne`), ce qui est
+/// acquis le reste.
 async fn amorcer_activites(client: &Client, activites: &mut Activites) {
-    let mut change = false;
-    for salon in client.joined_rooms() {
-        if activites.get(salon.room_id().as_str()) != 0 {
-            continue;
-        }
-        let mut options = MessagesOptions::backward();
-        options.limit = uint!(1);
-        if let Ok(lot) = salon.messages(options).await {
-            for ev in &lot.chunk {
-                if let Ok(Some(ts)) = ev.raw().get_field::<i64>("origin_server_ts") {
-                    change |= activites.noter(salon.room_id().as_str(), ts);
-                }
+    let a_amorcer: Vec<Room> = client.joined_rooms().into_iter().filter(|s| activites.get(s.room_id().as_str()) == 0).collect();
+    let mut reponses = futures_util::stream::iter(a_amorcer)
+        .map(|salon| async move {
+            let mut options = MessagesOptions::backward();
+            options.limit = uint!(1);
+            let ts = match tokio::time::timeout(Duration::from_secs(10), salon.messages(options)).await {
+                Ok(Ok(lot)) => lot.chunk.iter().find_map(|ev| ev.raw().get_field::<i64>("origin_server_ts").ok().flatten()),
+                _ => None,
+            };
+            (salon.room_id().to_string(), ts)
+        })
+        .buffer_unordered(6);
+    while let Some((salon, ts)) = reponses.next().await {
+        if let Some(ts) = ts {
+            if activites.noter(&salon, ts) {
+                activites.enregistrer();
             }
         }
     }
-    if change {
-        activites.enregistrer();
+}
+
+/// Une étape de démarrage qui parle au serveur, bornée : au-delà, on passe
+/// — la liste des salons et la synchro n'ont pas à l'attendre (vu le 28/09 :
+/// un utilisateur restait sans aucun salon affiché, en ligne et en vocal).
+async fn borne<T>(quoi: &str, limite: Duration, etape: impl std::future::Future<Output = T>) -> Option<T> {
+    let debut = std::time::Instant::now();
+    let resultat = tokio::time::timeout(limite, etape).await;
+    match &resultat {
+        Err(_) => log::warn!("[Sion][matrix] démarrage : {quoi} abandonné après {} s", limite.as_secs()),
+        Ok(_) if debut.elapsed() > Duration::from_secs(2) => {
+            log::warn!("[Sion][matrix] démarrage : {quoi} a pris {} ms", debut.elapsed().as_millis())
+        }
+        Ok(_) => {}
     }
+    resultat.ok()
 }
 
 async fn publier(client: &Client, fantomes: &HashSet<OwnedRoomId>, activites: &Activites, publication: &Publication) {
@@ -352,15 +381,30 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
     tokio::spawn(async move {
         let mut activites = Activites::charger(dossier.join(FICHIER_ACTIVITE));
         let base = client.homeserver().to_string();
-        publication.horloge.sonder(&base).await;
-        let mut invitations_tentees = HashSet::new();
-        accepter_invitations(&client, &mut invitations_tentees).await;
-        let mut fantomes = chercher_fantomes(&client, HashSet::new()).await;
-        crate::voix::liberer_appartenances_orphelines(&client, &rejoints(&client, &fantomes)).await;
-        amorcer_activites(&client, &mut activites).await;
-        publier(&client, &fantomes, &activites, &publication).await;
         let mut taches = tokio::task::JoinSet::new();
         let mut suivis = HashMap::new();
+        // La liste d'abord, depuis le magasin local : tout ce qui suit parle
+        // au serveur et peut traîner.
+        let mut fantomes = HashSet::new();
+        publier(&client, &fantomes, &activites, &publication).await;
+        suivre_les_salons(&client, &fantomes, &publication.fils, &mut taches, &mut suivis);
+        log::info!("[Sion][matrix] démarrage : {} salon(s) publié(s)", publication.salons.borrow().len());
+
+        borne("horloge", Duration::from_secs(10), publication.horloge.sonder(&base)).await;
+        let mut invitations_tentees = HashSet::new();
+        borne("invitations", Duration::from_secs(90), accepter_invitations(&client, &mut invitations_tentees)).await;
+        if let Some(f) = borne("salons fantômes", Duration::from_secs(20), chercher_fantomes(&client, HashSet::new())).await {
+            fantomes = f;
+        }
+        borne(
+            "appartenances orphelines",
+            Duration::from_secs(20),
+            crate::voix::liberer_appartenances_orphelines(&client, &rejoints(&client, &fantomes)),
+        )
+        .await;
+        borne("dernières activités", Duration::from_secs(30), amorcer_activites(&client, &mut activites)).await;
+        activites.enregistrer();
+        publier(&client, &fantomes, &activites, &publication).await;
         suivre_les_salons(&client, &fantomes, &publication.fils, &mut taches, &mut suivis);
 
         let mut flux = Box::pin(client.sync_stream(reglages(Duration::from_secs(30))).await);
@@ -384,9 +428,12 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
                     transmettre_rtc(&reponse.to_device, &publication.rtc);
                     accepter_invitations(&client, &mut invitations_tentees).await;
                     if publication.horloge.perimee() {
-                        publication.horloge.sonder(&base).await;
+                        borne("horloge", Duration::from_secs(10), publication.horloge.sonder(&base)).await;
                         // Même cadence (10 min) pour les salons fantômes.
-                        fantomes = chercher_fantomes(&client, fantomes).await;
+                        let precedents = fantomes.clone();
+                        fantomes = borne("salons fantômes", Duration::from_secs(20), chercher_fantomes(&client, fantomes))
+                            .await
+                            .unwrap_or(precedents);
                     }
                     publier(&client, &fantomes, &activites, &publication).await;
                     suivre_les_salons(&client, &fantomes, &publication.fils, &mut taches, &mut suivis);
