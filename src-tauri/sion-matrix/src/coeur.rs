@@ -76,6 +76,9 @@ fn activer_cache(client: &Client) -> Resultat<()> {
     client.event_cache().subscribe().map_err(|e| Erreur::Autre(e.to_string()))
 }
 
+/// Essais de lecture du trousseau à la reprise, deux secondes d'écart.
+const ESSAIS_COFFRE: u32 = 5;
+
 fn synchro_immediate() -> SyncSettings {
     synchro::reglages(Duration::ZERO)
 }
@@ -109,6 +112,10 @@ impl CoeurMatrix {
     /// Registre des médias servis par `sion-media`.
     pub(crate) fn medias(&self) -> &Medias {
         &self.fils.medias
+    }
+
+    pub(crate) fn fils(&self) -> &Fils {
+        &self.fils
     }
 
     /// Messages d'un salon, publiés à chaque changement.
@@ -350,7 +357,20 @@ impl CoeurMatrix {
             return Ok(true);
         }
         self.arreter_synchro().await;
-        let Some(s) = Session::charger(&self.dossier, &*self.coffre)? else {
+        // Un trousseau pas encore prêt au démarrage de la session (KWallet,
+        // GNOME Trousseau) : on lui laisse une dizaine de secondes.
+        let mut essais = 0;
+        let session = loop {
+            match Session::charger(&self.dossier, &*self.coffre) {
+                Err(Erreur::CoffreIndisponible(e)) if essais < ESSAIS_COFFRE => {
+                    essais += 1;
+                    log::warn!("[Sion][matrix] trousseau indisponible ({e}) : nouvel essai {essais}/{ESSAIS_COFFRE}");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                autre => break autre?,
+            }
+        };
+        let Some(s) = session else {
             self.etat.send_replace(EtatConnexion::Deconnecte);
             return Ok(false);
         };
@@ -405,6 +425,11 @@ impl CoeurMatrix {
                 log::warn!("[Sion][matrix] déconnexion côté serveur impossible : {e}");
             }
         }
+        drop(garde);
+        self.oublier_session_locale()
+    }
+
+    fn oublier_session_locale(&self) -> Resultat<()> {
         session::effacer(&self.dossier, &*self.coffre)?;
         self.salons.send_replace(Vec::new());
         self.fils.vider();
@@ -412,6 +437,49 @@ impl CoeurMatrix {
         self.sion.oublier();
         self.etat.send_replace(EtatConnexion::Deconnecte);
         Ok(())
+    }
+
+    /// Suppression DÉFINITIVE du compte (désactivation Matrix), authentifiée
+    /// par le mot de passe ; `effacer` demande aussi l'effacement des
+    /// messages envoyés. Puis la session locale est oubliée, comme à la
+    /// déconnexion — le jeton ne vaut plus rien.
+    pub async fn supprimer_compte(&self, mot_de_passe: &str, effacer: bool) -> Resultat<()> {
+        Box::pin(self.supprimer_compte_(mot_de_passe, effacer)).await
+    }
+
+    async fn supprimer_compte_(&self, mot_de_passe: &str, effacer: bool) -> Resultat<()> {
+        let client = self.client().await.ok_or(Erreur::PasDeSession)?;
+        let moi = client.user_id().ok_or(Erreur::PasDeSession)?.to_string();
+        // Premier appel sans authentification : le serveur ouvre la session
+        // UIA (et ne supprime rien).
+        let session = match Box::pin(client.account().deactivate(None, None, effacer)).await {
+            Ok(_) => None,
+            Err(e) => match e.as_uiaa_response() {
+                Some(uia) => Some(uia.session.clone()),
+                None => return Err(e.into()),
+            },
+        };
+        if let Some(session) = session {
+            let mut auth = serde_json::json!({
+                "type": "m.login.password",
+                "identifier": { "type": "m.id.user", "user": moi },
+                "password": mot_de_passe,
+            });
+            if let Some(s) = session {
+                auth["session"] = s.into();
+            }
+            let auth = serde_json::from_value(auth)?;
+            // L'appel en cours est quitté tant que le jeton vaut encore : après,
+            // l'appartenance resterait affichée chez les autres. Un mot de
+            // passe faux fait donc quitter l'appel, rien de plus.
+            self.quitter_voix().await;
+            Box::pin(client.account().deactivate(None, Some(auth), effacer)).await?;
+        }
+        log::info!("[Sion][matrix] compte {moi} supprimé (effacement des messages : {effacer})");
+        self.quitter_voix().await;
+        self.arreter_synchro().await;
+        *self.client.lock().await = None;
+        self.oublier_session_locale()
     }
 }
 

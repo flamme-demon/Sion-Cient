@@ -22,6 +22,7 @@ mod fil;
 mod fonctions_sion;
 mod gestion;
 mod horloge;
+mod lectures;
 mod rtc;
 mod medias;
 mod membres;
@@ -30,6 +31,7 @@ mod migration;
 mod salons;
 mod session;
 mod sion;
+mod social;
 mod synchro;
 mod voix;
 
@@ -39,7 +41,7 @@ pub use coffre::{Coffre, CoffreMemoire};
 pub use confiance::{EmojiSas, EtatVerification};
 pub use envoi::InfosMedia;
 pub use epingles::ResumeEpingle;
-pub use fil::FilSalon;
+pub use fil::{FilSalon, Frappe, LecturesSalon, Personne};
 pub use fonctions_sion::{EtatSalon, EvenementSion, ResultatSoundboard, SonAjoute};
 pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
 pub use medias::{type_mime, FormatMedia, PREFIXE_PAR_DEFAUT};
@@ -55,6 +57,10 @@ pub use voix::ConnexionVoix;
 pub enum Erreur {
     #[error("aucune session active")]
     PasDeSession,
+    /// Le trousseau du système ne répond pas (verrouillé, pas encore
+    /// démarré) : la session est intacte, il faut réessayer — pas l'effacer.
+    #[error("trousseau du système indisponible : {0}")]
+    CoffreIndisponible(String),
     #[error("serveur Matrix : {0}")]
     Matrix(#[from] matrix_sdk::Error),
     #[error("construction du client : {0}")]

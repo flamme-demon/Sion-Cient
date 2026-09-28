@@ -83,9 +83,13 @@ impl Session {
             effacer(dossier, coffre)?;
             return Ok(None);
         }
-        let secrets = fichier
-            .secrets
-            .or_else(|| coffre.lire().and_then(|s| serde_json::from_str(&s).ok()));
+        let secrets = match fichier.secrets {
+            Some(s) => Some(s),
+            // Coffre indisponible : ne RIEN effacer (vu le 28/09 : un
+            // trousseau pas prêt au lancement coûtait la session, puis un
+            // nouvel appareil à chaque démarrage).
+            None => coffre.lire_verifie().map_err(Erreur::CoffreIndisponible)?.and_then(|s| serde_json::from_str(&s).ok()),
+        };
         let Some(secrets) = secrets else {
             log::warn!("[Sion][matrix] secrets de session introuvables (coffre vidé ?) : session abandonnée");
             effacer(dossier, coffre)?;
@@ -223,6 +227,18 @@ mod tests {
         assert_eq!(Session::charger(d.path(), &coffre).unwrap(), None);
         assert!(!d.path().join(FICHIER_SESSION).exists());
         assert!(!magasin_present(d.path()));
+    }
+
+    #[test]
+    fn coffre_indisponible_rien_n_est_efface() {
+        let d = tempfile::tempdir().unwrap();
+        avec_magasin(d.path());
+        session().enregistrer(d.path(), &CoffreMemoire::default()).unwrap();
+        // Au lancement suivant, le trousseau ne répond pas (verrouillé).
+        let verrouille = CoffreMemoire::indisponible();
+        assert!(matches!(Session::charger(d.path(), &verrouille), Err(Erreur::CoffreIndisponible(_))));
+        assert!(d.path().join(FICHIER_SESSION).exists(), "session effacée alors que le coffre était seulement indisponible");
+        assert!(magasin_present(d.path()));
     }
 
     #[test]
