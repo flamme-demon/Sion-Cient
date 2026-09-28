@@ -55,15 +55,12 @@ rm -rf "$PROJECT_DIR/dist" \
 
 # --- 3. Full Tauri build (frontend + Rust) ---
 echo "[2/4] Build complet via Tauri (frontend + Rust + voix native)..."
-if ! (cd "$PROJECT_DIR" && bun run tauri build 2>&1); then
-    # Le bundler Tauri peut échouer pour des raisons indépendantes (deps
-    # AppImage) alors que le binaire est produit : on ne bloque que si le
-    # binaire release manque. Sinon on emballe nous-mêmes plus bas.
-    if [ ! -x "$RELEASE_DIR/$APP_NAME" ]; then
-        echo "ERREUR: compilation échouée (binaire release absent) — voir ci-dessus."
-        exit 1
-    fi
-    echo "ATTENTION: bundling Tauri en échec, on continue avec le binaire compilé."
+# `--no-bundle` : compilation seule. L'AppImage est montée plus bas par ce
+# script ; les .deb et .rpm que `targets: "all"` faisait fabriquer à Tauri
+# n'étaient ni publiés ni complets (sans ggml/transcribe, ffmpeg, dav1d).
+if ! (cd "$PROJECT_DIR" && bun run tauri build --no-bundle 2>&1) || [ ! -x "$RELEASE_DIR/$APP_NAME" ]; then
+    echo "ERREUR: compilation échouée (binaire release absent) — voir ci-dessus."
+    exit 1
 fi
 
 # --- 4. Download AppImage tools ---

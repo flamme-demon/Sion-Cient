@@ -165,9 +165,11 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
-  # Windows NSIS installer (.exe). We invoke `tauri build --bundles nsis`
-  # directly instead of the PowerShell helper script — the helper does
-  # dev-machine setup that's unnecessary on a fresh GHA runner.
+  # Windows NSIS installer (.exe). We invoke the Tauri CLI directly instead
+  # of the PowerShell helper script — the helper does dev-machine setup
+  # that's unnecessary on a fresh GHA runner. ONE compilation
+  # (`tauri build --no-bundle`), then `tauri bundle` packages that very
+  # binary.
   # -------------------------------------------------------------------------
   build-windows:
     runs-on: windows-latest
@@ -231,12 +233,17 @@ jobs:
       # CRT/BLAS build knobs for the transcribe.cpp dep live in
       # src-tauri/.cargo/config.toml (committed), so local and CI builds agree.
       - name: Compile Rust binary
-        # We do `cargo build` first instead of going straight to
-        # `tauri build`, because we need the native DLLs (ggml/transcribe)
-        # that build.rs drops next to the binary before staging them into
-        # the bundle.
-        working-directory: src-tauri
+        # Compile first, bundle later, because we need the native DLLs
+        # (ggml/transcribe) that build.rs drops next to the binary before
+        # staging them into the bundle. `tauri build --no-bundle` builds the
+        # frontend and compiles EXACTLY what ships (custom-protocol) : a plain
+        # `cargo build` here compiled a different binary, and the old
+        # `tauri build` step recompiled for 10+ minutes (28/09).
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ''
+          # Baked into the JS bundle by Vite (GIF search — Klipy).
+          VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
         run: |
           # Le build.rs de webrtc-sys cherche précisément
           # `<CUDA_HOME>\include\cuda.h`. Plutôt que de supposer où CUDA 13
@@ -259,7 +266,8 @@ jobs:
             if (Test-Path $root) { Get-ChildItem $root -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 40 FullName }
             Write-Host "→ build sans NVENC"
           }
-          cargo build --release
+          bun run tauri build --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Preuve embarquée, comme pour l'AppImage : sans ce contrôle, un runner
       # sans toolkit produirait un installeur silencieusement en logiciel.
@@ -278,7 +286,7 @@ jobs:
           Write-Host "OK codecs matériels NVIDIA compilés dans le binaire Windows"
 
       - name: Stage native DLLs + patch tauri.conf.json
-        # `tauri build --bundles nsis` ne connait pas les DLL natives.
+        # `tauri bundle --bundles nsis` ne connait pas les DLL natives.
         # On les copie dans src-tauri/native-dist/, puis on injecte un
         # `bundle.resources` dans tauri.conf.json. La config d'origine est
         # sauvegardee puis restauree apres le build.
@@ -339,12 +347,12 @@ jobs:
       - name: Build Tauri NSIS installer (.exe)
         # `bun run tauri` uses @tauri-apps/cli (already in devDependencies)
         # so we don't have to recompile tauri-cli from source. NSIS is
-        # downloaded automatically on first invocation.
-        run: bun run tauri build --bundles nsis
+        # downloaded automatically on first invocation. `tauri bundle`
+        # packages the binary compiled above — no second compilation, and
+        # the NVIDIA check above is on the binary that actually ships.
+        run: bun run tauri bundle --bundles nsis
         env:
           TAURI_SIGNING_PRIVATE_KEY: ''
-          # Baked into the JS bundle by Vite (GIF search — Klipy).
-          VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
 
       - name: Restore tauri.conf.json
         # Always run, even on previous-step failure, so a re-run starts
