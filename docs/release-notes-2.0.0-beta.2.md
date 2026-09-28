@@ -5,6 +5,11 @@ voit pas : Sion a un **nouveau moteur Matrix**, écrit en Rust, qui remplace
 celui qui tournait dans l'interface. L'interface ne s'en occupe plus : elle
 dessine, c'est tout.
 
+> **Republiée le 28 septembre** avec les correctifs des premiers retours et
+> quelques nouveautés (voir plus bas). Si vous aviez installé la beta 2
+> avant, retéléchargez-la. Et ne lancez plus l'alpha 9 à côté : chaque
+> passage d'une version à l'autre crée un nouvel appareil sur votre compte.
+
 ## À la première ouverture
 
 Sion vous redemande votre **mot de passe, une seule fois**. C'est le passage
@@ -33,7 +38,33 @@ vérification de l'appareil.
   participant parti sans prévenir n'y reste plus affiché des heures, et
   votre propre appareil efface ses traces au démarrage.
 
+## Nouveautés de la republication
+
+- **« X écrit… »** au bas du fil quand quelqu'un tape.
+- **« Vu par »** : de petites pastilles sous le dernier message lu par
+  chacun.
+- **Signaler** un message aux administrateurs du serveur (drapeau dans les
+  actions du message).
+- **Ignorer** un membre (menu du membre) : ses messages ne s'affichent plus.
+  La liste des ignorés est dans le panneau du compte.
+- **Salons en commun** et **bannière** dans le menu d'un membre ; la vôtre
+  se choisit dans le panneau du compte.
+- **Supprimer son compte**, définitivement, depuis le panneau du compte.
+- **Copier / Enregistrer l'image** au clic droit sur une image, et en
+  boutons dans la visionneuse.
+
 ## Corrections
+- **Aucun salon affiché** alors que Sion était en ligne : au démarrage, la
+  liste attendait des requêtes au serveur qui pouvaient traîner (beaucoup de
+  salons, invitation vers un autre serveur). Elle s'affiche désormais tout
+  de suite.
+- Les **pièces jointes** ne se téléchargeaient ni ne s'ouvraient, et
+  « copier l'image » ne copiait qu'une adresse inutilisable.
+- Dans **Sessions**, l'appareil actuel n'était pas reconnu : on pouvait le
+  supprimer soi-même et se retrouver déconnecté au lancement suivant.
+- **Exclure du vocal** ne faisait rien.
+- La **barre de défilement horizontale** sous les blocs de code était
+  énorme.
 
 - La soundboard, les sons du salon et le test audio étaient **muets quand on
   était seul** dans un salon vocal.
