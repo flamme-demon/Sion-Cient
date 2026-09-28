@@ -457,6 +457,13 @@ pub mod commandes {
     }
 
     /// Résumés des épinglés d'un salon (`getPinnedSummaries`).
+    /// Un message précis, même hors du fil chargé (aperçu d'un épinglé).
+    #[tauri::command]
+    pub async fn matrix_message(salon: String, evenement: String) -> Result<serde_json::Value, String> {
+        let m = coeur()?.message(&salon, &evenement).await.map_err(|e| e.to_string())?;
+        serde_json::to_value(m).map_err(|e| e.to_string())
+    }
+
     #[tauri::command]
     pub async fn matrix_epingles(salon: String) -> Result<serde_json::Value, String> {
         let resumes = coeur()?.epingles(&salon).await.map_err(|e| e.to_string())?;
@@ -1063,6 +1070,11 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_marquer_lu(_salon: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_message(_salon: String, _evenement: String) -> Result<serde_json::Value, String> {
         Err(INACTIF.into())
     }
 

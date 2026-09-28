@@ -120,6 +120,15 @@ export const chargerHistorique = (salon: string) => invoquer<boolean>("matrix_ch
 /** Accusé de lecture sur le dernier événement du salon. */
 export const marquerLu = (salon: string) => invoquer<void>("matrix_marquer_lu", { salon });
 
+/** Un message précis, même hors du fil chargé — demandé au serveur et
+ *  déchiffré par le cœur : l'aperçu d'un épinglé ou d'une réponse trop
+ *  ancienne. `null` s'il est illisible ou supprimé. */
+export async function message(salon: string, evenement: string): Promise<ChatMessage | null> {
+  const m = await invoquer<Omit<ChatMessage, "time"> | null>("matrix_message", { salon, evenement });
+  if (!m) return null;
+  return { ...m, time: new Date(m.ts ?? 0).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) };
+}
+
 /** Résumés des épinglés, du plus récent au plus ancien (`getPinnedSummaries`) :
  *  un épinglé hors du fil chargé est demandé au serveur (`loaded: false`). */
 export const epingles = (salon: string) => invoquer<PinnedSummary[]>("matrix_epingles", { salon });

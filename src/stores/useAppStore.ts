@@ -103,6 +103,10 @@ interface AppState {
   clearReplyingTo: () => void;
   scrollToMessageId: string | null;
   setScrollToMessageId: (id: string | null) => void;
+  /** Message affiché en entier dans une fenêtre (épinglé ou réponse hors du
+   *  fil chargé, voir `allerAuMessage`). */
+  apercuMessage: string | null;
+  setApercuMessage: (id: string | null) => void;
   setMobileView: (view: MobileView) => void;
   setIsSpeaking: (v: boolean) => void;
   setPendingAutoJoinVoice: (roomId: string | null) => void;
@@ -313,6 +317,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearReplyingTo: () => set({ replyingTo: null }),
   scrollToMessageId: null,
   setScrollToMessageId: (id) => set({ scrollToMessageId: id }),
+  apercuMessage: null,
+  setApercuMessage: (id) => set({ apercuMessage: id }),
   setMobileView: (view) => set({ mobileView: view }),
   setIsSpeaking: (v) => set({ isSpeaking: v }),
   setPendingAutoJoinVoice: (roomId) => set({ pendingAutoJoinVoice: roomId }),

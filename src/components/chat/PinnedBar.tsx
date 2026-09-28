@@ -6,11 +6,11 @@ import { useLayoutStore } from "../../stores/useLayoutStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import * as matrixService from "../../services/matrixService";
 import { plainPreview } from "../../utils/plainPreview";
+import { allerAuMessage } from "../../services/allerAuMessage";
 
 export function PinnedBar() {
   const { t } = useTranslation();
   const activeChannel = useAppStore((s) => s.activeChannel);
-  const setScrollToMessageId = useAppStore((s) => s.setScrollToMessageId);
   const messages = useMatrixStore((s) => s.messages);
   // Subscribe to pinnedVersion to re-render when pins change
   useMatrixStore((s) => s.pinnedVersion);
@@ -64,7 +64,7 @@ export function PinnedBar() {
     // les chercher sur le serveur.
     if (!currentPinned) { useLayoutStore.getState().openDockPanel("pinned"); return; }
     const eventId = currentPinned.eventId || String(currentPinned.id);
-    setScrollToMessageId(eventId);
+    allerAuMessage(eventId);
   };
 
   const handlePrev = (e: React.MouseEvent) => {

@@ -126,6 +126,14 @@ async fn entre_membres() {
     .await;
     println!("3. « vu par » : Bob sur « bonjour Bob »");
 
+    // ── Un message précis, par son identifiant (aperçu d'un épinglé)
+    let lu = bob.coeur.message(&salon, &message).await.expect("lecture du message").expect("message trouvé");
+    assert_eq!(lu.text, "bonjour Bob");
+    assert_eq!(lu.sender_id, id_alice);
+    let absent = bob.coeur.message(&salon, "$inexistant:sion.test").await.expect("lecture d'un absent");
+    assert!(absent.is_none(), "un message inexistant doit rendre None");
+    println!("3b. message lu par son identifiant ; un identifiant inexistant rend None");
+
     // ── Salons en commun
     let communs = alice.coeur.salons_en_commun(&id_bob).await.expect("salons en commun");
     assert!(communs.contains(&salon), "le salon partagé manque : {communs:?}");

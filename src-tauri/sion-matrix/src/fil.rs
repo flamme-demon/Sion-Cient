@@ -13,7 +13,7 @@ use matrix_sdk::deserialized_responses::{TimelineEvent, TimelineEventKind};
 use matrix_sdk::event_cache::{RoomEventCache, RoomEventCacheUpdate};
 use matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType;
 use matrix_sdk::ruma::events::receipt::{ReceiptThread, ReceiptType as TypeAccuse};
-use matrix_sdk::ruma::OwnedUserId;
+use matrix_sdk::ruma::{EventId, OwnedUserId};
 use matrix_sdk::{Room, RoomMemberships};
 use serde::Serialize;
 use serde_json::Value;
@@ -415,6 +415,26 @@ async fn profils(salon: &Room, medias: &Medias) -> HashMap<String, (Option<Strin
 }
 
 impl Fils {
+    /// Un message précis, même hors du fil chargé — demandé au serveur et
+    /// déchiffré s'il le faut : l'aperçu d'un épinglé ou d'une réponse trop
+    /// ancienne pour être atteinte en remontant (plafond de `MAX_HISTORIQUE`).
+    pub async fn message(&self, salon: &Room, id: &EventId) -> Option<Message> {
+        let ev = match salon.load_or_fetch_event(id, None).await {
+            Ok(ev) => ev,
+            Err(e) => {
+                log::debug!("[Sion][matrix] message {id} illisible : {e}");
+                return None;
+            }
+        };
+        let evenement = brut(&ev)?;
+        let membres = profils(salon, &self.medias).await;
+        let profil = |uid: &str| membres.get(uid).cloned().unwrap_or((None, None));
+        let url = |source: &messages::SourceMedia, vignette: bool| self.medias.url(source, vignette);
+        messages::extraire(&[evenement], &Contexte { profil: &profil, url: &url })
+            .into_iter()
+            .find(|m| m.event_id == id.as_str())
+    }
+
     /// Résumés des épinglés, du plus récent au plus ancien. Un épinglé hors
     /// du fil chargé est lu dans le cache ou demandé au serveur ; illisible
     /// ou supprimé, il est omis sans faire échouer la liste.

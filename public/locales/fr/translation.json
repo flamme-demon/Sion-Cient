@@ -130,6 +130,9 @@
     "deleteError": "Suppression refusée : vérifiez le mot de passe."
   },
   "chat": {
+    "previewTitle": "Message",
+    "previewFrom": "Message du {{date}}",
+    "previewMissing": "Ce message est introuvable : il a peut-être été supprimé.",
     "seenBy": "Vu par {{noms}}",
     "typingOne": "{{nom}} écrit…",
     "typingTwo": "{{a}} et {{b}} écrivent…",

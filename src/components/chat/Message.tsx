@@ -31,6 +31,7 @@ import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { ImageDuFil } from "./ImageDuFil";
 import { MenuImage } from "./MenuImage";
+import { allerAuMessage } from "../../services/allerAuMessage";
 import { ModaleSignalement } from "./ModaleSignalement";
 import { moteurRust } from "../../services/moteur";
 import { copierImage, enregistrerImage } from "../../services/actionsImage";
@@ -1009,9 +1010,7 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
             return (
             <div
               onClick={() => {
-                if (r.eventId) {
-                  useAppStore.getState().setScrollToMessageId(r.eventId);
-                }
+                if (r.eventId) allerAuMessage(r.eventId);
               }}
               style={{
                 display: 'flex',

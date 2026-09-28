@@ -5,6 +5,7 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { DOCK_ZONE_IDS, useLayoutStore } from "../../stores/useLayoutStore";
 import * as matrixService from "../../services/matrixService";
 import { plainPreview } from "../../utils/plainPreview";
+import { allerAuMessage } from "../../services/allerAuMessage";
 import type { PinnedSummary } from "../../services/matrixService";
 
 /**
@@ -25,7 +26,6 @@ import type { PinnedSummary } from "../../services/matrixService";
 export function PinnedListPanel() {
   const { t } = useTranslation();
   const activeChannel = useAppStore((s) => s.activeChannel);
-  const setScrollToMessageId = useAppStore((s) => s.setScrollToMessageId);
   // Re-lire quand les épingles changent pendant que le panneau est ouvert.
   const pinnedVersion = useMatrixStore((s) => s.pinnedVersion);
   const [pins, setPins] = useState<PinnedSummary[] | null>(null);
@@ -84,7 +84,7 @@ export function PinnedListPanel() {
           <button
             key={pin.eventId}
             type="button"
-            onClick={() => setScrollToMessageId(pin.eventId)}
+            onClick={() => allerAuMessage(pin.eventId)}
             style={enBandeau
               ? {
                 display: 'flex', flexDirection: 'column', gap: 6,

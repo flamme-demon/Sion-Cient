@@ -5,6 +5,7 @@ import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
 import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
 import { IndicateurFrappe } from "../chat/IndicateurFrappe";
+import { ApercuMessage } from "../chat/ApercuMessage";
 import { DropZone } from "../chat/DropZone";
 import { DockZone } from "./DockZone";
 import { FloatingPanels } from "./FloatingPanels";
@@ -127,6 +128,7 @@ export function MainArea() {
           <IndicateurFrappe />
           <ChatInput />
           <DropZone />
+          <ApercuMessage />
         </div>
         {!isMobile && <DockZone zone="right" />}
       </div>

@@ -147,6 +147,13 @@ impl CoeurMatrix {
         Ok(Box::pin(self.fils.epingles(&salon)).await)
     }
 
+    /// Un message précis, même hors du fil chargé (aperçu d'un épinglé).
+    pub async fn message(&self, salon: &str, evenement: &str) -> Resultat<Option<crate::Message>> {
+        let salon = self.salon(salon).await?;
+        let id = matrix_sdk::ruma::EventId::parse(evenement).map_err(|e| Erreur::Autre(e.to_string()))?;
+        Ok(Box::pin(self.fils.message(&salon, &id)).await)
+    }
+
     /// Accusé de lecture sur le dernier événement du salon.
     pub async fn marquer_lu(&self, salon: &str) -> Resultat<()> {
         Box::pin(fil::marquer_lu(&self.salon(salon).await?)).await;

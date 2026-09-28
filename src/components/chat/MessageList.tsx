@@ -5,6 +5,7 @@ import { LecteursMessage } from "./LecteursMessage";
 import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { findAdminRoom } from "../../services/adminCommandService";
+import { moteurRust } from "../../services/moteur";
 
 const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
@@ -567,13 +568,20 @@ export function MessageList() {
       return;
     }
     if (!activeChannel || !hasMore || jumpPagesRef.current >= MAX_JUMP_PAGES) {
-      // Hors d'atteinte : on abandonne sans laisser la pagination s'emballer.
+      // Hors d'atteinte : on abandonne sans laisser la pagination s'emballer,
+      // et on montre le message en entier plutôt que rien (moteur Rust).
+      if (moteurRust()) useAppStore.getState().setApercuMessage(pendingJump);
       setPendingJump(null);
       return;
     }
     if (isLoading) return;
     jumpPagesRef.current += 1;
     suppressScrollLoadRef.current = true;
+    // Même ancrage qu'une remontée à la main : sans lui, chaque page ajoutée
+    // en tête laissait la vue « collée au bas » redescendre — la liste
+    // montait et descendait sans jamais montrer la cible.
+    if (el) prependAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    isAtBottomRef.current = false;
     loadRoomHistory(activeChannel);
   }, [pendingJump, messages, activeChannel, hasMore, isLoading, loadRoomHistory, setScrollToMessageId]);
 
