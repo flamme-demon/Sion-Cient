@@ -944,16 +944,7 @@ async fn open_file_default(url: String, filename: String) -> Result<String, Stri
     let filename = sanitize_download_filename(&filename)?;
     let path = temp_dir.join(&filename);
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("download: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let bytes = read_response_limited(resp, 512 * 1024 * 1024).await?;
+    let bytes = octets_a_telecharger(url).await?;
     std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
 
     open::that(&path).map_err(|e| format!("open: {e}"))?;
@@ -987,8 +978,25 @@ async fn download_file(url: String, filename: String) -> Result<String, String> 
         counter += 1;
     }
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let bytes = octets_a_telecharger(url).await?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Contenu d'une pièce jointe à ouvrir ou enregistrer. Un média du moteur
+/// Matrix Rust (`sion-media://…`, `mxc://…`) n'est pas une adresse web : il
+/// est lu dans son dépôt local, déjà déchiffré — reqwest échouait et la
+/// webview ne sait pas télécharger ce protocole (bouton muet en 2.0 beta 2).
+async fn octets_a_telecharger(url: String) -> Result<Vec<u8>, String> {
+    let source = url.clone();
+    let depot = tauri::async_runtime::spawn_blocking(move || matrix_pont::fichier_media_matrix(&source))
+        .await
+        .map_err(|e| format!("média : {e}"))?;
+    if let Some(fichier) = depot {
+        return std::fs::read(fichier?).map_err(|e| format!("lecture : {e}"));
+    }
+    let resp = reqwest::Client::new()
         .get(&url)
         .send()
         .await
@@ -996,10 +1004,7 @@ async fn download_file(url: String, filename: String) -> Result<String, String> 
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    let bytes = read_response_limited(resp, 512 * 1024 * 1024).await?;
-    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
-
-    Ok(path.to_string_lossy().to_string())
+    read_response_limited(resp, 512 * 1024 * 1024).await
 }
 
 fn sanitize_download_filename(raw: &str) -> Result<String, String> {
@@ -1417,6 +1422,72 @@ fn read_clipboard_image_via_arboard() -> Result<tauri::ipc::Response, String> {
     rgba.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|e| format!("presse-papiers: encodage PNG: {e}"))?;
     Ok(tauri::ipc::Response::new(png))
+}
+
+/// « Copier l'image » d'une image du fil. Le menu de WebKit ne copiait que
+/// l'adresse `sion-media://` (inutile ailleurs que dans Sion) : on copie ici
+/// l'image elle-même — en PNG, que toutes les applications acceptent, et
+/// dans son format d'origine (GIF, WebP animés).
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn copier_image(url: String) -> Result<(), String> {
+    let octets = octets_a_telecharger(url).await?;
+    tauri::async_runtime::spawn_blocking(move || copier_image_bloquant(octets))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Presse-papiers gardé en vie : sous X11, arboard ne sert son contenu que
+/// tant que son objet existe.
+#[cfg(not(target_os = "android"))]
+static PRESSE_PAPIERS: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+
+#[cfg(not(target_os = "android"))]
+fn copier_image_bloquant(octets: Vec<u8>) -> Result<(), String> {
+    let image = image::load_from_memory(&octets)
+        .map_err(|e| format!("image illisible : {e}"))?
+        .to_rgba8();
+    #[cfg(target_os = "linux")]
+    {
+        use wl_clipboard_rs::copy::{Error as CopyError, MimeSource, MimeType, Options, Source};
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|e| format!("encodage PNG : {e}"))?;
+        let mut sources = vec![MimeSource {
+            source: Source::Bytes(png.into_boxed_slice()),
+            mime_type: MimeType::Specific("image/png".into()),
+        }];
+        if let Ok(format) = image::guess_format(&octets) {
+            if format != image::ImageFormat::Png {
+                sources.push(MimeSource {
+                    source: Source::Bytes(octets.into_boxed_slice()),
+                    mime_type: MimeType::Specific(format.to_mime_type().into()),
+                });
+            }
+        }
+        match Options::new().copy_multi(sources) {
+            Ok(()) => return Ok(()),
+            // Session X11 : pas de protocole Wayland, repli arboard.
+            Err(CopyError::MissingProtocol { .. }) | Err(CopyError::WaylandConnection(_)) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let (largeur, hauteur) = image.dimensions();
+    let donnees = arboard::ImageData {
+        width: largeur as usize,
+        height: hauteur as usize,
+        bytes: std::borrow::Cow::Owned(image.into_raw()),
+    };
+    let mut garde = PRESSE_PAPIERS.lock().map_err(|e| e.to_string())?;
+    if garde.is_none() {
+        *garde = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
+    }
+    garde
+        .as_mut()
+        .expect("presse-papiers initialisé juste au-dessus")
+        .set_image(donnees)
+        .map_err(|e| e.to_string())
 }
 
 /// Persist base64 audio bytes into `<app-data>/cues/` and return the absolute
@@ -3615,6 +3686,16 @@ pub fn run() {
         matrix_pont::commandes::matrix_changer_mot_de_passe,
         matrix_pont::commandes::matrix_supprimer_appareil,
         matrix_pont::commandes::matrix_est_suspendu,
+        matrix_pont::commandes::matrix_ecrire,
+        matrix_pont::commandes::matrix_lectures,
+        matrix_pont::commandes::matrix_signaler,
+        matrix_pont::commandes::matrix_ignorer,
+        matrix_pont::commandes::matrix_ne_plus_ignorer,
+        matrix_pont::commandes::matrix_ignores,
+        matrix_pont::commandes::matrix_banniere,
+        matrix_pont::commandes::matrix_salons_en_commun,
+        matrix_pont::commandes::matrix_changer_banniere,
+        matrix_pont::commandes::matrix_supprimer_compte,
         matrix_pont::commandes::matrix_etapes_inscription,
         matrix_pont::commandes::matrix_inscrire,
         matrix_pont::commandes::matrix_requete_admin,
@@ -3691,6 +3772,7 @@ pub fn run() {
         pick_image_file,
         read_file_b64,
         read_clipboard_image,
+        copier_image,
         read_dropped_file,
         detect_ffmpeg,
         detect_ytdlp,
@@ -3815,6 +3897,16 @@ pub fn run() {
         matrix_pont::commandes::matrix_changer_mot_de_passe,
         matrix_pont::commandes::matrix_supprimer_appareil,
         matrix_pont::commandes::matrix_est_suspendu,
+        matrix_pont::commandes::matrix_ecrire,
+        matrix_pont::commandes::matrix_lectures,
+        matrix_pont::commandes::matrix_signaler,
+        matrix_pont::commandes::matrix_ignorer,
+        matrix_pont::commandes::matrix_ne_plus_ignorer,
+        matrix_pont::commandes::matrix_ignores,
+        matrix_pont::commandes::matrix_banniere,
+        matrix_pont::commandes::matrix_salons_en_commun,
+        matrix_pont::commandes::matrix_changer_banniere,
+        matrix_pont::commandes::matrix_supprimer_compte,
         matrix_pont::commandes::matrix_etapes_inscription,
         matrix_pont::commandes::matrix_inscrire,
         matrix_pont::commandes::matrix_requete_admin,

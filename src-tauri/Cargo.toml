@@ -96,7 +96,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 # défaut — bzip2 et zstd tirent des bibliothèques C —, `deflate` suffit.
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # JPEG (partage d'écran natif) + PNG (image du presse-papiers).
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 # Persists window position/size/maximised/fullscreen state across launches
 # (desktop only — mobile windows are fullscreen and managed by the OS).
 tauri-plugin-window-state = "2"

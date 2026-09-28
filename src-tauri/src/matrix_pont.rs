@@ -52,6 +52,18 @@ mod actif {
             Self::entree()?.get_password().ok()
         }
 
+        /// Seule l'absence d'entrée (`NoEntry`) veut dire « pas de secret » ;
+        /// tout le reste (portefeuille verrouillé, service absent ou lent)
+        /// est une indisponibilité, qui ne doit pas coûter la session.
+        fn lire_verifie(&self) -> Result<Option<String>, String> {
+            let entree = keyring::Entry::new("com.sion.client", "session-matrix-rust").map_err(|e| e.to_string())?;
+            match entree.get_password() {
+                Ok(s) => Ok(Some(s)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+
         /// Écrit puis relit : sans feature de trousseau, `keyring` compile un
         /// faux coffre qui « réussit » sans rien garder (voir
         /// `secure_session_set_verified`).
@@ -105,6 +117,8 @@ mod actif {
         let mut verification = coeur.verification();
         let mut evenements_sion = coeur.evenements_sion();
         let mut cles_voix = coeur.cles_voix();
+        let mut frappes = coeur.frappes();
+        let mut lectures = coeur.lectures();
         let _ = COEUR.set(coeur);
         log::info!("[Sion][matrix] moteur Rust actif");
 
@@ -151,6 +165,39 @@ mod actif {
                     Err(RecvError::Lagged(_)) => {
                         if let Ok(coeur) = self::coeur() {
                             remettre_cles(coeur.cles_voix_connues().await).await;
+                        }
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+        // « En train d'écrire » et « vu par » : perdre une frappe en route
+        // est sans gravité (la suivante arrive dans les 3 s) ; en retard sur
+        // les lectures, on les renvoie toutes.
+        let app_frappes = app.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match frappes.recv().await {
+                    Ok(f) => {
+                        let _ = app_frappes.emit("matrix-frappe", &f);
+                    }
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        });
+        let app_lectures = app.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match lectures.recv().await {
+                    Ok(l) => {
+                        let _ = app_lectures.emit("matrix-lectures", &l);
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        if let Ok(coeur) = self::coeur() {
+                            for l in coeur.lectures_actuelles() {
+                                let _ = app_lectures.emit("matrix-lectures", &l);
+                            }
                         }
                     }
                     Err(RecvError::Closed) => break,
@@ -633,6 +680,63 @@ pub mod commandes {
     #[tauri::command]
     pub async fn matrix_est_suspendu() -> Result<bool, String> {
         coeur()?.est_suspendu().await.map_err(erreur)
+    }
+
+    // ── Entre membres : frappe, « vu par », signalement, ignorés, bannière ──
+
+    #[tauri::command]
+    pub async fn matrix_ecrire(salon: String, actif: bool) -> Result<(), String> {
+        coeur()?.ecrire(&salon, actif).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub fn matrix_lectures() -> Result<serde_json::Value, String> {
+        serde_json::to_value(coeur()?.lectures_actuelles()).map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_signaler(salon: String, evenement: String, raison: Option<String>) -> Result<(), String> {
+        coeur()?.signaler(&salon, &evenement, raison).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ignorer(utilisateur: String) -> Result<(), String> {
+        coeur()?.ignorer(&utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ne_plus_ignorer(utilisateur: String) -> Result<(), String> {
+        coeur()?.ne_plus_ignorer(&utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ignores() -> Result<Vec<String>, String> {
+        coeur()?.ignores().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_banniere(utilisateur: String) -> Result<Option<String>, String> {
+        coeur()?.banniere(&utilisateur).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_salons_en_commun(utilisateur: String) -> Result<Vec<String>, String> {
+        coeur()?.salons_en_commun(&utilisateur).await.map_err(erreur)
+    }
+
+    /// Sans `chemin` : la bannière est retirée.
+    #[tauri::command]
+    pub async fn matrix_changer_banniere(chemin: Option<String>, mime: Option<String>) -> Result<Option<String>, String> {
+        let image = match chemin {
+            Some(c) => Some((lire_depot(&c)?, mime.unwrap_or_else(|| "image/png".into()))),
+            None => None,
+        };
+        coeur()?.changer_banniere(image).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_compte(mot_de_passe: String, effacer: bool) -> Result<(), String> {
+        coeur()?.supprimer_compte(&mot_de_passe, effacer).await.map_err(erreur)
     }
 
     #[tauri::command]
@@ -1139,6 +1243,56 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_changer_avatar(_chemin: String, _mime: String) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ecrire(_salon: String, _actif: bool) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub fn matrix_lectures() -> Result<serde_json::Value, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_signaler(_salon: String, _evenement: String, _raison: Option<String>) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ignorer(_utilisateur: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ne_plus_ignorer(_utilisateur: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_ignores() -> Result<Vec<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_banniere(_utilisateur: String) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_salons_en_commun(_utilisateur: String) -> Result<Vec<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_changer_banniere(_chemin: Option<String>, _mime: Option<String>) -> Result<Option<String>, String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_supprimer_compte(_mot_de_passe: String, _effacer: bool) -> Result<(), String> {
         Err(INACTIF.into())
     }
 
