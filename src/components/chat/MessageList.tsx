@@ -201,40 +201,6 @@ export function MessageList() {
     }
   }, [messages, sepAnchor, currentUserId]);
 
-  // Dismiss the separator 5s after a clear "I've caught up" signal:
-  //  - Scrollable chat: user transitioned from "scrolled up" to "at bottom"
-  //    (via scroll or the arrow button). The transition check avoids firing
-  //    on channel open when a previous channel left us already at bottom.
-  //  - Non-scrollable chat: the whole conversation fits on screen, so the
-  //    user has seen everything at once. There's no scroll transition to
-  //    wait for — dismiss purely on a timer, otherwise the separator would
-  //    stay forever.
-  const prevShowScrollDownRef = useRef(showScrollDown);
-  useEffect(() => {
-    const prev = prevShowScrollDownRef.current;
-    prevShowScrollDownRef.current = showScrollDown;
-    // Absent : le bandeau attend le retour de l'utilisateur.
-    if (!sepAnchor || !present) return;
-
-    let dismissTimer: ReturnType<typeof setTimeout> | null = null;
-    // Check scrollability on the next frame so layout has settled after the
-    // channel-change render / initial scroll positioning.
-    const raf = requestAnimationFrame(() => {
-      const el = containerRef.current;
-      const isScrollable = el ? el.scrollHeight > el.clientHeight + 10 : false;
-      const shouldDismiss =
-        !isScrollable ||
-        (prev === true && showScrollDown === false);
-      if (shouldDismiss) {
-        dismissTimer = setTimeout(() => setSepAnchor(undefined), 5000);
-      }
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      if (dismissTimer) clearTimeout(dismissTimer);
-    };
-  }, [sepAnchor, showScrollDown, present]);
-
   // Find the index of the unread separator (skip our own messages)
   const { unreadSepIndex, unreadCount } = useMemo(() => {
     if (!sepAnchor || messages.length === 0) return { unreadSepIndex: -1, unreadCount: 0 };
@@ -653,6 +619,18 @@ export function MessageList() {
    *  flèche « tout en bas ». */
   const nonLusEnDessous = useMemo(() => computeHasUnread(), [computeHasUnread]);
 
+  // Le bandeau disparaît 5 s après que TOUT a été lu (arrivée en bas, en
+  // présence) — pas avant : il marque où commençaient les nouveaux messages.
+  // L'ancienne règle guettait le passage « flèche visible → cachée » : le
+  // moindre retour de la flèche dans ces 5 s (image qui finit de charger,
+  // bandeau replacé) annulait le minuteur sans le relancer, et le bandeau
+  // restait pour de bon (28/09).
+  useEffect(() => {
+    if (!sepAnchor || !present || nonLusEnDessous) return;
+    const minuteur = setTimeout(() => setSepAnchor(undefined), 5000);
+    return () => clearTimeout(minuteur);
+  }, [sepAnchor, present, nonLusEnDessous]);
+
   // Scroll handler
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -818,6 +796,8 @@ export function MessageList() {
       {showScrollDown && (
         <button
           onClick={() => {
+            // La main à l'utilisateur : le bandeau n'est plus maintenu en vue.
+            ancreJusquaRef.current = 0;
             scrollToBottom();
             markAsRead();
             // Force state update — when the chat fits on screen no scroll

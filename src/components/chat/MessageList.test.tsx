@@ -143,10 +143,17 @@ it("absent, un message reçu n'est pas lu ; au retour il faut descendre pour le 
   act(() => vi.advanceTimersByTime(100));
   expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$1");
 
-  // On descend : lu, et le bandeau reste.
+  // On descend : lu, et le bandeau reste…
   defiler(600);
   expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$2");
   expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+
+  // …puis disparaît 5 s après, puisque tout est lu — même si la vue a été
+  // ramenée plus haut entre-temps (bandeau replacé, image qui finit de
+  // charger) : l'ancienne règle attendait un nouveau retour en bas.
+  defiler(500);
+  act(() => vi.advanceTimersByTime(5100));
+  expect(conteneur.querySelector("[data-unread-sep]")).toBeNull();
 });
 
 it("sans souris ni clavier depuis une minute, un message reçu n'est pas lu (fil qui tient à l'écran)", () => {
