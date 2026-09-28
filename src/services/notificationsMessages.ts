@@ -8,8 +8,8 @@
 import { useAppStore } from "../stores/useAppStore";
 import type { NotificationMode } from "../stores/useSettingsStore";
 
-/** Sion affiché et fenêtre active : inutile de notifier. */
-export { sionAuPremierPlan } from "./premierPlan";
+/** Quelqu'un devant Sion : inutile de notifier. */
+export { utilisateurPresent, etatPresence } from "./premierPlan";
 
 // ── Faut-il notifier ? ───────────────────────────────────────────────────────
 

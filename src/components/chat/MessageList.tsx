@@ -6,6 +6,7 @@ import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { findAdminRoom } from "../../services/adminCommandService";
 import { moteurRust } from "../../services/moteur";
+import { EVENEMENTS_ACTIVITE, etatPresence } from "../../services/premierPlan";
 
 const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
@@ -15,9 +16,6 @@ const MAX_JUMP_PAGES = 25;
  *  d'un salon (~30 messages chacune ; le cœur Rust n'en garde de toute façon
  *  que 300). */
 const MAX_PAGES_DERNIER_LU = 12;
-/** Sans souris ni clavier depuis ce délai, l'utilisateur est considéré
- *  absent : les messages qui arrivent ne sont plus « lus » d'office. */
-const DELAI_ABSENCE_MS = 60_000;
 
 /** Returns true if both timestamps fall on the same calendar day (local time). */
 function isSameDay(a: number, b: number): boolean {
@@ -159,15 +157,11 @@ export function MessageList() {
   // ── Présence : un message n'est lu que si quelqu'un est là pour le voir.
   // Sion ouvert sur un salon, en bas du fil, pendant qu'on est parti : chaque
   // message arrivé était marqué lu aussitôt, et au retour rien ne distinguait
-  // ce qu'on avait manqué (28/09). Absent = fenêtre quittée (vers une autre
-  // application), cachée, ou sans souris ni clavier depuis une minute.
+  // ce qu'on avait manqué (28/09). La présence est celle de `premierPlan`
+  // (commune aux notifications) : fenêtre quittée, cachée, ou une minute sans
+  // souris ni clavier = absent.
   const presentRef = useRef(true);
   const [present, setPresent] = useState(true);
-  /** Dernière souris ou touche (ms) ; posée au montage, dans l'effet des
-   *  écouteurs — pas pendant le rendu, qui doit rester pur. */
-  const derniereActiviteRef = useRef(0);
-  /** Fenêtre quittée (`blur`) depuis la dernière action dans Sion. */
-  const quitteeRef = useRef(false);
   /** Génération des défilements vers le bas en attente (rAF, minuteur) : un
    *  placement sur le bandeau l'incrémente, ce qui les annule. */
   const defilementGenRef = useRef(0);
@@ -263,23 +257,17 @@ export function MessageList() {
     };
   });
   useEffect(() => {
-    derniereActiviteRef.current = Date.now();
-    // Toute action dans Sion prouve qu'on est là ; seul le fait de quitter
-    // la fenêtre (ou une minute sans rien toucher) rend absent. On ne
-    // demande PLUS `document.hasFocus()` : sous WebKitGTK il peut rester
-    // faux alors qu'on est dans la fenêtre (focus sur la surface native du
-    // partage d'écran) — Sion croyait l'utilisateur absent en permanence,
-    // plus rien n'était marqué lu et le bandeau ne partait jamais (28/09).
+    // Réévaluée à chaque évènement de la fenêtre ; `premierPlan`, chargé au
+    // démarrage, a déjà mis son état à jour (écouteurs posés avant ceux-ci).
     const evaluer = () => {
-      const visible = document.visibilityState === "visible";
-      const inactif = Date.now() - derniereActiviteRef.current;
-      const p = visible && !quitteeRef.current && inactif < DELAI_ABSENCE_MS;
+      const etat = etatPresence();
+      const p = etat.present;
       if (p === presentRef.current) return;
       presentRef.current = p;
       setPresent(p);
       void import("@tauri-apps/plugin-log")
         .then(({ info }) => info(
-          `[Sion][présence] ${p ? "présent" : "absent"} (visible=${visible}, fenêtre quittée=${quitteeRef.current}, inactif ${Math.round(inactif / 1000)} s)`,
+          `[Sion][présence] ${p ? "présent" : "absent"} (visible=${etat.visible}, fenêtre quittée=${etat.quittee}, inactif ${etat.inactifS} s)`,
         ))
         .catch(() => {});
       const { salon, dernierLu, lire } = courantRef.current;
@@ -292,24 +280,13 @@ export function MessageList() {
         lire();
       }
     };
-    const activite = () => {
-      derniereActiviteRef.current = Date.now();
-      quitteeRef.current = false;
-      evaluer();
-    };
-    const quitter = () => {
-      quitteeRef.current = true;
-      evaluer();
-    };
-    const evenements = ["pointermove", "pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
-    for (const e of evenements) window.addEventListener(e, activite, { passive: true });
-    window.addEventListener("blur", quitter);
+    const evenements = [...EVENEMENTS_ACTIVITE, "blur"] as const;
+    for (const e of evenements) window.addEventListener(e, evaluer, { passive: true });
     document.addEventListener("visibilitychange", evaluer);
     const minuterie = window.setInterval(evaluer, 5000);
     const premier = window.setTimeout(evaluer, 0);
     return () => {
-      for (const e of evenements) window.removeEventListener(e, activite);
-      window.removeEventListener("blur", quitter);
+      for (const e of evenements) window.removeEventListener(e, evaluer);
       document.removeEventListener("visibilitychange", evaluer);
       window.clearInterval(minuterie);
       window.clearTimeout(premier);

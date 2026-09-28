@@ -179,7 +179,6 @@ function notifierNouveaux(fil: FilSalon, avant: { id: number | string }[], get: 
     import("./useSettingsStore"),
     import("./useAuthStore"),
   ]).then(([notif, { findAdminRoom }, { useAppStore }, { useSettingsStore }, { useAuthStore }]) => {
-    if (notif.sionAuPremierPlan()) return;
     // Salon d'administration et robot : des réponses de commandes, jamais
     // des messages à notifier.
     if (fil.salon === findAdminRoom()) return;
@@ -199,6 +198,15 @@ function notifierNouveaux(fil: FilSalon, avant: { id: number | string }[], get: 
         salonVocal,
       };
       if (!notif.doitNotifier(nature, mode)) continue;
+      // Quelqu'un devant Sion : il le voit déjà. Journalisé dans les deux
+      // cas, pour savoir pourquoi une notification est partie ou non.
+      const presence = notif.etatPresence();
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(
+          `[Sion][notif] ${presence.present ? "non envoyée (utilisateur présent)" : "envoyée"} : ${m.eventId} de ${m.senderId} (mp=${nature.mp}, mention=${nature.mention}, réponse=${nature.reponseAMoi}, poke=${poke}) ; fenêtre quittée=${presence.quittee}, inactif ${presence.inactifS} s`,
+        ))
+        .catch(() => {});
+      if (presence.present) continue;
       void notif.envoyerNotification({
         titre: poke ? `👉 ${m.user}` : m.user,
         corps: poke ? "Poke!" : m.text || "📎",

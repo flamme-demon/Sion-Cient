@@ -20,6 +20,7 @@ vi.mock("./Message", () => ({ Message: () => null }));
 vi.mock("./LecteursMessage", () => ({ LecteursMessage: () => null }));
 
 import { MessageList } from "./MessageList";
+import { reinitialiserPresence } from "../../services/premierPlan";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import type { ChatMessage } from "../../types/matrix";
@@ -41,6 +42,8 @@ let racine: Root;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Présence commune (premierPlan) : chaque test part d'un utilisateur là.
+  reinitialiserPresence();
   // Images d'animation au rythme des minuteurs simulés.
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));
   vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
