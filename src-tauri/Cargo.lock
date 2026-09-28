@@ -7521,6 +7521,7 @@ dependencies = [
  "wl-clipboard-rs",
  "x11rb",
  "xkeysym",
+ "zbus",
  "zip",
 ]
 

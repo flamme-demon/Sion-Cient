@@ -172,6 +172,10 @@ ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 # keysym → name ("XK_twosuperior") for building layout-aware portal triggers.
 xkeysym = "0.2"
 futures-util = { version = "0.3", default-features = false }
+# Notifications système adressées directement au serveur du bureau
+# (`notifications_bureau.rs`) : boutons, réponse intégrée KDE, historique.
+# Déjà dans l'arbre (ashpd, notify-rust), mêmes options : rien à recompiler.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 # Used to mark the cursor overlay sticky (on all virtual desktops) via the
 # EWMH `_NET_WM_STATE_STICKY` ClientMessage. The overlay runs on XWayland, so
 # KWin/Mutter honor X11 window-state hints. Already in the lockfile (transitive

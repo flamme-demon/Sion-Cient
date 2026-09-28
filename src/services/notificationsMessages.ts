@@ -58,9 +58,44 @@ export function estMention(
 // ── Envoi ────────────────────────────────────────────────────────────────────
 
 let actionsEnregistrees = false;
+let ecouteBureau = false;
 
-/** Notification système : « Répondre » (champ de saisie) et « Ouvrir ». */
+/** Retours des notifications du bureau Linux (`notifications_bureau.rs`) :
+ *  clic ou « Ouvrir » ramène sur le message, la réponse intégrée de KDE part
+ *  comme une réponse ordinaire. Installés une fois. */
+async function ecouterNotificationsBureau(): Promise<void> {
+  if (ecouteBureau) return;
+  ecouteBureau = true;
+  const { listen } = await import("@tauri-apps/api/event");
+  await listen<{ salon: string; evenement?: string | null }>("notification-ouvrir", (e) => {
+    useAppStore.getState().setActiveChannel(e.payload.salon, false);
+    if (e.payload.evenement) {
+      const evenement = e.payload.evenement;
+      // Laisse le salon s'afficher avant d'y chercher le message.
+      setTimeout(() => void import("./allerAuMessage").then((m) => m.allerAuMessage(evenement)), 300);
+    }
+  });
+  await listen<{ salon: string; evenement?: string | null; texte: string }>("notification-repondre", (e) => {
+    const { salon, evenement, texte } = e.payload;
+    if (!texte.trim()) return;
+    void import("./matrixService").then((ms) =>
+      (evenement ? ms.sendReply(salon, evenement, texte) : ms.sendTextMessage(salon, texte)).catch(console.error),
+    );
+  });
+}
+
+/** Notification système : « Répondre » (champ de saisie) et « Ouvrir ».
+ *  Sous Linux, adressée directement au bureau (historique, boutons, réponse
+ *  intégrée) ; ailleurs, par `tauri-plugin-notification`. */
 export async function envoyerNotification(n: { titre: string; corps: string; salon: string; evenement?: string }): Promise<void> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await ecouterNotificationsBureau();
+    await invoke("notification_message", { titre: n.titre, corps: n.corps, salon: n.salon, evenement: n.evenement ?? null });
+    return;
+  } catch {
+    // Hors Linux (ou bus indisponible) : le module de Tauri, plus bas.
+  }
   try {
     const { sendNotification, isPermissionGranted, requestPermission, registerActionTypes, onAction } =
       await import("@tauri-apps/plugin-notification");

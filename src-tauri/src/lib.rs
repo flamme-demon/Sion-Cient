@@ -46,6 +46,7 @@ mod lecteur_audio;
 mod lecteur_video;
 mod media_server;
 mod matrix_pont;
+mod notifications_bureau;
 mod native_video_transport;
 #[cfg(feature = "native-voice")]
 mod voice_engine;
@@ -3774,6 +3775,7 @@ pub fn run() {
         read_file_b64,
         read_clipboard_image,
         copier_image,
+        notifications_bureau::notification_message,
         read_dropped_file,
         detect_ffmpeg,
         detect_ytdlp,
