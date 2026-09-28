@@ -131,9 +131,12 @@ body {
   animation: spin 0.7s linear infinite;
 }
 
-/* Scrollbar — M3 subtle */
+/* Scrollbar — M3 subtle. `height` règle les barres HORIZONTALES (blocs de
+   code, tableaux) : sans elle, WebKitGTK leur donnait son épaisseur par
+   défaut, une barre énorme sous chaque bloc de code. */
 ::-webkit-scrollbar {
   width: 4px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -452,6 +455,7 @@ select option {
   @media (hover: none) {
     ::-webkit-scrollbar {
       width: 2px;
+      height: 2px;
     }
   }
 }
