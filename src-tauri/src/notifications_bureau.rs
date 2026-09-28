@@ -19,7 +19,7 @@
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex, OnceLock};
 
     use futures_util::StreamExt;
@@ -57,8 +57,6 @@ mod linux {
         #[zbus(signal)]
         fn notification_replied(&self, id: u32, text: String) -> zbus::Result<()>;
 
-        #[zbus(signal)]
-        fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
     }
 
     /// Le message auquel une notification renvoie.
@@ -68,12 +66,41 @@ mod linux {
         evenement: Option<String>,
     }
 
+    /// Notifications dont on se souvient, au plus : une notification expirée
+    /// reste dans l'historique de KDE, où l'on peut encore cliquer ou
+    /// répondre — on ne l'oublie donc pas à sa fermeture (28/09 : réponse
+    /// depuis l'historique ignorée), seulement quand elle est trop ancienne.
+    const CIBLES_MAX: usize = 500;
+
+    #[derive(Default)]
+    struct Cibles {
+        par_id: HashMap<u32, Cible>,
+        ordre: VecDeque<u32>,
+    }
+
+    impl Cibles {
+        fn noter(&mut self, id: u32, cible: Cible) {
+            if self.par_id.insert(id, cible).is_none() {
+                self.ordre.push_back(id);
+            }
+            while self.ordre.len() > CIBLES_MAX {
+                if let Some(ancien) = self.ordre.pop_front() {
+                    self.par_id.remove(&ancien);
+                }
+            }
+        }
+
+        fn cible(&self, id: u32) -> Option<Cible> {
+            self.par_id.get(&id).cloned()
+        }
+    }
+
     struct Service {
         proxy: NotificationsProxy<'static>,
         /// Le serveur sait afficher un champ de réponse (KDE Plasma).
         reponse_integree: bool,
         icone: String,
-        cibles: Mutex<HashMap<u32, Cible>>,
+        cibles: Mutex<Cibles>,
     }
 
     static SERVICE: OnceLock<Arc<Service>> = OnceLock::new();
@@ -88,7 +115,7 @@ mod linux {
         let capacites = proxy.get_capabilities().await.unwrap_or_default();
         let reponse_integree = capacites.iter().any(|c| c == "inline-reply");
         let icone = icone(app).unwrap_or_default();
-        let nouveau = Arc::new(Service { proxy, reponse_integree, icone, cibles: Mutex::new(HashMap::new()) });
+        let nouveau = Arc::new(Service { proxy, reponse_integree, icone, cibles: Mutex::new(Cibles::default()) });
         if SERVICE.set(nouveau.clone()).is_ok() {
             log::info!(
                 "[Sion][notif] serveur de notifications joint (réponse intégrée : {reponse_integree}, capacités : {})",
@@ -127,8 +154,12 @@ mod linux {
             let Ok(mut flux) = service_action.proxy.receive_action_invoked().await else { return };
             while let Some(signal) = flux.next().await {
                 let Ok(args) = signal.args() else { continue };
-                let cible = service_action.cibles.lock().unwrap().get(&args.id).cloned();
-                let Some(cible) = cible else { continue };
+                let cible = service_action.cibles.lock().unwrap().cible(args.id);
+                let Some(cible) = cible else {
+                    log::debug!("[Sion][notif] action « {} » sur la notification {} (pas de Sion ?)", args.action_key, args.id);
+                    continue;
+                };
+                log::info!("[Sion][notif] action « {} » : ouverture de {}", args.action_key, cible.salon);
                 ramener_la_fenetre(&app_action);
                 let _ = app_action.emit("notification-ouvrir", &cible);
             }
@@ -139,8 +170,11 @@ mod linux {
             let Ok(mut flux) = service_reponse.proxy.receive_notification_replied().await else { return };
             while let Some(signal) = flux.next().await {
                 let Ok(args) = signal.args() else { continue };
-                let cible = service_reponse.cibles.lock().unwrap().get(&args.id).cloned();
-                let Some(cible) = cible else { continue };
+                let cible = service_reponse.cibles.lock().unwrap().cible(args.id);
+                let Some(cible) = cible else {
+                    log::warn!("[Sion][notif] réponse à la notification {} inconnue : ignorée", args.id);
+                    continue;
+                };
                 log::info!("[Sion][notif] réponse depuis la notification vers {}", cible.salon);
                 let _ = app_reponse.emit(
                     "notification-repondre",
@@ -148,14 +182,9 @@ mod linux {
                 );
             }
         });
-        // Fermée pour de bon : plus rien ne peut y renvoyer.
-        tauri::async_runtime::spawn(async move {
-            let Ok(mut flux) = service.proxy.receive_notification_closed().await else { return };
-            while let Some(signal) = flux.next().await {
-                let Ok(args) = signal.args() else { continue };
-                service.cibles.lock().unwrap().remove(&args.id);
-            }
-        });
+        // La fermeture d'une notification ne l'oublie PAS : expirée, elle
+        // reste dans l'historique et peut encore servir (voir `CIBLES_MAX`).
+        drop(service);
     }
 
     pub async fn envoyer(
@@ -183,7 +212,7 @@ mod linux {
             .notify("Sion", 0, &service.icone, titre, corps, &actions, indices, -1)
             .await
             .map_err(|e| format!("notification refusée : {e}"))?;
-        service.cibles.lock().unwrap().insert(id, Cible { salon, evenement });
+        service.cibles.lock().unwrap().noter(id, Cible { salon, evenement });
         Ok(())
     }
 }
