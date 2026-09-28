@@ -29,6 +29,10 @@ interface AuthState {
   registrationFlows: RegistrationFlowInfo | null;
   isLoadingFlows: boolean;
   isSuspended: boolean;
+  /** Moteur Rust : le trousseau du système n'a pas rendu la session (verrouillé,
+   *  pas encore prêt). Elle est intacte : on propose de réessayer plutôt que
+   *  de se reconnecter, ce qui créerait un nouvel appareil. */
+  keyringUnavailable: boolean;
 
   login: (homeserver: string, username: string, password: string) => Promise<void>;
   register: (homeserver: string, username: string, password: string, displayName?: string, token?: string, captchaResponse?: string) => Promise<void>;
@@ -105,6 +109,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   registrationFlows: null,
   isLoadingFlows: false,
   isSuspended: false,
+  keyringUnavailable: false,
 
   login: async (homeserver, username, password) => {
     set({ isLoading: true, error: null });
@@ -231,7 +236,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   restoreSession: async () => {
     if (moteurRust()) {
       // La session fait foi dans le cœur (fichier + coffre du système).
-      set({ isLoading: true, error: null });
+      set({ isLoading: true, error: null, keyringUnavailable: false });
       try {
         const { reprendre } = await import("../services/matrixCore");
         if (!(await reprendre())) {
@@ -263,7 +268,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
         if (await matrixService.checkSuspended().catch(() => false)) set({ isSuspended: true });
       } catch (err) {
-        set({ error: mapMatrixError(err), isLoading: false, credentials: null });
+        set({ error: mapMatrixError(err), isLoading: false, credentials: null, keyringUnavailable: estTrousseauIndisponible(err) });
       }
       return;
     }
@@ -346,6 +351,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   clearError: () => set({ error: null }),
 }));
 
+/** Erreur `CoffreIndisponible` du cœur (voir `sion-matrix/src/lib.rs`). */
+function estTrousseauIndisponible(err: unknown): boolean {
+  return /trousseau du système indisponible/.test(String(err));
+}
+
 /** Map Matrix error codes to i18n keys */
 function mapMatrixError(err: unknown): string {
   const e = err as { errcode?: string; data?: { errcode?: string }; message?: string };
@@ -353,6 +363,8 @@ function mapMatrixError(err: unknown): string {
   const texte = typeof err === "string" ? err : undefined;
   const code = e.errcode || e.data?.errcode || texte?.match(/\bM_[A-Z_]+\b/)?.[0];
   const t = i18n.t.bind(i18n);
+
+  if (estTrousseauIndisponible(err)) return t("auth.errorKeyringUnavailable");
 
   switch (code) {
     case "M_USER_IN_USE":

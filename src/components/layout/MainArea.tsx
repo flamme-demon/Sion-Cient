@@ -4,6 +4,7 @@ import { PinnedBar } from "../chat/PinnedBar";
 import { TranscriptInviteBanner } from "../chat/TranscriptInviteBanner";
 import { MessageList } from "../chat/MessageList";
 import { ChatInput } from "../chat/ChatInput";
+import { IndicateurFrappe } from "../chat/IndicateurFrappe";
 import { DropZone } from "../chat/DropZone";
 import { DockZone } from "./DockZone";
 import { FloatingPanels } from "./FloatingPanels";
@@ -123,6 +124,7 @@ export function MainArea() {
             </Suspense>
           )}
           <MessageList />
+          <IndicateurFrappe />
           <ChatInput />
           <DropZone />
         </div>

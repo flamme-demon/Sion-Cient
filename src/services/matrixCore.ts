@@ -286,6 +286,60 @@ export const supprimerAppareil = (appareil: string, motDePasse: string) =>
   invoquer<void>("matrix_supprimer_appareil", { appareil, motDePasse });
 /** Compte suspendu ? (sans changer le nom d'affichage, contrairement au JS). */
 export const estSuspendu = () => invoquer<boolean>("matrix_est_suspendu");
+/** Suppression DÉFINITIVE du compte ; `effacer` retire aussi ses messages.
+ *  La session locale est oubliée ensuite, comme à la déconnexion. */
+export const supprimerCompte = (motDePasse: string, effacer: boolean) =>
+  invoquer<void>("matrix_supprimer_compte", { motDePasse, effacer });
+
+// ── Entre membres : frappe, « vu par », signalement, ignorés, bannière ──────
+
+/** Un membre tel que le salon l'affiche. */
+export interface Personne {
+  id: string;
+  nom: string;
+  avatar?: string;
+}
+/** Qui écrit dans un salon (moi et les ignorés exceptés). */
+export interface Frappe {
+  salon: string;
+  personnes: Personne[];
+}
+/** « Vu par » : pour chaque message affiché (par `eventId`), les membres
+ *  dont la lecture s'arrête là. */
+export interface LecturesSalon {
+  salon: string;
+  lectures: Record<string, Personne[]>;
+}
+
+/** J'écris (ou plus) : le cœur ne prévient le serveur qu'au changement, ou
+ *  toutes les 3 s au plus. */
+export const ecrire = (salon: string, actif: boolean) => invoquer<void>("matrix_ecrire", { salon, actif });
+export async function surFrappes(rappel: (f: Frappe) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<Frappe>("matrix-frappe", (e) => rappel(e.payload));
+}
+export const lectures = () => invoquer<LecturesSalon[]>("matrix_lectures");
+export async function surLectures(rappel: (l: LecturesSalon) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<LecturesSalon>("matrix-lectures", (e) => rappel(e.payload));
+}
+/** Signale un message aux administrateurs du serveur. */
+export const signaler = (salon: string, evenement: string, raison?: string) =>
+  invoquer<void>("matrix_signaler", { salon, evenement, raison: raison ?? null });
+export const ignorer = (utilisateur: string) => invoquer<void>("matrix_ignorer", { utilisateur });
+export const nePlusIgnorer = (utilisateur: string) => invoquer<void>("matrix_ne_plus_ignorer", { utilisateur });
+/** Utilisateurs ignorés, lus sur le serveur. */
+export const ignores = () => invoquer<string[]>("matrix_ignores");
+/** Salons rejoints où cet utilisateur est aussi. */
+export const salonsEnCommun = (utilisateur: string) => invoquer<string[]>("matrix_salons_en_commun", { utilisateur });
+/** Bannière de profil (MSC4427), en URL `sion-media`. */
+export const banniere = (utilisateur: string) => invoquer<string | null>("matrix_banniere", { utilisateur });
+/** Ma bannière ; sans fichier, elle est retirée. Rend sa nouvelle URL. */
+export const changerBanniere = async (fichier: File | null) =>
+  invoquer<string | null>(
+    "matrix_changer_banniere",
+    fichier ? { chemin: await deposer(fichier), mime: fichier.type || "image/png" } : { chemin: null, mime: null },
+  );
 
 /** Étapes d'inscription (`getRegistrationFlows`), sans session. */
 export const etapesInscription = (serveur: string) => invoquer<RegistrationFlowInfo>("matrix_etapes_inscription", { serveur });

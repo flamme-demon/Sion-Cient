@@ -6,6 +6,10 @@ import { useAdminStore } from "../../stores/useAdminStore";
 import { useAppStore } from "../../stores/useAppStore";
 import { checkUserSuspended, suspendUser } from "../../services/adminService";
 import * as matrixService from "../../services/matrixService";
+import { moteurRust } from "../../services/moteur";
+import { useAuthStore } from "../../stores/useAuthStore";
+import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useEntreMembresStore, rafraichirIgnores } from "../../stores/useEntreMembresStore";
 
 interface UserContextMenuProps {
   userId: string;
@@ -112,8 +116,51 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
   const canVoiceKick = myPowerLevel >= 50 && myPowerLevel >= Math.min(targetPowerLevel, 100);
   // Can we change roles? (need admin level)
   const canChangeRole = myPowerLevel >= 100 && myPowerLevel > targetPowerLevel;
-  // Is this ourselves?
-  const isMyself = matrixUserId === matrixService.getMatrixClient()?.getUserId();
+  // Is this ourselves? (Moteur Rust : il n'y a pas de client JS, on lit
+  // l'identifiant de la session — sans quoi on se voyait comme un autre.)
+  const myUserId = useAuthStore((s) => s.credentials?.userId) ?? matrixService.getMatrixClient()?.getUserId();
+  const isMyself = matrixUserId === myUserId;
+
+  // Entre membres (moteur Rust) : ignoré ?, bannière, salons en commun.
+  const ignore = useEntreMembresStore((s) => s.ignores.includes(matrixUserId));
+  const [banniere, setBanniere] = useState<string | null>(null);
+  const [enCommun, setEnCommun] = useState<string[] | null>(null);
+  const [showEnCommun, setShowEnCommun] = useState(false);
+  const channels = useMatrixStore((s) => s.channels);
+  useEffect(() => {
+    if (!moteurRust() || isMyself) return;
+    let actif = true;
+    void import("../../services/matrixCore").then(async (core) => {
+      const [b, salons] = await Promise.all([
+        core.banniere(matrixUserId).catch(() => null),
+        core.salonsEnCommun(matrixUserId).catch(() => [] as string[]),
+      ]);
+      if (!actif) return;
+      setBanniere(b);
+      setEnCommun(salons);
+    });
+    return () => { actif = false; };
+  }, [matrixUserId, isMyself]);
+  // Salons partagés, hors MP et soundboard, dans l'ordre de la barre latérale.
+  const salonsEnCommun = enCommun
+    ? channels.filter((c) => enCommun.includes(c.id) && !c.isDM && !c.isSoundboard)
+    : [];
+
+  const handleToggleIgnore = async () => {
+    if (actionLoading) return;
+    setActionLoading(true);
+    try {
+      const core = await import("../../services/matrixCore");
+      if (ignore) await core.nePlusIgnorer(matrixUserId);
+      else await core.ignorer(matrixUserId);
+      await rafraichirIgnores();
+      onClose();
+    } catch (err) {
+      console.error("[Sion] Failed to toggle ignore:", err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -149,6 +196,20 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
     if (!voiceRoom) return;
     setActionLoading(true);
     try {
+      if (moteurRust()) {
+        // Moteur Rust : pas de client JS, l'événement passe par le cœur
+        // (sans cette branche, l'exclusion ne partait jamais).
+        const moi = useAuthStore.getState().credentials;
+        const core = await import("../../services/matrixCore");
+        await core.envoyerEvenement(voiceRoom, "com.sion.voice_kick", {
+          kicked_user: matrixUserId,
+          kicked_by: moi?.userId ?? "",
+          kicked_by_name: moi?.displayName || moi?.userId || "",
+          reason: kickReason.trim(),
+        });
+        onClose();
+        return;
+      }
       const client = matrixService.getMatrixClient();
       if (client) {
         const myUserId = client.getUserId() || "";
@@ -336,6 +397,15 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
         overflowY: "auto",
       }}
     >
+      {/* Bannière de profil (MSC4427) */}
+      {banniere && (
+        <img
+          src={banniere}
+          alt=""
+          onError={() => setBanniere(null)}
+          style={{ display: "block", width: "100%", aspectRatio: "3 / 1", objectFit: "cover", borderRadius: 8, marginBottom: 2 }}
+        />
+      )}
       {/* User name + role badge */}
       <div style={{ padding: "8px 14px 4px", display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontSize: 11, color: "var(--color-outline)", fontWeight: 600 }}>
@@ -373,6 +443,31 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
           onClose();
         }} style={itemStyle}>
           👉 Poke
+        </button>
+      )}
+
+      {/* Salons en commun */}
+      {!isMyself && moteurRust() && salonsEnCommun.length > 0 && (
+        <>
+          <button onClick={() => setShowEnCommun(!showEnCommun)} style={itemStyle}>
+            {t("contextMenu.mutualRooms", { count: salonsEnCommun.length })}
+          </button>
+          {showEnCommun && salonsEnCommun.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => { useAppStore.getState().setActiveChannel(c.id, c.hasVoice); onClose(); }}
+              style={{ ...itemStyle, padding: "6px 14px 6px 26px", fontSize: 12, color: "var(--color-on-surface-variant)" }}
+            >
+              {c.hasVoice ? "🔊" : "#"} {c.name}
+            </button>
+          ))}
+        </>
+      )}
+
+      {/* Ignorer : ses messages et frappes ne s'affichent plus */}
+      {!isMyself && moteurRust() && (
+        <button onClick={handleToggleIgnore} disabled={actionLoading} style={{ ...itemStyle, opacity: actionLoading ? 0.5 : 1 }}>
+          {ignore ? t("contextMenu.unignore") : t("contextMenu.ignore")}
         </button>
       )}
 

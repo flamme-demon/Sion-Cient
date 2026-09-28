@@ -1,6 +1,7 @@
 import { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Message } from "./Message";
+import { LecteursMessage } from "./LecteursMessage";
 import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { findAdminRoom } from "../../services/adminCommandService";
@@ -635,6 +636,7 @@ export function MessageList() {
                 isFirst={i === 0}
                 highlighted={highlightedId === eventId}
               />
+              {activeChannel && <LecteursMessage salon={activeChannel} eventId={eventId} />}
             </div>
           );
         })}

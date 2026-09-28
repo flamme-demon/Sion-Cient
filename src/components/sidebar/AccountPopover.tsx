@@ -9,6 +9,8 @@ import { ArrowLeftIcon } from "../icons";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { SIDEBAR_RAIL_WIDTH } from "../../stores/useLayoutStore";
 import { ImageCropper } from "../chat/ImageCropper";
+import { SectionsCompteRust } from "./SectionsCompteRust";
+import { moteurRust } from "../../services/moteur";
 
 export function AccountPopover({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
@@ -63,7 +65,10 @@ export function AccountPopover({ compact = false }: { compact?: boolean }) {
     }
   }, [showAccountPanel, credentials?.displayName]);
 
-  const currentDeviceId = matrixService.getMatrixClient()?.getDeviceId();
+  // Moteur Rust : pas de client JS, l'appareil est celui de la session. Sans
+  // cela, l'appareil courant n'était pas reconnu — ni marqué, ni protégé :
+  // on pouvait le supprimer soi-même (2.0 beta 2).
+  const currentDeviceId = credentials?.deviceId || matrixService.getMatrixClient()?.getDeviceId();
 
   const loadSessions = async () => {
     setLoadingSessions(true);
@@ -668,6 +673,7 @@ export function AccountPopover({ compact = false }: { compact?: boolean }) {
           )}
         </div>
       )}
+      {moteurRust() && <SectionsCompteRust />}
       </div>{/* end content wrapper */}
     </div>
     </>

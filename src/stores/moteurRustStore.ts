@@ -43,6 +43,8 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
   const core = await import("../services/matrixCore");
   const cache = await import("../services/cacheRust");
   const { APP_SESSION_START_TS } = await import("./useAppStore");
+  const { useEntreMembresStore } = await import("./useEntreMembresStore");
+  const entreMembres = useEntreMembresStore.getState();
 
   // Une réponse arrivée dans le cache synchrone fait redessiner.
   cache.surChangement(() => set((s) => ({ pinnedVersion: s.pinnedVersion + 1 })));
@@ -59,6 +61,7 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
     if (etat.etat === "deconnecte") {
       sessionPreparee = null;
       cache.vider();
+      entreMembres.vider();
       set({ channels: [], messages: {}, roomHasMore: {}, roomLoadingHistory: {} });
     }
   };
@@ -105,12 +108,15 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
   await core.surSalons((l) => appliquerSalons(l, false));
   await core.surMessages((f) => appliquerFil(f, false));
   await core.surVerification(appliquerVerification);
+  await core.surFrappes(entreMembres.definirFrappe);
+  await core.surLectures(entreMembres.definirLectures);
 
   // État présent au moment de l'abonnement.
   appliquerEtat(await core.etatConnexion());
   appliquerSalons(await core.salons().catch(() => []), true);
   for (const fil of await core.fils().catch(() => [])) appliquerFil(fil, true);
   appliquerVerification(await core.verification().catch(() => ({ etape: "idle" as const, emojis: [] })));
+  for (const l of await core.lectures().catch(() => [])) entreMembres.definirLectures(l);
 }
 
 /** Le cœur republie le fil ENTIER à chaque changement, en objets neufs :
@@ -173,6 +179,7 @@ async function preparerSession(set: Set, get: Get): Promise<void> {
   const service = await import("../services/matrixService");
   // Version de ce client, nom d'appareil (annoncés aux administrateurs).
   void service.refreshDeviceVersionLabel();
+  void import("./useEntreMembresStore").then((m) => m.rafraichirIgnores()).catch(() => {});
   void service.ouvrirDroitAnnonceVersion().finally(() => void service.publishClientVersion());
 
   // Le nom local (emojis compris) fait foi sur celui du serveur.

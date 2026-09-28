@@ -11,7 +11,7 @@ type AuthMode = "login" | "register";
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const { login, register, isLoading, error, clearError, fetchRegistrationFlows, registrationFlows, isLoadingFlows } = useAuthStore();
+  const { login, register, isLoading, error, clearError, fetchRegistrationFlows, registrationFlows, isLoadingFlows, keyringUnavailable, restoreSession } = useAuthStore();
 
   const [mode, setMode] = useState<AuthMode>("login");
   const [homeserver, setHomeserver] = useState(
@@ -292,6 +292,11 @@ export function LoginPage() {
 
         {migration && mode === "login" && <div style={styles.noticeBox}>{t("auth.migrationNotice")}</div>}
         {error && <div style={styles.errorBox}>{error}</div>}
+        {keyringUnavailable && (
+          <button type="button" style={{ ...styles.submitBtn, marginBottom: 16, opacity: isLoading ? 0.6 : 1 }} disabled={isLoading} onClick={() => void restoreSession()}>
+            {t("auth.retryKeyring")}
+          </button>
+        )}
 
         <form onSubmit={handleSubmit} autoComplete="off">
           <div style={styles.fieldGroup}>

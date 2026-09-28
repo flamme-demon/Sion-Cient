@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon } from "../icons";
+import { CrownIcon, ShieldIcon, FileIcon, DownloadIcon, ReplyIcon, PencilIcon, PinIcon, TrashIcon, EmojiIcon, MessageBubbleIcon, FlagIcon } from "../icons";
 import { UserAvatar } from "../sidebar/UserAvatar";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PollMessage } from "./PollMessage";
@@ -30,6 +30,10 @@ import { useAppStore } from "../../stores/useAppStore";
 import * as matrixService from "../../services/matrixService";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { ImageDuFil } from "./ImageDuFil";
+import { MenuImage } from "./MenuImage";
+import { ModaleSignalement } from "./ModaleSignalement";
+import { moteurRust } from "../../services/moteur";
+import { copierImage, enregistrerImage } from "../../services/actionsImage";
 import { definirLecteurActif, libererLecteurActif, useEstLecteurActif } from "../../services/lecteurActif";
 // Lecteur hors moteur web (voir docs/lecteur-video-natif.md). Chargé à la
 // demande : il ne sert qu'au clic, inutile de l'embarquer au démarrage.
@@ -126,6 +130,9 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
   // Fit (default) ↔ real size. Clicking the image toggles; at 100% the
   // overlay scrolls so very large screenshots can actually be read.
   const [zoomed, setZoomed] = useState(false);
+  const { t } = useTranslation();
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [copiee, setCopiee] = useState(false);
   // Fermer avec Escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -154,6 +161,7 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
           src={src}
           alt={alt}
           onClick={(e) => { e.stopPropagation(); setZoomed((z) => !z); }}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }}
           style={{
             margin: 'auto',
             display: 'block',
@@ -175,6 +183,29 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
           color: LIGHTBOX_INK, fontSize: 13, fontWeight: 600, userSelect: 'none',
         }}
       >{zoomed ? '100 %' : 'Ajusté'}</div>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ position: 'fixed', top: 'max(env(safe-area-inset-top, 0px), 16px)', right: 64, display: 'flex', gap: 8 }}
+      >
+        {[
+          {
+            libelle: copiee ? t("chat.imageCopied") : t("chat.copyImage"),
+            action: () => copierImage(src).then(() => { setCopiee(true); setTimeout(() => setCopiee(false), 1500); }),
+          },
+          { libelle: t("chat.saveImage"), action: () => enregistrerImage(src, alt) },
+        ].map(({ libelle, action }) => (
+          <button
+            key={libelle}
+            onClick={() => { action().catch((err) => useAppStore.getState().setFileError(String(err))); }}
+            style={{
+              background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 18,
+              padding: '7px 14px', cursor: 'pointer', fontFamily: 'inherit',
+              color: LIGHTBOX_INK, fontSize: 13, fontWeight: 600,
+            }}
+          >{libelle}</button>
+        ))}
+      </div>
+      {menu && <MenuImage url={src} nom={alt} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
       <button
         onClick={onClose}
         style={{
@@ -447,6 +478,7 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
     isVideo ? videoVisible && !!attachment.encryptedFile : true,
   );
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [menuImage, setMenuImage] = useState<{ x: number; y: number } | null>(null);
   // Vrai si la vignette du serveur n'a pas pu être chargée.
   const [vignetteEchouee, setVignetteEchouee] = useState(false);
   // Hoisted above any early return: the downstream image/audio/video
@@ -480,6 +512,7 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
           alt={attachment.name}
           onError={() => setVignetteEchouee(true)}
           onClick={() => setLightboxOpen(true)}
+          onContextMenu={(e) => { e.preventDefault(); setMenuImage({ x: e.clientX, y: e.clientY }); }}
           style={{
             // La place doit être RÉSERVÉE, sinon le fil sursaute chaque fois
             // qu'une image se décharge. On reproduit donc ce que faisait
@@ -493,6 +526,9 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
         />
         {lightboxOpen && (
           <ImageLightbox src={resolvedUrl} alt={attachment.name} onClose={() => setLightboxOpen(false)} />
+        )}
+        {menuImage && (
+          <MenuImage url={resolvedUrl} nom={attachment.name} x={menuImage.x} y={menuImage.y} onClose={() => setMenuImage(null)} />
         )}
       </>
     );
@@ -775,6 +811,7 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
     }
   };
 
+  const [showReport, setShowReport] = useState(false);
   const actionButtonStyle: React.CSSProperties = {
     padding: 6,
     border: 'none',
@@ -1224,6 +1261,17 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
               <PinIcon filled={isPinned} />
             </button>
           )}
+          {!isOwnMessage && moteurRust() && message.eventId && activeChannel && (
+            <button
+              onClick={() => setShowReport(true)}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-secondary-container)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              style={actionButtonStyle}
+              title={t("report.action")}
+            >
+              <FlagIcon />
+            </button>
+          )}
           {canDelete && !showDeleteConfirm && (
             <button
               onClick={handleDelete}
@@ -1269,6 +1317,9 @@ export const Message = React.memo(function Message({ message, showHeader, isFirs
         </div>
       )}
 
+      {showReport && message.eventId && activeChannel && (
+        <ModaleSignalement salon={activeChannel} eventId={message.eventId} auteur={message.user} onClose={() => setShowReport(false)} />
+      )}
     </div>
   );
 });

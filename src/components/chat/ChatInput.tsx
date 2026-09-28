@@ -13,6 +13,7 @@ import { EMOJI_DATA } from "../../utils/emojiData";
 import { readClipboardImageFile } from "../../utils/clipboardImage";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { LargeMessageModal } from "./LargeMessageModal";
+import { jEcris, jArrete } from "../../services/frappe";
 
 // Klipy GIF API — Tenor was shut down by Google on 2026-06-30. The key is
 // injected at build time via VITE_KLIPY_API_KEY: `.env.local` in dev, GitHub
@@ -176,6 +177,9 @@ export function ChatInput() {
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, []);
 
+  // « En train d'écrire » : terminé en changeant de salon ou en quittant.
+  useEffect(() => () => jArrete(), [activeChannel]);
+
   // Pre-fill input when editing a message
   useEffect(() => {
     if (editingMessage) {
@@ -269,6 +273,7 @@ export function ChatInput() {
     }
     clearPendingFiles();
     setInputText("");
+    jArrete();
     setHistoryIndex(-1);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -373,6 +378,9 @@ export function ChatInput() {
   const handleChange = (value: string) => {
     setInputText(value);
     autoGrow();
+    // Une modification de message n'est pas « écrire » pour les autres.
+    if (value.trim() && !editingMessage) jEcris(activeChannel);
+    else jArrete();
 
     // Detect @mention query
     const textarea = textareaRef.current;
