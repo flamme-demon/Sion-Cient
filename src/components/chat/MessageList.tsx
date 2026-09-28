@@ -168,6 +168,9 @@ export function MessageList() {
   const derniereActiviteRef = useRef(0);
   /** Fenêtre quittée (`blur`) depuis la dernière action dans Sion. */
   const quitteeRef = useRef(false);
+  /** Génération des défilements vers le bas en attente (rAF, minuteur) : un
+   *  placement sur le bandeau l'incrémente, ce qui les annule. */
+  const defilementGenRef = useRef(0);
 
   // Snapshot of lastReadId taken when the channel becomes active.
   // The real lastReadId is bumped to the latest message as soon as markAsRead()
@@ -315,7 +318,11 @@ export function MessageList() {
 
   // Scroll to bottom helper
   const scrollToBottom = useCallback(() => {
+    // Un placement sur le bandeau des non-lus survenu entre-temps annule ce
+    // défilement (voir `placerSurSeparateur`).
+    const generation = ++defilementGenRef.current;
     const doScroll = () => {
+      if (generation !== defilementGenRef.current) return;
       const el = containerRef.current;
       if (el) {
         suppressScrollLoadRef.current = true;
@@ -377,6 +384,12 @@ export function MessageList() {
     const el = containerRef.current;
     const sep = el?.querySelector<HTMLElement>("[data-unread-sep]");
     if (!el || !sep) return false;
+    // Annule les défilements vers le bas encore en attente : programmés par
+    // le changement de hauteur du fil à l'ouverture du salon, ils passaient
+    // APRÈS ce placement, ramenaient la vue en bas, et les non-lus étaient
+    // marqués lus sans avoir été vus (journal du 28/09 : « placement à
+    // l'ouverture … vue à 0 px du bas »).
+    defilementGenRef.current++;
     const basDuBandeau = sep.getBoundingClientRect().bottom - el.getBoundingClientRect().top + el.scrollTop;
     el.scrollTop = Math.max(0, basDuBandeau - el.clientHeight + 8);
     return true;
