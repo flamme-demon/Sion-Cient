@@ -341,10 +341,20 @@ export function MessageList() {
       prevMessagesLenRef.current = messages.length;
       channelJustChangedRef.current = true;
       initialScrollDoneRef.current = false;
-      const timer = setTimeout(() => { channelJustChangedRef.current = false; }, 5000);
-      return () => clearTimeout(timer);
     }
   }, [activeChannel, messages.length]);
+
+  // Fin de la fenêtre « salon tout juste ouvert », 5 s après le changement de
+  // salon — et lui seul. Le minuteur vivait dans l'effet ci-dessus, qui dépend
+  // aussi du nombre de messages : un message arrivé pendant ces 5 s annulait
+  // le minuteur (nettoyage) sans qu'aucun autre ne soit posé. La fenêtre ne se
+  // refermait jamais, et plus aucun message reçu n'était marqué comme lu —
+  // point rouge et « 1 nouveau message » sur un message déjà vu (28/09 ; au
+  // démarrage, les fils arrivent justement dans ces 5 s).
+  useEffect(() => {
+    const timer = setTimeout(() => { channelJustChangedRef.current = false; }, 5000);
+    return () => clearTimeout(timer);
+  }, [activeChannel]);
 
   // When messages change: preserve scroll or auto-scroll
   useEffect(() => {
