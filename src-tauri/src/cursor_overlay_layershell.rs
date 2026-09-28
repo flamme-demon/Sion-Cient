@@ -39,18 +39,19 @@ use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer,
     wl_compositor::WlCompositor,
+    wl_output::{self, WlOutput},
     wl_registry::WlRegistry,
     wl_shm::{Format, WlShm},
     wl_shm_pool::WlShmPool,
     wl_surface::WlSurface,
 };
-use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{Anchor, Event as LayerEvent, ZwlrLayerSurfaceV1},
 };
 
-use super::{OverlayState, UserEvent};
+use super::{GeometrieEcran, OverlayState, UserEvent};
 
 /// Cadence d'animation des ondes de clic, identique aux autres hôtes.
 const ANIMATE_STEP: Duration = Duration::from_millis(33);
@@ -91,9 +92,72 @@ pub(super) fn start(
     }
 }
 
+/// Ce que le compositeur annonce d'un écran (`wl_output`).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct InfoEcran {
+    /// Position dans l'espace du compositeur.
+    x: i32,
+    y: i32,
+    /// Mode courant, en pixels physiques, avant rotation.
+    largeur: i32,
+    hauteur: i32,
+    /// Écran tourné d'un quart de tour : largeur et hauteur s'échangent.
+    pivote: bool,
+    /// Connecteur (« DP-3 »), pour les journaux.
+    nom: Option<String>,
+}
+
+impl InfoEcran {
+    fn taille(&self) -> (i32, i32) {
+        if self.pivote {
+            (self.hauteur, self.largeur)
+        } else {
+            (self.largeur, self.hauteur)
+        }
+    }
+}
+
+/// L'écran dont la taille (et, si la capture en donne une, la position)
+/// correspond à l'image capturée. `None` si aucun, ou si plusieurs écrans
+/// identiques restent indiscernables : mieux vaut alors laisser le
+/// compositeur choisir que viser au hasard.
+///
+/// La position d'une image du portail vaut en général (0, 0) — le flux ne
+/// sait pas où est son écran — : elle ne départage donc que si elle n'est pas
+/// nulle.
+fn choisir_ecran(ecrans: &[InfoEcran], g: GeometrieEcran) -> Option<usize> {
+    let proche = |a: i32, b: i32| (a - b).abs() <= 2;
+    let candidats: Vec<usize> = ecrans
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            let (w, h) = e.taille();
+            w > 0 && proche(w, g.largeur) && proche(h, g.hauteur)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match candidats.as_slice() {
+        [] => None,
+        [seul] => Some(*seul),
+        plusieurs => {
+            if g.x == 0 && g.y == 0 {
+                return None;
+            }
+            let par_position: Vec<usize> =
+                plusieurs.iter().copied().filter(|&i| ecrans[i].x == g.x && ecrans[i].y == g.y).collect();
+            match par_position.as_slice() {
+                [seul] => Some(*seul),
+                _ => None,
+            }
+        }
+    }
+}
+
 /// État partagé avec la file d'évènements Wayland.
 #[derive(Default)]
 struct Etat {
+    /// Écrans du compositeur, dans l'ordre de `Host::sorties`.
+    ecrans: Vec<InfoEcran>,
     /// Taille accordée par le compositeur, en pixels logiques.
     largeur: u32,
     hauteur: u32,
@@ -117,6 +181,11 @@ struct Host {
     compositor: WlCompositor,
     shm: WlShm,
     layer_shell: ZwlrLayerShellV1,
+    /// Écrans (`wl_output`), pour poser l'overlay sur celui qui est partagé.
+    sorties: Vec<WlOutput>,
+    /// Géométrie partagée connue à la création de la surface : si elle
+    /// change, la surface est recréée sur le bon écran.
+    cible: Option<GeometrieEcran>,
     etat: Etat,
     surfaces: Option<Surfaces>,
     /// Mémoire partagée courante et sa taille, réallouée quand la surface
@@ -140,7 +209,7 @@ struct Host {
 impl Host {
     fn connect() -> Result<Self, String> {
         let conn = Connection::connect_to_env().map_err(|e| format!("connexion Wayland: {e}"))?;
-        let (globals, queue) =
+        let (globals, mut queue) =
             registry_queue_init::<Etat>(&conn).map_err(|e| format!("registre: {e}"))?;
         let qh = queue.handle();
         let compositor: WlCompositor = globals
@@ -150,7 +219,27 @@ impl Host {
         let layer_shell: ZwlrLayerShellV1 = globals
             .bind(&qh, 1..=5, ())
             .map_err(|e| format!("zwlr_layer_shell_v1 absent: {e}"))?;
-        log::info!("[Sion][CursorOverlay] hôte Wayland layer-shell prêt");
+        // Tous les écrans, pour viser celui qui est partagé. Version 4 au
+        // plus : elle ajoute le nom du connecteur.
+        let mut sorties = Vec::new();
+        for g in globals.contents().clone_list() {
+            if g.interface == "wl_output" {
+                let index = sorties.len() as u32;
+                sorties.push(globals.registry().bind::<WlOutput, u32, Etat>(g.name, g.version.min(4), &qh, index));
+            }
+        }
+        let mut etat = Etat::default();
+        // Un aller-retour : les écrans décrivent leur géométrie et leur mode.
+        let _ = queue.roundtrip(&mut etat);
+        log::info!(
+            "[Sion][CursorOverlay] hôte Wayland layer-shell prêt ({} écran(s) : {})",
+            etat.ecrans.len(),
+            etat.ecrans
+                .iter()
+                .map(|e| format!("{} {}x{} à {},{}", e.nom.as_deref().unwrap_or("?"), e.taille().0, e.taille().1, e.x, e.y))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         Ok(Self {
             conn,
             queue,
@@ -158,7 +247,9 @@ impl Host {
             compositor,
             shm,
             layer_shell,
-            etat: Etat::default(),
+            sorties,
+            cible: None,
+            etat,
             surfaces: None,
             pool: None,
             buffer: None,
@@ -179,11 +270,34 @@ impl Host {
             return;
         }
         let surface = self.compositor.create_surface(&self.qh, ());
+        // L'écran PARTAGÉ, reconnu à la taille de l'image capturée. Faute de
+        // le connaître (capture pas encore commencée, écrans identiques), le
+        // compositeur choisit — en général l'écran actif.
+        self.cible = super::cursor_overlay_shared_geometry();
+        let choix = self.cible.and_then(|g| {
+            let choix = choisir_ecran(&self.etat.ecrans, g);
+            match choix {
+                Some(i) => log::info!(
+                    "[Sion][CursorOverlay] overlay posé sur l'écran partagé {} ({}x{})",
+                    self.etat.ecrans[i].nom.as_deref().unwrap_or("?"),
+                    g.largeur,
+                    g.hauteur
+                ),
+                None => log::warn!(
+                    "[Sion][CursorOverlay] écran partagé {}x{} à {},{} non reconnu parmi {:?} : le compositeur choisit",
+                    g.largeur,
+                    g.hauteur,
+                    g.x,
+                    g.y,
+                    self.etat.ecrans
+                ),
+            }
+            choix
+        });
+        let sortie = choix.and_then(|i| self.sorties.get(i));
         let couche = self.layer_shell.get_layer_surface(
             &surface,
-            // `None` : le compositeur choisit l'écran, comme l'hôte X11 visait
-            // l'écran principal.
-            None,
+            sortie,
             Layer::Overlay,
             "sion-cursor-overlay".to_string(),
             &self.qh,
@@ -429,6 +543,13 @@ impl Host {
                 self.hide();
                 self.etat.ferme = false;
             }
+            // L'écran partagé vient d'être connu (première image), ou a
+            // changé : la surface est recréée dessus.
+            if self.surfaces.is_some() && super::cursor_overlay_shared_geometry() != self.cible {
+                self.hide();
+                self.show();
+                self.need_redraw = true;
+            }
 
             // 2) Peindre si nécessaire.
             // Un redessin au plus toutes les 33 ms.
@@ -539,9 +660,104 @@ impl Dispatch<WlRegistry, GlobalListContents> for Etat {
     }
 }
 
+impl Dispatch<WlOutput, u32> for Etat {
+    fn event(
+        etat: &mut Self,
+        _: &WlOutput,
+        event: wl_output::Event,
+        index: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let i = *index as usize;
+        if etat.ecrans.len() <= i {
+            etat.ecrans.resize_with(i + 1, InfoEcran::default);
+        }
+        let ecran = &mut etat.ecrans[i];
+        match event {
+            wl_output::Event::Geometry { x, y, transform, .. } => {
+                ecran.x = x;
+                ecran.y = y;
+                ecran.pivote = matches!(
+                    transform,
+                    WEnum::Value(
+                        wl_output::Transform::_90
+                            | wl_output::Transform::_270
+                            | wl_output::Transform::Flipped90
+                            | wl_output::Transform::Flipped270
+                    )
+                );
+            }
+            wl_output::Event::Mode { flags, width, height, .. } => {
+                if matches!(flags, WEnum::Value(f) if f.contains(wl_output::Mode::Current)) {
+                    ecran.largeur = width;
+                    ecran.hauteur = height;
+                }
+            }
+            wl_output::Event::Name { name } => ecran.nom = Some(name),
+            _ => {}
+        }
+    }
+}
+
 delegate_noop!(Etat: ignore WlCompositor);
 delegate_noop!(Etat: ignore WlSurface);
 delegate_noop!(Etat: ignore WlShm);
 delegate_noop!(Etat: ignore WlShmPool);
 delegate_noop!(Etat: ignore ZwlrLayerShellV1);
 delegate_noop!(Etat: ignore wayland_client::protocol::wl_region::WlRegion);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ecran(nom: &str, x: i32, y: i32, largeur: i32, hauteur: i32) -> InfoEcran {
+        InfoEcran { x, y, largeur, hauteur, pivote: false, nom: Some(nom.into()) }
+    }
+
+    fn capture(x: i32, y: i32, largeur: i32, hauteur: i32) -> GeometrieEcran {
+        GeometrieEcran { x, y, largeur, hauteur }
+    }
+
+    #[test]
+    fn un_seul_ecran_de_cette_taille_est_choisi() {
+        let ecrans = [ecran("DP-1", 0, 0, 2560, 1440), ecran("DP-2", 2560, 0, 1920, 1080), ecran("HDMI-1", 4480, 0, 3840, 2160)];
+        assert_eq!(choisir_ecran(&ecrans, capture(0, 0, 1920, 1080)), Some(1));
+        assert_eq!(choisir_ecran(&ecrans, capture(0, 0, 3840, 2160)), Some(2));
+    }
+
+    #[test]
+    fn un_ecran_pivote_se_reconnait_a_sa_taille_tournee() {
+        let mut vertical = ecran("DP-2", 2560, 0, 1920, 1080);
+        vertical.pivote = true;
+        let ecrans = [ecran("DP-1", 0, 0, 1920, 1080), vertical];
+        // 1080x1920 : seul l'écran vertical correspond.
+        assert_eq!(choisir_ecran(&ecrans, capture(0, 0, 1080, 1920)), Some(1));
+    }
+
+    #[test]
+    fn des_ecrans_identiques_sans_position_restent_indecis() {
+        let ecrans = [ecran("DP-1", 0, 0, 1920, 1080), ecran("DP-2", 1920, 0, 1920, 1080)];
+        assert_eq!(choisir_ecran(&ecrans, capture(0, 0, 1920, 1080)), None);
+    }
+
+    #[test]
+    fn une_position_reelle_departage_des_ecrans_identiques() {
+        let ecrans = [ecran("DP-1", 0, 0, 1920, 1080), ecran("DP-2", 1920, 0, 1920, 1080)];
+        assert_eq!(choisir_ecran(&ecrans, capture(1920, 0, 1920, 1080)), Some(1));
+    }
+
+    #[test]
+    fn aucune_taille_correspondante_ne_choisit_rien() {
+        let ecrans = [ecran("DP-1", 0, 0, 2560, 1440)];
+        assert_eq!(choisir_ecran(&ecrans, capture(0, 0, 1280, 720)), None);
+        assert_eq!(choisir_ecran(&[], capture(0, 0, 1280, 720)), None);
+    }
+
+    #[test]
+    fn deux_pixels_d_ecart_sont_toleres() {
+        // Certains flux arrondissent à un nombre pair de pixels.
+        let ecrans = [ecran("DP-1", 0, 0, 1366, 768), ecran("DP-2", 1366, 0, 2560, 1440)];
+        assert_eq!(choisir_ecran(&ecrans, capture(0, 0, 1364, 768)), Some(0));
+    }
+}

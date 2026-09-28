@@ -473,6 +473,46 @@ pub fn cursor_overlay_set_shared_screen(index: Option<u64>) {
     log::info!("[Sion][CursorOverlay] écran partagé déclaré : {valeur}");
 }
 
+/// Rectangle de l'écran partagé tel que la capture le voit : position dans le
+/// bureau et taille en pixels.
+///
+/// Sous Wayland, c'est le PORTAIL (la fenêtre de sélection de KDE) qui choisit
+/// l'écran ; Sion n'en apprend rien, sinon par les images du flux. L'overlay
+/// layer-shell était créé sans écran désigné et KWin le posait sur l'écran
+/// actif : avec plusieurs écrans, les curseurs des viewers atterrissaient sur
+/// un autre écran que celui partagé (vu le 28/09, quatre écrans sous KDE).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeometrieEcran {
+    pub x: i32,
+    pub y: i32,
+    pub largeur: i32,
+    pub hauteur: i32,
+}
+
+static GEOMETRIE_PARTAGEE: Mutex<Option<GeometrieEcran>> = Mutex::new(None);
+
+/// Déclare la géométrie de l'écran partagé (première image de la capture, ou
+/// changement de taille en cours de partage).
+pub fn cursor_overlay_set_shared_geometry(geometrie: Option<GeometrieEcran>) {
+    let mut g = match GEOMETRIE_PARTAGEE.lock() {
+        Ok(g) => g,
+        Err(poison) => poison.into_inner(),
+    };
+    if *g != geometrie {
+        log::info!("[Sion][CursorOverlay] géométrie de l'écran partagé : {geometrie:?}");
+        *g = geometrie;
+    }
+}
+
+/// Géométrie de l'écran partagé, si la capture l'a déjà donnée.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn cursor_overlay_shared_geometry() -> Option<GeometrieEcran> {
+    match GEOMETRIE_PARTAGEE.lock() {
+        Ok(g) => *g,
+        Err(poison) => *poison.into_inner(),
+    }
+}
+
 /// Index de l'écran partagé, si connu.
 // Lue par l'hôte Win32 de l'overlay pour borner le dessin au moniteur partagé.
 // Sous Linux le layer-shell se borne autrement, d'où l'exemption ciblée.
@@ -503,6 +543,8 @@ pub fn cursor_overlay_open() -> bool {
 #[tauri::command]
 pub fn cursor_overlay_close() {
     OVERLAY_OPEN.store(false, Ordering::Release);
+    // Le prochain partage désignera de nouveau son écran.
+    cursor_overlay_set_shared_geometry(None);
     let Some(handle) = HANDLE.get() else {
         return;
     };

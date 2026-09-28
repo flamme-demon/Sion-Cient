@@ -762,6 +762,8 @@ fn run_share_capture(
     const DELAI_PREMIERE_IMAGE: std::time::Duration = std::time::Duration::from_secs(120);
     let debut_capture = std::time::Instant::now();
     let mut premiere_image = false;
+    // Géométrie de l'écran partagé déjà annoncée à l'overlay des curseurs.
+    let mut geometrie_annoncee: Option<(i32, i32, i32, i32)> = None;
     let stop_cb = std::sync::Arc::clone(&stop);
     let capture_armed_outer = std::sync::Arc::clone(&capture_armed);
     let mut ready_tx = Some(ready_tx);
@@ -818,6 +820,21 @@ fn run_share_capture(
                 }
             };
             premiere_image = true;
+            // Sous Wayland, seule l'image dit quel écran le portail a retenu :
+            // l'overlay des curseurs s'y place (voir `GeometrieEcran`).
+            let geometrie = (frame.left(), frame.top(), frame.width(), frame.height());
+            if geometrie_annoncee != Some(geometrie) {
+                geometrie_annoncee = Some(geometrie);
+                #[cfg(not(target_os = "android"))]
+                crate::cursor_overlay::cursor_overlay_set_shared_geometry(Some(
+                    crate::cursor_overlay::GeometrieEcran {
+                        x: geometrie.0,
+                        y: geometrie.1,
+                        largeur: geometrie.2,
+                        hauteur: geometrie.3,
+                    },
+                ));
+            }
             let (w, h) = (frame.width().max(0) as u32, frame.height().max(0) as u32);
             if w < 2 || h < 2 {
                 return;
