@@ -159,13 +159,15 @@ export function MessageList() {
   // ── Présence : un message n'est lu que si quelqu'un est là pour le voir.
   // Sion ouvert sur un salon, en bas du fil, pendant qu'on est parti : chaque
   // message arrivé était marqué lu aussitôt, et au retour rien ne distinguait
-  // ce qu'on avait manqué (28/09). Absent = fenêtre sans le focus, cachée,
-  // ou sans souris ni clavier depuis une minute.
+  // ce qu'on avait manqué (28/09). Absent = fenêtre quittée (vers une autre
+  // application), cachée, ou sans souris ni clavier depuis une minute.
   const presentRef = useRef(true);
   const [present, setPresent] = useState(true);
   /** Dernière souris ou touche (ms) ; posée au montage, dans l'effet des
    *  écouteurs — pas pendant le rendu, qui doit rester pur. */
   const derniereActiviteRef = useRef(0);
+  /** Fenêtre quittée (`blur`) depuis la dernière action dans Sion. */
+  const quitteeRef = useRef(false);
 
   // Snapshot of lastReadId taken when the channel becomes active.
   // The real lastReadId is bumped to the latest message as soon as markAsRead()
@@ -243,13 +245,24 @@ export function MessageList() {
   });
   useEffect(() => {
     derniereActiviteRef.current = Date.now();
+    // Toute action dans Sion prouve qu'on est là ; seul le fait de quitter
+    // la fenêtre (ou une minute sans rien toucher) rend absent. On ne
+    // demande PLUS `document.hasFocus()` : sous WebKitGTK il peut rester
+    // faux alors qu'on est dans la fenêtre (focus sur la surface native du
+    // partage d'écran) — Sion croyait l'utilisateur absent en permanence,
+    // plus rien n'était marqué lu et le bandeau ne partait jamais (28/09).
     const evaluer = () => {
-      const p = document.visibilityState === "visible"
-        && document.hasFocus()
-        && Date.now() - derniereActiviteRef.current < DELAI_ABSENCE_MS;
+      const visible = document.visibilityState === "visible";
+      const inactif = Date.now() - derniereActiviteRef.current;
+      const p = visible && !quitteeRef.current && inactif < DELAI_ABSENCE_MS;
       if (p === presentRef.current) return;
       presentRef.current = p;
       setPresent(p);
+      void import("@tauri-apps/plugin-log")
+        .then(({ info }) => info(
+          `[Sion][présence] ${p ? "présent" : "absent"} (visible=${visible}, fenêtre quittée=${quitteeRef.current}, inactif ${Math.round(inactif / 1000)} s)`,
+        ))
+        .catch(() => {});
       const { salon, dernierLu, lire } = courantRef.current;
       if (!p) {
         // Départ : ce qui arrivera désormais est nouveau, le bandeau se
@@ -262,17 +275,22 @@ export function MessageList() {
     };
     const activite = () => {
       derniereActiviteRef.current = Date.now();
+      quitteeRef.current = false;
+      evaluer();
+    };
+    const quitter = () => {
+      quitteeRef.current = true;
       evaluer();
     };
     const evenements = ["pointermove", "pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
     for (const e of evenements) window.addEventListener(e, activite, { passive: true });
-    window.addEventListener("blur", evaluer);
+    window.addEventListener("blur", quitter);
     document.addEventListener("visibilitychange", evaluer);
     const minuterie = window.setInterval(evaluer, 5000);
     const premier = window.setTimeout(evaluer, 0);
     return () => {
       for (const e of evenements) window.removeEventListener(e, activite);
-      window.removeEventListener("blur", evaluer);
+      window.removeEventListener("blur", quitter);
       document.removeEventListener("visibilitychange", evaluer);
       window.clearInterval(minuterie);
       window.clearTimeout(premier);
