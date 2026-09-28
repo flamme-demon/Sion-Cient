@@ -131,6 +131,13 @@ export function MessageList() {
   /** Hauteur et position juste avant une pagination vers le haut. */
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const channelJustChangedRef = useRef(false);
+  /** Vrai une fois la vue placée à l'ouverture du salon : avant, arriver en
+   *  bas (défilement recalé par le changement de contenu) ne vaut pas
+   *  lecture — c'était marquer lus des messages jamais montrés. */
+  const positionneRef = useRef(false);
+  /** Jusqu'à quand garder le bandeau « nouveaux messages » en haut de la vue
+   *  (horodatage ms) ; 0 = plus d'ancrage. */
+  const ancreJusquaRef = useRef(0);
 
   // Track unread state (disabled for admin room)
   const isAdminRoom = activeChannel === findAdminRoom();
@@ -286,50 +293,51 @@ export function MessageList() {
     return false;
   }, [activeChannel, isAdminRoom, lastReadMessageId, messages, currentUserId]);
 
+  /** Place le bandeau « nouveaux messages » en haut de la vue, les non-lus
+   *  en dessous. Faux s'il n'est pas dans le fil. */
+  const placerSurSeparateur = useCallback((): boolean => {
+    const el = containerRef.current;
+    const sep = el?.querySelector<HTMLElement>("[data-unread-sep]");
+    if (!el || !sep) return false;
+    const haut = sep.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    el.scrollTop = Math.max(0, haut - 12);
+    return true;
+  }, []);
+
   // Position the scroll on channel-open: at the unread separator if the
-  // user has a backlog of unread, otherwise at the bottom. Falls back to
-  // scrollToBottom if the separator hasn't rendered yet (e.g. lastReadId
-  // fell outside the currently-loaded message window).
+  // user has a backlog of unread, otherwise at the bottom.
   const positionInitialScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     // After any scroll operation, re-check whether we ended up at the bottom.
-    // When the chat fits on screen, scrollIntoView/scrollToBottom produce no
-    // actual scroll event, so handleScroll never fires and the derived state
+    // When the chat fits on screen, scrollToBottom produces no actual scroll
+    // event, so handleScroll never fires and the derived state
     // (isAtBottomRef + showScrollDown) would otherwise stay stuck.
     const syncBottomState = () => {
+      positionneRef.current = true;
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
       isAtBottomRef.current = atBottom;
       setShowScrollDown(!atBottom);
       if (atBottom) markAsRead();
     };
 
-    if (computeHasUnread()) {
-      const sep = el.querySelector("[data-unread-sep]");
-      if (sep) {
-        sep.scrollIntoView({ behavior: "auto", block: "center" });
-        // If the chat is short enough that scrolling to the separator leaves
-        // us at the bottom, nudge the scroll up a bit so the user is NOT at
-        // bottom. That makes the "jump to latest" arrow visible, and the
-        // user has to actively reach the bottom (scroll or arrow click) to
-        // acknowledge the unread — which is what dismisses the separator.
-        requestAnimationFrame(() => {
-          if (el.scrollHeight - el.scrollTop - el.clientHeight < 50) {
-            el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - 80);
-          }
-          syncBottomState();
-        });
-      } else {
-        // Separator not in DOM (e.g. lastReadId outside loaded window).
-        // Bottom-scroll so user at least sees the latest.
-        scrollToBottom();
-        requestAnimationFrame(syncBottomState);
-      }
-    } else {
-      scrollToBottom();
+    // Le bandeau fait foi : s'il est dans le fil, on y va. Il n'y est plus
+    // centré puis remonté de 80 px — le premier non-lu se retrouvait à moitié
+    // sous la zone de saisie —, il est en HAUT, les nouveaux messages dessous.
+    if (placerSurSeparateur()) {
+      // WebKit n'ancre pas le défilement : un aperçu de lien ou une image qui
+      // prend sa taille au-dessus pousserait le bandeau hors de vue. On le
+      // replace pendant quelques secondes, tant que l'utilisateur ne touche
+      // à rien (voir `arreterAncre` et l'observateur de hauteur).
+      ancreJusquaRef.current = Date.now() + 4000;
       requestAnimationFrame(syncBottomState);
+      return;
     }
-  }, [computeHasUnread, scrollToBottom, markAsRead]);
+    // Pas de bandeau (dernier lu hors du fil chargé, ou rien de nouveau) :
+    // en bas, au moins l'utilisateur voit le plus récent.
+    scrollToBottom();
+    requestAnimationFrame(syncBottomState);
+  }, [placerSurSeparateur, scrollToBottom, markAsRead]);
 
   // On channel change: reset per-channel state and schedule initial scroll.
   // We do NOT call markAsRead unconditionally here — if the channel has
@@ -341,6 +349,8 @@ export function MessageList() {
       prevMessagesLenRef.current = messages.length;
       channelJustChangedRef.current = true;
       initialScrollDoneRef.current = false;
+      positionneRef.current = false;
+      ancreJusquaRef.current = 0;
     }
   }, [activeChannel, messages.length]);
 
@@ -460,12 +470,15 @@ export function MessageList() {
       const currHeight = contentEl.offsetHeight;
       if (currHeight !== lastHeight) {
         lastHeight = currHeight;
+        // Le bandeau des non-lus reste en haut de la vue pendant que le
+        // contenu prend ses dimensions (voir `positionInitialScroll`).
+        if (ancreJusquaRef.current > Date.now() && placerSurSeparateur()) return;
         if (isAtBottomRef.current) scrollToBottom();
       }
     });
     ro.observe(contentEl);
     return () => ro.disconnect();
-  }, [scrollToBottom]);
+  }, [scrollToBottom, placerSurSeparateur]);
 
   const userHasScrolledRef = useRef(false);
   useEffect(() => { userHasScrolledRef.current = false; }, [activeChannel]);
@@ -506,6 +519,14 @@ export function MessageList() {
     return () => observer.disconnect();
   }, []);
 
+  /** L'utilisateur prend la main : le bandeau des non-lus n'est plus
+   *  maintenu en haut de la vue. */
+  const arreterAncre = useCallback(() => { ancreJusquaRef.current = 0; }, []);
+
+  /** Des messages d'autrui non lus restent plus bas : point rouge sur la
+   *  flèche « tout en bas ». */
+  const nonLusEnDessous = useMemo(() => computeHasUnread(), [computeHasUnread]);
+
   // Scroll handler
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -518,7 +539,9 @@ export function MessageList() {
     // Only update state when it actually changes (avoids re-rendering 158 messages)
     if (wasAtBottom !== atBottom) {
       setShowScrollDown(!atBottom);
-      if (atBottom) markAsRead();
+      // Pas avant que la vue ait été placée à l'ouverture du salon : un
+      // recalage du défilement n'est pas une lecture.
+      if (atBottom && positionneRef.current) markAsRead();
     }
 
     if (!atBottom) {
@@ -625,6 +648,10 @@ export function MessageList() {
 
       <div
         ref={containerRef}
+        onWheel={arreterAncre}
+        onTouchStart={arreterAncre}
+        onMouseDown={arreterAncre}
+        onKeyDown={arreterAncre}
         className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 flex flex-col min-w-0"
         onScroll={handleScroll}
       >
@@ -695,6 +722,15 @@ export function MessageList() {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="6 9 12 15 18 9" />
           </svg>
+          {nonLusEnDessous && (
+            <span
+              aria-label={t("chat.unreadBelow")}
+              style={{
+                position: "absolute", top: 0, right: 0, width: 10, height: 10, borderRadius: "50%",
+                background: "var(--color-error)", border: "2px solid var(--color-surface-container-high)",
+              }}
+            />
+          )}
         </button>
       )}
     </div>

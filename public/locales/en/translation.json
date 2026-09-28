@@ -130,6 +130,7 @@
     "deleteError": "Deletion refused: check the password."
   },
   "chat": {
+    "unreadBelow": "New messages below",
     "previewTitle": "Message",
     "previewFrom": "Message from {{date}}",
     "previewMissing": "This message could not be found: it may have been deleted.",
