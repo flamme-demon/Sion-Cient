@@ -14,4 +14,8 @@ object SionNatif {
 
   @JvmStatic
   external fun initialiser(context: Context)
+
+  /** Appli tuée en plein appel : départ propre, avant l'arrêt du processus. */
+  @JvmStatic
+  external fun quitterVoix()
 }

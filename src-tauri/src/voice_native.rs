@@ -2205,6 +2205,27 @@ pub fn voice_native_disconnect(app: tauri::AppHandle<TauriRuntime>) -> VoiceNati
     status
 }
 
+/// Appli tuée (Android) : ferme la session vocale sans fenêtre ni
+/// événement — départ propre envoyé au SFU avant que le processus ne meure.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn couper_voix_native() {
+    #[cfg(feature = "native-voice")]
+    {
+        webrtc_sys::sion_audio::ffi::clear_soundboard_audio();
+        invalidate_native_events();
+        if let Some(mut engine) = take_engine() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine.disconnect();
+            }));
+        }
+        participants_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+    reset_manager_to_disconnected();
+}
+
 /// Vrai quand l'utilisateur est en sourdine.
 pub(crate) fn en_sourdine() -> bool {
     manager().lock().unwrap_or_else(|e| e.into_inner()).deafened

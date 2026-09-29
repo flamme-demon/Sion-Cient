@@ -323,6 +323,10 @@ export interface LecturesSalon {
 /** J'écris (ou plus) : le cœur ne prévient le serveur qu'au changement, ou
  *  toutes les 3 s au plus. */
 export const ecrire = (salon: string, actif: boolean) => invoquer<void>("matrix_ecrire", { salon, actif });
+/** Pusher HTTP de cet appareil (push Android via ntfy), format event_id_only. */
+export const enregistrerPusher = (passerelle: string, cle: string, appId: string, appareil: string) =>
+  invoquer<void>("matrix_enregistrer_pusher", { passerelle, cle, appId, appareil });
+export const retirerPusher = (cle: string, appId: string) => invoquer<void>("matrix_retirer_pusher", { cle, appId });
 export async function surFrappes(rappel: (f: Frappe) => void): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<Frappe>("matrix-frappe", (e) => rappel(e.payload));

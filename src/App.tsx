@@ -128,6 +128,8 @@ export default function App() {
   joinVoiceRef.current = joinVoiceChannel;
   const leaveVoiceRef = useRef(leaveVoiceChannel);
   leaveVoiceRef.current = leaveVoiceChannel;
+  /** État micro / sourdine avant un appel téléphonique (Android). */
+  const avantAppelRef = useRef<{ muted: boolean; deafened: boolean } | null>(null);
 
   // Listen for Android foreground service notification actions
   useEffect(() => {
@@ -137,6 +139,24 @@ export default function App() {
       if (action === "disconnect") {
         const voiceId = useAppStore.getState().connectedVoiceChannel;
         if (voiceId) leaveVoiceRef.current(voiceId);
+      }
+      // Appel téléphonique décroché : sourdine (micro coupé, plus rien du
+      // salon) le temps de l'appel ; raccroché : état d'avant rétabli.
+      if (action === "appel-debut") {
+        const s = useAppStore.getState();
+        avantAppelRef.current = { muted: s.isMuted, deafened: s.isDeafened };
+        if (!s.isDeafened) s.toggleDeafen();
+      }
+      if (action === "appel-fin" && avantAppelRef.current) {
+        const avant = avantAppelRef.current;
+        avantAppelRef.current = null;
+        const s = useAppStore.getState();
+        if (!avant.deafened && s.isDeafened) s.toggleDeafen();
+        // La sourdine avait coupé le micro : on lui rend son état d'avant.
+        setTimeout(() => {
+          const apres = useAppStore.getState();
+          if (apres.isMuted !== avant.muted) apres.toggleMute(true);
+        }, 300);
       }
     };
     // Handle notification tap — open room (with retry until channels loaded)

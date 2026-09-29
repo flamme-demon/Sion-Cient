@@ -45,6 +45,37 @@ impl CoeurMatrix {
         self.fils().toutes_lectures()
     }
 
+    /// Déclare où le serveur envoie les notifications push de cet appareil :
+    /// un pusher HTTP vers la passerelle Matrix de ntfy (`passerelle`), le
+    /// sujet ntfy servant de clé (`cle`). Format « event_id_only » : ni texte
+    /// ni expéditeur ne quittent le serveur. Remplace un pusher de même clé.
+    pub async fn enregistrer_pusher(&self, passerelle: &str, cle: &str, app_id: &str, nom_appareil: &str) -> Resultat<()> {
+        use matrix_sdk::ruma::api::client::push::{Pusher, PusherIds, PusherInit, PusherKind};
+        use matrix_sdk::ruma::push::{HttpPusherData, PushFormat};
+        let client = self.client().await.ok_or(Erreur::PasDeSession)?;
+        let mut donnees = HttpPusherData::new(passerelle.to_owned());
+        donnees.format = Some(PushFormat::EventIdOnly);
+        let pusher: Pusher = PusherInit {
+            ids: PusherIds::new(cle.to_owned(), app_id.to_owned()),
+            kind: PusherKind::Http(donnees),
+            app_display_name: "Sion Client".to_owned(),
+            device_display_name: nom_appareil.to_owned(),
+            profile_tag: None,
+            lang: "fr".to_owned(),
+        }
+        .into();
+        Box::pin(client.pusher().set(pusher, false)).await?;
+        Ok(())
+    }
+
+    /// Retire le pusher de cet appareil (déconnexion).
+    pub async fn retirer_pusher(&self, cle: &str, app_id: &str) -> Resultat<()> {
+        use matrix_sdk::ruma::api::client::push::PusherIds;
+        let client = self.client().await.ok_or(Erreur::PasDeSession)?;
+        Box::pin(client.pusher().delete(PusherIds::new(cle.to_owned(), app_id.to_owned()))).await?;
+        Ok(())
+    }
+
     /// Signale que j'écris (ou plus) : matrix-sdk n'envoie au serveur qu'un
     /// changement ou un rappel toutes les 3 s.
     pub async fn ecrire(&self, salon: &str, actif: bool) -> Resultat<()> {

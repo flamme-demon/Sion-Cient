@@ -12,6 +12,13 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
 
+  companion object {
+    /** Interface vivante (WebView créé) : c'est elle qui notifie, avec le
+     *  texte déchiffré ; le service ntfy ne prend le relais que sans elle. */
+    @Volatile var vivante = false
+    private const val DEMANDE_NOTIFICATIONS = 4243
+  }
+
   private var voiceActionReceiver: BroadcastReceiver? = null
   private var cachedWebView: WebView? = null
   private var pendingRoomId: String? = null
@@ -22,6 +29,14 @@ class MainActivity : TauriActivity() {
     SionNatif.initialiser(applicationContext)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    vivante = true
+    // Android 13+ : sans cette autorisation, aucune notification — ni
+    // message, ni appel en cours (29/09 : jamais demandée).
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    ) {
+      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), DEMANDE_NOTIFICATIONS)
+    }
 
     // Inject JS interface for voice service control once WebView is ready
     val activity = this
@@ -48,6 +63,8 @@ class MainActivity : TauriActivity() {
           VoiceCallService.ACTION_MUTE -> "mute"
           VoiceCallService.ACTION_DEAFEN -> "deafen"
           VoiceCallService.ACTION_DISCONNECT -> "disconnect"
+          VoiceCallService.ACTION_APPEL_DEBUT -> "appel-debut"
+          VoiceCallService.ACTION_APPEL_FIN -> "appel-fin"
           else -> return
         }
         runOnUiThread {
@@ -142,6 +159,7 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onDestroy() {
+    vivante = false
     voiceActionReceiver?.let { unregisterReceiver(it) }
     super.onDestroy()
   }

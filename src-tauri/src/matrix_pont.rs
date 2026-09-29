@@ -419,10 +419,23 @@ mod actif {
 
     /// Fermeture de la fenêtre : départ de l'appel publié par le cœur, sans
     /// compter sur une webview qui s'en va.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     pub fn quitter_voix_a_la_fermeture() {
         if let Ok(coeur) = coeur() {
             let coeur = coeur.clone();
             tauri::async_runtime::spawn(async move { coeur.quitter_voix().await });
+        }
+    }
+
+    /// Appli tuée (Android) : départ de l'appel publié AVANT de rendre la
+    /// main — le processus peut disparaître juste après. Borné à `delai`.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn quitter_voix_bloquant(delai: std::time::Duration) {
+        if let Ok(coeur) = coeur() {
+            let coeur = coeur.clone();
+            let _ = tauri::async_runtime::block_on(async move {
+                tokio::time::timeout(delai, coeur.quitter_voix()).await
+            });
         }
     }
 
@@ -463,10 +476,15 @@ mod actif {
     }
 
     pub fn quitter_voix_a_la_fermeture() {}
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fn quitter_voix_bloquant(_delai: std::time::Duration) {}
 }
 
 #[cfg_attr(target_os = "android", allow(unused_imports))]
 pub use actif::{deposer_media, fichier_media_matrix, initialiser, quitter_voix_a_la_fermeture};
+#[cfg(target_os = "android")]
+pub use actif::quitter_voix_bloquant;
 
 /// Protocole `sion-media` (médias des messages du moteur Rust). Sans la
 /// feature, il n'existe pas : le moteur JS n'en produit aucune URL.
@@ -783,6 +801,16 @@ pub mod commandes {
     #[tauri::command]
     pub async fn matrix_ecrire(salon: String, actif: bool) -> Result<(), String> {
         coeur()?.ecrire(&salon, actif).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_enregistrer_pusher(passerelle: String, cle: String, app_id: String, appareil: String) -> Result<(), String> {
+        coeur()?.enregistrer_pusher(&passerelle, &cle, &app_id, &appareil).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_retirer_pusher(cle: String, app_id: String) -> Result<(), String> {
+        coeur()?.retirer_pusher(&cle, &app_id).await.map_err(erreur)
     }
 
     #[tauri::command]
@@ -1349,6 +1377,16 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_ecrire(_salon: String, _actif: bool) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_enregistrer_pusher(_passerelle: String, _cle: String, _app_id: String, _appareil: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_retirer_pusher(_cle: String, _app_id: String) -> Result<(), String> {
         Err(INACTIF.into())
     }
 

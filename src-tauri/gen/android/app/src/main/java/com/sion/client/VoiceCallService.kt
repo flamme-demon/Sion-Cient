@@ -8,8 +8,11 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -25,6 +28,10 @@ class VoiceCallService : Service() {
         const val ACTION_MUTE = "com.sion.client.MUTE"
         const val ACTION_DEAFEN = "com.sion.client.DEAFEN"
         const val ACTION_DISCONNECT = "com.sion.client.DISCONNECT"
+        /** Appel téléphonique décroché / terminé : Sion se met en sourdine
+         *  pendant l'appel, puis rétablit son état. */
+        const val ACTION_APPEL_DEBUT = "com.sion.client.APPEL_DEBUT"
+        const val ACTION_APPEL_FIN = "com.sion.client.APPEL_FIN"
         const val EXTRA_CHANNEL_NAME = "channel_name"
         const val EXTRA_IS_MUTED = "is_muted"
         const val EXTRA_IS_DEAFENED = "is_deafened"
@@ -70,28 +77,105 @@ class VoiceCallService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val handler = Handler(Looper.getMainLooper())
-    private val speakerRunnable = object : Runnable {
-        override fun run() {
-            if (!isRunning) return
-            forceSpeaker()
-            handler.postDelayed(this, 2000)
+    /**
+     * Sortie audio de l'appel : casque (Bluetooth, filaire, USB) s'il y en a
+     * un, sinon haut-parleur. Réévaluée quand un appareil se branche ou se
+     * débranche. Avant : le haut-parleur était forcé toutes les 2 s, ce qui
+     * rendait un casque Bluetooth inutilisable (29/09).
+     */
+    private fun choisirSortie() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val dispo = am.availableCommunicationDevices
+            val ordre = listOf(
+                AudioDeviceInfo.TYPE_BLE_HEADSET,
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_USB_HEADSET,
+                AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            )
+            val choix = ordre.firstNotNullOfOrNull { type -> dispo.firstOrNull { it.type == type } }
+            if (choix != null && am.communicationDevice?.id != choix.id) {
+                am.setCommunicationDevice(choix)
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                val sorties = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type }
+                val bluetooth = AudioDeviceInfo.TYPE_BLUETOOTH_SCO in sorties
+                val filaire = sorties.any {
+                    it == AudioDeviceInfo.TYPE_WIRED_HEADSET || it == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                        it == AudioDeviceInfo.TYPE_USB_HEADSET
+                }
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (bluetooth) {
+                    am.startBluetoothSco()
+                    am.isBluetoothScoOn = true
+                }
+                am.isSpeakerphoneOn = !bluetooth && !filaire
+            }
         }
     }
 
-    private fun forceSpeaker() {
+    private val appareilsAudio = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = choisirSortie()
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = choisirSortie()
+    }
+
+    // ── Appel téléphonique ──────────────────────────────────────────────
+    // Décroché : sourdine (micro coupé, plus rien entendu du salon) ;
+    // raccroché : état d'avant rétabli (côté interface, `__SION_VOICE_ACTION__`).
+    private var appelEnCours = false
+    private var ecouteMode: AudioManager.OnModeChangedListener? = null
+    @Suppress("DEPRECATION")
+    private var ecouteTelephone: PhoneStateListener? = null
+
+    private fun signalerAppel(enAppel: Boolean) {
+        if (enAppel == appelEnCours) return
+        appelEnCours = enAppel
+        sendBroadcast(Intent("com.sion.client.VOICE_ACTION").apply {
+            putExtra("action", if (enAppel) ACTION_APPEL_DEBUT else ACTION_APPEL_FIN)
+            setPackage(packageName)
+        })
+        // Après l'appel, le système a repris la main sur le mode et la sortie.
+        if (!enAppel) handler.postDelayed({ choisirSortie() }, 800)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun suivreAppelsTelephoniques() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+ : use setCommunicationDevice
-            val speaker = am.availableCommunicationDevices.firstOrNull {
-                it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            // Mode audio global : IN_CALL = appel téléphonique décroché (le
+            // nôtre est IN_COMMUNICATION). La sonnerie seule ne coupe rien.
+            val ecoute = AudioManager.OnModeChangedListener { mode ->
+                signalerAppel(mode == AudioManager.MODE_IN_CALL)
             }
-            if (speaker != null && am.communicationDevice?.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
-                am.setCommunicationDevice(speaker)
-            }
+            am.addOnModeChangedListener(mainExecutor, ecoute)
+            ecouteMode = ecoute
         } else {
-            am.mode = AudioManager.MODE_IN_COMMUNICATION
-            am.isSpeakerphoneOn = true
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            val ecoute = object : PhoneStateListener() {
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    signalerAppel(state == TelephonyManager.CALL_STATE_OFFHOOK)
+                }
+            }
+            tm.listen(ecoute, PhoneStateListener.LISTEN_CALL_STATE)
+            ecouteTelephone = ecoute
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun cesserSuivreAppels() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ecouteMode?.let { am.removeOnModeChangedListener(it) }
+        } else {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            ecouteTelephone?.let { tm.listen(it, PhoneStateListener.LISTEN_NONE) }
+        }
+        ecouteMode = null
+        ecouteTelephone = null
     }
 
     override fun onCreate() {
@@ -105,8 +189,27 @@ class VoiceCallService : Service() {
         }
         isRunning = true
 
-        // Force speaker after WebRTC audio setup (with delay + periodic enforcement)
-        handler.postDelayed(speakerRunnable, 3000)
+        // Sortie choisie une fois WebRTC en place, puis à chaque appareil
+        // branché ou débranché.
+        handler.postDelayed({ choisirSortie() }, 1500)
+        (getSystemService(Context.AUDIO_SERVICE) as AudioManager).registerAudioDeviceCallback(appareilsAudio, handler)
+        suivreAppelsTelephoniques()
+    }
+
+    /**
+     * Appli balayée des récentes : on quitte l'appel proprement (départ
+     * MatrixRTC puis LiveKit, voir android_natif.rs) avant de s'arrêter.
+     * Sans ça, la voix continuait sans interface et « Quitter » ne répondait
+     * plus — les autres voyaient un participant fantôme (29/09).
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        try {
+            SionNatif.quitterVoix()
+        } catch (_: Throwable) {
+        }
+        stop(this)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -170,7 +273,9 @@ class VoiceCallService : Service() {
 
     override fun onDestroy() {
         isRunning = false
-        handler.removeCallbacks(speakerRunnable)
+        handler.removeCallbacksAndMessages(null)
+        cesserSuivreAppels()
+        (getSystemService(Context.AUDIO_SERVICE) as AudioManager).unregisterAudioDeviceCallback(appareilsAudio)
         // Restore audio routing
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

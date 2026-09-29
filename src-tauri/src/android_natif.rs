@@ -76,3 +76,16 @@ fn initialiser_webrtc(env: &JNIEnv, contexte: &JObject) {
         noter(log::Level::Error, "[Sion][android] WebRTC : initialisation du Context refusée".into());
     }
 }
+
+/// Appli tuée (tâche retirée des récentes) : `VoiceCallService.onTaskRemoved`
+/// appelle ceci avant de s'arrêter. Sans ça, la voix continuait sans
+/// interface — « Quitter » de la notification ne répondait plus — et les
+/// autres voyaient un participant fantôme (29/09).
+#[no_mangle]
+pub extern "system" fn Java_com_sion_client_SionNatif_quitterVoix<'local>(_env: JNIEnv<'local>, _classe: JClass<'local>) {
+    log::info!("[Sion][android] appli fermée : départ de l'appel");
+    // D'abord l'appartenance MatrixRTC (les autres ne nous voient plus),
+    // puis la session LiveKit (départ propre au SFU).
+    crate::matrix_pont::quitter_voix_bloquant(std::time::Duration::from_millis(1500));
+    crate::voice_native::couper_voix_native();
+}

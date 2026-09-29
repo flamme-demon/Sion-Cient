@@ -96,9 +96,12 @@ case "${1:-}" in
         APK=$(find "$APP_DIR/build/outputs/apk" -name "*debug*.apk" -newer "$APP_DIR/libs/libwebrtc.jar" | head -1)
         [ -n "$APK" ] || { echo "[Sion] APK de dev introuvable"; exit 1; }
         echo "[Sion] APK de dev : $APK ($(du -h "$APK" | cut -f1))"
-        if adb get-state >/dev/null 2>&1; then
-            adb install -r "$APK"
-            adb shell am start -n "$APPLICATION_ID.dev/$APPLICATION_ID.MainActivity"
+        # Le téléphone branché en USB (ANDROID_SERIAL, sinon le premier appareil
+        # USB) — jamais un appareil réseau (TV…) apparu dans adb entre-temps.
+        SERIAL=${ANDROID_SERIAL:-$(adb devices | awk 'NR > 1 && $2 == "device" && $1 !~ /:/ { print $1; exit }')}
+        if [ -n "$SERIAL" ]; then
+            adb -s "$SERIAL" install -r "$APK"
+            adb -s "$SERIAL" shell am start -n "$APPLICATION_ID.dev/$APPLICATION_ID.MainActivity"
         fi
         ;;
     build)

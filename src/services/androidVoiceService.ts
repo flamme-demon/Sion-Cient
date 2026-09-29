@@ -51,10 +51,9 @@ export function startVoiceService(channelName: string, isMuted: boolean, isDeafe
     try {
       bridge.startVoiceService(channelName, isMuted, isDeafened);
       serviceStarted = true;
-      // Force speaker mode after WebRTC has started
-      setTimeout(() => {
-        try { bridge.setSpeakerOn(true); } catch { /* ignore */ }
-      }, 1000);
+      // La sortie audio (casque, sinon haut-parleur) est choisie par le
+      // service d'appel lui-même : forcer le haut-parleur ici écrasait un
+      // casque Bluetooth.
     } catch (e) {
       console.warn("[Sion] Voice service start error:", e);
     }
@@ -78,6 +77,15 @@ export function startPushListener(topicUrl: string) {
   const bridge = getBridge();
   if (bridge) {
     try { (bridge as unknown as { startPushListener: (url: string) => void }).startPushListener(topicUrl); } catch { /* ignore */ }
+  }
+}
+
+/** Arrête l'écoute ntfy (déconnexion). */
+export function stopPushListener() {
+  if (!isAndroid) return;
+  const bridge = getBridge();
+  if (bridge) {
+    try { (bridge as unknown as { stopPushListener: () => void }).stopPushListener(); } catch { /* ignore */ }
   }
 }
 

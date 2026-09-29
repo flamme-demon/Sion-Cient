@@ -100,14 +100,18 @@ class NtfyListenerService : Service() {
 
         android.util.Log.i("SionPush", "Topic: $topicUrl")
 
-        // Start SSE listener in background thread
-        // Use local ntfy URL to avoid NAT hairpinning issues
-        val localTopicUrl = topicUrl
-            .replace("https://push.sionchat.fr", "http://192.168.252.245:8090")
+        // Écoute SSE : l'adresse publique d'abord — l'IP locale en dur, seule
+        // utilisée jusqu'ici, rendait les push impossibles hors de la maison
+        // (4G). L'adresse locale reste un secours quand la publique échoue
+        // (retour NAT impossible sur le réseau local).
+        val adresses = listOf(
+            topicUrl,
+            topicUrl.replace("https://push.sionchat.fr", "http://192.168.252.245:8090"),
+        ).distinct().map { "$it/sse" }
         shouldRun = true
         listenerThread?.interrupt()
         listenerThread = Thread {
-            listenToSse("$localTopicUrl/sse")
+            listenToSse(adresses)
         }.apply {
             isDaemon = true
             start()
@@ -146,9 +150,12 @@ class NtfyListenerService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun listenToSse(sseUrl: String) {
-        android.util.Log.i("SionPush", "Starting SSE listener: $sseUrl")
+    private fun listenToSse(adresses: List<String>) {
+        var essai = 0
         while (shouldRun) {
+            // Une adresse qui échoue : on passe à la suivante.
+            val sseUrl = adresses[essai % adresses.size]
+            android.util.Log.i("SionPush", "SSE : connexion à $sseUrl")
             try {
                 val url = URL(sseUrl)
                 val conn = url.openConnection() as HttpURLConnection
@@ -173,6 +180,7 @@ class NtfyListenerService : Service() {
                 android.util.Log.w("SionPush", "SSE connection closed, reconnecting...")
             } catch (e: Exception) {
                 android.util.Log.e("SionPush", "SSE error: ${e.message}")
+                essai++
                 if (!shouldRun) return
                 try { Thread.sleep(5000) } catch (_: InterruptedException) { return }
             }
@@ -198,10 +206,12 @@ class NtfyListenerService : Service() {
             val eventId = notification.optString("event_id", "")
             val unread = notification.optJSONObject("counts")?.optInt("unread", 0) ?: 0
 
+            // Interface vivante (premier ou arrière-plan) : elle notifie
+            // elle-même, avec le texte déchiffré — pas de doublon.
             val foreground = isAppInForeground()
-            android.util.Log.i("SionPush", "roomId=$roomId unread=$unread foreground=$foreground")
+            android.util.Log.i("SionPush", "roomId=$roomId unread=$unread foreground=$foreground vivante=${MainActivity.vivante}")
 
-            if (foreground) return
+            if (foreground || MainActivity.vivante) return
 
             // Check notification mode
             val mode = getSharedPreferences("sion_push", Context.MODE_PRIVATE)

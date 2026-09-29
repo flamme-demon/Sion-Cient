@@ -11,6 +11,8 @@
  */
 
 import { getMatrixClient } from "./matrixService";
+import * as core from "./matrixCore";
+import { moteurRust } from "./moteur";
 import { PushRuleKind } from "matrix-js-sdk";
 import type { NotificationMode } from "../stores/useSettingsStore";
 
@@ -44,13 +46,9 @@ export async function syncPushRules(_mode: NotificationMode): Promise<void> {
 // Note: server-side push rules for E2EE rooms are unreliable with Continuwuity.
 // Notification filtering is handled client-side in NtfyListenerService (Android).
 
-/** Generate a deterministic topic name for this device */
-function getTopicId(): string {
-  const client = getMatrixClient();
-  if (!client) return "";
-  const userId = client.getUserId() || "";
-  const deviceId = client.getDeviceId() || "";
-  // Simple hash to create a short topic name
+/** Sujet ntfy de cet appareil : court, stable, dérivé du compte et de
+ *  l'appareil. */
+function sujet(userId: string, deviceId: string): string {
   let hash = 0;
   const str = `${userId}:${deviceId}`;
   for (let i = 0; i < str.length; i++) {
@@ -59,8 +57,47 @@ function getTopicId(): string {
   return `sion_${Math.abs(hash).toString(36)}`;
 }
 
+/** Generate a deterministic topic name for this device */
+function getTopicId(): string {
+  const client = getMatrixClient();
+  if (!client) return "";
+  return sujet(client.getUserId() || "", client.getDeviceId() || "");
+}
+
+/** Passerelle Matrix de ntfy (spec « push gateway ») : le serveur y poste,
+ *  ntfy publie sur le sujet donné comme clé du pusher. */
+const PASSERELLE = `${NTFY_BASE_URL}/_matrix/push/v1/notify`;
+
+/** Moteur Rust : sujet de cet appareil, d'après la session. */
+async function sujetRust(): Promise<{ topicUrl: string; appareil: string } | null> {
+  const { useAuthStore } = await import("../stores/useAuthStore");
+  const c = useAuthStore.getState().credentials;
+  if (!c?.userId || !c.deviceId) return null;
+  return { topicUrl: `${NTFY_BASE_URL}/${sujet(c.userId, c.deviceId)}`, appareil: c.deviceId };
+}
+
+const SUR_ANDROID = /Android/i.test(navigator.userAgent);
+
 /** Register a Matrix HTTP pusher that sends notifications to our ntfy topic */
 export async function registerPusher(): Promise<void> {
+  if (moteurRust()) {
+    // Le cœur déclare le pusher — sur téléphone seulement : sur PC, personne
+    // n'écoute le sujet ntfy (les notifications viennent de la synchro).
+    // Avant : `getMatrixClient()` rendait null avec le moteur Rust, et aucun
+    // pusher n'était déclaré — plus aucun push sur Android (29/09).
+    if (!SUR_ANDROID) return;
+    const s = await sujetRust();
+    if (!s) return;
+    try {
+      await core.enregistrerPusher(PASSERELLE, s.topicUrl, PUSH_APP_ID, s.appareil);
+      console.info(`[Sion][push] pusher déclaré (${s.topicUrl})`);
+      const { startPushListener } = await import("./androidVoiceService");
+      startPushListener(s.topicUrl);
+    } catch (err) {
+      console.warn("[Sion][push] pusher non déclaré :", err);
+    }
+    return;
+  }
   const client = getMatrixClient();
   if (!client) return;
 
@@ -112,6 +149,15 @@ export async function registerPusher(): Promise<void> {
 
 /** Unregister the pusher (on logout) */
 export async function unregisterPusher(): Promise<void> {
+  if (moteurRust()) {
+    if (!SUR_ANDROID) return;
+    const s = await sujetRust();
+    if (!s) return;
+    await core.retirerPusher(s.topicUrl, PUSH_APP_ID).catch(() => {});
+    const { stopPushListener } = await import("./androidVoiceService");
+    stopPushListener();
+    return;
+  }
   const client = getMatrixClient();
   if (!client) return;
 
