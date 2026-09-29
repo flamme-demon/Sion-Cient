@@ -258,6 +258,13 @@ mod actif {
             .get(header::RANGE)
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
+        // Android : le WebView applique LUI-MÊME la plage à la réponse
+        // interceptée — il saute dans le flux jusqu'au début demandé, puis
+        // lit jusqu'à la fin, en gardant notre statut. On lui donne donc le
+        // fichier ENTIER avec un 206 « du début demandé à la fin » (un morceau
+        // déjà découpé l'était deux fois ; un 200 faisait planter les sauts).
+        #[cfg(target_os = "android")]
+        let (plage, plage_android) = (None::<String>, plage.filter(|_| original));
         if let (true, Some(plage)) = (original, plage) {
             tauri::async_runtime::spawn_blocking(move || match servir_plage(&cle, &plage) {
                 Ok(r) => repondeur.respond(r),
@@ -274,6 +281,23 @@ mod actif {
             // L'original accepte les plages (voir plus haut).
             let reponse = if original { reponse.header(header::ACCEPT_RANGES, "bytes") } else { reponse };
             let reponse = match contenu {
+                #[cfg(target_os = "android")]
+                Ok(octets) if plage_android.is_some() => {
+                    let total = octets.len() as u64;
+                    let plage = plage_android.as_deref().unwrap_or_default();
+                    match sion_matrix::plage_http(plage, total, u64::MAX) {
+                        Some((debut, _)) => reponse
+                            .status(206)
+                            .header(header::CONTENT_TYPE, sion_matrix::type_mime(&octets))
+                            .header(header::CONTENT_RANGE, format!("bytes {debut}-{}/{total}", total - 1))
+                            .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+                            .body(octets),
+                        None => reponse
+                            .status(416)
+                            .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+                            .body(Vec::new()),
+                    }
+                }
                 Ok(octets) => reponse
                     .header(header::CONTENT_TYPE, sion_matrix::type_mime(&octets))
                     .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
@@ -291,10 +315,12 @@ mod actif {
     }
 
     /// Au plus par réponse à une plage : le lecteur redemande la suite.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     const MORCEAU_MAX: u64 = 4 * 1024 * 1024;
 
     /// Réponse 206 à une requête par plage, lue dans le fichier déchiffré
     /// (`deposer_media`) ; 416 si la plage est hors du fichier.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     fn servir_plage(cle: &str, plage: &str) -> Result<Response<Vec<u8>>, tauri::http::Error> {
         use std::io::{Read, Seek, SeekFrom};
         let base = Response::builder()
