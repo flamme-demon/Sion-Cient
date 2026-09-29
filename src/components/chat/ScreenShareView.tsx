@@ -6,7 +6,9 @@ import { useAppStore } from "../../stores/useAppStore";
 import { useLayoutStore, SHARE_VIEW_MIN_VH, SHARE_VIEW_MAX_VH, SHARE_FLOATING_MIN_W, SHARE_FLOATING_MIN_H } from "../../stores/useLayoutStore";
 import { ResizeHandle } from "../layout/ResizeHandle";
 import { useTranslation } from "react-i18next";
-import { SpeakerIcon, ScreenIcon } from "../icons";
+import { SpeakerIcon, ScreenIcon, EyeIcon, EyeOffIcon } from "../icons";
+import { useIsMobile } from "../../hooks/useIsMobile";
+import { useVideoMasqueeStore } from "../../stores/useVideoMasqueeStore";
 
 /** Partage affichable : les pixels arrivent par le WebSocket binaire natif,
  *  il n'y a plus d'objet piste LiveKit dans la webview. */
@@ -826,6 +828,13 @@ export function ScreenShareView() {
   // first available one when their pick is gone — no effect needed.
   const activeShare = activeShares.find((s) => s.participantIdentity === selectedId) ?? activeShares[0] ?? null;
   const activeIdentity = activeShare?.participantIdentity ?? null;
+  // Téléphone : ni PIP natif ni carte flottante (le système et la place
+  // manquent) ; « masquer la vidéo » sert davantage.
+  const isMobile = useIsMobile();
+  // Vidéo masquée : le serveur ne l'envoie plus — données et batterie
+  // épargnées, le son du partage continue.
+  const videoMasquee = useVideoMasqueeStore((st) => !!activeIdentity && st.masquees.has(activeIdentity));
+  const basculerVideo = useVideoMasqueeStore((st) => st.basculer);
 
   // PIP natif (fenêtre OS au-dessus des autres applis) : état reflété depuis
   // Rust — elle peut s'être fermée seule (fin de partage, clic droit).
@@ -857,7 +866,7 @@ export function ScreenShareView() {
   useNativeVideoSurface(
     canvasRef,
     activeIdentity,
-    nativeSurfaceEnabled === true && !mosaic && shareDock !== "floating",
+    nativeSurfaceEnabled === true && !mosaic && shareDock !== "floating" && !videoMasquee,
   );
   // Partages vers lesquels on a pointé dans cette session — permet de tout
   // nettoyer chez les partageurs (blur, minimisation, fermeture), y compris
@@ -1692,14 +1701,38 @@ export function ScreenShareView() {
             <MosaicIcon />
           </button>
         )}
-        <button
+        {activeIdentity && !mosaic && (
+          <button
+            type="button"
+            onClick={() => basculerVideo(activeIdentity)}
+            title={videoMasquee
+              ? t("screenShare.showVideo", { defaultValue: "Afficher la vidéo" })
+              : t("screenShare.hideVideo", { defaultValue: "Masquer la vidéo (économise données et batterie, le son continue)" })}
+            aria-label={videoMasquee
+              ? t("screenShare.showVideo", { defaultValue: "Afficher la vidéo" })
+              : t("screenShare.hideVideo", { defaultValue: "Masquer la vidéo (économise données et batterie, le son continue)" })}
+            aria-pressed={videoMasquee}
+            className="flex items-center transition-colors shrink-0"
+            style={{
+              marginLeft: activeShares.length > 1 ? 0 : 'auto',
+              padding: '0 10px', alignSelf: 'stretch',
+              border: 'none', borderLeft: '1px solid var(--color-outline-variant)',
+              background: videoMasquee ? 'var(--color-secondary-container)' : 'transparent',
+              color: videoMasquee ? 'var(--color-on-secondary-container)' : 'var(--color-on-surface-variant)',
+              cursor: 'pointer',
+            }}
+          >
+            {videoMasquee ? <EyeOffIcon /> : <EyeIcon />}
+          </button>
+        )}
+        {!isMobile && <button
           type="button"
           onClick={toggleShareDock}
           title={t("screenShare.floatView", { defaultValue: "Détacher en carte flottante (Ctrl+Maj+P)" })}
           aria-label={t("screenShare.floatView", { defaultValue: "Détacher en carte flottante (Ctrl+Maj+P)" })}
           className="flex items-center transition-colors shrink-0"
           style={{
-            marginLeft: activeShares.length > 1 ? 0 : 'auto',
+            marginLeft: activeShares.length > 1 || (activeIdentity && !mosaic) ? 0 : 'auto',
             padding: '0 10px', alignSelf: 'stretch',
             border: 'none', borderLeft: '1px solid var(--color-outline-variant)',
             background: 'transparent', color: 'var(--color-on-surface-variant)',
@@ -1707,7 +1740,7 @@ export function ScreenShareView() {
           }}
         >
           <FloatIcon />
-        </button>
+        </button>}
         {activeIdentity && !mosaic && shareDock !== "floating" && (
           <button
             type="button"
@@ -1725,7 +1758,7 @@ export function ScreenShareView() {
             <ExpandIcon />
           </button>
         )}
-        {activeIdentity && (
+        {activeIdentity && !isMobile && (
           <button
             type="button"
             onClick={() => {
@@ -1802,7 +1835,7 @@ export function ScreenShareView() {
           style={{
             background: 'black',
             maxHeight: `${shareViewMaxVh}vh`,
-            display: nativePipOpen ? 'none' : 'block',
+            display: nativePipOpen || videoMasquee ? 'none' : 'block',
             // Lue par `applyNativeFrameSize` pour borner la largeur à
             // « hauteur maximale × ratio du flux » : la boîte épouse alors
             // l'image au lieu de la laisser flotter au milieu de bandes
@@ -1810,6 +1843,27 @@ export function ScreenShareView() {
             ['--sion-share-max-height' as string]: `${shareViewMaxVh}vh`,
           } as React.CSSProperties}
         />
+        {videoMasquee && activeIdentity && (
+          <div style={{
+            width: '100%', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12,
+            background: 'var(--color-surface-container)', color: 'var(--color-on-surface-variant)', fontSize: 13,
+          }}>
+            <EyeOffIcon />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              {t("screenShare.videoHidden", { defaultValue: "Vidéo masquée — elle n'est plus reçue, le son continue." })}
+            </span>
+            <button
+              type="button"
+              onClick={() => basculerVideo(activeIdentity)}
+              style={{
+                padding: '6px 12px', borderRadius: 999, border: 'none', cursor: 'pointer',
+                background: 'var(--color-primary)', color: 'var(--color-on-primary)', fontSize: 12, fontWeight: 600,
+              }}
+            >
+              {t("screenShare.showVideo", { defaultValue: "Afficher la vidéo" })}
+            </button>
+          </div>
+        )}
         {/* Carousel chevrons — overlaid on the video edges, in addition to the
             top tab bar, for quick prev/next cycling. Only when >1 share. */}
         {nativeSurfaceEnabled !== true && activeShares.length > 1 && (

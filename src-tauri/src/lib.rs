@@ -3851,7 +3851,8 @@ pub fn run() {
         voice_native::voice_native_get_screenshare_audio_state,
         voice_native::voice_native_video_port,
         voice_native::voice_native_set_screensharing,
-        voice_native::voice_native_capture_maintenue
+        voice_native::voice_native_capture_maintenue,
+        voice_native::voice_native_set_screenshare_video_visible
     ]);
 
     #[cfg(target_os = "android")]
@@ -3997,7 +3998,8 @@ pub fn run() {
         voice_native::voice_native_get_screenshare_audio_state,
         voice_native::voice_native_video_port,
         voice_native::voice_native_set_screensharing,
-        voice_native::voice_native_capture_maintenue
+        voice_native::voice_native_capture_maintenue,
+        voice_native::voice_native_set_screenshare_video_visible
     ]);
 
     #[cfg(not(target_os = "android"))]

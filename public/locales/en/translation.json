@@ -307,7 +307,10 @@
     "monitorHint": "Single-window sharing isn't available on Windows — pick a whole screen.",
     "start": "Start sharing",
     "apply": "Apply",
-    "nativePip": "Native PIP — window above other applications. Drag to move; top-right buttons: 🏠 back to Sion, 🔊 mute the share audio; right-click to close."
+    "nativePip": "Native PIP — window above other applications. Drag to move; top-right buttons: 🏠 back to Sion, 🔊 mute the share audio; right-click to close.",
+    "showVideo": "Show video",
+    "hideVideo": "Hide video (saves data and battery, sound keeps playing)",
+    "videoHidden": "Video hidden — no longer received, sound keeps playing."
   },
   "soundboard": {
     "soundCount_one": "{{count}} sound",

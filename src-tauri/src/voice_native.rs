@@ -2536,6 +2536,25 @@ pub fn voice_native_set_screenshare_audio_muted(
     }
 }
 
+/// Masque / réaffiche la VIDÉO du partage d'un expéditeur (le SFU cesse de
+/// l'envoyer ; voir `set_screenshare_video_visible`).
+#[tauri::command]
+pub fn voice_native_set_screenshare_video_visible(
+    app: tauri::AppHandle<TauriRuntime>,
+    sender: String,
+    visible: bool,
+) -> Result<bool, String> {
+    #[cfg(feature = "native-voice")]
+    {
+        return with_engine(&app, "vidéo du partage natif", |e| e.set_screenshare_video_visible(&sender, visible));
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&app, &sender, &visible);
+        Err("voix native indisponible".to_string())
+    }
+}
+
 /// Règle localement le gain du son d'un partage reçu. WebRTC accepte un gain
 /// par source distante ; la valeur est mémorisée pour les republications.
 #[tauri::command]

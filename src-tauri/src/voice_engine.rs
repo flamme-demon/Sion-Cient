@@ -1507,6 +1507,9 @@ pub struct LiveKitEngine {
     /// `screenShareAudioMuted` JS) : survivre au undeafen global (qui
     /// réinscrit tout) sans réactiver leur partage.
     share_audio_muted: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Partages dont la vidéo est masquée : le SFU cesse de l'envoyer (ni
+    /// données ni décodage), même après une réinscription.
+    share_video_hidden: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
     /// Gain local du son de chaque partage, conservé pendant les
     /// réabonnements/republications de la session.
     share_audio_volume: std::sync::Arc<Mutex<std::collections::HashMap<String, f32>>>,
@@ -1569,6 +1572,7 @@ impl LiveKitEngine {
             mic_needs_republish: std::sync::atomic::AtomicBool::new(false),
             local_share: Mutex::new(None),
             share_audio_muted: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
+            share_video_hidden: std::sync::Arc::new(Mutex::new(std::collections::HashSet::new())),
             share_audio_volume: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             video_stops: std::sync::Arc::new(Mutex::new(std::collections::HashMap::new())),
             event_app: Mutex::new(None),
@@ -2709,7 +2713,46 @@ impl LiveKitEngine {
     /// toggle 🔊 JS), sans toucher aux voix. Retourne `true` si une piste
     /// `ScreenshareAudio` de cet expéditeur existe (false = pas de son
     /// partagé, le front masque le contrôle).
-    pub fn set_screenshare_audio_subscribed(
+/// Masque / réaffiche la VIDÉO du partage d'un expéditeur. Masquée, la
+    /// piste reste souscrite mais le SFU cesse de l'envoyer (`set_enabled`) :
+    /// ni données ni décodage — utile en données mobiles, sur batterie, ou
+    /// quand on ne regarde pas. Réafficher redemande une image clé.
+    /// Retourne `true` si une piste vidéo de partage existe.
+    pub fn set_screenshare_video_visible(&self, sender: &str, visible: bool) -> Result<bool, String> {
+        let _rt_enter = self.rt.enter();
+        {
+            let mut masques = self.share_video_hidden.lock().unwrap_or_else(|e| e.into_inner());
+            if visible {
+                masques.remove(sender);
+            } else {
+                masques.insert(sender.to_string());
+            }
+        }
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(room) = room_guard.as_ref() else {
+            return Ok(false);
+        };
+        let mut found = false;
+        for participant in room.remote_participants().values() {
+            if participant.identity().as_str() != sender {
+                continue;
+            }
+            for publication in participant.track_publications().values() {
+                if is_screenshare_video(publication.kind(), publication.source()) {
+                    found = true;
+                    publication.set_enabled(visible);
+                }
+            }
+        }
+        log::info!(
+            "[Sion][voix-native] vidéo du partage {} : {}",
+            sender,
+            if visible { "affichée" } else { "masquée (plus reçue)" }
+        );
+        Ok(found)
+    }
+
+        pub fn set_screenshare_audio_subscribed(
         &self,
         sender: &str,
         subscribed: bool,
@@ -2834,6 +2877,7 @@ impl LiveKitEngine {
         // pas le réactiver toute seule (voir `set_deafened`).
         let share_audio_muted = self.share_audio_muted.clone();
         let share_audio_volume = self.share_audio_volume.clone();
+        let share_video_hidden = self.share_video_hidden.clone();
         // Pompe vidéo : handles possédés (la tâche est `'static`, pas de `&self`).
         let video_stops = self.video_stops.clone();
         let video_app = self
@@ -3077,6 +3121,15 @@ impl LiveKitEngine {
                             } else {
                                 publication.set_enabled(true);
                             }
+                            // Vidéo masquée par l'utilisateur : le SFU n'envoie
+                            // rien tant qu'elle n'est pas réaffichée.
+                            if share_video_hidden
+                                .lock()
+                                .map(|m| m.contains(&sender))
+                                .unwrap_or(false)
+                            {
+                                publication.set_enabled(false);
+                            }
                             // Échelle des couches (diagnostic : que propose le
                             // SFU ?). Pas d'API pour lister les couches
                             // simulcast — dimension + simulcast + dims des
@@ -3315,6 +3368,10 @@ impl VoiceEngine for LiveKitEngine {
             .lock()
             .map(|mut m| m.clear())
             .unwrap_or_default();
+        self.share_video_hidden
+            .lock()
+            .map(|mut m| m.clear())
+            .unwrap_or_default();
         self.share_audio_volume
             .lock()
             .map(|mut volumes| volumes.clear())
@@ -3382,6 +3439,10 @@ impl VoiceEngine for LiveKitEngine {
             .unwrap_or_else(|e| e.into_inner()) = None;
         *self.watchdog_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.share_audio_muted
+            .lock()
+            .map(|mut m| m.clear())
+            .unwrap_or_default();
+        self.share_video_hidden
             .lock()
             .map(|mut m| m.clear())
             .unwrap_or_default();

@@ -290,6 +290,12 @@ export function setVoiceNativeMuted(muted: boolean): Promise<VoiceNativeStatus> 
   return tauriInvoke<VoiceNativeStatus>("voice_native_set_muted", { muted });
 }
 
+/** Masque / réaffiche la vidéo d'un partage reçu : masquée, le serveur ne
+ *  l'envoie plus (économie de données et de batterie). */
+export function setVoiceNativeShareVideoVisible(sender: string, visible: boolean): Promise<boolean> {
+  return tauriInvoke<boolean>("voice_native_set_screenshare_video_visible", { sender, visible });
+}
+
 /** Push-to-talk : garder la capture ouverte micro coupé, pour que la voix
  *  parte dès l'appui (voir `capture_maintenue` côté Rust). */
 export function setVoiceNativeCaptureMaintenue(active: boolean): Promise<void> {
