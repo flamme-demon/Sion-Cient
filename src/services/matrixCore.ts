@@ -395,13 +395,19 @@ export const commandeAdmin = (commande: string) => invoquer<string>("matrix_comm
 // ── Chiffrement et confiance (T5) ───────────────────────────────────────────
 
 /** Étapes de la vérification, identiques à `verificationStep` du store JS. */
-export type EtapeVerification = "idle" | "requesting" | "waiting" | "comparing" | "confirmed" | "done" | "cancelled" | "error";
+export type EtapeVerification =
+  | "idle" | "requesting" | "waiting" | "pret" | "comparing" | "confirmed"
+  | "qr-scanne" | "qr-attente" | "done" | "cancelled" | "error";
 
 export interface EtatVerification {
   etape: EtapeVerification;
   /** Les 7 emojis à comparer (`EmojiData` : `{ emoji, name }`). */
   emojis: { emoji: string; name: string }[];
   erreur?: string;
+  /** Étape `pret` : QR de vérification à afficher (octets en base64). */
+  qr?: string;
+  /** Étape `pret` : cet appareil peut scanner le QR de l'autre. */
+  scanner?: boolean;
 }
 
 export const verification = () => invoquer<EtatVerification>("matrix_verification");
@@ -417,6 +423,23 @@ export const demarrerVerification = () => invoquer<void>("matrix_demarrer_verifi
 export const confirmerEmojis = () => invoquer<void>("matrix_confirmer_emojis");
 export const refuserEmojis = () => invoquer<void>("matrix_refuser_emojis");
 export const annulerVerification = () => invoquer<void>("matrix_annuler_verification");
+/** Étape `pret` : comparer des emojis plutôt que le QR. */
+export const verificationParEmojis = () => invoquer<void>("matrix_verification_emojis");
+/** Étape `pret` : octets du QR de l'autre appareil, lus par la caméra. */
+export const verificationScanner = (octets: number[]) => invoquer<void>("matrix_verification_scanner", { octets });
+/** Étape `qr-scanne` : l'autre appareil a bien scanné notre QR. */
+export const verificationConfirmerQr = () => invoquer<void>("matrix_verification_confirmer_qr");
+
+/** Jeton de connexion à usage unique pour un autre appareil (mot de passe
+ *  redemandé par le serveur) ; `expireMs` : sa durée de vie. */
+export const jetonConnexion = (motDePasse: string) =>
+  invoquer<{ jeton: string; expireMs: number }>("matrix_jeton_connexion", { motDePasse });
+/** Connexion par le jeton lu dans le QR code d'un autre appareil. */
+export const connecterJeton = (serveur: string, jeton: string) =>
+  invoquer<void>("matrix_connecter_jeton", { serveur, jeton });
+/** QR code en SVG, dessiné par Sion (aucun service extérieur). */
+export const qrSvg = (source: { texte: string } | { octetsBase64: string }) =>
+  invoquer<string>("qr_svg", { texte: null, octetsBase64: null, ...source });
 
 /** `checkDeviceVerified`. */
 export const appareilVerifie = () => invoquer<boolean>("matrix_appareil_verifie");

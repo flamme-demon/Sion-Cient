@@ -110,7 +110,11 @@ mod actif {
                 }
             },
         };
-        let coeur = Arc::new(CoeurMatrix::nouveau(dossier, "Sion (moteur Rust)", coffre).avec_prefixe_medias(PREFIXE_MEDIAS));
+        // Nom de l'appareil pour les connexions à venir (liste des sessions).
+        let nom = if cfg!(target_os = "android") { "Sion Android" } else { "Sion (moteur Rust)" };
+        let coeur = Arc::new(CoeurMatrix::nouveau(dossier, nom, coffre).avec_prefixe_medias(PREFIXE_MEDIAS));
+        // Le téléphone a une caméra : il sait scanner le QR de vérification.
+        coeur.definir_camera(cfg!(target_os = "android"));
         let mut etat = coeur.etat();
         let mut salons = coeur.salons();
         let mut messages = coeur.messages();
@@ -510,6 +514,20 @@ pub mod commandes {
         coeur()?.connecter(&serveur, &identifiant, &mot_de_passe).await.map_err(|e| e.to_string())
     }
 
+    /// Connexion par le jeton lu dans le QR code d'un autre appareil.
+    #[tauri::command]
+    pub async fn matrix_connecter_jeton(serveur: String, jeton: String) -> Result<(), String> {
+        coeur()?.connecter_par_jeton(&serveur, &jeton).await.map_err(|e| e.to_string())
+    }
+
+    /// Jeton de connexion pour un autre appareil (QR code), après
+    /// confirmation du mot de passe.
+    #[tauri::command]
+    pub async fn matrix_jeton_connexion(mot_de_passe: String) -> Result<serde_json::Value, String> {
+        let (jeton, expire_ms) = coeur()?.jeton_connexion(&mot_de_passe).await.map_err(erreur)?;
+        Ok(serde_json::json!({ "jeton": jeton, "expireMs": expire_ms }))
+    }
+
     #[tauri::command]
     pub async fn matrix_reprendre() -> Result<bool, String> {
         coeur()?.reprendre().await.map_err(|e| e.to_string())
@@ -905,6 +923,21 @@ pub mod commandes {
     }
 
     #[tauri::command]
+    pub async fn matrix_verification_emojis() -> Result<(), String> {
+        coeur()?.verification_emojis().await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_verification_scanner(octets: Vec<u8>) -> Result<(), String> {
+        coeur()?.verification_scanner(&octets).await.map_err(erreur)
+    }
+
+    #[tauri::command]
+    pub async fn matrix_verification_confirmer_qr() -> Result<(), String> {
+        coeur()?.verification_confirmer_qr().await.map_err(erreur)
+    }
+
+    #[tauri::command]
     pub async fn matrix_refuser_emojis() -> Result<(), String> {
         coeur()?.refuser_emojis().await.map_err(erreur)
     }
@@ -1141,6 +1174,16 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_connecter(_serveur: String, _identifiant: String, _mot_de_passe: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_connecter_jeton(_serveur: String, _jeton: String) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_jeton_connexion(_mot_de_passe: String) -> Result<serde_json::Value, String> {
         Err(INACTIF.into())
     }
 
@@ -1486,6 +1529,21 @@ pub mod commandes {
 
     #[tauri::command]
     pub async fn matrix_confirmer_emojis() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_verification_emojis() -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_verification_scanner(_octets: Vec<u8>) -> Result<(), String> {
+        Err(INACTIF.into())
+    }
+
+    #[tauri::command]
+    pub async fn matrix_verification_confirmer_qr() -> Result<(), String> {
         Err(INACTIF.into())
     }
 

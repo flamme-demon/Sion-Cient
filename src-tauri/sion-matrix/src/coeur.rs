@@ -53,6 +53,12 @@ pub struct CoeurMatrix {
     synchro: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+/// Comment se connecter : mot de passe, ou jeton donné par un autre appareil.
+enum Identification<'a> {
+    MotDePasse { identifiant: &'a str, mot_de_passe: &'a str },
+    Jeton(&'a str),
+}
+
 /// Rien d'automatique : le cœur ne doit jamais créer une nouvelle identité
 /// de signature croisée ni une nouvelle sauvegarde sur un compte qui en a
 /// déjà une. Seul un amorçage explicite (tranche T5) le fera.
@@ -257,7 +263,46 @@ impl CoeurMatrix {
     /// Connexion par mot de passe, toujours comme **nouvel appareil** avec des
     /// magasins neufs : tout état local précédent est effacé.
     pub async fn connecter(&self, serveur: &str, identifiant: &str, mot_de_passe: &str) -> Resultat<()> {
-        Box::pin(self.connecter_(serveur, identifiant, mot_de_passe, None)).await.map(|_| ())
+        Box::pin(self.connecter_(serveur, Identification::MotDePasse { identifiant, mot_de_passe }, None)).await.map(|_| ())
+    }
+
+    /// Connexion par jeton (`m.login.token`) : celui qu'un autre appareil du
+    /// compte a obtenu (`jeton_connexion`) et montré en QR code — le
+    /// téléphone se connecte sans qu'on y tape le mot de passe.
+    pub async fn connecter_par_jeton(&self, serveur: &str, jeton: &str) -> Resultat<()> {
+        Box::pin(self.connecter_(serveur, Identification::Jeton(jeton), None)).await.map(|_| ())
+    }
+
+    /// Jeton de connexion à usage unique pour un autre appareil (spec
+    /// `/login/get_token`, ~2 min). Continuwuity exige d'abord le mot de passe
+    /// (UIA, `m.login.password`), comme pour supprimer le compte.
+    pub async fn jeton_connexion(&self, mot_de_passe: &str) -> Resultat<(String, u64)> {
+        Box::pin(self.jeton_connexion_(mot_de_passe)).await
+    }
+
+    async fn jeton_connexion_(&self, mot_de_passe: &str) -> Resultat<(String, u64)> {
+        use matrix_sdk::ruma::api::client::session::get_login_token;
+        let client = self.client().await.ok_or(Erreur::PasDeSession)?;
+        let moi = client.user_id().ok_or(Erreur::PasDeSession)?.to_string();
+        let premier = Box::pin(std::future::IntoFuture::into_future(client.send(get_login_token::v1::Request::new()))).await;
+        let reponse = match premier {
+            Ok(r) => r,
+            Err(e) => {
+                let Some(uia) = e.as_uiaa_response() else { return Err(Erreur::Autre(e.to_string())) };
+                let mut auth = serde_json::json!({
+                    "type": "m.login.password",
+                    "identifier": { "type": "m.id.user", "user": moi },
+                    "password": mot_de_passe,
+                });
+                if let Some(session) = uia.session.clone() {
+                    auth["session"] = session.into();
+                }
+                let mut requete = get_login_token::v1::Request::new();
+                requete.auth = Some(serde_json::from_value(auth)?);
+                Box::pin(std::future::IntoFuture::into_future(client.send(requete))).await.map_err(|e| Erreur::Autre(e.to_string()))?
+            }
+        };
+        Ok((reponse.login_token, reponse.expires_in.as_millis() as u64))
     }
 
     /// Connexion d'un nouvel appareil qui REPREND l'ancien, celui du moteur
@@ -271,14 +316,13 @@ impl CoeurMatrix {
         mot_de_passe: &str,
         import: &ImportMigration,
     ) -> Resultat<RapportMigration> {
-        Box::pin(self.connecter_(serveur, identifiant, mot_de_passe, Some(import))).await
+        Box::pin(self.connecter_(serveur, Identification::MotDePasse { identifiant, mot_de_passe }, Some(import))).await
     }
 
     async fn connecter_(
         &self,
         serveur: &str,
-        identifiant: &str,
-        mot_de_passe: &str,
+        identification: Identification<'_>,
         import: Option<&ImportMigration>,
     ) -> Resultat<RapportMigration> {
         self.quitter_voix().await;
@@ -297,11 +341,13 @@ impl CoeurMatrix {
         let mut rapport = RapportMigration::default();
         let resultat = async {
             let client = self.construire(serveur, &phrase, false).await?;
-            client
-                .matrix_auth()
-                .login_username(identifiant, mot_de_passe)
-                .initial_device_display_name(&self.nom_appareil)
-                .await?;
+            let connexion = match identification {
+                Identification::MotDePasse { identifiant, mot_de_passe } => {
+                    client.matrix_auth().login_username(identifiant, mot_de_passe)
+                }
+                Identification::Jeton(jeton) => client.matrix_auth().login_token(jeton),
+            };
+            connexion.initial_device_display_name(&self.nom_appareil).await?;
             client_connecte = Some(client.clone());
             activer_cache(&client)?;
             if let Some(import) = import {

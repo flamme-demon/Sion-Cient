@@ -103,6 +103,8 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
       verificationStep: v.etape,
       verificationEmojis: v.emojis,
       verificationError: v.erreur ?? null,
+      verificationQr: v.qr ?? null,
+      verificationScanner: v.scanner ?? false,
       ...(v.etape === "done" ? { needsVerification: false } : {}),
     });
   };
@@ -246,7 +248,7 @@ async function preparerSession(set: Set, get: Get): Promise<void> {
   void service.ouvrirDroitAnnonceVersion().finally(() => void service.publishClientVersion());
 
   // Le nom local (emojis compris) fait foi sur celui du serveur.
-  const { useAuthStore, getCachedLoginPassword, clearCachedLoginPassword } = await import("./useAuthStore");
+  const { useAuthStore, getCachedLoginPassword, clearCachedLoginPassword, consommerVerificationApresConnexion } = await import("./useAuthStore");
   const creds = useAuthStore.getState().credentials;
   // Seulement pour le compte connecté : jamais le nom d'une autre session.
   if (creds?.displayName && creds.displayName !== creds.userId && creds.userId === get().currentUserId) {
@@ -265,6 +267,7 @@ async function preparerSession(set: Set, get: Get): Promise<void> {
   clearCachedLoginPassword();
   if (!(await service.checkDeviceVerified())) {
     set({ needsVerification: true });
+    if (consommerVerificationApresConnexion()) void get().startCrossDeviceVerification();
   } else {
     await service.tryAutoRestoreKeyBackup().catch(() => 0);
   }

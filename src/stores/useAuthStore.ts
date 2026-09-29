@@ -20,6 +20,15 @@ let cachedLoginPassword: string | null = null;
 export function getCachedLoginPassword(): string | null { return cachedLoginPassword; }
 export function clearCachedLoginPassword(): void { cachedLoginPassword = null; }
 
+// Connexion par le QR code d'un autre appareil : la vérification est lancée
+// d'elle-même dès que le cœur sait l'appareil non vérifié.
+let verificationApresConnexion = false;
+export function consommerVerificationApresConnexion(): boolean {
+  const v = verificationApresConnexion;
+  verificationApresConnexion = false;
+  return v;
+}
+
 interface AuthState {
   credentials: AuthCredentials | null;
   isLoading: boolean;
@@ -35,6 +44,9 @@ interface AuthState {
   keyringUnavailable: boolean;
 
   login: (homeserver: string, username: string, password: string) => Promise<void>;
+  /** Moteur Rust : connexion par le jeton lu dans le QR code d'un autre
+   *  appareil du compte (connexionQr.ts). */
+  loginJeton: (homeserver: string, jeton: string) => Promise<void>;
   register: (homeserver: string, username: string, password: string, displayName?: string, token?: string, captchaResponse?: string) => Promise<void>;
   checkSuspendedStatus: () => Promise<void>;
   fetchRegistrationFlows: (homeserver: string) => Promise<void>;
@@ -179,6 +191,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ credentials, isLoading: false });
     } catch (err) {
       set({ error: mapMatrixError(err), isLoading: false });
+      throw err;
+    }
+  },
+
+  loginJeton: async (homeserver, jeton) => {
+    set({ isLoading: true, error: null });
+    try {
+      const core = await import("../services/matrixCore");
+      await core.connecterJeton(homeserver, jeton);
+      const credentials = await identifiantsRust(homeserver, getLiveKitFromExisting(get().credentials));
+      if (!credentials) throw new Error("connexion sans utilisateur");
+      verificationApresConnexion = true;
+      saveCredentials(credentials);
+      set({ credentials, isLoading: false });
+    } catch (err) {
+      // Jeton refusé : expiré (~2 min) ou déjà servi.
+      const refuse = typeof err === "string" && /\bM_(FORBIDDEN|INVALID_TOKEN|UNAUTHORIZED)\b/.test(err);
+      set({ error: refuse ? i18n.t("qr.loginTokenInvalid") : mapMatrixError(err), isLoading: false });
       throw err;
     }
   },

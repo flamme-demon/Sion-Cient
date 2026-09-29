@@ -11,6 +11,8 @@ import { SIDEBAR_RAIL_WIDTH } from "../../stores/useLayoutStore";
 import { ImageCropper } from "../chat/ImageCropper";
 import { SectionsCompteRust } from "./SectionsCompteRust";
 import { moteurRust } from "../../services/moteur";
+import { SUR_ANDROID } from "../../utils/plateforme";
+import { ConnexionTelephoneModal } from "../qr/ConnexionTelephoneModal";
 
 export function AccountPopover({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
@@ -40,6 +42,7 @@ export function AccountPopover({ compact = false }: { compact?: boolean }) {
   const [deletePasswordFor, setDeletePasswordFor] = useState<string | null>(null);
   const [deletePassword, setDeletePassword] = useState("");
   const [sessionMsg, setSessionMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [connexionTelephone, setConnexionTelephone] = useState(false);
   const needsVerification = useMatrixStore((s) => s.needsVerification);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -496,6 +499,33 @@ export function AccountPopover({ compact = false }: { compact?: boolean }) {
       )}
       {regenerateError && (
         <div style={{ fontSize: 11, color: 'var(--color-error)' }}>{regenerateError}</div>
+      )}
+
+      {/* Connecter un téléphone par QR code (moteur Rust, depuis l'ordinateur) */}
+      {moteurRust() && !SUR_ANDROID && (
+        <button
+          onClick={() => setConnexionTelephone(true)}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: 12,
+            border: '1px solid var(--color-outline-variant)',
+            background: 'var(--color-surface-container-high)',
+            color: 'var(--color-on-surface)',
+            fontSize: 13,
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          {t("qr.connectPhone")}
+        </button>
+      )}
+      {connexionTelephone && (
+        <ConnexionTelephoneModal
+          onFermer={() => setConnexionTelephone(false)}
+          onVerification={() => { setConnexionTelephone(false); toggleAccountPanel(); }}
+        />
       )}
 
       {/* Sessions */}

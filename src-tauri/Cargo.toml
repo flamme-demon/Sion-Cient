@@ -67,6 +67,9 @@ futures-util = { version = "0.3", optional = true }
 jpeg-rusturbo = { version = "0.9", optional = true }
 # WebSocket local du partage reçu (`native_video_transport`) et des raccourcis.
 tungstenite = "0.24"
+# QR codes dessinés en SVG (connexion d'un téléphone, vérification) : même
+# version que celle de matrix-sdk (fonction `qrcode`).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # Cœur Matrix en Rust (docs/plan-matrix-rust-sdk.md), feature
 # `moteur-matrix-rust` : ordinateur ET Android (docs/plan-android-2.1.md).

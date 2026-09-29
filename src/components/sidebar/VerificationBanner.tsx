@@ -4,6 +4,9 @@ import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useLayoutStore } from "../../stores/useLayoutStore";
 import type { VerificationStep, EmojiData } from "../../stores/useMatrixStore";
 import { CloseIcon } from "../icons";
+import * as core from "../../services/matrixCore";
+import { QrImage } from "../qr/QrImage";
+import { ScannerQr, type QrLu } from "../qr/ScannerQr";
 
 export function VerificationBanner({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
@@ -21,6 +24,15 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
   const confirmVerificationEmojis = useMatrixStore((s) => s.confirmVerificationEmojis);
   const rejectVerificationEmojis = useMatrixStore((s) => s.rejectVerificationEmojis);
   const cancelVerification = useMatrixStore((s) => s.cancelVerification);
+  const verificationQr = useMatrixStore((s) => s.verificationQr);
+  const verificationScanner = useMatrixStore((s) => s.verificationScanner);
+  const [scan, setScan] = useState(false);
+  // Le scanner ne survit pas à l'étape `pret` (vérification annulée, emojis…).
+  const [etapeVue, setEtapeVue] = useState(verificationStep);
+  if (etapeVue !== verificationStep) {
+    setEtapeVue(verificationStep);
+    if (verificationStep !== "pret") setScan(false);
+  }
 
   const [expanded, setExpanded] = useState(false);
   const [mode, setMode] = useState<"choose" | "recovery" | "cross-device">("choose");
@@ -32,16 +44,18 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
     verificationStep !== "idle" && verificationStep !== "done";
   const isVisible = needsVerification || hasActiveIncomingVerification;
 
-  // Auto-expand and switch to cross-device mode when an incoming verification arrives
+  // Une vérification qui démarre — reçue d'un autre appareil, ou lancée
+  // d'elle-même après une connexion par QR code — déploie la bannière.
   const prevStepRef = useRef(verificationStep);
   useEffect(() => {
-    if (!needsVerification && prevStepRef.current === "idle" && verificationStep === "waiting") {
-      // Incoming verification just started — auto-expand in cross-device mode
+    const avant = prevStepRef.current;
+    const auRepos = avant === "idle" || avant === "done" || avant === "cancelled" || avant === "error";
+    if (auRepos && (verificationStep === "requesting" || verificationStep === "waiting" || verificationStep === "pret")) {
       setExpanded(true);
       setMode("cross-device");
     }
     prevStepRef.current = verificationStep;
-  }, [verificationStep, needsVerification]);
+  }, [verificationStep]);
 
   if (!isVisible) return null;
 
@@ -97,6 +111,18 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
     setMode("choose");
   };
 
+  /** QR lu par la caméra : un QR de vérification Matrix commence par « MATRIX ». */
+  const lireQrVerification = async ({ octets }: QrLu): Promise<string | null> => {
+    const entete = String.fromCharCode(...octets.slice(0, 6));
+    if (entete !== "MATRIX") return t("qr.notVerificationCode");
+    try {
+      await core.verificationScanner(octets);
+      return null;
+    } catch (e) {
+      return String(e);
+    }
+  };
+
   const colors = {
     container: "var(--color-tertiary-container)",
     text: "var(--color-on-tertiary-container)",
@@ -122,6 +148,74 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
           <button onClick={handleBack} style={smallBtnStyle(false)}>
             {t("auth.cancel")}
           </button>
+        </div>
+      );
+    }
+
+    if (step === "pret") {
+      return (
+        <div style={{ padding: "0 12px 12px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {verificationQr && (
+            <>
+              <div style={{ fontSize: 11, color: colors.text, opacity: 0.75, lineHeight: 1.4 }}>
+                {t("qr.verifyShowHint")}
+              </div>
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <QrImage octetsBase64={verificationQr} taille={200} alt={t("qr.verifyShowHint")} />
+              </div>
+            </>
+          )}
+          {verificationScanner && (
+            <button onClick={() => setScan(true)} style={{
+              ...actionBtnStyle,
+              background: "var(--color-primary)",
+              color: "var(--color-on-primary)",
+            }}>
+              {t("qr.verifyScan")}
+            </button>
+          )}
+          <button onClick={() => void core.verificationParEmojis().catch(() => {})} style={smallBtnStyle(false)}>
+            {t("qr.verifyEmojis")}
+          </button>
+          <button onClick={handleBack} style={{ ...smallBtnStyle(false), background: "transparent" }}>
+            {t("auth.cancel")}
+          </button>
+          {scan && (
+            <ScannerQr
+              titre={t("qr.verifyScan")}
+              aide={t("qr.verifyScanHint")}
+              onLu={lireQrVerification}
+              onFermer={() => setScan(false)}
+            />
+          )}
+        </div>
+      );
+    }
+
+    if (step === "qr-scanne") {
+      return (
+        <div style={{ padding: "0 12px 12px 12px" }}>
+          <div style={{ fontSize: 11, color: colors.text, opacity: 0.75, marginBottom: 10, lineHeight: 1.4 }}>
+            {t("qr.verifyScannedQuestion")}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => void core.verificationConfirmerQr().catch(() => {})} style={{
+              ...actionBtnStyle,
+              flex: 1,
+              background: "var(--color-primary)",
+              color: "var(--color-on-primary)",
+            }}>
+              {t("qr.yes")}
+            </button>
+            <button onClick={cancelVerification} style={{
+              ...actionBtnStyle,
+              flex: 1,
+              background: "var(--color-error-container)",
+              color: "var(--color-on-error-container)",
+            }}>
+              {t("qr.no")}
+            </button>
+          </div>
         </div>
       );
     }
@@ -180,11 +274,11 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
       );
     }
 
-    if (step === "confirmed") {
+    if (step === "confirmed" || step === "qr-attente") {
       return (
         <div style={{ padding: "0 12px 12px 12px" }}>
           <div style={{ fontSize: 11, color: colors.text, opacity: 0.75, lineHeight: 1.4 }}>
-            {t("auth.crossDeviceConfirmed")}
+            {step === "qr-attente" ? t("qr.verifyWaitingOther") : t("auth.crossDeviceConfirmed")}
           </div>
           <div style={{ display: "flex", justifyContent: "center", padding: "8px 0" }}>
             <div style={{

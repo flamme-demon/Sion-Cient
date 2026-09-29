@@ -21,8 +21,11 @@ export type VerificationStep =
   | "idle"           // No verification in progress
   | "requesting"     // Sending request to other devices
   | "waiting"        // Waiting for other device to accept
+  | "pret"           // Moteur Rust : prêts des deux côtés, QR proposé (emojis au choix)
   | "comparing"      // Emojis shown, waiting for user to confirm
   | "confirmed"      // User confirmed, waiting for other device
+  | "qr-scanne"      // Moteur Rust : l'autre appareil a scanné notre QR, à confirmer
+  | "qr-attente"     // Moteur Rust : QR de l'autre scanné, il doit confirmer
   | "done"           // Verification completed
   | "cancelled"      // Verification cancelled
   | "error";         // Error occurred
@@ -53,6 +56,10 @@ export interface MatrixState {
   verificationStep: VerificationStep;
   verificationEmojis: EmojiData[];
   verificationError: string | null;
+  /** Étape `pret` : QR de vérification à afficher (octets en base64). */
+  verificationQr: string | null;
+  /** Étape `pret` : cet appareil (téléphone) peut scanner le QR de l'autre. */
+  verificationScanner: boolean;
 
   bootstrapE2EE: (password?: string) => Promise<void>;
   dismissRecoveryKey: () => void;
@@ -697,6 +704,8 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
   verificationStep: "idle",
   verificationEmojis: [],
   verificationError: null,
+  verificationQr: null,
+  verificationScanner: false,
 
   bootstrapE2EE: async (password?: string) => {
     set({ bootstrapStep: "bootstrapping" });
@@ -2423,7 +2432,7 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     connectionStatus: "disconnected", currentUserId: null,
     needsVerification: false, isRestoringKeys: false, hasUndecryptableMessages: false, pinnedVersion: 0,
     bootstrapStep: "idle", generatedRecoveryKey: null,
-    verificationStep: "idle", verificationEmojis: [], verificationError: null,
+    verificationStep: "idle", verificationEmojis: [], verificationError: null, verificationQr: null, verificationScanner: false,
   }),
 }));
 

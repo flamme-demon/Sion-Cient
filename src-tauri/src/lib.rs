@@ -1667,6 +1667,27 @@ pub(crate) fn purger_medias_temporaires(age_max: std::time::Duration, taille_max
     (effaces, liberes)
 }
 
+/// QR code en SVG : `texte` (connexion d'un téléphone) ou `octets_base64`
+/// (QR de vérification Matrix, données binaires). Dessiné ici, sans service
+/// extérieur.
+#[tauri::command]
+fn qr_svg(texte: Option<String>, octets_base64: Option<String>) -> Result<String, String> {
+    use base64::Engine as _;
+    let octets = match (texte, octets_base64) {
+        (Some(t), _) => t.into_bytes(),
+        (None, Some(b)) => base64::engine::general_purpose::STANDARD.decode(b).map_err(|e| e.to_string())?,
+        (None, None) => return Err("rien à coder".into()),
+    };
+    let code = qrcode::QrCode::new(octets).map_err(|e| e.to_string())?;
+    Ok(code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(240, 240)
+        .quiet_zone(true)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .build())
+}
+
 /// Déconnexion : plus aucun média déchiffré ne reste sur le disque.
 #[tauri::command]
 fn vider_medias_temporaires() -> usize {
@@ -3729,6 +3750,12 @@ pub fn run() {
         matrix_pont::commandes::matrix_supprimer_appareil,
         matrix_pont::commandes::matrix_est_suspendu,
         matrix_pont::commandes::matrix_ecrire,
+        matrix_pont::commandes::matrix_connecter_jeton,
+        matrix_pont::commandes::matrix_jeton_connexion,
+        matrix_pont::commandes::matrix_verification_emojis,
+        matrix_pont::commandes::matrix_verification_scanner,
+        matrix_pont::commandes::matrix_verification_confirmer_qr,
+        qr_svg,
         vider_medias_temporaires,
         matrix_pont::commandes::matrix_enregistrer_pusher,
         matrix_pont::commandes::matrix_retirer_pusher,
@@ -3947,6 +3974,12 @@ pub fn run() {
         matrix_pont::commandes::matrix_supprimer_appareil,
         matrix_pont::commandes::matrix_est_suspendu,
         matrix_pont::commandes::matrix_ecrire,
+        matrix_pont::commandes::matrix_connecter_jeton,
+        matrix_pont::commandes::matrix_jeton_connexion,
+        matrix_pont::commandes::matrix_verification_emojis,
+        matrix_pont::commandes::matrix_verification_scanner,
+        matrix_pont::commandes::matrix_verification_confirmer_qr,
+        qr_svg,
         vider_medias_temporaires,
         matrix_pont::commandes::matrix_enregistrer_pusher,
         matrix_pont::commandes::matrix_retirer_pusher,

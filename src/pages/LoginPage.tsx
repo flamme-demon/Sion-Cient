@@ -6,12 +6,27 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { EyeIcon, EyeOffIcon } from "../components/icons";
 import { moteurRust } from "../services/moteur";
 import { ancienneSession } from "../services/migrationMoteur";
+import { lireConnexionQr, type ConnexionQr } from "../services/connexionQr";
+import { ScannerQr, type QrLu } from "../components/qr/ScannerQr";
+import { SUR_ANDROID } from "../utils/plateforme";
 
 type AuthMode = "login" | "register";
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const { login, register, isLoading, error, clearError, fetchRegistrationFlows, registrationFlows, isLoadingFlows, keyringUnavailable, restoreSession } = useAuthStore();
+  const { login, loginJeton, register, isLoading, error, clearError, fetchRegistrationFlows, registrationFlows, isLoadingFlows, keyringUnavailable, restoreSession } = useAuthStore();
+  // Téléphone : connexion par le QR code affiché sur le PC (connexionQr.ts).
+  const [scanConnexion, setScanConnexion] = useState(false);
+  const [connexionQr, setConnexionQr] = useState<ConnexionQr | null>(null);
+  const lireQrConnexion = ({ texte }: QrLu): string | null => {
+    const lue = lireConnexionQr(texte);
+    if (!lue) return t("qr.notLoginCode");
+    setConnexionQr(lue);
+    setHomeserver(lue.serveur);
+    clearError();
+    void loginJeton(lue.serveur, lue.jeton).catch(() => setConnexionQr(null));
+    return null;
+  };
 
   const [mode, setMode] = useState<AuthMode>("login");
   const [homeserver, setHomeserver] = useState(
@@ -291,6 +306,32 @@ export function LoginPage() {
         </div>
 
         {migration && mode === "login" && <div style={styles.noticeBox}>{t("auth.migrationNotice")}</div>}
+        {connexionQr && isLoading && (
+          <div style={styles.noticeBox}>{t("qr.loggingInAs", { user: connexionQr.utilisateur })}</div>
+        )}
+        {SUR_ANDROID && moteurRust() && mode === "login" && !migration && (
+          <>
+            <button
+              type="button"
+              style={{ ...styles.submitBtn, marginTop: 0, marginBottom: 8 }}
+              disabled={isLoading}
+              onClick={() => { clearError(); setScanConnexion(true); }}
+            >
+              {t("qr.scanLogin")}
+            </button>
+            <div style={{ fontSize: 12, lineHeight: 1.45, color: "var(--color-on-surface-variant)", textAlign: "center", marginBottom: 20 }}>
+              {t("qr.scanLoginHint")}
+            </div>
+          </>
+        )}
+        {scanConnexion && (
+          <ScannerQr
+            titre={t("qr.scanLogin")}
+            aide={t("qr.scanLoginHelp")}
+            onLu={lireQrConnexion}
+            onFermer={() => setScanConnexion(false)}
+          />
+        )}
         {error && <div style={styles.errorBox}>{error}</div>}
         {keyringUnavailable && (
           <button type="button" style={{ ...styles.submitBtn, marginBottom: 16, opacity: isLoading ? 0.6 : 1 }} disabled={isLoading} onClick={() => void restoreSession()}>
