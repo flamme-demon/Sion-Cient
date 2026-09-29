@@ -7,6 +7,7 @@ import { onParticipantJoined, onParticipantLeft, noteConnectionLost, resetVoiceC
 import type { ParticipantInfo } from "../types/livekit";
 import { getVoiceNativeStatus } from "../services/voiceNativeService";
 import type { VoiceNativeData, VoiceNativeE2eeState } from "../services/voiceNativeService";
+import { estCetAppareil } from "../utils/identiteVocale";
 
 /** Session vocale LiveKit native (moteur Rust). La webview ne crée plus de
  *  `Room` : elle suit les événements `voice-native-*` et publie ses paquets
@@ -64,8 +65,10 @@ export function useLiveKit() {
     knownNativeIdentities.current = new Set();
     const { useAuthStore } = await import("../stores/useAuthStore");
     const localUserId = useAuthStore.getState().credentials?.userId;
-    const isLocalIdentity = (id: string) =>
-      !!localUserId && (id === localUserId || id.startsWith(localUserId + ":"));
+    const localDeviceId = useAuthStore.getState().credentials?.deviceId;
+    // Cet appareil seulement : mon téléphone qui rejoint est un participant
+    // comme un autre (cues, qualité, AFK).
+    const isLocalIdentity = (id: string) => estCetAppareil(id, localUserId, localDeviceId);
     const onParticipants = (updatedParticipants: typeof participants, isCurrent: () => boolean) => {
       // Cues TeamSpeak join/leave/timeout : le moteur Rust ne les émet pas,
       // on les dérive des différences de listes. La première liste (pairs

@@ -16,7 +16,8 @@ import type { Channel, UserRole } from "../../types/matrix";
 import { moteurRust } from "../../services/moteur";
 import { leaveRoom as matrixServiceLeave } from "../../services/matrixService";
 import * as cacheRust from "../../services/cacheRust";
-import { appareilDeIdentite, plateformeLocale, plateformeMobile } from "../../utils/plateforme";
+import { plateformeLocale, plateformeMobile } from "../../utils/plateforme";
+import { appareilDeIdentite, estCetAppareil } from "../../utils/identiteVocale";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -40,9 +41,10 @@ function ContenuMiniAvatar({ url, nom }: { url?: string; nom: string }) {
 }
 
 // Extract display name and avatar from LiveKit participant identity
-function getParticipantInfo(identity: string, roomId: string | null, localUserId: string | null, localDisplayName: string | null, localAvatarUrl: string | undefined) {
-  // Check if this is the local user
-  const isLocal = localUserId && (identity === localUserId || identity.startsWith(localUserId + ":"));
+function getParticipantInfo(identity: string, roomId: string | null, localUserId: string | null, localDeviceId: string | null, localDisplayName: string | null, localAvatarUrl: string | undefined) {
+  // Cet appareil — pas mes autres appareils (PC et téléphone dans le même
+  // appel) : ils sont des participants distants comme les autres.
+  const isLocal = estCetAppareil(identity, localUserId, localDeviceId);
 
   if (isLocal && localDisplayName) {
     return { name: localDisplayName, avatarUrl: localAvatarUrl, isLocal: true };
@@ -206,7 +208,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
         return matrixMemberIds.has(userId);
       })
       .map((p) => {
-        const info = getParticipantInfo(p.identity, channel.id, localUserId, localDisplayName, localAvatarUrl);
+        const info = getParticipantInfo(p.identity, channel.id, localUserId, credentials?.deviceId || null, localDisplayName, localAvatarUrl);
         const isSelf = info.isLocal;
         const muted = isSelf ? isMuted : p.isMuted;
         // Local: use the store (canonical truth). Remote: read the deafened
@@ -218,7 +220,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
         const appareil = appareilDeIdentite(p.identity);
         const mobile = isSelf
           ? plateformeMobile(plateformeLocale())
-          : !!appareil && !!channel.voiceUsers.find((u) => u.id === userId)?.mobileDevices?.includes(appareil);
+          : !!channel.voiceUsers.find((u) => u.id === userId)?.devices?.find((d) => d.id === appareil)?.mobile;
         return {
           id: p.identity,
           name: info.name,

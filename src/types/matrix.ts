@@ -8,6 +8,15 @@ export interface MatrixUser {
   presence?: "online" | "offline" | "unavailable";
 }
 
+/** Un appareil en appel (`call.member`). */
+export interface VoiceDevice {
+  id: string;
+  muted: boolean;
+  deafened: boolean;
+  /** `sion_platform` : téléphone (android, ios). */
+  mobile: boolean;
+}
+
 export interface VoiceChannelUser extends MatrixUser {
   speaking: boolean;
   muted: boolean;
@@ -16,8 +25,10 @@ export interface VoiceChannelUser extends MatrixUser {
   connectionQuality?: "excellent" | "good" | "poor" | "lost" | "unknown";
   /** Emoji displayed during an active soundboard trigger; undefined when idle. */
   playingSoundEmoji?: string;
-  /** Appareils (device_id) en appel depuis un téléphone (`sion_platform`). */
-  mobileDevices?: string[];
+  /** Chacun de ses appareils en appel (un call.member par appareil) : on
+   *  peut y être depuis le PC et le téléphone, micro coupé sur l'un et
+   *  ouvert sur l'autre. */
+  devices?: VoiceDevice[];
   /** Tous les appareils de l'utilisateur en appel sont des téléphones. */
   mobileOnly?: boolean;
   /** Ligne d'un appel en cours (un appareil) : c'est un téléphone. */

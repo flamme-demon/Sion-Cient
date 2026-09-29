@@ -10,6 +10,7 @@
 import type { ConnectionQuality, ParticipantInfo } from "../types/livekit";
 import type { AudioQualityPreset } from "../stores/useSettingsStore";
 import { getMatrixClient } from "./matrixService";
+import { appareilDeIdentite } from "../utils/identiteVocale";
 
 export type VoiceNativeState = "disconnected" | "connecting" | "connected" | "reconnecting";
 
@@ -1041,6 +1042,8 @@ export interface MatrixVoiceUserState {
   id: string;
   muted: boolean;
   deafened: boolean;
+  /** Par appareil (un call.member chacun), quand c'est connu. */
+  devices?: { id: string; muted: boolean; deafened: boolean }[];
 }
 
 /** Fusionne l'état voix Matrix (`sion_muted` / `sion_deafened` des events
@@ -1069,8 +1072,14 @@ export function overlayMatrixVoiceState(
   const out = participants.map((p) => {
     const u = byUser.get(matrixUserIdOf(p.identity));
     if (!u) return p;
-    const isMuted = p.isMuted || u.muted;
-    const isDeafened = p.isDeafened || u.deafened;
+    // L'état de CET appareil : un compte en appel depuis le PC (micro coupé)
+    // et le téléphone (micro ouvert) ne doit pas voir le premier couvrir le
+    // second (29/09). Appareil inconnu de Matrix : rien à ajouter.
+    const appareil = appareilDeIdentite(p.identity);
+    const etat = u.devices?.length ? u.devices.find((d) => d.id === appareil) : u;
+    if (!etat) return p;
+    const isMuted = p.isMuted || etat.muted;
+    const isDeafened = p.isDeafened || etat.deafened;
     if (isMuted === p.isMuted && isDeafened === p.isDeafened) return p;
     touched = true;
     return { ...p, isMuted, isDeafened };

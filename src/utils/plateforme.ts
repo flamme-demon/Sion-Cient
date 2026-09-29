@@ -18,9 +18,3 @@ export function plateformeLocale(): Plateforme {
 export function plateformeMobile(plateforme: unknown): boolean {
   return plateforme === "android" || plateforme === "ios";
 }
-
-/** Appareil d'une identité LiveKit (`@alice:hs:APPAREIL` → `APPAREIL`). */
-export function appareilDeIdentite(identite: string): string | null {
-  const m = identite.match(/^@[^:]+:[^:]+:(.+)$/);
-  return m ? m[1] : null;
-}

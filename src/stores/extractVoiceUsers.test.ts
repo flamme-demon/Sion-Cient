@@ -55,22 +55,30 @@ describe("extractVoiceUsers", () => {
     expect(users).toEqual([{
       id: "@alice:hs", name: "alice", role: "user", avatarUrl: undefined,
       speaking: false, muted: false, deafened: false,
-      mobileDevices: [], mobileOnly: false,
+      devices: [{ id: "dev1", muted: false, deafened: false, mobile: false }], mobileOnly: false,
     }]);
   });
 
-  it("téléphone ou ordinateur, par appareil (`sion_platform`)", () => {
+  it("état et plateforme par appareil (`sion_platform`)", () => {
     const users = extractVoiceUsers(
       room([
-        callMemberEvent("@alice:hs", { application: "m.call", device_id: "PC", sion_platform: "linux" }, { stateKey: "_@alice:hs_PC_m.call" }),
+        callMemberEvent("@alice:hs", { application: "m.call", device_id: "PC", sion_platform: "linux", sion_muted: true }, { stateKey: "_@alice:hs_PC_m.call" }),
         callMemberEvent("@alice:hs", { application: "m.call", device_id: "TEL", sion_platform: "android" }, { stateKey: "_@alice:hs_TEL_m.call" }),
         callMemberEvent("@bob:hs", { application: "m.call", device_id: "B", sion_platform: "android" }),
       ]),
       null,
     );
     expect(users).toHaveLength(2);
-    expect(users[0]).toMatchObject({ id: "@alice:hs", mobileDevices: ["TEL"], mobileOnly: false });
-    expect(users[1]).toMatchObject({ id: "@bob:hs", mobileDevices: ["B"], mobileOnly: true });
+    // Micro coupé sur le PC, ouvert sur le téléphone : chacun le sien.
+    expect(users[0]).toMatchObject({
+      id: "@alice:hs",
+      mobileOnly: false,
+      devices: [
+        { id: "PC", muted: true, deafened: false, mobile: false },
+        { id: "TEL", muted: false, deafened: false, mobile: true },
+      ],
+    });
+    expect(users[1]).toMatchObject({ id: "@bob:hs", mobileOnly: true });
   });
 
   it("exclut un membre nouveau-format expiré (expires_ts dans le passé)", () => {

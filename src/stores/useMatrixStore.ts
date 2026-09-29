@@ -4,7 +4,7 @@ import { ClientEvent, MatrixEvent, MatrixEventEvent, RoomEvent, RoomMemberEvent,
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api";
 import type { VerificationRequest, ShowSasCallbacks } from "matrix-js-sdk/lib/crypto-api/verification";
 import { VerificationPhase, VerifierEvent, VerificationRequestEvent } from "matrix-js-sdk/lib/crypto-api/verification";
-import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser, PollData } from "../types/matrix";
+import type { ChatMessage, Channel, FileAttachment, VoiceChannelUser, VoiceDevice, PollData } from "../types/matrix";
 import * as matrixService from "../services/matrixService";
 import { moteurRust } from "../services/moteur";
 import { demarrerMoteurRust } from "./moteurRustStore";
@@ -216,11 +216,13 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
     // Téléphone ou ordinateur, par appareil (`sion_platform`) : un même
     // utilisateur peut être en appel des deux.
     const mobile = plateformeMobile(content?.sion_platform);
-    const appareil: string | undefined = content?.device_id;
+    const appareil: VoiceDevice | null = content?.device_id
+      ? { id: content.device_id, muted: content?.sion_muted === true, deafened: content?.sion_deafened === true, mobile }
+      : null;
     if (seenUserIds.has(userId)) {
       const deja = users.find((u) => u.id === userId);
       if (deja) {
-        if (mobile && appareil) deja.mobileDevices = [...(deja.mobileDevices ?? []), appareil];
+        if (appareil) deja.devices = [...(deja.devices ?? []), appareil];
         deja.mobileOnly = !!deja.mobileOnly && mobile;
       }
       continue;
@@ -243,7 +245,7 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
       speaking: false,
       muted: sionMuted,
       deafened: sionDeafened,
-      mobileDevices: mobile && appareil ? [appareil] : [],
+      devices: appareil ? [appareil] : [],
       mobileOnly: mobile,
     });
   }

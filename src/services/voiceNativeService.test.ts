@@ -375,6 +375,25 @@ describe("voiceNativeService (pont voix native, moteur Rust)", () => {
     expect(merged[0].identity).toBe("@picsou:example.org:DEVICE1");
   });
 
+  it("overlayMatrixVoiceState applique l'état de chaque appareil, pas celui du compte", () => {
+    const mk = (identity: string) => ({
+      identity, name: identity, isSpeaking: true, isMuted: false, isDeafened: false,
+      isScreenSharing: false, audioLevel: 0, connectionQuality: "unknown" as const,
+    });
+    // 29/09 : flamme en appel depuis le PC (micro coupé) et le téléphone
+    // (en train de parler) — le téléphone ne doit pas s'afficher coupé.
+    const participants = [mk("@flamme:example.org:PC"), mk("@flamme:example.org:TEL")];
+    const merged = overlayMatrixVoiceState(participants, [{
+      id: "@flamme:example.org", muted: true, deafened: false,
+      devices: [
+        { id: "PC", muted: true, deafened: false },
+        { id: "TEL", muted: false, deafened: false },
+      ],
+    }]);
+    expect(merged[0].isMuted).toBe(true);
+    expect(merged[1].isMuted).toBe(false);
+  });
+
   it("overlayMatrixVoiceState ne ment jamais vers false et rend la réf si inchangé", () => {
     const mk = (identity: string, isMuted: boolean, isDeafened: boolean) => ({
       identity,
