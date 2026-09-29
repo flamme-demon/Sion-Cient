@@ -179,11 +179,31 @@ impl Confiance {
             return;
         }
         self.publier(EtatVerification::etape("done"));
+        attendre_la_cle_de_sauvegarde(client).await;
         match telecharger_la_sauvegarde(client).await {
             Ok(n) => log::info!("[Sion][matrix] après vérification : clés de {n} salon(s) restaurées"),
             Err(e) => log::warn!("[Sion][matrix] après vérification : restauration impossible ({e})"),
         }
     }
+}
+
+/// La clé de la sauvegarde arrive de l'autre appareil (`m.secret.send`) un peu
+/// APRÈS la fin de la vérification : téléchargée aussitôt, la sauvegarde
+/// n'était pas encore active et rien n'était restauré (29/09, téléphone :
+/// « clés de 0 salon(s) restaurées », historique chiffré illisible).
+const ATTENTE_CLE_SAUVEGARDE: std::time::Duration = std::time::Duration::from_secs(30);
+
+async fn attendre_la_cle_de_sauvegarde(client: &Client) {
+    let sauvegardes = client.encryption().backups();
+    let debut = std::time::Instant::now();
+    while !sauvegardes.are_enabled().await {
+        if debut.elapsed() >= ATTENTE_CLE_SAUVEGARDE {
+            log::warn!("[Sion][matrix] après vérification : clé de la sauvegarde toujours absente après 30 s");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    log::info!("[Sion][matrix] après vérification : clé de la sauvegarde reçue en {} ms", debut.elapsed().as_millis());
 }
 
 /// Télécharge les clés de la sauvegarde pour tous les salons chiffrés
