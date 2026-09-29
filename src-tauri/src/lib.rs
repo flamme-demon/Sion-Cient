@@ -1635,6 +1635,44 @@ pub(crate) fn sion_media_dir() -> std::path::PathBuf {
     dir
 }
 
+/// Médias déposés dans `sion_media_dir` : des fichiers DÉCHIFFRÉS (salons
+/// chiffrés compris), lisibles par tout programme de la session. Rien ne les
+/// effaçait : 83 fichiers, 145 Mo accumulés en deux jours sur un PC (29/09).
+/// Au démarrage : ceux de plus de `age_max` partent, puis les plus anciens
+/// jusqu'à tenir dans `taille_max`. Rend (fichiers effacés, octets libérés).
+pub(crate) fn purger_medias_temporaires(age_max: std::time::Duration, taille_max: u64) -> (usize, u64) {
+    let Ok(entrees) = std::fs::read_dir(sion_media_dir()) else { return (0, 0) };
+    let maintenant = std::time::SystemTime::now();
+    let mut fichiers: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = entrees
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok().filter(|m| m.is_file())?;
+            Some((meta.modified().unwrap_or(maintenant), meta.len(), e.path()))
+        })
+        .collect();
+    // Du plus récent au plus ancien : on garde tant qu'on reste sous le plafond.
+    fichiers.sort_by(|a, b| b.0.cmp(&a.0));
+    let (mut gardes, mut effaces, mut liberes) = (0u64, 0usize, 0u64);
+    for (date, taille, chemin) in fichiers {
+        let vieux = maintenant.duration_since(date).map(|d| d > age_max).unwrap_or(false);
+        if vieux || gardes + taille > taille_max {
+            if std::fs::remove_file(&chemin).is_ok() {
+                effaces += 1;
+                liberes += taille;
+            }
+        } else {
+            gardes += taille;
+        }
+    }
+    (effaces, liberes)
+}
+
+/// Déconnexion : plus aucun média déchiffré ne reste sur le disque.
+#[tauri::command]
+fn vider_medias_temporaires() -> usize {
+    purger_medias_temporaires(std::time::Duration::ZERO, 0).0
+}
+
 /// Écrit le corps binaire de la requête dans un fichier temporaire et renvoie
 /// son chemin.
 ///
@@ -3691,6 +3729,7 @@ pub fn run() {
         matrix_pont::commandes::matrix_supprimer_appareil,
         matrix_pont::commandes::matrix_est_suspendu,
         matrix_pont::commandes::matrix_ecrire,
+        vider_medias_temporaires,
         matrix_pont::commandes::matrix_enregistrer_pusher,
         matrix_pont::commandes::matrix_retirer_pusher,
         matrix_pont::commandes::matrix_lectures,
@@ -3908,6 +3947,7 @@ pub fn run() {
         matrix_pont::commandes::matrix_supprimer_appareil,
         matrix_pont::commandes::matrix_est_suspendu,
         matrix_pont::commandes::matrix_ecrire,
+        vider_medias_temporaires,
         matrix_pont::commandes::matrix_enregistrer_pusher,
         matrix_pont::commandes::matrix_retirer_pusher,
         matrix_pont::commandes::matrix_lectures,
@@ -4078,6 +4118,32 @@ pub fn run() {
             if let Ok(cache) = app.path().app_cache_dir() {
                 let _ = std::fs::create_dir_all(&cache);
                 std::env::set_var("TMPDIR", &cache);
+            }
+            // Ménage au démarrage, sur un fil à part (plusieurs Go possibles) :
+            // médias déchiffrés anciens, et restes du CEF de la 1.x.
+            {
+                let cache = app.path().app_cache_dir().ok();
+                std::thread::spawn(move || {
+                    let (n, octets) = purger_medias_temporaires(
+                        std::time::Duration::from_secs(24 * 3600),
+                        500 * 1024 * 1024,
+                    );
+                    if n > 0 {
+                        log::info!("[Sion] médias temporaires : {n} fichier(s) effacé(s), {} Mo libérés", octets / (1024 * 1024));
+                    }
+                    // La 1.x (CEF) gardait ~1,5 à 2,5 Go de cache dans `cef/`
+                    // (Windows : %LOCALAPPDATA%\com.sion.client\cef, Linux :
+                    // ~/.cache/com.sion.client/cef), inutile depuis la 2.0.
+                    #[cfg(not(target_os = "android"))]
+                    if let Some(cef) = cache.map(|c| c.join("cef")).filter(|c| c.is_dir()) {
+                        match std::fs::remove_dir_all(&cef) {
+                            Ok(()) => log::info!("[Sion] restes du CEF de la 1.x supprimés ({})", cef.display()),
+                            Err(e) => log::warn!("[Sion] restes du CEF non supprimés ({}) : {e}", cef.display()),
+                        }
+                    }
+                    #[cfg(target_os = "android")]
+                    let _ = cache;
+                });
             }
             // Moteur Matrix Rust (SION_MATRIX_MOTEUR=rust + feature) : après le
             // journal, pour que ses messages y arrivent.

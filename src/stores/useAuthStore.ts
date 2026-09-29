@@ -324,6 +324,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     // Unregister push before logout
     import("../services/pushService").then(({ unregisterPusher }) => unregisterPusher()).catch(() => {});
+    // Plus aucun média déchiffré sur le disque après la déconnexion.
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("vider_medias_temporaires"))
+      .catch(() => {});
     matrixService.logout();
     clearCredentials();
     useAdminStore.getState().reset();
