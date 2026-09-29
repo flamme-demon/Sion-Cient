@@ -89,7 +89,8 @@ pub fn plage_http(entete: &str, total: u64, morceau_max: u64) -> Option<(u64, u6
     if debut >= total || fin < debut {
         return None;
     }
-    Some((debut, fin.min(debut + morceau_max.max(1) - 1)))
+    // `saturating_add` : un morceau « illimité » (u64::MAX, Android) déborderait.
+    Some((debut, fin.min(debut.saturating_add(morceau_max.max(1) - 1))))
 }
 
 /// Ce qu'on demande d'un média.
@@ -213,6 +214,8 @@ mod tests {
         assert_eq!(plage_http("bytes=5-2", 1000, 10_000), None);
         assert_eq!(plage_http("octets=0-", 1000, 10_000), None);
         assert_eq!(plage_http("bytes=0-", 0, 10_000), None);
+        // Morceau illimité (Android) : pas de débordement (29/09).
+        assert_eq!(plage_http("bytes=500-", 1000, u64::MAX), Some((500, 999)));
     }
 
     use super::*;

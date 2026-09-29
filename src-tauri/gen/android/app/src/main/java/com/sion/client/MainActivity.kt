@@ -68,39 +68,11 @@ class MainActivity : TauriActivity() {
     }
   }
 
-  override fun onPause() {
-    if (VoiceCallService.isRunning) {
-      // Skip TauriActivity.onPause() which pauses WebView
-      // Call Activity.onPause() directly for lifecycle
-      try {
-        val method = android.app.Activity::class.java.getDeclaredMethod("onPause")
-        method.isAccessible = true
-        method.invoke(this)
-      } catch (_: Exception) {
-        super.onPause()
-      }
-      return
-    }
-    super.onPause()
-  }
-
-  override fun onStop() {
-    if (VoiceCallService.isRunning) {
-      // Skip TauriActivity.onStop() which suspends WebView JS
-      // Call Activity.onStop() directly
-      try {
-        val method = android.app.Activity::class.java.getDeclaredMethod("onStop")
-        method.isAccessible = true
-        method.invoke(this)
-      } catch (_: Exception) {
-        super.onStop()
-      }
-      // Re-resume WebView to counteract any pause
-      cachedWebView?.onResume()
-      return
-    }
-    super.onStop()
-  }
+  // Plus de court-circuit de onPause/onStop pendant un appel : il gardait le
+  // WebView éveillé pour la voix JS (1.x). La voix vit désormais en Rust,
+  // tenue par le service d'appel ; ce contournement (réflexion, reprise
+  // forcée du WebView pendant l'arrêt) coïncidait avec des plantages du
+  // WebView à l'extinction de l'écran en plein appel (29/09).
 
   override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
     super.onRequestPermissionsResult(requestCode, permissions, grantResults)
