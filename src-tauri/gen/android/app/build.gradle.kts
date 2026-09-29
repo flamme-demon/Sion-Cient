@@ -53,6 +53,9 @@ android {
             // le suffixe `.dev` (bundle.android.debugApplicationIdSuffix dans
             // tauri.conf.json — Tauri efface un applicationIdSuffix écrit ici).
             versionNameSuffix = "-dev"
+            // Deux icônes « Sion » sur le téléphone sinon.
+            resValue("string", "app_name", "Sion Dev")
+            resValue("string", "main_activity_title", "Sion Dev")
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true
