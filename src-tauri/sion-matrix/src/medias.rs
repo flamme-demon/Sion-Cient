@@ -63,6 +63,35 @@ pub fn type_mime(octets: &[u8]) -> &'static str {
     }
 }
 
+/// Plage d'octets demandée par un en-tête HTTP `Range` (`bytes=a-b`,
+/// `bytes=a-`, `bytes=-n`), bornes incluses, limitée à `morceau_max` octets :
+/// le lecteur vidéo en redemande la suite. `None` si la plage est
+/// insatisfiable (réponse 416). Plusieurs plages : seule la première compte.
+pub fn plage_http(entete: &str, total: u64, morceau_max: u64) -> Option<(u64, u64)> {
+    let spec = entete.trim().strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (debut, fin) = spec.split_once('-')?;
+    if total == 0 {
+        return None;
+    }
+    let (debut, fin) = match (debut.trim(), fin.trim()) {
+        ("", "") => return None,
+        // Les n derniers octets.
+        ("", n) => {
+            let n: u64 = n.parse().ok()?;
+            if n == 0 {
+                return None;
+            }
+            (total.saturating_sub(n), total - 1)
+        }
+        (a, "") => (a.parse().ok()?, total - 1),
+        (a, b) => (a.parse().ok()?, b.parse::<u64>().ok()?.min(total - 1)),
+    };
+    if debut >= total || fin < debut {
+        return None;
+    }
+    Some((debut, fin.min(debut + morceau_max.max(1) - 1)))
+}
+
 /// Ce qu'on demande d'un média.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormatMedia {
@@ -171,6 +200,21 @@ impl Medias {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plages_http() {
+        assert_eq!(plage_http("bytes=0-", 1000, 10_000), Some((0, 999)));
+        assert_eq!(plage_http("bytes=100-199", 1000, 10_000), Some((100, 199)));
+        assert_eq!(plage_http("bytes=900-5000", 1000, 10_000), Some((900, 999)));
+        assert_eq!(plage_http("bytes=-100", 1000, 10_000), Some((900, 999)));
+        // Bornée : le lecteur redemande la suite.
+        assert_eq!(plage_http("bytes=0-", 1000, 256), Some((0, 255)));
+        assert_eq!(plage_http("bytes=0-1,5-9", 1000, 10_000), Some((0, 1)));
+        assert_eq!(plage_http("bytes=1000-", 1000, 10_000), None);
+        assert_eq!(plage_http("bytes=5-2", 1000, 10_000), None);
+        assert_eq!(plage_http("octets=0-", 1000, 10_000), None);
+        assert_eq!(plage_http("bytes=0-", 0, 10_000), None);
+    }
+
     use super::*;
     use serde_json::json;
 

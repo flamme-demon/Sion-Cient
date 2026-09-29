@@ -248,12 +248,31 @@ mod actif {
         let cle = requete.uri().path().trim_start_matches('/').to_owned();
         // Original, vignette du fil (`?vignette=1`) ou avatar (`?avatar=1`).
         let format = sion_matrix::FormatMedia::depuis_requete(requete.uri().query());
+        let original = format == sion_matrix::FormatMedia::Original;
+        // Requête par plage (lecteur vidéo : avancer, reculer, aperçu, index
+        // en fin de MP4). Servie depuis le fichier déchiffré une fois : sans
+        // elle, chaque demande renvoyait la vidéo entière et le lecteur ne
+        // savait pas se déplacer (29/09, téléphone).
+        let plage = requete
+            .headers()
+            .get(header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        if let (true, Some(plage)) = (original, plage) {
+            tauri::async_runtime::spawn_blocking(move || match servir_plage(&cle, &plage) {
+                Ok(r) => repondeur.respond(r),
+                Err(e) => log::error!("[Sion][matrix] réponse média invalide : {e}"),
+            });
+            return;
+        }
         tauri::async_runtime::spawn(async move {
             let contenu = match coeur() {
                 Ok(coeur) => coeur.media_format(&cle, format).await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
             let reponse = Response::builder().header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+            // L'original accepte les plages (voir plus haut).
+            let reponse = if original { reponse.header(header::ACCEPT_RANGES, "bytes") } else { reponse };
             let reponse = match contenu {
                 Ok(octets) => reponse
                     .header(header::CONTENT_TYPE, sion_matrix::type_mime(&octets))
@@ -269,6 +288,49 @@ mod actif {
                 Err(e) => log::error!("[Sion][matrix] réponse média invalide : {e}"),
             }
         });
+    }
+
+    /// Au plus par réponse à une plage : le lecteur redemande la suite.
+    const MORCEAU_MAX: u64 = 4 * 1024 * 1024;
+
+    /// Réponse 206 à une requête par plage, lue dans le fichier déchiffré
+    /// (`deposer_media`) ; 416 si la plage est hors du fichier.
+    fn servir_plage(cle: &str, plage: &str) -> Result<Response<Vec<u8>>, tauri::http::Error> {
+        use std::io::{Read, Seek, SeekFrom};
+        let base = Response::builder()
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(header::ACCEPT_RANGES, "bytes");
+        let Some((nom, mime)) = deposer_media(cle) else {
+            return base.status(404).body(Vec::new());
+        };
+        let chemin = crate::sion_media_dir().join(&nom);
+        let lire = || -> std::io::Result<(u64, Option<(u64, u64, Vec<u8>)>)> {
+            let mut fichier = std::fs::File::open(&chemin)?;
+            let total = fichier.metadata()?.len();
+            let Some((debut, fin)) = sion_matrix::plage_http(plage, total, MORCEAU_MAX) else {
+                return Ok((total, None));
+            };
+            fichier.seek(SeekFrom::Start(debut))?;
+            let mut octets = vec![0u8; (fin - debut + 1) as usize];
+            fichier.read_exact(&mut octets)?;
+            Ok((total, Some((debut, fin, octets))))
+        };
+        match lire() {
+            Ok((total, Some((debut, fin, octets)))) => base
+                .status(206)
+                .header(header::CONTENT_TYPE, mime)
+                .header(header::CONTENT_RANGE, format!("bytes {debut}-{fin}/{total}"))
+                .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+                .body(octets),
+            Ok((total, None)) => base
+                .status(416)
+                .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+                .body(Vec::new()),
+            Err(e) => {
+                log::warn!("[Sion][matrix] média {cle} illisible : {e}");
+                base.status(404).body(Vec::new())
+            }
+        }
     }
 
     /// Dépose un média du cœur dans le dossier du serveur média local

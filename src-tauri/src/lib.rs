@@ -4067,6 +4067,14 @@ pub fn run() {
             // n'existe (TLS du système, WebRTC).
             #[cfg(target_os = "android")]
             android_natif::journaliser_initialisation();
+            // Android : le dossier temporaire par défaut de Rust
+            // (`/data/local/tmp`) est interdit aux applis — médias déchiffrés
+            // (lecture par plages), fichiers déposés : le cache de l'appli.
+            #[cfg(target_os = "android")]
+            if let Ok(cache) = app.path().app_cache_dir() {
+                let _ = std::fs::create_dir_all(&cache);
+                std::env::set_var("TMPDIR", &cache);
+            }
             // Moteur Matrix Rust (SION_MATRIX_MOTEUR=rust + feature) : après le
             // journal, pour que ses messages y arrivent.
             matrix_pont::initialiser(app.handle());

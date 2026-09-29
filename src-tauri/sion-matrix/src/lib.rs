@@ -44,7 +44,7 @@ pub use epingles::ResumeEpingle;
 pub use fil::{FilSalon, Frappe, LecturesSalon, Personne};
 pub use fonctions_sion::{EtatSalon, EvenementSion, ResultatSoundboard, SonAjoute};
 pub use gestion::{Appareil, DetailsSalon, EtapesInscription, MembreSalon, ReponseServeur};
-pub use medias::{type_mime, FormatMedia, PREFIXE_PAR_DEFAUT};
+pub use medias::{plage_http, type_mime, FormatMedia, PREFIXE_PAR_DEFAUT};
 pub use messages::Message;
 pub use migration::{ImportMigration, RapportMigration};
 pub use rtc::CleMedia;

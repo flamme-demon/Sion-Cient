@@ -234,7 +234,10 @@ const SUR_ANDROID = typeof navigator !== "undefined" && /Android/i.test(navigato
  */
 function VideoWeb({ resolvedUrl, attachment }: { resolvedUrl: string | null; attachment: FileAttachment }) {
   const [repli, setRepli] = useState<string | null>(null);
-  const src = repli ?? (attachment.encryptedFile ? resolvedUrl : attachment.url ?? null);
+  const adresse = repli ?? (attachment.encryptedFile ? resolvedUrl : attachment.url ?? null);
+  // Sans vignette du serveur : `#t=0.1` fait afficher cette image-là en
+  // aperçu (servie par plage) au lieu d'un cadre vide.
+  const src = adresse && !attachment.thumbnailUrl ? `${adresse}#t=0.1` : adresse;
   const ratio =
     attachment.width && attachment.height ? `${attachment.width} / ${attachment.height}` : '16 / 9';
   const echec = () => {
