@@ -53,6 +53,9 @@ export function MobileVoiceBar() {
     if (pttTimeout.current) clearTimeout(pttTimeout.current);
     if (isMuted) {
       toggleMute(true);
+      // La voix part dès l'appui (porte de capture, sans aller-retour au
+      // serveur) : une vibration le confirme sous le doigt.
+      navigator.vibrate?.(15);
     }
     setPttActive(true);
     setIsSpeaking(true);
@@ -160,7 +163,8 @@ export function MobileVoiceBar() {
             borderRadius: '50%',
             flexShrink: 0,
             transition: 'all 150ms',
-            background: pttActive ? 'var(--color-primary)' : 'var(--color-surface-container-highest)',
+            position: 'relative',
+            background: pttActive ? 'var(--color-green)' : 'var(--color-surface-container-highest)',
             color: pttActive ? 'var(--color-on-primary)' : 'var(--color-on-surface)',
             display: 'flex',
             alignItems: 'center',
@@ -168,9 +172,20 @@ export function MobileVoiceBar() {
             WebkitUserSelect: 'none',
             userSelect: 'none',
             touchAction: 'none',
-            boxShadow: pttActive ? '0 0 20px rgba(168,199,250,0.5)' : '0 2px 8px rgba(0,0,0,0.3)',
+            boxShadow: pttActive ? '0 0 0 6px color-mix(in srgb, var(--color-green) 30%, transparent)' : '0 2px 8px rgba(0,0,0,0.3)',
           }}
         >
+          {/* En direct : on sait sans regarder le salon que la voix passe. */}
+          {pttActive && (
+            <span style={{
+              position: 'absolute', top: -26, left: '50%', transform: 'translateX(-50%)',
+              padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap',
+              background: 'var(--color-green)', color: 'var(--color-on-primary)',
+              fontSize: 10, fontWeight: 700, letterSpacing: '0.06em',
+            }}>
+              EN DIRECT
+            </span>
+          )}
           <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
             <path d="M19 10v2a7 7 0 0 1-14 0v-2" />

@@ -951,9 +951,53 @@ export function parseVoiceNativeVideoPacket(data: ArrayBuffer): VoiceNativeBinar
 
 /** Ouvre le flux vidéo local binaire. Le WebSocket transporte les JPEG sans
  * JSON/base64 et garde l'IPC Tauri réservé aux petits événements de contrôle. */
+/** Android : Chromium interdit à la page de joindre le WebSocket local
+ *  (accès au réseau local) — les images du partage passent par le protocole
+ *  interne `sion-video`, en requêtes successives : chaque réponse porte le
+ *  dernier numéro d'image puis les images arrivées depuis la précédente, la
+ *  plus récente par expéditeur (voir `images_depuis` côté Rust). */
+function lireImagesParRequetes(onFrame: (frame: VoiceNativeBinaryFrame) => void): () => void {
+  let actif = true;
+  let vu = 0;
+  let premiere = true;
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  void (async () => {
+    while (actif) {
+      try {
+        const reponse = await fetch(`http://sion-video.localhost/?vu=${vu}`, { cache: "no-store" });
+        const octets = await reponse.arrayBuffer();
+        if (octets.byteLength < 8) { await pause(500); continue; }
+        const vue = new DataView(octets);
+        vu = Number(vue.getBigUint64(0, true));
+        let position = 8;
+        let recues = 0;
+        while (position + 4 <= octets.byteLength) {
+          const longueur = vue.getUint32(position, true);
+          position += 4;
+          const frame = parseVoiceNativeVideoPacket(octets.slice(position, position + longueur));
+          position += longueur;
+          if (!frame) continue;
+          recues++;
+          if (premiere) {
+            premiere = false;
+            console.info(`[Sion][partage-natif] première frame reçue (requêtes) ${frame.sender} ${frame.width}x${frame.height}`);
+          }
+          onFrame(frame);
+        }
+        // Rien de nouveau : on laisse passer une image (~15 im/s émises).
+        if (recues === 0) await pause(40);
+      } catch {
+        await pause(500);
+      }
+    }
+  })();
+  return () => { actif = false; };
+}
+
 export async function connectVoiceNativeVideoStream(
   onFrame: (frame: VoiceNativeBinaryFrame) => void,
 ): Promise<() => void> {
+  if (/Android/i.test(navigator.userAgent)) return lireImagesParRequetes(onFrame);
   const port = await tauriInvoke<number>("voice_native_video_port");
   if (!port) throw new Error("transport vidéo natif indisponible");
   const socket = new WebSocket(`ws://127.0.0.1:${port}`);

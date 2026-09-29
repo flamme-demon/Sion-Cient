@@ -4011,6 +4011,23 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 
     let builder = matrix_pont::enregistrer_protocole(builder);
+    // Android : images du partage reçu lues par requêtes (le WebView ne peut
+    // pas joindre le WebSocket local), voir `native_video_transport::images_depuis`.
+    #[cfg(target_os = "android")]
+    let builder = builder.register_uri_scheme_protocol("sion-video", |_ctx, requete| {
+        let vu = requete
+            .uri()
+            .query()
+            .and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("vu=")))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        tauri::http::Response::builder()
+            .header("Content-Type", "application/octet-stream")
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Cache-Control", "no-store")
+            .body(native_video_transport::images_depuis(vu))
+            .unwrap_or_default()
+    });
 
     let builder = builder
         .plugin(tauri_plugin_notification::init())

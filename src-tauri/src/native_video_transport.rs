@@ -17,6 +17,15 @@ const HEADER_LEN: usize = 14;
 static PORT: OnceLock<u16> = OnceLock::new();
 static CLIENTS: OnceLock<Mutex<Vec<Arc<ClientQueue>>>> = OnceLock::new();
 static LAST_PACKETS: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+/// Numéro de la dernière image diffusée, et de la dernière de chaque
+/// expéditeur : la lecture par requêtes (`images_depuis`) ne rend que ce qui
+/// est arrivé depuis la précédente.
+static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEQUENCES: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+fn sequences() -> &'static Mutex<HashMap<String, u64>> {
+    SEQUENCES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Une seule image récente par expéditeur et par webview. Si Rust produit
 /// plusieurs images pendant que WebKit en décode une, la plus récente écrase
@@ -148,6 +157,8 @@ pub fn broadcast(sender: &str, width: u32, height: u32, jpeg: &[u8]) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(sender.to_owned(), packet.clone());
+    let numero = SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
+    sequences().lock().unwrap_or_else(|e| e.into_inner()).insert(sender.to_owned(), numero);
     clients()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -176,6 +187,7 @@ pub fn remove(sender: &str) {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(sender);
+    sequences().lock().unwrap_or_else(|e| e.into_inner()).remove(sender);
     for client in clients().lock().unwrap_or_else(|e| e.into_inner()).iter() {
         client
             .frames
@@ -185,9 +197,51 @@ pub fn remove(sender: &str) {
     }
 }
 
+/// Lecture par requêtes, pour le WebView d'Android : Chromium lui interdit de
+/// joindre le WebSocket local (accès au réseau local depuis la page, 29/09).
+/// Rend le dernier numéro d'image (u64 LE), puis la dernière image de chaque
+/// expéditeur arrivée après `vu`, chacune précédée de sa longueur (u32 LE) et
+/// au format du WebSocket (`SVF1`…). Rien de nouveau : le numéro seul.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn images_depuis(vu: u64) -> Vec<u8> {
+    let dernier = SEQUENCE.load(Ordering::Acquire);
+    let recents: Vec<String> = sequences()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, numero)| **numero > vu)
+        .map(|(expediteur, _)| expediteur.clone())
+        .collect();
+    let mut out = dernier.to_le_bytes().to_vec();
+    let paquets = last_packets().lock().unwrap_or_else(|e| e.into_inner());
+    for expediteur in recents {
+        if let Some(paquet) = paquets.get(&expediteur) {
+            out.extend_from_slice(&(paquet.len() as u32).to_le_bytes());
+            out.extend_from_slice(paquet);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_depuis_ne_rend_que_les_nouvelles() {
+        if port() == 0 {
+            return; // pas de boucle locale dans ce bac à sable
+        }
+        broadcast("@a:hs:TEL", 64, 64, b"jpeg-a");
+        let tout = images_depuis(0);
+        let dernier = u64::from_le_bytes(tout[..8].try_into().unwrap());
+        assert!(tout.len() > 8, "l'image de @a est rendue");
+        // Déjà vue : le numéro seul.
+        assert_eq!(images_depuis(dernier).len(), 8);
+        broadcast("@a:hs:TEL", 64, 64, b"jpeg-a2");
+        assert!(images_depuis(dernier).len() > 8);
+        remove("@a:hs:TEL");
+    }
 
     #[test]
     fn packet_video_est_binaire_et_auto_decrit() {

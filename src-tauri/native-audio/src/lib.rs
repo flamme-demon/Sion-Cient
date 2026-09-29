@@ -48,6 +48,21 @@ impl Settings {
 static SETTINGS: AtomicU32 = AtomicU32::new(7 | (65535 << 3));
 static CAPTURE_RMS: AtomicU32 = AtomicU32::new(0);
 static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// Porte de capture du push-to-talk : fermée, la capture sort du silence.
+/// La piste reste ouverte côté serveur — aucune signalisation à chaque appui,
+/// la voix part à l'instant (29/09). Ouverte par défaut (hors push-to-talk).
+static PORTE_OUVERTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_capture_gate(ouverte: bool) {
+    PORTE_OUVERTE.store(ouverte, Ordering::Relaxed);
+}
+
+/// Silence la trame quand la porte est fermée.
+fn appliquer_porte(samples: &mut [f32], ouverte: bool) {
+    if !ouverte {
+        samples.fill(0.0);
+    }
+}
 
 const SOUNDBOARD_RATE: usize = 48_000;
 const SOUNDBOARD_MAX_SAMPLES: usize = SOUNDBOARD_RATE * 20;
@@ -324,6 +339,9 @@ impl CaptureProcessor {
             } else {
                 0.0
             };
+            // Après la mesure : le niveau reste celui de la vraie voix (alerte
+            // « vous parlez micro coupé »), mais rien ne part.
+            appliquer_porte(samples, PORTE_OUVERTE.load(Ordering::Relaxed));
             if channel == 0 {
                 CAPTURE_RMS.store(rms.to_bits(), Ordering::Relaxed);
                 CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -338,6 +356,15 @@ impl CaptureProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn porte_fermee_la_trame_sort_du_silence() {
+        let mut trame = vec![8000.0_f32; FRAME_SIZE];
+        appliquer_porte(&mut trame, true);
+        assert!(trame.iter().all(|&x| x == 8000.0), "porte ouverte, la voix passe telle quelle");
+        appliquer_porte(&mut trame, false);
+        assert!(trame.iter().all(|&x| x == 0.0), "porte fermée, rien ne part");
+    }
 
     #[test]
     fn rendu_actif_seulement_pendant_que_webrtc_rend() {

@@ -2580,6 +2580,23 @@ impl LiveKitEngine {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        // Push-to-talk : la piste reste ouverte et la capture ne s'arrête
+        // pas ; c'est la porte du traitement audio qui fait le silence. Plus
+        // de signalisation au serveur à chaque appui (le SFU ne relayait la
+        // piste qu'après le « unmute ») : la voix part à l'instant (29/09).
+        if crate::voice_native::capture_maintenue() {
+            if let Some(track) = track.as_ref() {
+                if let Some(audio) = self.audio.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    let _ = audio.start_recording();
+                }
+                sion_native_audio::set_capture_gate(enabled);
+                if track.is_muted() {
+                    let _rt_enter = self.rt.enter();
+                    track.unmute();
+                }
+                return Ok(());
+            }
+        }
         if enabled {
             let audio_guard = self.audio.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(audio) = audio_guard.as_ref() {
