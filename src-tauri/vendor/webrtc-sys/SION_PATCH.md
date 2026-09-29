@@ -34,6 +34,10 @@ The original sources and notices are retained. Sion modifications:
 - `src/audio_device_controller.cpp`: expose an opaque index-based device ID
   when the Linux ADM enumerates named endpoints with empty GUIDs, and resolve
   that ID back to the same ADM index when selecting a device.
+- `src/adm_proxy.cpp` (Android) : l'ADM de la plateforme, créé à la demande
+  (`EnsurePlatformAdmCreated`), reçoit le transport audio déjà enregistré
+  sur le proxy. Sans ça, il tournait sans transport (« Invalid audio
+  transport ») : aucun son dans aucun sens sur Android (29/09).
 - `audio_track.{h,cpp,rs}`: expose the existing WebRTC
   `AudioSourceInterface::SetVolume` operation for per-share local playback
   gain. The small safe Rust forwarding method lives in `vendor/libwebrtc`.

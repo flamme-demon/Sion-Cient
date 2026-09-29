@@ -131,6 +131,14 @@ bool AdmProxy::EnsurePlatformAdmCreated() {
     return false;
   }
 
+  // Sion : le transport audio a été enregistré (RegisterAudioCallback) à la
+  // création de la fabrique, quand cet ADM n'existait pas encore — il n'était
+  // remis qu'au synthétique. Sans lui, micro et haut-parleur tournent à vide
+  // (« Invalid audio transport ») : aucun son, dans aucun sens (29/09).
+  if (audio_transport_) {
+    platform_adm_->RegisterAudioCallback(audio_transport_);
+  }
+
   return true;
 }
 #endif
