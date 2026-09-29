@@ -102,6 +102,14 @@ class MainActivity : TauriActivity() {
     super.onStop()
   }
 
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode == VoiceServiceBridge.DEMANDE_MICRO) {
+      val accordee = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+      VoiceServiceBridge.reponseMicro = if (accordee) "accordée" else "refusée"
+    }
+  }
+
   override fun onResume() {
     super.onResume()
     // Clear push notifications when app comes to foreground

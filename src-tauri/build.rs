@@ -82,6 +82,23 @@ fn copy_transcribe_libs() {
 
 fn main() {
     copy_transcribe_libs();
+    // Android + voix : les fonctions JNI de libwebrtc (`Java_livekit_org_webrtc_*`,
+    // appelées par libwebrtc.jar) doivent rester dans libapp_lib.so. webrtc-sys
+    // les réclame dans son propre build script, mais le `rustc-link-arg` d'une
+    // dépendance ne s'applique pas à notre bibliothèque finale : l'éditeur de
+    // liens les retirait, et la voix plantait à la création de WebRTC
+    // (UnsatisfiedLinkError sur SoftwareVideoEncoderFactory, 29/09).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android")
+        && std::env::var_os("CARGO_FEATURE_NATIVE_VOICE").is_some()
+    {
+        webrtc_sys_build::configure_jni_symbols().expect("symboles JNI de libwebrtc");
+    }
+    // Android : segments de libapp_lib.so alignés sur 16 Ko. Les téléphones à
+    // pages de 16 Ko (Android 15+) refusent sinon de charger la bibliothèque,
+    // et Android le signale déjà sur les versions de débogage (29/09).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rustc-link-arg=-Wl,-z,max-page-size=16384");
+    }
     // Les variantes ggml voyagent à côté de l'exécutable : sans $ORIGIN dans le
     // RPATH, l'éditeur de liens dynamique ne regarde jamais ce dossier et le
     // lancement échoue sur « libtranscribe.so.0 => not found ».

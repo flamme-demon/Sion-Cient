@@ -8,7 +8,7 @@ import { useSettingsStore } from "../stores/useSettingsStore";
 import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitTokenService";
 import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMemberEvent, republishCallMember } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
-import { startVoiceService, stopVoiceService } from "../services/androidVoiceService";
+import { autoriserMicro, startVoiceService, stopVoiceService } from "../services/androidVoiceService";
 import { isVoiceNativeAvailable } from "../services/voiceNativeService";
 import { disconnectNativeSession, waitForNativeSessionCleanup } from "../services/nativeVoiceSession";
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
@@ -259,6 +259,11 @@ export function useVoiceChannel() {
         // Moteur Matrix Rust (étape 3) : le cœur trouve le service, obtient
         // le jeton, publie l'appartenance et échange les clés, qu'il remet
         // lui-même au moteur vocal natif.
+        // Android : sans le micro, WebRTC ne démarre pas sa capture — et le
+        // service d'appel (type « micro ») serait refusé par le système.
+        if (!(await autoriserMicro())) {
+          throw new Error("autorisation du micro refusée");
+        }
         const core = await import("../services/matrixCore");
         const connexion = await core.rejoindreVoix(matrixRoomId);
         activeRustRoomId = matrixRoomId;

@@ -12,6 +12,9 @@ interface SionBridge {
   isVoiceServiceRunning(): boolean;
   setSpeakerOn(on: boolean): void;
   getPendingAction(): string;
+  hasMicPermission?(): boolean;
+  requestMicPermission?(): void;
+  micPermissionState?(): "attente" | "accordée" | "refusée";
 }
 
 function getBridge(): SionBridge | null {
@@ -19,6 +22,27 @@ function getBridge(): SionBridge | null {
 }
 
 let serviceStarted = false;
+
+/**
+ * Android : autorisation du micro, demandée au besoin avant d'entrer en
+ * vocal. La voix Rust capte par le micro Java de WebRTC, qui l'exige ;
+ * l'ancienne voix JS l'obtenait par le WebView. Rend `false` si refusée.
+ */
+export async function autoriserMicro(): Promise<boolean> {
+  if (!isAndroid) return true;
+  const bridge = getBridge();
+  if (!bridge?.hasMicPermission || !bridge.requestMicPermission || !bridge.micPermissionState) return true;
+  if (bridge.hasMicPermission()) return true;
+  bridge.requestMicPermission();
+  // La boîte de dialogue d'Android répond à l'activité : on attend sa réponse.
+  const limite = Date.now() + 120_000;
+  while (Date.now() < limite) {
+    await new Promise((r) => setTimeout(r, 250));
+    const etat = bridge.micPermissionState();
+    if (etat !== "attente") return etat === "accordée";
+  }
+  return false;
+}
 
 export function startVoiceService(channelName: string, isMuted: boolean, isDeafened: boolean) {
   if (!isAndroid) return;

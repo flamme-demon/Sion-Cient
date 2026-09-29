@@ -7517,6 +7517,7 @@ dependencies = [
  "wayland-sys",
  "webkit2gtk",
  "webrtc-sys",
+ "webrtc-sys-build",
  "windows 0.58.0",
  "windows-core 0.58.0",
  "winit",

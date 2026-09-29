@@ -6,6 +6,35 @@ import android.webkit.JavascriptInterface
 
 class VoiceServiceBridge(private val context: Context) {
 
+    companion object {
+        const val DEMANDE_MICRO = 4242
+        /** Réponse à la dernière demande du micro : « attente », « accordée »
+         *  ou « refusée » (posée par MainActivity.onRequestPermissionsResult). */
+        @Volatile var reponseMicro: String = "attente"
+    }
+
+    /** Voix Rust : le micro Java de WebRTC exige l'autorisation accordée à
+     *  l'exécution (l'ancienne voix JS l'obtenait par le WebView). */
+    @JavascriptInterface
+    fun hasMicPermission(): Boolean =
+        androidx.core.content.ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    @JavascriptInterface
+    fun requestMicPermission() {
+        val activity = context as? android.app.Activity ?: return
+        reponseMicro = "attente"
+        activity.runOnUiThread {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                activity, arrayOf(android.Manifest.permission.RECORD_AUDIO), DEMANDE_MICRO
+            )
+        }
+    }
+
+    @JavascriptInterface
+    fun micPermissionState(): String = if (hasMicPermission()) "accordée" else reponseMicro
+
     @JavascriptInterface
     fun startVoiceService(channelName: String, isMuted: Boolean, isDeafened: Boolean) {
         VoiceCallService.start(context, channelName, isMuted, isDeafened)

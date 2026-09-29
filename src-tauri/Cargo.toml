@@ -21,6 +21,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Android + voix : garder les fonctions JNI de libwebrtc (voir build.rs).
+# Même version que celle du build script de webrtc-sys (déjà compilée).
+webrtc-sys-build = "0.3.19"
 
 [dependencies]
 serde_json = "1.0"
