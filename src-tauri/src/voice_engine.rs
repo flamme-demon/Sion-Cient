@@ -2630,7 +2630,11 @@ impl LiveKitEngine {
             if let Some(audio) = audio_guard.as_ref() {
                 // Le vumètre des réglages et l'alerte « parler en étant
                 // muet » utilisent cette même capture sans publier de piste.
-                if !crate::voice_native::microphone_monitor_requested() {
+                // Push-to-talk : la capture reste ouverte pour le prochain
+                // appui (voir `capture_maintenue`).
+                if !crate::voice_native::microphone_monitor_requested()
+                    && !crate::voice_native::capture_maintenue()
+                {
                     let _ = audio.stop_recording();
                 }
             }

@@ -3,6 +3,7 @@ import { MicIcon, HeadphoneIcon, DisconnectIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useVoiceChannel } from "../../hooks/useVoiceChannel";
+import { setVoiceNativeCaptureMaintenue } from "../../services/voiceNativeService";
 
 async function requestMicPermission(): Promise<boolean> {
   try {
@@ -36,12 +37,22 @@ export function MobileVoiceBar() {
     }
   }, [connectedVoice]);
 
+  // Push-to-talk : capture gardée ouverte pendant l'appel, sinon chaque appui
+  // relance le micro Android et le début de la phrase se perd (29/09).
+  useEffect(() => {
+    if (!connectedVoice) return;
+    void setVoiceNativeCaptureMaintenue(true).catch(() => {});
+    return () => { void setVoiceNativeCaptureMaintenue(false).catch(() => {}); };
+  }, [connectedVoice]);
+
   const setIsSpeaking = useAppStore((s) => s.setIsSpeaking);
 
+  // Push-to-talk : sans le son de micro activé / coupé à chaque appui
+  // (toggleMute(true) = silencieux).
   const handlePTTStart = useCallback(() => {
     if (pttTimeout.current) clearTimeout(pttTimeout.current);
     if (isMuted) {
-      toggleMute();
+      toggleMute(true);
     }
     setPttActive(true);
     setIsSpeaking(true);
@@ -50,7 +61,7 @@ export function MobileVoiceBar() {
   const handlePTTEnd = useCallback(() => {
     pttTimeout.current = setTimeout(() => {
       if (!useAppStore.getState().isMuted) {
-        toggleMute();
+        toggleMute(true);
       }
       setPttActive(false);
       setIsSpeaking(false);

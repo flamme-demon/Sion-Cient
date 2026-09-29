@@ -70,6 +70,7 @@ import { updateVoiceService } from "./services/androidVoiceService";
 import { useTranslation } from "react-i18next";
 import * as matrixService from "./services/matrixService";
 import { moteurRust } from "./services/moteur";
+import { fermerFeuilleMobile } from "./components/layout/dockPanels";
 
 export default function App() {
   const { t } = useTranslation();
@@ -220,6 +221,8 @@ export default function App() {
         if (appState.showAccountPanel) { toggleAccountPanel(); return; }
         if (appState.showSettings) { toggleSettings(); return; }
         if (appState.showAdmin) { toggleAdmin(); return; }
+        // Feuille de panneau (épinglés, membres…) ouverte par-dessus le chat.
+        if (fermerFeuilleMobile()) return;
 
         // If viewing chat, go back to sidebar
         if (appState.mobileView === "chat") { setMobileView("sidebar"); return; }

@@ -290,6 +290,12 @@ export function setVoiceNativeMuted(muted: boolean): Promise<VoiceNativeStatus> 
   return tauriInvoke<VoiceNativeStatus>("voice_native_set_muted", { muted });
 }
 
+/** Push-to-talk : garder la capture ouverte micro coupé, pour que la voix
+ *  parte dès l'appui (voir `capture_maintenue` côté Rust). */
+export function setVoiceNativeCaptureMaintenue(active: boolean): Promise<void> {
+  return tauriInvoke<void>("voice_native_capture_maintenue", { active });
+}
+
 export function setVoiceNativeDeafened(deafened: boolean): Promise<VoiceNativeStatus> {
   return tauriInvoke<VoiceNativeStatus>("voice_native_set_deafened", { deafened });
 }

@@ -576,6 +576,22 @@ fn audio_test_owners() -> &'static Mutex<std::collections::HashSet<String>> {
     AUDIO_TEST_OWNERS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
 
+/// Push-to-talk : la capture reste ouverte micro coupé (la piste, elle, ne
+/// transmet rien), pour que la voix parte dès l'appui. Sous Android, relancer
+/// AudioRecord et l'annulation d'écho à chaque appui mangeait le début des
+/// phrases (29/09).
+static CAPTURE_MAINTENUE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn capture_maintenue() -> bool {
+    CAPTURE_MAINTENUE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn voice_native_capture_maintenue(active: bool) {
+    CAPTURE_MAINTENUE.store(active, std::sync::atomic::Ordering::Relaxed);
+    log::info!("[Sion][voix-native] capture maintenue micro coupé (push-to-talk) : {active}");
+}
+
 #[cfg(feature = "native-voice")]
 pub(crate) fn microphone_monitor_requested() -> bool {
     audio_test_owners()

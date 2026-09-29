@@ -221,6 +221,56 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
   );
 }
 
+/** Android : le WebView (Chromium) lit lui-même les vidéos — H.264, VP9,
+ *  AV1 —, et le lecteur natif du bureau (ffmpeg, surface native) n'existe pas
+ *  sur téléphone : la carte ne jouait rien (29/09). */
+const SUR_ANDROID = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+
+/**
+ * Vidéo du fil sur téléphone : une balise `<video>` ordinaire. Le média est
+ * lu par son adresse `sion-media` (servie et déchiffrée par Rust) ; si le
+ * WebView la refuse, repli sur le serveur média local, qui sert les requêtes
+ * par plage (`urlLecture`).
+ */
+function VideoWeb({ resolvedUrl, attachment }: { resolvedUrl: string | null; attachment: FileAttachment }) {
+  const [repli, setRepli] = useState<string | null>(null);
+  const src = repli ?? (attachment.encryptedFile ? resolvedUrl : attachment.url ?? null);
+  const ratio =
+    attachment.width && attachment.height ? `${attachment.width} / ${attachment.height}` : '16 / 9';
+  const echec = () => {
+    if (repli || !attachment.url) return;
+    void import("../../services/matrixCore")
+      .then((m) => m.urlLecture(attachment.url!))
+      .then((u) => { if (u && u !== attachment.url) setRepli(u); })
+      .catch(() => {});
+  };
+  return (
+    <div style={{ marginTop: 6, width: 420, maxWidth: '100%' }}>
+      {src ? (
+        <video
+          controls
+          playsInline
+          preload="metadata"
+          src={src}
+          poster={attachment.thumbnailUrl ?? undefined}
+          onError={echec}
+          style={{
+            display: 'block', width: '100%', maxHeight: 340, aspectRatio: ratio,
+            borderRadius: 14, background: 'var(--color-surface-container-highest)',
+          }}
+        />
+      ) : (
+        <div style={{ padding: '8px 12px', borderRadius: 14, background: 'var(--color-surface-container-high)', color: 'var(--color-outline)', fontSize: 12 }}>
+          Chargement de la vidéo…
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--color-outline)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {attachment.name} · {formatFileSize(attachment.size)}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Carte vidéo du fil : une affiche cliquable, jamais de balise `<video>`.
  *
@@ -476,7 +526,7 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   // l'URL. Seul un média chiffré doit encore passer ici, pour être déchiffré.
   const resolvedUrl = useResolvedUrl(
     attachment,
-    isVideo ? videoVisible && !!attachment.encryptedFile : true,
+    isVideo ? (SUR_ANDROID || videoVisible) && !!attachment.encryptedFile : true,
   );
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [menuImage, setMenuImage] = useState<{ x: number; y: number } | null>(null);
@@ -548,7 +598,9 @@ function AttachmentDisplay({ attachment }: { attachment: FileAttachment }) {
   }
 
   if (isVideo) {
-    return <VideoCard resolvedUrl={resolvedUrl} attachment={attachment} />;
+    return SUR_ANDROID
+      ? <VideoWeb resolvedUrl={resolvedUrl} attachment={attachment} />
+      : <VideoCard resolvedUrl={resolvedUrl} attachment={attachment} />;
   }
 
   const handleOpen = (e: React.MouseEvent) => {

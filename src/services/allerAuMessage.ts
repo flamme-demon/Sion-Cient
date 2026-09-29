@@ -10,6 +10,7 @@
 import { useAppStore } from "../stores/useAppStore";
 import { useMatrixStore } from "../stores/useMatrixStore";
 import { moteurRust } from "./moteur";
+import { useLayoutStore } from "../stores/useLayoutStore";
 
 export function allerAuMessage(eventId: string): void {
   const app = useAppStore.getState();
@@ -18,4 +19,9 @@ export function allerAuMessage(eventId: string): void {
   const present = charges.some((m) => (m.eventId || String(m.id)) === eventId);
   if (present || !moteurRust()) app.setScrollToMessageId(eventId);
   else app.setApercuMessage(eventId);
+  // Téléphone : la feuille des épinglés couvre le fil — on la referme pour
+  // montrer le message.
+  if (typeof window !== "undefined" && window.innerWidth < 768) {
+    useLayoutStore.getState().closeDockPanel("pinned");
+  }
 }

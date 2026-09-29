@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
@@ -21,28 +21,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { DockZoneContext } from "./dockZoneContext";
 import { BackgroundControls, PanelBackgroundLayer } from "./PanelBackground";
 import { usePanelBackgroundStyle } from "../../services/panelBackground";
-import { VoiceStatusPanel } from "../chat/VoiceStatusPanel";
-
-// Blocs lourds chargés à la demande (perf mémoire, 2026-09-12) : le soundboard
-// embarquait dans le chunk de démarrage tout son sous-graphe (panneau vocal,
-// modal d'upload, trimballeur, hotkeys) alors qu'il n'est peint que si le
-// bloc est docké ET le salon soundboard présent. Idem membres et
-// transcription. Le chunk de boot ne garde que la coquille de la dock.
-const MemberPanel = lazy(() =>
-  import("../chat/MemberPanel").then((m) => ({ default: m.MemberPanel })),
-);
-const SoundboardPanel = lazy(() =>
-  import("../chat/SoundboardPanel").then((m) => ({ default: m.SoundboardPanel })),
-);
-const MemeboardPanel = lazy(() =>
-  import("../chat/MemeboardPanel").then((m) => ({ default: m.MemeboardPanel })),
-);
-const PinnedPanel = lazy(() =>
-  import("../chat/PinnedListPanel").then((m) => ({ default: m.PinnedListPanel })),
-);
-const TranscriptPanel = lazy(() =>
-  import("../chat/TranscriptPanel").then((m) => ({ default: m.TranscriptPanel })),
-);
+import { PANEL_BODIES, PANEL_TITLE_KEYS } from "./dockPanels";
 
 /**
  * Une zone de la dock (roadmap §1.6) : à droite en colonne, en haut ou en bas
@@ -58,23 +37,7 @@ const TranscriptPanel = lazy(() =>
  * la position du curseur) ou vers le cadre « Menu » pour le remettre à
  * l'origine. Pointer events uniquement (jamais HTML5 DnD — WebKitGTK).
  */
-const PANEL_TITLE_KEYS: Record<DockPanelId, string> = {
-  members: "members.title",
-  soundboard: "soundboard.title",
-  memeboard: "memeboard.title",
-  transcript: "transcript.title",
-  voice: "layout.voicePanelTitle",
-  pinned: "chat.pinnedList",
-};
 
-const PANEL_BODIES: Record<DockPanelId, ComponentType> = {
-  members: MemberPanel,
-  soundboard: SoundboardPanel,
-  memeboard: MemeboardPanel,
-  transcript: TranscriptPanel,
-  voice: VoiceStatusPanel,
-  pinned: PinnedPanel,
-};
 
 /** Part de hauteur : 0 = hauteur naturelle (une barre, comme le bloc vocal),
  *  1 = élastique (les blocs à contenu se partagent l'espace restant). */
