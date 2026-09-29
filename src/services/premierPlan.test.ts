@@ -17,8 +17,9 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 /** Module neuf : son état (fenêtre quittée, dernière activité) vit au niveau
  *  du module et ses écouteurs sont posés à l'import. */
-async function charger(tauri: boolean) {
+async function charger(tauri: boolean, userAgent = "Mozilla/5.0 (X11; Linux x86_64)") {
   vi.resetModules();
+  Object.defineProperty(navigator, "userAgent", { configurable: true, get: () => userAgent });
   if (tauri) window.__TAURI_INTERNALS__ = {};
   else delete window.__TAURI_INTERNALS__;
   const module = await import("./premierPlan");
@@ -81,4 +82,23 @@ it("sous Tauri, Sion lancé en arrière-plan part absent", async () => {
   fenetre.active = false;
   const { utilisateurPresent } = await charger(true);
   expect(utilisateurPresent()).toBe(false);
+});
+
+it("sur Android, ni suivi de la fenêtre ni délai d'inactivité : seule la visibilité compte", async () => {
+  vi.useFakeTimers();
+  try {
+    const { utilisateurPresent } = await charger(true, "Mozilla/5.0 (Linux; Android 16; 2201123G) Mobile");
+    // Tauri n'y suit pas le focus : rien n'est écouté.
+    expect(fenetre.rappel).toBeNull();
+
+    // Lire un long message sans toucher l'écran n'est pas une absence.
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(utilisateurPresent()).toBe(true);
+
+    // Appli passée en arrière-plan (ou écran éteint) : page cachée.
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    expect(utilisateurPresent()).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });

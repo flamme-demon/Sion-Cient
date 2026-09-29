@@ -16,7 +16,9 @@
 //! QUE pendant la sourdine : le micro y étant coupé, se passer de la référence
 //! d'écho est sans conséquence.
 
+#[cfg(not(target_os = "android"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_os = "android"))]
 use std::sync::Arc;
 
 /// Fréquence des clips fournis par le front (mono).
@@ -27,6 +29,7 @@ const TAUX_SOURCE: u32 = 48_000;
 /// seconde : la qualité d'un rééchantillonneur polyphasé n'y est pas audible.
 ///
 /// Rendu entrelacé, prêt à être copié tel quel dans le tampon de sortie.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn adapter(source: &[f32], taux_sortie: u32, canaux: usize) -> Vec<f32> {
     if source.is_empty() || canaux == 0 {
         return Vec::new();
@@ -66,6 +69,13 @@ pub fn jouer_clip_local(samples: Vec<i16>, gain: f32) {
         });
 }
 
+/// Android : pas de cpal (voir Cargo.toml) — le cue de sourdine ne sort pas.
+#[cfg(target_os = "android")]
+fn jouer_bloquant(_samples: Vec<i16>, _gain: f32) -> Result<(), String> {
+    Err("pas de sortie locale sous Android".into())
+}
+
+#[cfg(not(target_os = "android"))]
 fn jouer_bloquant(samples: Vec<i16>, gain: f32) -> Result<(), String> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 

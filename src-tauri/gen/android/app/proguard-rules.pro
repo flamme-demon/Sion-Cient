@@ -19,3 +19,7 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# Appelées depuis le code natif (JNI) : invisibles pour ProGuard.
+-keep class org.webrtc.** { *; }
+-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
+-keep class com.sion.client.SionNatif { *; }

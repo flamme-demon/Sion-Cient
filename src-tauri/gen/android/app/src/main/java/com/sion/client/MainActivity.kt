@@ -17,6 +17,9 @@ class MainActivity : TauriActivity() {
   private var pendingRoomId: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Avant Tauri : le moteur Matrix fait ses premières requêtes dès le
+    // démarrage, et la voix a besoin de WebRTC côté Java.
+    SionNatif.initialiser(applicationContext)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
 

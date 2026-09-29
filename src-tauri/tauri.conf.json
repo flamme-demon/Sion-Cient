@@ -26,6 +26,10 @@
   },
   "bundle": {
     "active": true,
+    "android": {
+      "minSdkVersion": 26,
+      "debugApplicationIdSuffix": ".dev"
+    },
     "targets": "all",
     "resources": [
       "resources/*"

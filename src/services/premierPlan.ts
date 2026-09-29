@@ -23,6 +23,12 @@
 /** Sans souris ni clavier depuis ce délai, l'utilisateur est absent. */
 export const DELAI_ABSENCE_MS = 60_000;
 
+/** Sur téléphone, l'écran s'éteint de lui-même et l'appli passée en arrière-
+ *  plan cache la page : seule la visibilité compte. Lire un long message sans
+ *  toucher l'écran n'est pas une absence, et Tauri n'y suit pas le focus de la
+ *  fenêtre (`is_focused` ignoré, aucun évènement). */
+const SUR_TELEPHONE = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+
 /** Évènements qui prouvent qu'on est là. */
 export const EVENEMENTS_ACTIVITE = ["pointermove", "pointerdown", "keydown", "wheel", "touchstart", "focus"] as const;
 
@@ -54,7 +60,7 @@ if (typeof window !== "undefined") {
 }
 
 async function suivreFenetreTauri(): Promise<void> {
-  if (typeof window === "undefined" || !window.__TAURI_INTERNALS__) return;
+  if (typeof window === "undefined" || !window.__TAURI_INTERNALS__ || SUR_TELEPHONE) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const fenetre = getCurrentWindow();
   const signaler = (active: boolean) => {
@@ -85,7 +91,7 @@ export function etatPresence(): EtatPresence {
   const visible = document.visibilityState === "visible";
   const inactif = Date.now() - derniereActivite;
   return {
-    present: visible && !fenetreQuittee && inactif < DELAI_ABSENCE_MS,
+    present: visible && !fenetreQuittee && (SUR_TELEPHONE || inactif < DELAI_ABSENCE_MS),
     visible,
     quittee: fenetreQuittee,
     inactifS: Math.round(inactif / 1000),

@@ -4,3 +4,7 @@
 /tauri.build.gradle.kts
 /proguard-tauri.pro
 /tauri.properties
+# Classes Java de WebRTC, copiées par build-scripts/build-android.sh
+/libs/libwebrtc.jar
+# Ressources du bureau (ffmpeg…) : exclues par tauri.android.conf.json
+/src/main/assets/resources/

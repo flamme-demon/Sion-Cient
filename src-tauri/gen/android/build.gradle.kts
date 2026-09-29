@@ -13,6 +13,11 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // Composant Kotlin de `rustls-platform-verifier` (vérification TLS du
+        // moteur Matrix Rust), publié par ses auteurs sur GitHub.
+        maven {
+            url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
+        }
     }
 }
 

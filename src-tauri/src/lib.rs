@@ -1,12 +1,14 @@
 #[cfg(target_os = "linux")]
 use rdev::Key;
+#[cfg_attr(target_os = "android", allow(unused_imports))]
 use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg(not(target_os = "android"))]
 mod cursor_overlay;
-#[cfg(not(target_os = "android"))]
 mod native_video_surface;
+#[cfg(target_os = "android")]
+mod android_natif;
 #[cfg(not(target_os = "android"))]
 mod pip_window;
 #[cfg(target_os = "linux")]
@@ -42,7 +44,9 @@ mod incrustation_lecteur;
 mod meme_pop;
 #[cfg(not(target_os = "android"))]
 mod profil;
+#[cfg(not(target_os = "android"))]
 mod lecteur_audio;
+#[cfg(not(target_os = "android"))]
 mod lecteur_video;
 mod media_server;
 mod matrix_pont;
@@ -2738,7 +2742,6 @@ fn parse_download_pct(line: &str) -> Option<f64> {
 }
 
 /// Parse an ffmpeg `-progress` line ("out_time=HH:MM:SS.micro") → elapsed seconds.
-#[cfg(not(target_os = "android"))]
 fn parse_ffmpeg_time_secs(line: &str) -> Option<f64> {
     let rest = line.trim().strip_prefix("out_time=")?;
     let mut parts = rest.split(':');
@@ -2751,7 +2754,6 @@ fn parse_ffmpeg_time_secs(line: &str) -> Option<f64> {
 /// Run ffmpeg with the given args, streaming `out_time` progress as
 /// `video-import-progress {phase:"convert"}` events. `eff` = expected output
 /// duration (s) for the percentage. Returns Err(stderr) on non-zero exit.
-#[cfg(not(target_os = "android"))]
 fn run_ffmpeg_encode(
     app: &tauri::AppHandle<TauriRuntime>,
     ffmpeg_bin: &str,
@@ -4040,6 +4042,10 @@ pub fn run() {
                     ))
                     .build(),
             )?;
+            // Android : ce que `SionNatif.initialiser` a noté avant que le journal
+            // n'existe (TLS du système, WebRTC).
+            #[cfg(target_os = "android")]
+            android_natif::journaliser_initialisation();
             // Moteur Matrix Rust (SION_MATRIX_MOTEUR=rust + feature) : après le
             // journal, pour que ses messages y arrivent.
             matrix_pont::initialiser(app.handle());
@@ -4177,9 +4183,11 @@ pub fn run() {
             // Actions des boutons du PIP natif (retour sur Sion, son du
             // partage) : la fenêtre vit sur un fil winit hors de l'arbre
             // Tauri — elle a besoin de ce handle pour agir.
+            #[cfg(not(target_os = "android"))]
             pip_window::set_app_handle(app.handle().clone());
             // Préchauffe la boucle winit du PIP : le premier clic ne paie
             // plus sa construction.
+            #[cfg(not(target_os = "android"))]
             pip_window::prewarm();
 
             // WebSocket server for global shortcuts (évite l'IPC Tauri, dont

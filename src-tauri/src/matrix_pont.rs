@@ -377,6 +377,7 @@ mod actif {
     pub fn quitter_voix_a_la_fermeture() {}
 }
 
+#[cfg_attr(target_os = "android", allow(unused_imports))]
 pub use actif::{deposer_media, fichier_media_matrix, initialiser, quitter_voix_a_la_fermeture};
 
 /// Protocole `sion-media` (médias des messages du moteur Rust). Sans la

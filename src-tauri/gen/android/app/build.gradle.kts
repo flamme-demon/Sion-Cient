@@ -13,6 +13,14 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Le composant Kotlin de `rustls-platform-verifier` doit avoir EXACTEMENT la
+// version de la crate `rustls-platform-verifier-android` du Cargo.lock.
+val rustlsPlatformVerifierVersion: String = rootProject.file("../../Cargo.lock").readLines().let { lignes ->
+    val i = lignes.indexOfFirst { it.trim() == "name = \"rustls-platform-verifier-android\"" }
+    require(i >= 0) { "rustls-platform-verifier-android absent du Cargo.lock" }
+    lignes[i + 1].substringAfter('"').substringBefore('"')
+}
+
 android {
     compileSdk = 36
     namespace = "com.sion.client"
@@ -33,13 +41,18 @@ android {
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.sion.client"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = ".dev"
+            // Installable à côté de la version publiée : l'identifiant prend
+            // le suffixe `.dev` (bundle.android.debugApplicationIdSuffix dans
+            // tauri.conf.json — Tauri efface un applicationIdSuffix écrit ici).
+            versionNameSuffix = "-dev"
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true
@@ -82,6 +95,10 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.media:media:1.7.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+    // Classes Java de WebRTC (micro, haut-parleur) : tirées de l'archive
+    // libwebrtc précompilée par build-scripts/build-android.sh.
+    implementation(files("libs/libwebrtc.jar"))
+    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

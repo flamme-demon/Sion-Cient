@@ -60,6 +60,8 @@ use livekit::options::{
     AudioEncoding, TrackPublishOptions, VideoCodec, VideoEncoderBackend, VideoEncoding,
 };
 use livekit::track::VideoQuality;
+// Pas de capture d'écran sous Android (libwebrtc ne l'y implémente pas).
+#[cfg(not(target_os = "android"))]
 use livekit::webrtc::desktop_capturer::{
     CaptureError, CaptureSource, DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
 };
@@ -736,6 +738,7 @@ fn run_share_audio_pump(
 /// `argb_to_i420` lit en fait du BGRA — noms tournés dans ce binding,
 /// prouvé par tests) → `VideoFrame`.
 /// Se termine sur `stop` (ou erreur permanente : dialogue portail refusé…).
+#[cfg(not(target_os = "android"))]
 fn run_share_capture(
     mut capturer: DesktopCapturer,
     source: CaptureSource,
@@ -1922,6 +1925,7 @@ impl LiveKitEngine {
             // capture directement (sinon elle tourne pour rien).
             let _ = audio.stop_recording();
         }
+        #[cfg(not(target_os = "android"))]
         crate::transcribe::note_native_mic_enabled(
             !self.mic_muted.load(std::sync::atomic::Ordering::Relaxed),
         );
@@ -2090,6 +2094,7 @@ impl LiveKitEngine {
     /// Idempotent (déjà en partage = no-op OK). `with_audio=false` :
     /// vidéo seule (les viewers voient "sans son", comme un partage JS
     /// sans la case audio).
+    #[cfg(not(target_os = "android"))]
     pub fn start_screensharing(
         &self,
         source_id: Option<u64>,
@@ -2253,6 +2258,19 @@ impl LiveKitEngine {
         Ok(audio_published)
     }
 
+    /// Android : pas d'émission de partage d'écran en 2.1 (MediaProjection
+    /// plus tard, voir docs/plan-android-2.1.md) ; le partage REÇU marche.
+    #[cfg(target_os = "android")]
+    pub fn start_screensharing(
+        &self,
+        _source_id: Option<u64>,
+        _with_audio: bool,
+        _config: ScreenShareConfig,
+        _video_codec: &str,
+    ) -> Result<bool, String> {
+        Err("le partage d'écran n'est pas disponible sur Android".into())
+    }
+
     /// Stoppe le partage d'écran local (drapeaux stop + dépublications).
     /// Idempotent (pas de partage = no-op OK). La vidéo est dépubliée en
     /// dernier, après l'audio (miroir JS : évite une renégociation qui
@@ -2270,6 +2288,7 @@ impl LiveKitEngine {
         state.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         // 1) Fermer la capture système : le canal se termine, la pompe le voit
         //    (elle sort en ≤ 50 ms — voir sa boucle).
+        #[cfg(not(target_os = "android"))]
         crate::system_audio::system_audio_stop();
         // 2) Attendre la pompe AVANT la moindre dépublication : sinon sa
         //    dernière poussée tombait sur une piste détruite (SIGSEGV dans
@@ -2330,6 +2349,7 @@ impl LiveKitEngine {
     /// piste `ScreenshareAudio`. Retourne le sid publié (ou une erreur —
     /// l'appelant continue sans le son, mode "sans son" côté viewers).
     /// Traitements OFF (boucle = écho garanti sinon), parité JS.
+    #[cfg(not(target_os = "android"))]
     pub fn start_share_audio(
         rt: &tokio::runtime::Handle,
         room: &Room,
@@ -2553,6 +2573,7 @@ impl LiveKitEngine {
             .store(!enabled, std::sync::atomic::Ordering::Relaxed);
         // Tap de transcription natif : coupe immédiatement l'audio (le
         // segment en cours est fermé côté transcribe.rs).
+        #[cfg(not(target_os = "android"))]
         crate::transcribe::note_native_mic_enabled(enabled);
         let track = self
             .mic_track
@@ -3309,6 +3330,7 @@ impl VoiceEngine for LiveKitEngine {
             .take()
         {
             share.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            #[cfg(not(target_os = "android"))]
             crate::system_audio::system_audio_stop();
         }
         let room = self.room.lock().map(|mut g| g.take()).unwrap_or(None);
@@ -3331,6 +3353,7 @@ impl VoiceEngine for LiveKitEngine {
         *self.audio.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.mic_sid.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.mic_track.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        #[cfg(not(target_os = "android"))]
         crate::transcribe::note_native_mic_enabled(false);
         *self
             .local_meter_stop

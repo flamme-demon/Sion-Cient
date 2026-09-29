@@ -1,71 +1,124 @@
 #!/usr/bin/env bash
-# Build Android.
-# NOTE : la voix dépend du moteur Rust (`native-voice`), qui n'est pas
-# compilé ici (pas de libwebrtc pour Android — les patches webrtc-sys ne
-# s'appliquent pas). La voix Android est donc inactive tant que le moteur
-# n'y est pas porté.
+# Build Android (docs/plan-android-2.1.md).
+#
+# Mêmes features que sur ordinateur : moteur Matrix Rust et voix Rust
+# (libwebrtc précompilé pour Android, classes Java dans libwebrtc.jar). Plus
+# aucune retouche de Cargo.toml : ce qui est propre au bureau est exclu par
+# `cfg(not(target_os = "android"))` dans le code.
+#
+#   debug : APK de dev (com.sion.client.dev, installable à côté de la version
+#           publiée), installé et lancé si un téléphone est branché ;
+#   build : APK de publication (signé si gen/android/keystore.properties existe) ;
+#   dev   : `tauri android dev` (rechargement à chaud depuis Vite, même réseau).
 set -euo pipefail
 
-CARGO_TOML="src-tauri/Cargo.toml"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR"
 
-# Force rustup toolchain (Arch Linux a un rustc système sans target Android)
-export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$HOME/.cargo/bin:$PATH"
-
-# Désactive les features desktop natives le temps du build Android.
-enable_android() {
-    echo "[Sion] Mode Android..."
-    sed -i 's/^default = \["native-voice", "moteur-matrix-rust"\]/default = []/' "$CARGO_TOML"
-}
-
-restore_desktop() {
-    echo "[Sion] Mode Desktop..."
-    sed -i 's/^default = \[\]/default = ["native-voice", "moteur-matrix-rust"]/' "$CARGO_TOML"
-    echo "[Sion] Mise à jour Cargo.lock..."
-    cd src-tauri && cargo update -p tauri --quiet 2>/dev/null || true; cd ..
-}
-
-trap restore_desktop EXIT
-enable_android
-
-echo "[Sion] Lancement build Android..."
-if [ "${1:-}" = "dev" ]; then
-    # Si Vite tourne déjà sur 5173, le tuer et laisser Tauri relancer le sien
-    if lsof -ti :5173 >/dev/null 2>&1; then
-        echo "[Sion] Vite actif sur :5173, on le tue pour le build"
-        kill $(lsof -ti :5173) 2>/dev/null
-        sleep 1
-    fi
-    bun run tauri android dev
-elif [ "${1:-}" = "build" ]; then
-    bun run tauri android build
-
-    # Centralised installer collection — copy the signed APK to build-apps/
-    PROJECT_DIR="$(pwd)"
-    BUILD_APPS_DIR="$PROJECT_DIR/build-apps"
-    mkdir -p "$BUILD_APPS_DIR"
-
-    VERSION=$(grep -m1 '"version"' "$PROJECT_DIR/package.json" \
-        | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
-    : "${VERSION:=0.0.0}"
-
-    # Tauri places the signed release APK under src-tauri/gen/android/app/build/outputs/apk/
-    APK_SRC=$(find "$PROJECT_DIR/src-tauri/gen/android/app/build/outputs/apk/universal/release" \
-        -name "*.apk" 2>/dev/null | head -1)
-    if [ -z "$APK_SRC" ]; then
-        APK_SRC=$(find "$PROJECT_DIR/src-tauri/gen/android/app/build/outputs/apk" \
-            -name "*-release*.apk" 2>/dev/null | head -1)
-    fi
-
-    if [ -n "$APK_SRC" ] && [ -f "$APK_SRC" ]; then
-        APK_DEST="$BUILD_APPS_DIR/Sion_Client-${VERSION}.apk"
-        cp -f "$APK_SRC" "$APK_DEST"
-        SIZE=$(du -h "$APK_DEST" | cut -f1)
-        echo ""
-        echo "[Sion] APK copie: $APK_DEST ($SIZE)"
-    else
-        echo "[Sion] ATTENTION: APK release introuvable dans src-tauri/gen/android/app/build/outputs/apk/"
-    fi
-else
-    echo "Usage: $0 [dev|build]"
-    exit 1
+# rustc de rustup (cibles Android installées), pas celui du système.
+export PATH="$HOME/.cargo/bin:$PATH"
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+export NDK_HOME="${NDK_HOME:-$ANDROID_HOME/ndk/27.2.12479018}"
+export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$NDK_HOME}"
+# Gradle 8 / AGP 8 : JDK 17.
+if [ -z "${JAVA_HOME:-}" ] && [ -d /usr/lib/jvm/java-17-openjdk ]; then
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 fi
+
+APP_DIR="src-tauri/gen/android/app"
+APPLICATION_ID="com.sion.client"
+
+# ── libwebrtc.jar ─────────────────────────────────────────────────────────────
+# Même version que la libwebrtc liée par webrtc-sys : son tag vient de la
+# crate `webrtc-sys-build` du Cargo.lock. Pris dans l'archive déjà téléchargée
+# par un build précédent, sinon téléchargé.
+preparer_libwebrtc_jar() {
+    local version tag jar cache
+    cargo fetch --manifest-path src-tauri/Cargo.toml --quiet
+    version=$(grep -A1 '^name = "webrtc-sys-build"' src-tauri/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+    tag=$(grep -h 'pub const WEBRTC_TAG' "$HOME"/.cargo/registry/src/*/webrtc-sys-build-"$version"/src/lib.rs \
+        | head -1 | sed -E 's/.*"(.*)".*/\1/')
+    [ -n "$tag" ] || { echo "[Sion] tag libwebrtc introuvable (webrtc-sys-build $version)"; exit 1; }
+
+    jar=$(find src-tauri/target -path "*/livekit/android-arm64-release-$tag/android-arm64-release/libwebrtc.jar" \
+        2>/dev/null | head -1)
+    if [ -z "$jar" ]; then
+        cache="$HOME/.cache/sion/libwebrtc-android-$tag"
+        jar="$cache/libwebrtc.jar"
+        if [ ! -f "$jar" ]; then
+            echo "[Sion] Téléchargement de libwebrtc Android ($tag)…"
+            mkdir -p "$cache"
+            curl -fL "https://github.com/livekit/rust-sdks/releases/download/$tag/webrtc-android-arm64-release.zip" \
+                -o "$cache/webrtc.zip"
+            unzip -o -j "$cache/webrtc.zip" '*/libwebrtc.jar' -d "$cache"
+            rm -f "$cache/webrtc.zip"
+        fi
+    fi
+    mkdir -p "$APP_DIR/libs"
+    cp -f "$jar" "$APP_DIR/libs/libwebrtc.jar"
+    echo "[Sion] libwebrtc.jar ($tag) prêt"
+}
+
+preparer_libwebrtc_jar
+
+# ── versionCode ───────────────────────────────────────────────────────────────
+# Tauri calcule majeur×1 000 000 + mineur×1 000 + patch et ignore la
+# pré-version : toutes les bêtas d'une version auraient le même code et ne
+# s'installeraient pas l'une sur l'autre. Ici : majeur×10 000 000 +
+# mineur×100 000 + patch×1 000 + rang de la pré-version (alpha.N → N,
+# beta.N → 100+N, rc.N → 500+N, finale → 999). 2.1.0-beta.1 → 20100101,
+# 2.1.0 → 20100999 ; toujours au-dessus des 1.x (1 000 000).
+version_code() {
+    local version=$1 base pre rang ma mi pa
+    base=${version%%-*}
+    pre=${version#"$base"}
+    IFS=. read -r ma mi pa <<<"$base"
+    case "$pre" in
+        "")         rang=999 ;;
+        -alpha.*)   rang=${pre#-alpha.} ;;
+        -beta.*)    rang=$((100 + ${pre#-beta.})) ;;
+        -rc.*)      rang=$((500 + ${pre#-rc.})) ;;
+        *)          echo "[Sion] pré-version inconnue : $version" >&2; exit 1 ;;
+    esac
+    echo $((ma * 10000000 + mi * 100000 + pa * 1000 + rang))
+}
+VERSION=$(sed -n 's/^  "version": "\(.*\)",/\1/p' package.json)
+VERSION_CODE=$(version_code "$VERSION")
+CONFIG_ANDROID="{\"bundle\":{\"android\":{\"versionCode\":$VERSION_CODE}}}"
+echo "[Sion] $VERSION → versionCode $VERSION_CODE"
+
+case "${1:-}" in
+    debug)
+        # Sans les informations de débogage complètes, l'APK de dev passait
+        # 1,3 Go ; les numéros de ligne suffisent aux traces de plantage.
+        CARGO_PROFILE_DEV_DEBUG=line-tables-only \
+            bun run tauri android build --debug --apk --target aarch64 --config "$CONFIG_ANDROID"
+        APK=$(find "$APP_DIR/build/outputs/apk" -name "*debug*.apk" -newer "$APP_DIR/libs/libwebrtc.jar" | head -1)
+        [ -n "$APK" ] || { echo "[Sion] APK de dev introuvable"; exit 1; }
+        echo "[Sion] APK de dev : $APK ($(du -h "$APK" | cut -f1))"
+        if adb get-state >/dev/null 2>&1; then
+            adb install -r "$APK"
+            adb shell am start -n "$APPLICATION_ID.dev/$APPLICATION_ID.MainActivity"
+        fi
+        ;;
+    build)
+        bun run tauri android build --apk --target aarch64 --config "$CONFIG_ANDROID"
+        BUILD_APPS_DIR="$PROJECT_DIR/build-apps"
+        mkdir -p "$BUILD_APPS_DIR"
+        APK=$(find "$APP_DIR/build/outputs/apk" -name "*release*.apk" | head -1)
+        if [ -n "$APK" ]; then
+            cp -f "$APK" "$BUILD_APPS_DIR/Sion_Client-${VERSION}-arm64.apk"
+            echo "[Sion] APK : $BUILD_APPS_DIR/Sion_Client-${VERSION}-arm64.apk ($(du -h "$APK" | cut -f1))"
+        else
+            echo "[Sion] ATTENTION : APK de publication introuvable dans $APP_DIR/build/outputs/apk/"
+            exit 1
+        fi
+        ;;
+    dev)
+        bun run tauri android dev
+        ;;
+    *)
+        echo "Usage : $0 [debug|build|dev]"
+        exit 1
+        ;;
+esac

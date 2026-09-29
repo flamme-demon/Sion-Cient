@@ -290,13 +290,17 @@ est déconnecté. Conditions :
   machine** : perdue, plus aucune mise à jour en place n'est possible.
 - **versionCode** : Tauri calcule `majeur×1 000 000 + mineur×1 000 + patch`
   et ignore la pré-version — toutes les bêtas d'une version auraient le même
-  code et ne s'installeraient pas l'une sur l'autre. Fixer le code dans
-  `tauri.conf.json` (`bundle.android.versionCode`) avec :
-  `majeur×10 000 000 + mineur×100 000 + patch×1 000 + n° de bêta`,
-  `999` pour la stable. 2.1.0-beta.1 → 20 100 001, 2.1.0 → 20 100 999 ;
-  toujours au-dessus de la 1.x (1 000 000).
+  code et ne s'installeraient pas l'une sur l'autre. `build-android.sh` le
+  calcule et le passe à Tauri (`--config`, `bundle.android.versionCode`) :
+  `majeur×10 000 000 + mineur×100 000 + patch×1 000 + rang`, le rang valant
+  N pour alpha.N, 100+N pour beta.N, 500+N pour rc.N et 999 pour la finale.
+  2.1.0-beta.1 → 20 100 101, 2.1.0 → 20 100 999 ; toujours au-dessus de la
+  1.x (1 000 000).
+- **Version de dev** : `build-android.sh debug` produit `com.sion.client.dev`
+  (`bundle.android.debugApplicationIdSuffix`), installable à côté de la
+  version publiée, avec ses propres données.
 - **ABI** : arm64-v8a seulement (plus x86_64 pour l'émulateur en dev).
-- **minSdk** : passer de 24 à 26 (Android 8) — canaux de notification et
+- **minSdk 26** (Android 8), fait en A0 : canaux de notification et
   services de premier plan sans branches de compatibilité ; les appareils
   Android 7 sont marginaux.
 - **Distribution** : APK sur les releases GitHub. Pas de Play Store (service

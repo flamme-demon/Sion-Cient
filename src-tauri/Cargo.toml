@@ -62,6 +62,16 @@ futures-util = { version = "0.3", optional = true }
 # Encodeur JPEG SIMD pur Rust (~5× l'encodeur scalaire de `image` sur x86,
 # 4:4:4 pour du texte net) : le pont JPEG du partage d'écran y passe.
 jpeg-rusturbo = { version = "0.9", optional = true }
+# WebSocket local du partage reçu (`native_video_transport`) et des raccourcis.
+tungstenite = "0.24"
+
+# Cœur Matrix en Rust (docs/plan-matrix-rust-sdk.md), feature
+# `moteur-matrix-rust` : ordinateur ET Android (docs/plan-android-2.1.md).
+sion-matrix = { path = "sion-matrix", optional = true }
+# Moteur Matrix Rust : matrix-sdk active rustls avec aws-lc-rs, l'appli et
+# LiveKit avec ring — deux fournisseurs, rustls ne choisit plus seul et la
+# connexion de LiveKit paniquait. `run()` installe ring par défaut.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 
 # Desktop-only dependencies (all platforms except Android)
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -80,14 +90,6 @@ tauri-plugin-global-shortcut = "2"
 #      Linux — la migration du fichier en clair se fait alors toute seule au
 #      premier `load_session`.
 keyring = "3"
-# Cœur Matrix en Rust (docs/plan-matrix-rust-sdk.md) : compilé seulement avec
-# la feature `moteur-matrix-rust`, désactivée tant que le moteur n'est pas
-# livrable — ni les bêtas ni la CI ne payent la compilation de matrix-sdk.
-sion-matrix = { path = "sion-matrix", optional = true }
-# Moteur Matrix Rust : matrix-sdk active rustls avec aws-lc-rs, l'appli et
-# LiveKit avec ring — deux fournisseurs, rustls ne choisit plus seul et la
-# connexion de LiveKit paniquait. `run()` installe ring par défaut.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
 # keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-native", "apple-native"] }
 # Lecture du presse-papiers (image collée au Ctrl+V) : WebKitGTK n'expose pas
 # les images dans `clipboardData.items`, contrairement à CEF/Chromium.
@@ -104,7 +106,8 @@ tauri-plugin-window-state = "2"
 # (tauri-plugin-dialog can't be used: it pulls tauri-plugin-fs on schemars 0.8
 # while the tauri fork uses schemars 1.0 → build conflict.)
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
-tungstenite = "0.24"
+# Sortie audio locale (`cue_playback`, lecteur vidéo) : bureau seulement —
+# sous Android, cpal tirerait oboe (C++) pour un cue de sourdine.
 cpal = "0.15"
 # Meeting transcription (local ASR). transcribe-cpp binds transcribe.cpp
 # (handy-computer): one ggml inference engine for 16 ASR families — whisper
@@ -207,6 +210,13 @@ webkit2gtk = { version = "2", features = ["v2_20"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# Vérification TLS du système pour matrix-sdk (reqwest 0.13) : initialisée au
+# démarrage par `android_natif.rs`. Même version que celle de matrix-sdk ; le
+# composant Kotlin assorti vient de Gradle (voir app/build.gradle.kts).
+rustls-platform-verifier = "0.7"
+# L'API de `rustls-platform-verifier` est en jni 0.22 (Tauri et libwebrtc
+# restent en 0.21).
+jni22 = { package = "jni", version = "0.22" }
 
 # Windows-only dependencies (WASAPI process-loopback exclude for screen-share
 # audio that excludes Sion's own output — Windows 11 / Server 2022 build
