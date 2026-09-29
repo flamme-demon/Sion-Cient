@@ -13,6 +13,7 @@ import { findSoundboardRoom, getMatrixClient, mxcToHttp, uploadFile } from "./ma
 import * as core from "./matrixCore";
 import { moteurRust } from "./moteur";
 import { SUR_ANDROID } from "../utils/plateforme";
+import { urlMeme } from "./memeCache";
 import { fetchSoundboardMessages } from "./soundboardService";
 import {
   bytesToB64,
@@ -133,9 +134,9 @@ async function jouerLocalement(source: string, gain: number, emetteur: string | 
   // Téléphone : pas de fenêtre système par-dessus les autres applis — le
   // meme s'affiche dans Sion, au premier plan seulement (`useMemePopStore`).
   if (SUR_ANDROID) {
-    const url = source.startsWith("mxc://")
-      ? (moteurRust() ? await core.urlMedia(source) : mxcToHttp(source))
-      : source;
+    // Depuis la mémoire (blob) : la vidéo démarre en ~60 ms au lieu de
+    // 240 à 390 ms par l'adresse média (voir `memeCache`).
+    const url = source.startsWith("mxc://") ? await urlMeme(source) : source;
     if (!url) return;
     const { useMemePopStore } = await import("../stores/useMemePopStore");
     useMemePopStore.getState().montrer({ url, volume: gain * useSettingsStore.getState().memeboardVolume, emetteur });

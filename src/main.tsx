@@ -11,6 +11,8 @@ import "./services/premierPlan";
 // Téléphone : vidéo des partages masquée en arrière-plan et, au besoin, en
 // données mobiles — à installer avant l'arrivée du premier partage.
 import "./stores/useVideoMasqueeStore";
+// Téléphone : memes préchargés en mémoire en entrant en vocal (Wi-Fi).
+import "./services/memeCache";
 
 // Route Rust `log::*` records into the webview console — the only way to see
 // them on the shipped Windows build (no terminal). Pairs with the Rust
