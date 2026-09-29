@@ -12,6 +12,7 @@
 import { findSoundboardRoom, getMatrixClient, mxcToHttp, uploadFile } from "./matrixService";
 import * as core from "./matrixCore";
 import { moteurRust } from "./moteur";
+import { SUR_ANDROID } from "../utils/plateforme";
 import { fetchSoundboardMessages } from "./soundboardService";
 import {
   bytesToB64,
@@ -129,6 +130,17 @@ export function urlMedia(mxc: string): string | null {
 const ffmpegPath = () => useSettingsStore.getState().ffmpegPath || undefined;
 
 async function jouerLocalement(source: string, gain: number, emetteur: string | null): Promise<void> {
+  // Téléphone : pas de fenêtre système par-dessus les autres applis — le
+  // meme s'affiche dans Sion, au premier plan seulement (`useMemePopStore`).
+  if (SUR_ANDROID) {
+    const url = source.startsWith("mxc://")
+      ? (moteurRust() ? await core.urlMedia(source) : mxcToHttp(source))
+      : source;
+    if (!url) return;
+    const { useMemePopStore } = await import("../stores/useMemePopStore");
+    useMemePopStore.getState().montrer({ url, volume: gain * useSettingsStore.getState().memeboardVolume, emetteur });
+    return;
+  }
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("memeboard_jouer", {
     source,
@@ -334,6 +346,11 @@ export async function supprimerMeme(eventId: string): Promise<void> {
 
 /** Retire tous les memes à l'écran — la memeboard vient d'être coupée. */
 export async function arreterMemes(): Promise<void> {
+  if (SUR_ANDROID) {
+    const { useMemePopStore } = await import("../stores/useMemePopStore");
+    useMemePopStore.getState().vider();
+    return;
+  }
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("memeboard_arreter").catch(() => { /* hors Tauri */ });
 }

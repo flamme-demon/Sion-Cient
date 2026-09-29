@@ -300,7 +300,7 @@ export function ChatHeader() {
               <UsersIcon />
             </button>
           )}
-          {!isMobile && channels.some((c) => c.isSoundboard) && (
+          {channels.some((c) => c.isSoundboard) && (
             <button
               onClick={() => useLayoutStore.getState().toggleDockPanel("soundboard")}
               style={{
@@ -325,7 +325,7 @@ export function ChatHeader() {
               </svg>
             </button>
           )}
-          {!isMobile && channels.some((c) => c.isSoundboard) && (
+          {channels.some((c) => c.isSoundboard) && (
             <button
               onClick={() => useLayoutStore.getState().toggleDockPanel("memeboard")}
               style={{

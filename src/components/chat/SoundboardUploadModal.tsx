@@ -14,6 +14,7 @@ import { ExternalAudioImport } from "./ExternalAudioImport";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { trimToClip } from "../../services/audioTrim";
 import { TTS_MODEL_LABELS } from "../../services/ttsService";
+import { SUR_ANDROID } from "../../utils/plateforme";
 
 /** Hauteur du sélecteur d'emoji, et marge qui le sépare du bouton. */
 const EMOJI_PANEL_H = 300;
@@ -187,9 +188,10 @@ export function SoundboardUploadModal({ existingCategories, maxSize, onClose, on
           {editing ? t("soundboard.editTitle") : t("soundboard.uploadTitle")}
         </div>
 
-        {!editing && (
+        {!editing && !SUR_ANDROID && (
           <>
-            {/* Source toggle: local file vs external-media URL (yt-dlp). */}
+            {/* Source toggle: local file vs external-media URL (yt-dlp) —
+                pas de yt-dlp sur téléphone. */}
             <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 12, background: 'var(--color-surface-container-high)' }}>
               {(["file", "url"] as const).map((m) => (
                 <button key={m} type="button"

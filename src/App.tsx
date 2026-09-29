@@ -49,6 +49,8 @@ function LazyScreenFallback() {
   );
 }
 import { MobileVoiceBar } from "./components/mobile/MobileVoiceBar";
+import { MemePopWeb } from "./components/mobile/MemePopWeb";
+import { SUR_ANDROID } from "./utils/plateforme";
 import { ConnectionStatusBanner } from "./components/ConnectionStatusBanner";
 import { UpdateBanner } from "./components/layout/UpdateBanner";
 import { DownloadToast } from "./components/layout/DownloadToast";
@@ -482,6 +484,7 @@ export default function App() {
 
         {/* Mobile voice bar with PTT */}
         {isMobile && connectedVoice && <MobileVoiceBar />}
+        {SUR_ANDROID && <MemePopWeb />}
 
         {mutedSpeakWarning && (
           <div style={{

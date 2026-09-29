@@ -21,6 +21,7 @@ import { defautsDeContraste } from "../../themes/contrast";
 import { ACCENTS_PROPOSES, tokensAccent } from "../../themes/accent";
 import { ProfilModal } from "./ProfilModal";
 import type { Theme } from "../../themes/types";
+import { SUR_ANDROID } from "../../utils/plateforme";
 
 
 type SettingsTab = "general" | "audio" | "channel" | "shortcuts" | "advanced";
@@ -219,6 +220,8 @@ export function SettingsPanel() {
   const voiceSounds = useSettingsStore((s) => s.voiceSounds);
   const setVoiceSound = useSettingsStore((s) => s.setVoiceSound);
   const muteSoundsWhenDeafened = useSettingsStore((s) => s.muteSoundsWhenDeafened);
+  const partagesVideoReseauMobile = useSettingsStore((s) => s.partagesVideoReseauMobile);
+  const setPartagesVideoReseauMobile = useSettingsStore((s) => s.setPartagesVideoReseauMobile);
   const setMuteSoundsWhenDeafened = useSettingsStore((s) => s.setMuteSoundsWhenDeafened);
   const [cueEditor, setCueEditor] = useState<{ cue: VoiceCue; file: File; path: string; label: string } | null>(null);
   const [cueUrlImport, setCueUrlImport] = useState<{ cue: VoiceCue; label: string } | null>(null);
@@ -698,11 +701,24 @@ export function SettingsPanel() {
 
           {/* Meeting transcription (local whisper) — model + language. The
               model is fetched on first use; the button just pre-downloads. */}
-          <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+          {SUR_ANDROID && (
+            <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
+              <div style={rowStyle}>
+                <div style={{ marginRight: 12 }}>
+                  <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.partagesReseauMobile")}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2 }}>{t("settings.partagesReseauMobileDesc")}</div>
+                </div>
+                <button onClick={() => setPartagesVideoReseauMobile(!partagesVideoReseauMobile)} style={toggleStyle(partagesVideoReseauMobile)}>
+                  <div style={toggleDotStyle(partagesVideoReseauMobile)} />
+                </button>
+              </div>
+            </div>
+          )}
+          {!SUR_ANDROID && <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={{ fontSize: 14, color: 'var(--color-on-surface)' }}>{t("settings.transcribeTitle")}</div>
             <div style={{ fontSize: 12, color: 'var(--color-on-surface-variant)', marginTop: 2, marginBottom: 12 }}>{t("settings.transcribeDesc")}</div>
             <TranscribeModelPicker selectStyle={selectStyle} />
-          </div>
+          </div>}
           <div style={{ background: 'var(--color-surface-container)', borderRadius: 16, padding: 16 }}>
             <div style={voiceChannelSounds ? { ...rowStyle, marginBottom: 8 } : rowStyle}>
               <div style={{ marginRight: 12 }}>

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { PaperclipIcon, FileIcon, PollIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { PollCreateModal } from "./PollCreateModal";
+import { SUR_ANDROID } from "../../utils/plateforme";
 
 // Import de vidéo externe (yt-dlp & co) hors du chunk de démarrage (perf
 // mémoire, 2026-09-12) : il n'est ouvert que par le menu trombone.
@@ -60,7 +61,8 @@ export function AttachButton() {
                 onClick={() => { setMenuOpen(false); inputRef.current?.click(); }}>
                 <FileIcon /> {t("chat.attachFileItem")}
               </button>
-              <button type="button" style={itemStyle}
+              {/* Vidéo par lien (yt-dlp) : pas sur téléphone. */}
+              {!SUR_ANDROID && <button type="button" style={itemStyle}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                 onClick={() => { setMenuOpen(false); setShowVideoImport(true); }}>
@@ -68,7 +70,7 @@ export function AttachButton() {
                   <polygon points="23 7 16 12 23 17 23 7" />
                   <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
                 </svg> {t("extVideo.menuItem")}
-              </button>
+              </button>}
               <button type="button" style={itemStyle} disabled={!activeChannel}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-surface-container-highest)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}

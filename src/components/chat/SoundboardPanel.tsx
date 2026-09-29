@@ -27,6 +27,7 @@ import { UserAvatar } from "../sidebar/UserAvatar";
 import { loadHotkeys, onHotkeysChange, pruneHotkeys, resyncHotkeys } from "../../services/soundboardHotkeys";
 import { useLayoutStore } from "../../stores/useLayoutStore";
 import { useDockZone } from "../layout/dockZoneContext";
+import { SUR_ANDROID } from "../../utils/plateforme";
 
 // Build a nested tree from "Films/Kamelott" paths so the pill navigation can
 // list top-level categories and drill into sub-categories.
@@ -380,7 +381,8 @@ export function SoundboardPanel() {
 
   const tabDefs = [
     { key: "sounds" as const, label: t("soundboard.tabSounds"), show: true },
-    { key: "voices" as const, label: t("tts.tab"), show: canUpload },
+    // Voix clonées : modèles locaux, pas sur téléphone.
+    { key: "voices" as const, label: t("tts.tab"), show: canUpload && !SUR_ANDROID },
     { key: "members" as const, label: `${t("soundboard.tabMembers")} · ${members.length}`, show: canManageMembers },
   ].filter((x) => x.show);
 

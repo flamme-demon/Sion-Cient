@@ -673,7 +673,9 @@
     "transcribeModelSmallHint": "Équilibré · ~194 Mo",
     "transcribeModelMediumHint": "Meilleure qualité · ~583 Mo",
     "transcribeModelParakeetHint": "Très rapide · 25 langues · ~549 Mo",
-    "assetSummaryHint": "llama.cpp + Qwen3.5-4B · ~2,7 Go"
+    "assetSummaryHint": "llama.cpp + Qwen3.5-4B · ~2,7 Go",
+    "partagesReseauMobile": "Vidéo des partages d'écran en données mobiles",
+    "partagesReseauMobileDesc": "Désactivé : en 4G/5G, un partage arrive vidéo masquée (le son continue) et un bouton l'affiche. En Wi-Fi, la vidéo s'affiche toujours."
   },
   "admin": {
     "title": "Admin Continuwuity",

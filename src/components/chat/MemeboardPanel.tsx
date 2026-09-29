@@ -36,6 +36,7 @@ import { MemeTrimmer } from "./MemeTrimmer";
 import { EmojiGridPanel } from "./EmojiGridPanel";
 import { definirLecteurActif, libererLecteurActif } from "../../services/lecteurActif";
 import { adresseDeReprise } from "../../services/repriseImages";
+import { SUR_ANDROID } from "../../utils/plateforme";
 
 /** Identifiant de l'essai dans le registre du lecteur unique : une vidéo du
  *  fil en cours de lecture rend la main, comme quand on en lance une autre. */
@@ -312,7 +313,9 @@ export function MemeboardPanel() {
     />
   );
 
-  const boutonAjouter = peutEnvoyer && (
+  // Créer un meme passe par ffmpeg (analyse, découpe) : pas sur téléphone,
+  // où l'on déclenche seulement ceux du salon.
+  const boutonAjouter = peutEnvoyer && !SUR_ANDROID && (
     <button
       type="button"
       onClick={() => setImport(true)}

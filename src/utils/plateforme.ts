@@ -18,3 +18,6 @@ export function plateformeLocale(): Plateforme {
 export function plateformeMobile(plateforme: unknown): boolean {
   return plateforme === "android" || plateforme === "ios";
 }
+
+/** Android (téléphone) : ni PIP, ni ffmpeg, ni yt-dlp, ni modèles locaux. */
+export const SUR_ANDROID = plateformeLocale() === "android";

@@ -119,6 +119,9 @@ interface SettingsState {
   memeboardEnabled: boolean;
   /** Volume de la bande-son des memes, de 0 à 1. */
   memeboardVolume: number;
+  /** Téléphone en données mobiles : afficher la vidéo des partages d'écran
+   *  reçus. Faux par défaut — masquée (le son continue), un bouton l'affiche. */
+  partagesVideoReseauMobile: boolean;
   /** Play short join/leave/timeout cues when a member enters or leaves the
    *  voice channel the local user is currently in (TeamSpeak-style). */
   voiceChannelSounds: boolean;
@@ -206,6 +209,7 @@ interface SettingsState {
   setSoundboardVolume: (v: number) => void;
   setMemeboardEnabled: (v: boolean) => void;
   setMemeboardVolume: (v: number) => void;
+  setPartagesVideoReseauMobile: (v: boolean) => void;
   setVoiceChannelSounds: (v: boolean) => void;
   setMuteSoundsWhenDeafened: (v: boolean) => void;
   setVoiceSound: (cue: VoiceCue, cfg: VoiceSoundCfg | null) => void;
@@ -264,6 +268,7 @@ export const useSettingsStore = create<SettingsState>()(
       soundboardVolume: 0.2,
       memeboardEnabled: true,
       memeboardVolume: 0.5,
+      partagesVideoReseauMobile: false,
       voiceChannelSounds: true,
       muteSoundsWhenDeafened: false,
       voiceSounds: { ...EMPTY_VOICE_SOUNDS },
@@ -322,6 +327,7 @@ export const useSettingsStore = create<SettingsState>()(
         // Coupée en plein meme : ceux à l'écran doivent partir aussi.
         if (!v) import("../services/memeboardService").then(({ arreterMemes }) => arreterMemes()).catch(() => {});
       },
+      setPartagesVideoReseauMobile: (v) => set({ partagesVideoReseauMobile: v }),
       setMemeboardVolume: (v) => set({ memeboardVolume: Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5 }),
       setSoundboardVolume: (v) => {
         set({ soundboardVolume: v });

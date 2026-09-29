@@ -673,7 +673,9 @@
     "transcribeModelSmallHint": "Balanced · ~194 MB",
     "transcribeModelMediumHint": "Best quality · ~583 MB",
     "transcribeModelParakeetHint": "Very fast · 25 languages · ~549 MB",
-    "assetSummaryHint": "llama.cpp + Qwen3.5-4B · ~2.7 GB"
+    "assetSummaryHint": "llama.cpp + Qwen3.5-4B · ~2.7 GB",
+    "partagesReseauMobile": "Screen share video on mobile data",
+    "partagesReseauMobileDesc": "Off: on 4G/5G, a share arrives with its video hidden (sound keeps playing) and a button shows it. On Wi-Fi, video always shows."
   },
   "admin": {
     "title": "Admin Continuwuity",
