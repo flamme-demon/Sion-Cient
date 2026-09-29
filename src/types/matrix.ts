@@ -16,6 +16,12 @@ export interface VoiceChannelUser extends MatrixUser {
   connectionQuality?: "excellent" | "good" | "poor" | "lost" | "unknown";
   /** Emoji displayed during an active soundboard trigger; undefined when idle. */
   playingSoundEmoji?: string;
+  /** Appareils (device_id) en appel depuis un téléphone (`sion_platform`). */
+  mobileDevices?: string[];
+  /** Tous les appareils de l'utilisateur en appel sont des téléphones. */
+  mobileOnly?: boolean;
+  /** Ligne d'un appel en cours (un appareil) : c'est un téléphone. */
+  mobile?: boolean;
 }
 
 export interface Channel {

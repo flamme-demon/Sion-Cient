@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon } from "../icons";
+import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon, PhoneIcon } from "../icons";
 import { ChannelIcon } from "./ChannelIcon";
 import { UserAvatar } from "./UserAvatar";
 import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
@@ -16,6 +16,7 @@ import type { Channel, UserRole } from "../../types/matrix";
 import { moteurRust } from "../../services/moteur";
 import { leaveRoom as matrixServiceLeave } from "../../services/matrixService";
 import * as cacheRust from "../../services/cacheRust";
+import { appareilDeIdentite, plateformeLocale, plateformeMobile } from "../../utils/plateforme";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -211,6 +212,13 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
         // Local: use the store (canonical truth). Remote: read the deafened
         // flag broadcast via LiveKit participant metadata.
         const deafened = isSelf ? isDeafened : p.isDeafened;
+        // Téléphone ou ordinateur, par appareil : on peut être connecté des
+        // deux (`sion_platform` des call.member, relayé par voiceUsers).
+        const userId = p.identity.match(/^(@[^:]+:[^:]+)/)?.[1] ?? p.identity;
+        const appareil = appareilDeIdentite(p.identity);
+        const mobile = isSelf
+          ? plateformeMobile(plateformeLocale())
+          : !!appareil && !!channel.voiceUsers.find((u) => u.id === userId)?.mobileDevices?.includes(appareil);
         return {
           id: p.identity,
           name: info.name,
@@ -221,6 +229,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
           deafened,
           connectionQuality: p.connectionQuality,
           playingSoundEmoji: p.playingSoundEmoji,
+          mobile,
         };
       });
   }, [isConnectedChannel, liveKitConnected, liveKitParticipants, channel.voiceUsers, credentials, isMuted, isDeafened, matrixConnected]);
@@ -579,6 +588,11 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: 'var(--color-on-surface)', opacity: u.deafened ? 0.6 : 1 }}>
                 {u.name}
               </span>
+              {(u.mobile ?? u.mobileOnly) && (
+                <span title="Sur téléphone" style={{ display: 'flex', flexShrink: 0, color: 'var(--color-on-surface-variant)', opacity: 0.8 }}>
+                  <PhoneIcon />
+                </span>
+              )}
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, opacity: 0.75 }}>
                 {/* Parité avec la liste déployée : rôle (couronne/bouclier),
                     badge AFK, micro, casque, qualité réseau — rien ne manque. */}
@@ -645,6 +659,11 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, color: roleColor(u.role), fontWeight: u.role !== "user" ? 600 : 400, opacity: u.deafened ? 0.55 : 0.8 }}>
                   {u.name}
                 </span>
+                {(u.mobile ?? u.mobileOnly) && (
+                  <span title="Sur téléphone" style={{ display: 'flex', flexShrink: 0, color: 'var(--color-on-surface-variant)', opacity: 0.7 }}>
+                    <PhoneIcon size={11} />
+                  </span>
+                )}
                 {u.deafened && (
                   <span
                     title="AFK (sourdine)"

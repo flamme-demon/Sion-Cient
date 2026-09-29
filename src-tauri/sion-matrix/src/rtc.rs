@@ -72,6 +72,21 @@ pub(crate) struct Annonce<'a> {
     pub sourd: bool,
 }
 
+/// Système de cet appareil (`sion_platform`) : la liste des participants
+/// distingue téléphone et ordinateur, par exemple quand on est en appel des
+/// deux (29/09). L'interface JS publie la même valeur (`plateformeLocale`).
+pub(crate) const PLATEFORME: &str = if cfg!(target_os = "android") {
+    "android"
+} else if cfg!(target_os = "ios") {
+    "ios"
+} else if cfg!(target_os = "windows") {
+    "windows"
+} else if cfg!(target_os = "macos") {
+    "macos"
+} else {
+    "linux"
+};
+
 pub(crate) fn contenu_appartenance(a: &Annonce) -> Value {
     let mut contenu = json!({
         "application": "m.call",
@@ -87,6 +102,7 @@ pub(crate) fn contenu_appartenance(a: &Annonce) -> Value {
         ],
         "sion_muted": a.muet,
         "sion_deafened": a.sourd,
+        "sion_platform": PLATEFORME,
     });
     if let Some(ts) = a.cree {
         contenu["created_ts"] = json!(ts);
@@ -481,7 +497,7 @@ mod tests {
                 "membershipID": "@a:hs:DEV", "expires": 7_200_000, "m.call.intent": "audio",
                 "focus_active": { "type": "livekit", "focus_selection": "oldest_membership" },
                 "foci_preferred": [{ "livekit_alias": "!salon:hs", "livekit_service_url": "https://livekit.exemple", "type": "livekit" }],
-                "sion_muted": true, "sion_deafened": false, "created_ts": T,
+                "sion_muted": true, "sion_deafened": false, "sion_platform": PLATEFORME, "created_ts": T,
             })
         );
         // À la jonction, pas de `created_ts` : c'est la date de l'événement.

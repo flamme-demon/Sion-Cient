@@ -4,6 +4,7 @@ import { parseMentions } from "../utils/mentions";
 import * as core from "./matrixCore";
 import * as cacheRust from "./cacheRust";
 import { moteurRust } from "./moteur";
+import { plateformeLocale } from "../utils/plateforme";
 
 let matrixClient: MatrixClient | null = null;
 
@@ -927,6 +928,8 @@ export function buildCallMemberContent(livekitServiceUrl: string, livekitAlias: 
     // renewal the peer view of our mute/deafen is continuous.
     sion_muted: localVoiceState.muted,
     sion_deafened: localVoiceState.deafened,
+    // Téléphone ou ordinateur (liste des participants).
+    sion_platform: plateformeLocale(),
   };
 }
 

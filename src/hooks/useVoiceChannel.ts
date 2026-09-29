@@ -9,6 +9,7 @@ import { generateLiveKitToken, getMatrixRTCToken } from "../services/livekitToke
 import { getMatrixClient, getLocalVoiceState, sendCallMemberEvent, removeCallMemberEvent, republishCallMember } from "../services/matrixService";
 import { MatrixKeyProvider } from "../services/matrixRTCE2EE";
 import { autoriserMicro, startVoiceService, stopVoiceService } from "../services/androidVoiceService";
+import { plateformeLocale } from "../utils/plateforme";
 import { isVoiceNativeAvailable } from "../services/voiceNativeService";
 import { disconnectNativeSession, waitForNativeSessionCleanup } from "../services/nativeVoiceSession";
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
@@ -359,7 +360,7 @@ export function useVoiceChannel() {
               mm.makeMyMembership = (expires: number) => {
                 const base = original(expires);
                 const vs = getLocalVoiceState();
-                return { ...base, sion_muted: vs.muted, sion_deafened: vs.deafened };
+                return { ...base, sion_muted: vs.muted, sion_deafened: vs.deafened, sion_platform: plateformeLocale() };
               };
             } else {
               console.warn("[Sion] MembershipManager.makeMyMembership not found — cross-channel voice state limited to fast-path only; SDK renewals will clobber");

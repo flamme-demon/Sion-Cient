@@ -15,6 +15,7 @@ import { playMessageReceived } from "../services/soundService";
 import { playPokeCue, playKickCue, playMemberKickedCue, noteKicked } from "../services/voiceChannelSounds";
 import { findAdminRoom } from "../services/adminCommandService";
 import { noteServerTimestamp, serverNow, publishClockSkew } from "../services/serverClock";
+import { plateformeMobile } from "../utils/plateforme";
 
 export type VerificationStep =
   | "idle"           // No verification in progress
@@ -211,7 +212,19 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
     const stateKeyStr: string = stateKey || "";
     const stateKeyMatch = stateKeyStr.match(/^_(@[^_]+)/);
     const userId = sender || (stateKeyMatch ? stateKeyMatch[1] : null);
-    if (!userId || seenUserIds.has(userId)) continue;
+    if (!userId) continue;
+    // Téléphone ou ordinateur, par appareil (`sion_platform`) : un même
+    // utilisateur peut être en appel des deux.
+    const mobile = plateformeMobile(content?.sion_platform);
+    const appareil: string | undefined = content?.device_id;
+    if (seenUserIds.has(userId)) {
+      const deja = users.find((u) => u.id === userId);
+      if (deja) {
+        if (mobile && appareil) deja.mobileDevices = [...(deja.mobileDevices ?? []), appareil];
+        deja.mobileOnly = !!deja.mobileOnly && mobile;
+      }
+      continue;
+    }
     seenUserIds.add(userId);
 
     // Sion embeds the user's mute/deafen state inside the call.member
@@ -230,6 +243,8 @@ export function extractVoiceUsers(room: any, client: MatrixClient | null): Voice
       speaking: false,
       muted: sionMuted,
       deafened: sionDeafened,
+      mobileDevices: mobile && appareil ? [appareil] : [],
+      mobileOnly: mobile,
     });
   }
 

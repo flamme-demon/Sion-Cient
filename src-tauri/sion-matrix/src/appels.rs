@@ -31,6 +31,10 @@ pub struct UtilisateurVocal {
     pub speaking: bool,
     pub muted: bool,
     pub deafened: bool,
+    /// Appareils (device_id) en appel depuis un téléphone (`sion_platform`).
+    pub mobile_devices: Vec<String>,
+    /// Tous ses appareils en appel sont des téléphones.
+    pub mobile_only: bool,
 }
 
 /// Vérité au sens de JavaScript : `null`, `false`, `0`, `""` sont faux.
@@ -125,16 +129,25 @@ pub(crate) fn participants(
     maintenant: i64,
     profil: impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Vec<UtilisateurVocal> {
-    let mut vus = std::collections::HashSet::new();
-    let mut liste = Vec::new();
+    let mut rang: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut liste: Vec<UtilisateurVocal> = Vec::new();
     for ev in evenements {
         if !est_actif(ev, maintenant) {
             continue;
         }
         let Some(id) = utilisateur(ev) else { continue };
-        if !vus.insert(id.clone()) {
+        // Téléphone ou ordinateur, par appareil : un même utilisateur peut
+        // être en appel des deux.
+        let mobile = matches!(ev.contenu.get("sion_platform").and_then(Value::as_str), Some("android" | "ios"));
+        let appareil = ev.contenu.get("device_id").and_then(Value::as_str).map(str::to_owned);
+        let mobiles: Vec<String> = appareil.filter(|_| mobile).into_iter().collect();
+        if let Some(&i) = rang.get(&id) {
+            let deja = &mut liste[i];
+            deja.mobile_devices.extend(mobiles);
+            deja.mobile_only &= mobile;
             continue;
         }
+        rang.insert(id.clone(), liste.len());
         let (nom, avatar) = profil(&id);
         liste.push(UtilisateurVocal {
             name: nom.unwrap_or_else(|| partie_locale(&id)),
@@ -144,6 +157,8 @@ pub(crate) fn participants(
             // Champs propres à Sion : absents chez un client non-Sion.
             muted: ev.contenu.get("sion_muted") == Some(&Value::Bool(true)),
             deafened: ev.contenu.get("sion_deafened") == Some(&Value::Bool(true)),
+            mobile_devices: mobiles,
+            mobile_only: mobile,
             id,
         });
     }
@@ -183,8 +198,27 @@ mod tests {
                 speaking: false,
                 muted: false,
                 deafened: false,
+                mobile_devices: vec![],
+                mobile_only: false,
             }]
         );
+    }
+
+    #[test]
+    fn telephone_et_ordinateur_par_appareil() {
+        let mut pc = ev("@alice:hs", json!({ "application": "m.call", "device_id": "PC", "sion_platform": "linux" }));
+        pc.cle_etat = "_@alice:hs_PC_m.call".into();
+        let mut tel = ev("@alice:hs", json!({ "application": "m.call", "device_id": "TEL", "sion_platform": "android" }));
+        tel.cle_etat = "_@alice:hs_TEL_m.call".into();
+        let bob = ev("@bob:hs", json!({ "application": "m.call", "device_id": "B", "sion_platform": "android" }));
+
+        let l = liste(&[pc, tel, bob]);
+        assert_eq!(l.len(), 2, "un utilisateur, une ligne");
+        assert_eq!(l[0].mobile_devices, vec!["TEL".to_owned()]);
+        assert!(!l[0].mobile_only, "Alice est aussi sur ordinateur");
+        assert!(l[1].mobile_only);
+        // Client sans `sion_platform` : ni téléphone ni seulement téléphone.
+        assert!(liste(&[ev("@c:hs", json!({ "application": "m.call", "device_id": "C" }))])[0].mobile_devices.is_empty());
     }
 
     #[test]
