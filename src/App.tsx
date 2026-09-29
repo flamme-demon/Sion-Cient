@@ -160,7 +160,7 @@ export default function App() {
       }
     };
     // Handle notification tap — open room (with retry until channels loaded)
-    (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string) => {
+    (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string, eventId?: string) => {
       let retries = 0;
       const tryOpen = () => {
         const channel = useMatrixStore.getState().channels.find(c => c.id === roomId);
@@ -168,6 +168,8 @@ export default function App() {
           useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
           useAppStore.getState().setMobileView("chat");
           useMatrixStore.getState().loadRoomHistory(roomId);
+          // Notification ntfy (appli fermée) : jusqu'au message lui-même.
+          if (eventId) setTimeout(() => void import("./services/allerAuMessage").then((m) => m.allerAuMessage(eventId)), 300);
         } else if (retries < 20) {
           retries++;
           setTimeout(tryOpen, 1000);

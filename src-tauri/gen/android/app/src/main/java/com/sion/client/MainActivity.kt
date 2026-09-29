@@ -22,6 +22,7 @@ class MainActivity : TauriActivity() {
   private var voiceActionReceiver: BroadcastReceiver? = null
   private var cachedWebView: WebView? = null
   private var pendingRoomId: String? = null
+  private var pendingEventId: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     // Avant Tauri : le moteur Matrix fait ses premières requêtes dès le
@@ -122,6 +123,9 @@ class MainActivity : TauriActivity() {
     val roomId = intent?.getStringExtra("open_room_id") ?: return
     android.util.Log.i("SionPush", "handleNotificationIntent: roomId=$roomId")
     intent.removeExtra("open_room_id")
+    // Jusqu'au message lui-même, pas seulement le salon.
+    pendingEventId = intent.getStringExtra("open_event_id")
+    intent.removeExtra("open_event_id")
 
     // Clear all message notifications
     val manager = getSystemService(NotificationManager::class.java)
@@ -147,8 +151,10 @@ class MainActivity : TauriActivity() {
         ) { result ->
           if (result.contains("ready")) {
             android.util.Log.i("SionPush", "Navigating to room: $roomId")
-            webView.evaluateJavascript("window.__SION_OPEN_ROOM__('$roomId')", null)
+            val evenement = pendingEventId?.let { ", '$it'" } ?: ""
+            webView.evaluateJavascript("window.__SION_OPEN_ROOM__('$roomId'$evenement)", null)
             pendingRoomId = null
+            pendingEventId = null
           } else if (attempts < 30) {
             webView.postDelayed(this, 1000)
           }

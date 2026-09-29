@@ -100,14 +100,10 @@ class NtfyListenerService : Service() {
 
         android.util.Log.i("SionPush", "Topic: $topicUrl")
 
-        // Écoute SSE : l'adresse publique d'abord — l'IP locale en dur, seule
+        // Écoute SSE sur l'adresse publique : l'IP locale en dur, seule
         // utilisée jusqu'ici, rendait les push impossibles hors de la maison
-        // (4G). L'adresse locale reste un secours quand la publique échoue
-        // (retour NAT impossible sur le réseau local).
-        val adresses = listOf(
-            topicUrl,
-            topicUrl.replace("https://push.sionchat.fr", "http://192.168.252.245:8090"),
-        ).distinct().map { "$it/sse" }
+        // (4G) — et Android refuse de toute façon le HTTP en clair.
+        val adresses = listOf("$topicUrl/sse")
         shouldRun = true
         listenerThread?.interrupt()
         listenerThread = Thread {

@@ -29,7 +29,9 @@ class PushPollWorker(context: Context, params: WorkerParameters) : Worker(contex
         val lastId = prefs.getString(PREF_LAST_ID, null)
 
         // Use local ntfy URL to avoid NAT hairpinning
-        val localTopicUrl = topicUrl.replace("https://push.sionchat.fr", "http://192.168.252.245:8090")
+        // Adresse publique : l'IP locale en clair (HTTP) est refusée par Android
+        // et injoignable hors de la maison.
+        val localTopicUrl = topicUrl
 
         try {
             val pollUrl = if (lastId != null) {

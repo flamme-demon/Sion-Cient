@@ -60,6 +60,18 @@ export function estMention(
 let actionsEnregistrees = false;
 let ecouteBureau = false;
 
+/** Ouvre le salon d'une notification, puis son message (même hors du fil
+ *  chargé). Sur téléphone, bascule aussi de la liste au chat. */
+export function ouvrirMessage(salon: string, evenement?: string | null): void {
+  const app = useAppStore.getState();
+  app.setActiveChannel(salon, false);
+  app.setMobileView("chat");
+  if (evenement) {
+    // Laisse le salon s'afficher avant d'y chercher le message.
+    setTimeout(() => void import("./allerAuMessage").then((m) => m.allerAuMessage(evenement)), 300);
+  }
+}
+
 /** Retours des notifications du bureau Linux (`notifications_bureau.rs`) :
  *  clic ou « Ouvrir » ramène sur le message, la réponse intégrée de KDE part
  *  comme une réponse ordinaire. Installés une fois. */
@@ -68,12 +80,7 @@ async function ecouterNotificationsBureau(): Promise<void> {
   ecouteBureau = true;
   const { listen } = await import("@tauri-apps/api/event");
   await listen<{ salon: string; evenement?: string | null }>("notification-ouvrir", (e) => {
-    useAppStore.getState().setActiveChannel(e.payload.salon, false);
-    if (e.payload.evenement) {
-      const evenement = e.payload.evenement;
-      // Laisse le salon s'afficher avant d'y chercher le message.
-      setTimeout(() => void import("./allerAuMessage").then((m) => m.allerAuMessage(evenement)), 300);
-    }
+    ouvrirMessage(e.payload.salon, e.payload.evenement);
   });
   await listen<{ salon: string; evenement?: string | null; texte: string }>("notification-repondre", (e) => {
     const { salon, evenement, texte } = e.payload;
@@ -112,20 +119,31 @@ export async function envoyerNotification(n: { titre: string; corps: string; sal
           { id: "open", title: "Ouvrir", foreground: true },
         ],
       }]).catch(() => {});
-      onAction((notification) => {
-        const extra = notification.extra as Record<string, string> | undefined;
-        if (!extra) return;
-        const actionId = (notification as unknown as Record<string, string>).actionId;
-        if (actionId === "open" || !actionId) {
-          useAppStore.getState().setActiveChannel(extra.roomId, false);
-          if (extra.eventId) useAppStore.getState().setScrollToMessageId(extra.eventId);
-        }
-        if (actionId === "reply") {
-          const reponse = (notification as unknown as Record<string, string>).inputValue;
-          if (reponse && extra.roomId) {
-            void import("./matrixService").then((ms) => ms.sendReply(extra.roomId, extra.eventId, reponse).catch(console.error));
+      onAction((retour) => {
+        // Android : { actionId, inputValue, notification: { extra } } ;
+        // ailleurs, la notification elle-même porte `extra`. Lire `extra` à
+        // la racine laissait le toucher et « Répondre » sans effet sur le
+        // téléphone (29/09).
+        const r = retour as unknown as {
+          actionId?: string;
+          inputValue?: string | null;
+          extra?: Record<string, string>;
+          notification?: { extra?: Record<string, string> } | null;
+        };
+        const extra = r.notification?.extra ?? r.extra;
+        if (!extra?.roomId) return;
+        if (r.actionId === "reply") {
+          const reponse = r.inputValue?.trim();
+          if (reponse) {
+            void import("./matrixService").then((ms) =>
+              (extra.eventId ? ms.sendReply(extra.roomId, extra.eventId, reponse) : ms.sendTextMessage(extra.roomId, reponse))
+                .catch(console.error),
+            );
           }
+          return;
         }
+        // « tap » (Android), « open », ou clic sans action.
+        ouvrirMessage(extra.roomId, extra.eventId || null);
       }).catch(() => {});
     }
 
@@ -142,8 +160,7 @@ export async function envoyerNotification(n: { titre: string; corps: string; sal
       const notif = new Notification(n.titre, { body: n.corps, icon: "/icons/128x128.png" });
       notif.onclick = () => {
         window.focus();
-        useAppStore.getState().setActiveChannel(n.salon, false);
-        if (n.evenement) useAppStore.getState().setScrollToMessageId(n.evenement);
+        ouvrirMessage(n.salon, n.evenement);
       };
     }
   }
