@@ -170,3 +170,20 @@ it("sans souris ni clavier depuis une minute, un message reçu n'est pas lu (fil
   act(() => vi.advanceTimersByTime(100));
   expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$2");
 });
+
+it("absent, une réponse partie depuis la notification ne vaut pas lecture du salon", () => {
+  act(() => vi.advanceTimersByTime(6000));
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  act(() => { window.dispatchEvent(new Event("blur")); });
+
+  ajouter(message("$2", "@narkow:sion.test", 2));
+  act(() => vi.advanceTimersByTime(100));
+  expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+
+  // 29/09 : réponse depuis la notification de KDE, on est toujours ailleurs.
+  // Mon message arrive dans le fil : il ne prouve pas qu'on a lu le salon.
+  ajouter(message("$3", "@flamme:sion.test", Date.now()));
+  act(() => vi.advanceTimersByTime(100));
+  expect(conteneur.querySelector("[data-unread-sep]")).not.toBeNull();
+  expect(useAppStore.getState().lastReadMessageId[SALON]).toBe("$1");
+});

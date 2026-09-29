@@ -200,8 +200,10 @@ export function MessageList() {
   useEffect(() => {
     channelOpenedAtRef.current = Date.now();
   }, [activeChannel]);
+  // Absent, mon message ne prouve rien : il est parti de la notification (ou
+  // d'un autre appareil) sans que ce salon ait été vu (29/09).
   useEffect(() => {
-    if (!sepAnchor || messages.length === 0 || !currentUserId) return;
+    if (!sepAnchor || messages.length === 0 || !currentUserId || !presentRef.current) return;
     const last = messages[messages.length - 1];
     if (last.senderId === currentUserId && (last.ts ?? 0) >= channelOpenedAtRef.current) {
       setSepAnchor(undefined);
@@ -500,7 +502,9 @@ export function MessageList() {
     // window. Must run BEFORE the channelJustChanged early-return below,
     // otherwise sending a message within 5s of opening the channel leaves
     // the scroll wherever it was.
-    if (currLen > prevLen && currentUserId) {
+    // Sauf absent : une réponse partie de la notification suit le chemin
+    // des autres messages (vue arrêtée sur le bandeau, rien de lu).
+    if (currLen > prevLen && currentUserId && presentRef.current) {
       const lastMsg = messages[currLen - 1];
       if (lastMsg.senderId === currentUserId && (lastMsg.ts ?? 0) >= channelOpenedAtRef.current) {
         scrollToBottom();
