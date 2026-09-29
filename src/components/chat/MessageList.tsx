@@ -6,7 +6,7 @@ import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { findAdminRoom } from "../../services/adminCommandService";
 import { moteurRust } from "../../services/moteur";
-import { EVENEMENTS_ACTIVITE, etatPresence } from "../../services/premierPlan";
+import { EVENEMENTS_ACTIVITE, EVENEMENT_PRESENCE, etatPresence } from "../../services/premierPlan";
 
 const EMPTY_MESSAGES: never[] = [];
 const SCROLL_TOP_THRESHOLD = 100;
@@ -280,7 +280,7 @@ export function MessageList() {
         lire();
       }
     };
-    const evenements = [...EVENEMENTS_ACTIVITE, "blur"] as const;
+    const evenements = [...EVENEMENTS_ACTIVITE, "blur", EVENEMENT_PRESENCE] as const;
     for (const e of evenements) window.addEventListener(e, evaluer, { passive: true });
     document.addEventListener("visibilitychange", evaluer);
     const minuterie = window.setInterval(evaluer, 5000);
