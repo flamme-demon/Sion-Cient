@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useMatrixStore } from "../../stores/useMatrixStore";
+import { useLayoutStore } from "../../stores/useLayoutStore";
 import type { VerificationStep, EmojiData } from "../../stores/useMatrixStore";
 import { CloseIcon } from "../icons";
 
@@ -42,11 +43,30 @@ export function VerificationBanner({ compact = false }: { compact?: boolean }) {
     prevStepRef.current = verificationStep;
   }, [verificationStep, needsVerification]);
 
-  // Rail : la bannière (flux de vérification, saisie de clé) ne tient pas
-  // dans 72px — on la masque, le déploiement du menu la fait réapparaître.
-  if (compact) return null;
-
   if (!isVisible) return null;
+
+  // Rail : la bannière (flux de vérification, saisie de clé) ne tient pas
+  // dans 72px. Une pastille la signale — la masquer tout à fait rendait une
+  // demande de vérification invisible (29/09) ; un clic déploie le menu.
+  if (compact) {
+    const libelle = hasActiveIncomingVerification
+      ? t("auth.incomingVerification")
+      : hasUndecryptableMessages ? t("auth.keysNeeded") : t("auth.verificationNeeded");
+    return (
+      <button
+        onClick={() => useLayoutStore.getState().setSidebarMode("full")}
+        title={libelle}
+        aria-label={libelle}
+        style={{
+          margin: "4px auto", width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+          background: "var(--color-tertiary-container)", border: "none", cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}
+      >
+        <span style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--color-warning)" }} />
+      </button>
+    );
+  }
 
   const handleRestore = async () => {
     if (!recoveryKey.trim()) return;

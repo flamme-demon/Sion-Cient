@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ServerHeader } from "../sidebar/ServerHeader";
 import { ChannelList } from "../sidebar/ChannelList";
@@ -7,6 +7,7 @@ import { AccountPopover } from "../sidebar/AccountPopover";
 import { VerificationBanner } from "../sidebar/VerificationBanner";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useAppStore } from "../../stores/useAppStore";
+import { useMatrixStore } from "../../stores/useMatrixStore";
 import { MOBILE_VOICE_BAR_HEIGHT } from "../mobile/MobileVoiceBar";
 import { ResizeHandle } from "./ResizeHandle";
 import { BackgroundControls, PanelBackgroundLayer } from "./PanelBackground";
@@ -78,6 +79,16 @@ export function Sidebar() {
   // Fond d'image du menu latéral (portée « channels ») — même mécanisme que
   // la zone de chat et les blocs de la dock.
   const channelsBg = usePanelBackgroundStyle("channels");
+  // Un autre appareil demande une vérification : les emojis à comparer ne
+  // s'affichent que menu déployé — on le déploie (29/09 : demande restée
+  // invisible, menu en rail).
+  const verificationStep = useMatrixStore((s) => s.verificationStep);
+  const needsVerification = useMatrixStore((s) => s.needsVerification);
+  useEffect(() => {
+    if (needsVerification || verificationStep !== "waiting") return;
+    const layout = useLayoutStore.getState();
+    if (layout.sidebarMode !== "full") layout.setSidebarMode("full");
+  }, [verificationStep, needsVerification]);
 
   // Mobile : comportement d'origine (pleine largeur, pas de layout desktop).
   if (isMobile) {
