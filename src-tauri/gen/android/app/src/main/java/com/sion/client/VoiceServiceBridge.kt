@@ -35,6 +35,22 @@ class VoiceServiceBridge(private val context: Context) {
     @JavascriptInterface
     fun micPermissionState(): String = if (hasMicPermission()) "accordée" else reponseMicro
 
+    /** Lien externe : l'application par défaut (navigateur, mail…). Sans ça,
+     *  le lien s'ouvrait dans le WebView de Sion — `open_url` côté Rust n'a
+     *  pas d'équivalent Android. */
+    @JavascriptInterface
+    fun openUrl(url: String): Boolean {
+        val uri = android.net.Uri.parse(url)
+        if (uri.scheme !in setOf("http", "https", "mailto", "tel", "geo")) return false
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            true
+        } catch (_: android.content.ActivityNotFoundException) {
+            false
+        }
+    }
+
     @JavascriptInterface
     fun startVoiceService(channelName: String, isMuted: Boolean, isDeafened: Boolean) {
         VoiceCallService.start(context, channelName, isMuted, isDeafened)

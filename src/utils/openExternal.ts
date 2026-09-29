@@ -3,6 +3,12 @@
  * Uses Tauri invoke when running in the desktop app, falls back to window.open.
  */
 export async function openExternalUrl(url: string): Promise<void> {
+  // Android : l'application par défaut, par le pont Kotlin — `open_url` n'y
+  // a pas d'équivalent et le repli `window.open` ouvrait le lien DANS Sion.
+  const pont = (window as unknown as { __SION__?: { openUrl?: (u: string) => boolean } }).__SION__;
+  if (pont?.openUrl && /Android/i.test(navigator.userAgent)) {
+    if (pont.openUrl(url)) return;
+  }
   if (window.__TAURI_INTERNALS__) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
