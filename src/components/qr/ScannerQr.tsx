@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import jsQR from "jsqr";
 import { CloseIcon } from "../icons";
+import { ordreCameras } from "../../utils/cameras";
 
 export interface QrLu {
   texte: string;
@@ -13,6 +14,8 @@ export interface QrLu {
  *  ralentirait sans rien gagner (le QR occupe le centre de la vue). */
 const COTE_ANALYSE = 640;
 const INTERVALLE_MS = 120;
+/** Sans image passé ce délai, la caméra est muette : on essaie la suivante. */
+const DELAI_IMAGE_MS = 4000;
 
 /**
  * Scanner de QR code : caméra arrière + décodage jsQR, en JavaScript pur —
@@ -30,6 +33,8 @@ export function ScannerQr({ titre, aide, onLu, onFermer }: {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [occupe, setOccupe] = useState(false);
+  const [plusieurs, setPlusieurs] = useState(false);
+  const changerRef = useRef<() => void>(() => {});
   const onLuRef = useRef(onLu);
   const onFermerRef = useRef(onFermer);
   useEffect(() => {
@@ -40,11 +45,77 @@ export function ScannerQr({ titre, aide, onLu, onFermer }: {
   useEffect(() => {
     let flux: MediaStream | null = null;
     let minuteur: ReturnType<typeof setTimeout> | undefined;
+    let garde: ReturnType<typeof setTimeout> | undefined;
     let fini = false;
+    // Caméras dans l'ordre d'essai, celle en cours, essais automatiques faits.
+    let ordre: string[] = [];
+    let rang = 0;
+    let essais = 0;
     // Le même QR refusé n'est pas re-signalé à chaque image.
     let dernierRefus = "";
     const toile = document.createElement("canvas");
     const contexte = toile.getContext("2d", { willReadFrequently: true });
+
+    const erreurCamera = (e: unknown) => {
+      if (fini) return;
+      const nom = (e as { name?: string })?.name;
+      setMessage(nom === "NotAllowedError" ? t("qr.cameraDenied") : t("qr.cameraError"));
+    };
+
+    const imageRecue = () => {
+      const v = videoRef.current;
+      return !!v && v.readyState >= 2 && v.videoWidth > 0 && v.currentTime > 0;
+    };
+
+    // Caméra muette : la suivante, une fois chacune au plus.
+    const essayerSuivante = () => {
+      if (fini) return;
+      if (ordre.length > 1 && essais < ordre.length) {
+        essais += 1;
+        void suivante();
+      } else {
+        setMessage(t("qr.noCameraImage"));
+      }
+    };
+
+    const brancher = async (deviceId?: string) => {
+      clearTimeout(garde);
+      flux?.getTracks().forEach((p) => p.stop());
+      flux = null;
+      // Sans caméra précise (première ouverture, pour l'autorisation et les
+      // libellés) : celle par défaut. « Caméra arrière » ouvrait sur un
+      // Xiaomi la n° 5, muette — et `getUserMedia` ne répondait JAMAIS.
+      const demande = navigator.mediaDevices.getUserMedia({
+        video: deviceId ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } : true,
+        audio: false,
+      });
+      // Une caméra précise a un délai (la première attend, elle, la réponse
+      // à la demande d'autorisation).
+      const f = deviceId
+        ? await Promise.race([demande, new Promise<null>((r) => setTimeout(() => r(null), DELAI_IMAGE_MS))])
+        : await demande;
+      if (!f) {
+        void demande.then((tard) => tard.getTracks().forEach((p) => p.stop())).catch(() => {});
+        essayerSuivante();
+        return;
+      }
+      if (fini) { f.getTracks().forEach((p) => p.stop()); return; }
+      flux = f;
+      const video = videoRef.current;
+      if (video) {
+        video.srcObject = f;
+        void video.play().catch(() => {});
+      }
+      garde = setTimeout(() => { if (!imageRecue()) essayerSuivante(); }, DELAI_IMAGE_MS);
+    };
+
+    const suivante = async () => {
+      if (ordre.length < 2) return;
+      rang = (rang + 1) % ordre.length;
+      setMessage(null);
+      await brancher(ordre[rang]).catch(erreurCamera);
+    };
+    changerRef.current = () => { essais = 0; void suivante(); };
 
     const analyser = async () => {
       if (fini) return;
@@ -75,26 +146,38 @@ export function ScannerQr({ titre, aide, onLu, onFermer }: {
       minuteur = setTimeout(() => void analyser(), INTERVALLE_MS);
     };
 
-    navigator.mediaDevices?.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    }).then((f) => {
-      if (fini) { f.getTracks().forEach((p) => p.stop()); return; }
-      flux = f;
-      const video = videoRef.current;
-      if (video) {
-        video.srcObject = f;
-        void video.play().catch(() => {});
+    // Lu par une fonction : `flux` change dans `brancher`, hors de portée du
+    // suivi de types de TypeScript.
+    const fluxOuvert = (): MediaStream | null => flux;
+
+    const cameras = async () =>
+      (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+
+    (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("getUserMedia indisponible");
+      // Les libellés des caméras ne sont donnés qu'une fois la caméra
+      // autorisée : sans eux, une première ouverture « caméra arrière ».
+      let liste = await cameras();
+      let actuelle: string | undefined;
+      if (!liste.some((c) => c.label)) {
+        await brancher();
+        if (fini) return;
+        actuelle = fluxOuvert()?.getVideoTracks()[0]?.getSettings().deviceId;
+        liste = await cameras();
       }
+      ordre = ordreCameras(liste);
+      setPlusieurs(ordre.length > 1);
+      // La principale en tête ; rouverte si ce n'est pas celle déjà ouverte.
+      rang = 0;
+      if (ordre.length > 0 && ordre[0] !== actuelle) await brancher(ordre[0]);
+      else if (ordre.length === 0 && !fluxOuvert()) await brancher();
       void analyser();
-    }).catch((e: unknown) => {
-      const nom = (e as { name?: string })?.name;
-      setMessage(nom === "NotAllowedError" ? t("qr.cameraDenied") : t("qr.cameraError"));
-    });
+    })().catch(erreurCamera);
 
     return () => {
       fini = true;
       clearTimeout(minuteur);
+      clearTimeout(garde);
       flux?.getTracks().forEach((p) => p.stop());
     };
   }, [t]);
@@ -144,6 +227,17 @@ export function ScannerQr({ titre, aide, onLu, onFermer }: {
         {message
           ? <div style={{ background: "rgba(179,38,30,0.85)", borderRadius: 12, padding: "10px 14px" }}>{message}</div>
           : occupe ? t("qr.reading") : aide}
+        {plusieurs && (
+          <button
+            onClick={() => changerRef.current()}
+            style={{
+              marginTop: 12, padding: "10px 18px", borderRadius: 20, border: "none", cursor: "pointer",
+              background: "rgba(255,255,255,0.15)", color: "#fff", fontSize: 14, fontFamily: "inherit", // theme-exempt : sur l'image
+            }}
+          >
+            {t("qr.switchCamera")}
+          </button>
+        )}
       </div>
     </div>,
     document.body,

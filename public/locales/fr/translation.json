@@ -929,6 +929,8 @@
     "verifyScannedQuestion": "L'autre appareil a scanné le QR code. Affiche-t-il « QR code lu » ?",
     "verifyWaitingOther": "QR code lu ! Confirmez sur l'autre appareil pour terminer.",
     "yes": "Oui",
-    "no": "Non"
+    "no": "Non",
+    "switchCamera": "Changer de caméra",
+    "noCameraImage": "La caméra ne donne pas d'image. Essayez « Changer de caméra »."
   }
 }
