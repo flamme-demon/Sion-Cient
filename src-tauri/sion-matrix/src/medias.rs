@@ -122,14 +122,36 @@ pub(crate) struct Medias {
     sources: Mutex<HashMap<String, SourceMedia>>,
 }
 
+/// Clé d'un média dans son URL. En clair (`mxc://`) : l'adresse elle-même,
+/// encodée (`m…`), que le cœur relit sans registre. Une URL gardée d'un
+/// lancement précédent (identifiants enregistrés, cache des fils) échouait
+/// sinon tant que le cœur ne l'avait pas réinscrite — et l'image restait
+/// cassée : avatars vides « de temps à autre, pas partout » (30/09).
+/// Chiffré : un condensé (16 chiffres hexadécimaux) — les clés de
+/// déchiffrement n'ont rien à faire dans une URL.
 fn cle(source: &SourceMedia) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use base64::Engine as _;
     match source {
-        SourceMedia::Mxc(m) => ("mxc", m.as_str()).hash(&mut h),
-        SourceMedia::Chiffre(f) => ("chiffre", f.to_string()).hash(&mut h),
+        SourceMedia::Mxc(m) => format!("m{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(m)),
+        SourceMedia::Chiffre(f) => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            ("chiffre", f.to_string()).hash(&mut h);
+            format!("{:016x}", h.finish())
+        }
     }
-    format!("{:016x}", h.finish())
 }
+
+/// Source d'une clé de média en clair, sans passer par le registre.
+fn source_sans_registre(cle: &str) -> Option<SourceMedia> {
+    use base64::Engine as _;
+    let octets = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(cle.strip_prefix('m')?).ok()?;
+    let mxc = String::from_utf8(octets).ok().filter(|m| m.starts_with("mxc://"))?;
+    Some(SourceMedia::Mxc(mxc))
+}
+
+/// Délai accordé à un média chiffré pas encore (ré)inscrit : au démarrage,
+/// l'interface affiche le cache des fils avant que le cœur ne les republie.
+const ATTENTE_INSCRIPTION: std::time::Duration = std::time::Duration::from_secs(8);
 
 impl Medias {
     pub fn nouveau(prefixe: impl Into<String>) -> Self {
@@ -170,14 +192,26 @@ impl Medias {
     /// Contenu d'un média du registre. La miniature (600×400, comme
     /// `mxcToThumbnail`) n'existe que pour un média en clair : le serveur ne
     /// peut pas redimensionner ce qu'il ne sait pas lire.
+    fn inscrite(&self, cle: &str) -> Option<SourceMedia> {
+        self.sources.lock().unwrap().get(cle).cloned()
+    }
+
+    async fn source(&self, cle: &str) -> Resultat<SourceMedia> {
+        if let Some(s) = self.inscrite(cle).or_else(|| source_sans_registre(cle)) {
+            return Ok(s);
+        }
+        let limite = tokio::time::Instant::now() + ATTENTE_INSCRIPTION;
+        while tokio::time::Instant::now() < limite {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Some(s) = self.inscrite(cle) {
+                return Ok(s);
+            }
+        }
+        Err(Erreur::Autre(format!("média inconnu : {cle}")))
+    }
+
     pub async fn contenu(&self, client: &Client, cle: &str, format: FormatMedia) -> Resultat<Vec<u8>> {
-        let source = self
-            .sources
-            .lock()
-            .unwrap()
-            .get(cle)
-            .cloned()
-            .ok_or_else(|| Erreur::Autre(format!("média inconnu : {cle}")))?;
+        let source = self.source(cle).await?;
         let (source, format) = match source {
             SourceMedia::Mxc(m) => {
                 let format = match format {
@@ -220,6 +254,23 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn media_en_clair_retrouve_sans_registre() {
+        // URL d'un lancement précédent : ce registre-ci ne la connaît pas.
+        let url = Medias::nouveau(PREFIXE_PAR_DEFAUT).url_avatar("mxc://sionchat.fr/AbC-d_e").unwrap();
+        let cle = url.strip_prefix(PREFIXE_PAR_DEFAUT).unwrap().split('?').next().unwrap();
+        assert!(cle.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'), "{cle}");
+        assert!(matches!(source_sans_registre(cle), Some(SourceMedia::Mxc(m)) if m == "mxc://sionchat.fr/AbC-d_e"));
+        // Un condensé (média chiffré) ou autre chose ne se devine pas.
+        assert!(source_sans_registre("0123456789abcdef").is_none());
+        assert!(source_sans_registre("m%%%").is_none());
+        let pas_mxc = format!("m{}", {
+            use base64::Engine as _;
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("https://ailleurs/x")
+        });
+        assert!(source_sans_registre(&pas_mxc).is_none(), "seulement une adresse mxc://");
+    }
 
     #[test]
     fn meme_source_meme_url_et_la_cle_ne_fuit_pas() {

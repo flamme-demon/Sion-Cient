@@ -44,6 +44,8 @@ describe("matrixCore", () => {
     expect(await urlLecture("http://sion-media.localhost/00ff00ff00ff00ff?vignette=1")).toBe(
       "http://127.0.0.1:41234/matrix/00ff00ff00ff00ff",
     );
+    // Média en clair : la clé porte l'adresse mxc:// encodée.
+    expect(await urlLecture("sion-media://localhost/mbXhjOi8vaHMvYWJj_-")).toBe("http://127.0.0.1:41234/matrix/mbXhjOi8vaHMvYWJj_-");
     expect(await urlLecture("https://ailleurs/son.mp3")).toBe("https://ailleurs/son.mp3");
     invoke.mockResolvedValue(0);
     expect(await urlLecture("sion-media://localhost/00ff00ff00ff00ff")).toBeNull();

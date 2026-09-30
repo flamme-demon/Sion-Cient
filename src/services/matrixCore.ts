@@ -133,7 +133,9 @@ export async function message(salon: string, evenement: string): Promise<ChatMes
  *  un épinglé hors du fil chargé est demandé au serveur (`loaded: false`). */
 export const epingles = (salon: string) => invoquer<PinnedSummary[]>("matrix_epingles", { salon });
 
-const URL_SION_MEDIA = /^(?:sion-media:\/\/localhost|http:\/\/sion-media\.localhost)\/([0-9a-f]{16})(?:\?|$)/;
+/** Clé : 16 chiffres hexadécimaux (média chiffré) ou `m` + base64url de
+ *  l'adresse `mxc://` (média en clair, voir `cle` dans medias.rs). */
+const URL_SION_MEDIA = /^(?:sion-media:\/\/localhost|http:\/\/sion-media\.localhost)\/([0-9a-f]{16}|m[A-Za-z0-9_-]+)(?:\?|$)/;
 
 /** URL qu'un `<audio>` ou une `<video>` savent lire. Sous WebKitGTK, ces
  *  éléments passent par GStreamer, qui ignore `sion-media://` : le média est

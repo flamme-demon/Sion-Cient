@@ -19,6 +19,11 @@ const MARQUE = "reprise";
 
 let installee = false;
 let compteur = 0;
+// Unique aussi d'un chargement de page à l'autre : WebKitGTK se souvient des
+// adresses d'avant un rechargement, et un compteur reparti de 1 retombait sur
+// l'une d'elles — la reprise échouait à son tour, l'avatar restait vide
+// (« de temps à autre et pas partout », 30/09, après des rechargements).
+const PAGE = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 /** Adresse de reprise, unique, ou `null` si l'image n'est pas du cœur ou a
  *  déjà été reprise. Aussi pour une image détachée (`new Image()`), dont
@@ -32,7 +37,7 @@ export function adresseDeReprise(src: string): string | null {
     return null;
   }
   if (url.searchParams.has(MARQUE)) return null;
-  url.searchParams.set(MARQUE, String(++compteur));
+  url.searchParams.set(MARQUE, `${PAGE}-${++compteur}`);
   return url.toString();
 }
 

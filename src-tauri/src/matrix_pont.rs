@@ -367,8 +367,14 @@ mod actif {
     /// (`/matrix/<clé>`), une fois : nom du fichier et type MIME. Appelé depuis
     /// un fil du serveur, hors de tout runtime async.
     pub fn deposer_media(cle: &str) -> Option<(String, &'static str)> {
-        // Clé opaque produite par le cœur : 16 chiffres hexadécimaux, rien d'autre.
-        if cle.len() != 16 || !cle.bytes().all(|b| b.is_ascii_hexdigit()) {
+        // Clé produite par le cœur : 16 chiffres hexadécimaux (média chiffré)
+        // ou `m` + base64url (média en clair). Ni `/` ni `.` : elle devient un
+        // nom de fichier et ne doit pas sortir du dossier.
+        let hexa = cle.len() == 16 && cle.bytes().all(|b| b.is_ascii_hexdigit());
+        let en_clair = cle.len() <= 512
+            && cle.starts_with('m')
+            && cle.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if !hexa && !en_clair {
             return None;
         }
         let nom = format!("sion_mx_{cle}");
