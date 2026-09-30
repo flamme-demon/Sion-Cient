@@ -50,6 +50,9 @@ mod lecteur_audio;
 mod lecteur_video;
 mod media_server;
 mod matrix_pont;
+// Windows : l'appel ne passe pas après un jeu (priorité, bridage d'arrière-plan).
+#[cfg(feature = "native-voice")]
+mod priorite_appel;
 mod notifications_bureau;
 mod native_video_transport;
 #[cfg(feature = "native-voice")]

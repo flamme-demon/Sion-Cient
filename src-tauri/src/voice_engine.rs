@@ -3359,6 +3359,9 @@ impl VoiceEngine for LiveKitEngine {
             "[Sion][voix-native] session SFU établie en {}ms (signal+PC+data-channel)",
             t0.elapsed().as_millis()
         );
+        // Windows : l'encodage et le réseau de l'appel ne passent pas après
+        // un jeu lourd (voir priorite_appel.rs).
+        crate::priorite_appel::entrer();
         let identity = room.local_participant().identity().to_string();
         self.deafened
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -3415,6 +3418,7 @@ impl VoiceEngine for LiveKitEngine {
         if let Some(room) = room {
             let _ = self.rt.block_on(room.close());
         }
+        crate::priorite_appel::sortir();
         // Plus aucune frame : les pompes vidéo meurent via leurs canaux stop
         // (leurs events `frame-stopped` partent avant la fin de l'ADM).
         for (_, stop) in self
