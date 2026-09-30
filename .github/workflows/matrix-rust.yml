@@ -7,7 +7,7 @@ name: Cœur Matrix Rust
 
 on:
   push:
-    branches: [feat/matrix-rust]
+    branches: [main]
     paths:
       - 'src-tauri/sion-matrix/**'
       - 'src-tauri/Cargo.lock'
