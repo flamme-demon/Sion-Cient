@@ -38,6 +38,10 @@ val cleSignature: Map<String, String>? = System.getenv("SION_KEYSTORE_FILE")?.le
 
 android {
     compileSdk = 36
+    // NDK de build-android.sh et de la CI (release.yml) : sans lui, AGP ne
+    // savait pas stripper la bibliothèque native (« Unable to strip ») et
+    // la publiait avec ses 51 Mo de symboles.
+    ndkVersion = "27.2.12479018"
     namespace = "com.sion.client"
 
     signingConfigs {
@@ -110,6 +114,21 @@ android {
 
 rust {
     rootDirRel = "../../../"
+}
+
+// Version de publication seulement : la bibliothèque native part SANS ses
+// symboles et COMPRESSÉE dans l'APK (30/09 : 156 Mo, dont 51 Mo de noms de
+// fonctions ; ~43 Mo ainsi). Le gabarit de Tauri garde les symboles via
+// `packaging` dans le bloc « debug », ce qui vaut en fait pour toutes les
+// variantes : on le défait ici pour la release. Compressée, la bibliothèque
+// est décompressée à l'installation (un peu plus de place sur le téléphone,
+// bien moins à télécharger). La version complète, pour lire un plantage
+// natif, est gardée par la CI (artefact `android-symboles`).
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variante ->
+        variante.packaging.jniLibs.keepDebugSymbols.set(emptySet())
+        variante.packaging.jniLibs.useLegacyPackaging.set(true)
+    }
 }
 
 dependencies {

@@ -24,6 +24,20 @@ class MainActivity : TauriActivity() {
   private var pendingRoomId: String? = null
   private var pendingEventId: String? = null
 
+  // Le pont `__SION__` doit être posé AVANT le chargement de la page : un
+  // objet ajouté ensuite n'apparaît qu'au chargement suivant. Posé par un
+  // `post` qui cherchait le WebView, il arrivait trop tard dans la version
+  // de publication (plus rapide que celle de dev) : plus de contrôle du
+  // micro — entrée en vocal sans autorisation, plantage de libwebrtc — ni de
+  // push, pour toute la session (beta 4, 30/09). wry appelle ce crochet à la
+  // création du WebView, avant de charger la page.
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    cachedWebView = webView
+    webView.addJavascriptInterface(VoiceServiceBridge(this), "__SION__")
+    webView.settings.mediaPlaybackRequiresUserGesture = false
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // Avant Tauri : le moteur Matrix fait ses premières requêtes dès le
     // démarrage, et la voix a besoin de WebRTC côté Java.
@@ -39,16 +53,13 @@ class MainActivity : TauriActivity() {
       requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), DEMANDE_NOTIFICATIONS)
     }
 
-    // Inject JS interface for voice service control once WebView is ready
-    val activity = this
+    // Navigation demandée par une notification, une fois le WebView là
+    // (le pont `__SION__`, lui, est posé dans `onWebViewCreate`).
     window.decorView.post(object : Runnable {
       override fun run() {
-        val webView = findWebView()
+        val webView = cachedWebView ?: findWebView()
         if (webView != null) {
           cachedWebView = webView
-          webView.addJavascriptInterface(VoiceServiceBridge(activity), "__SION__")
-          webView.settings.mediaPlaybackRequiresUserGesture = false
-          // Process pending notification navigation
           tryNavigateToRoom()
         } else {
           window.decorView.postDelayed(this, 200)

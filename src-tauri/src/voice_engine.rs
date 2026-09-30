@@ -1771,6 +1771,12 @@ impl LiveKitEngine {
             // -1) et tout `switch_recording_device` échoue en DeviceNotFound.
             if let Err(e) = audio.start_recording() {
                 log::warn!("[Sion][voix-native] pré-initialisation capture ADM: {e}");
+                // Android : l'échec veut dire micro non autorisé ou
+                // indisponible. Publier quand même faisait démarrer par
+                // libwebrtc un enregistreur jamais créé — SIGSEGV dans
+                // OpenSLESRecorder::StartRecording (beta 4, 30/09).
+                #[cfg(target_os = "android")]
+                return Err(format!("micro indisponible (autorisation refusée ?) : {e}"));
             }
             // Une liste encore partielle (GUID zéro) juste après
             // l'acquisition fait aussi échouer le switch : on réessaie
