@@ -16,10 +16,12 @@ import { moteurRust } from "./moteur";
 import { PushRuleKind } from "matrix-js-sdk";
 import type { NotificationMode } from "../stores/useSettingsStore";
 
-const NTFY_BASE_URL = import.meta.env.VITE_NTFY_BASE_URL;
-if (!NTFY_BASE_URL) {
-  throw new Error("[Sion] VITE_NTFY_BASE_URL is not defined in environment variables");
-}
+// Serveur ntfy de Sion : public (il figure dans chaque pousseur déclaré au
+// serveur Matrix) ; `VITE_NTFY_BASE_URL` le remplace pour un autre serveur.
+// Il n'était défini que par un `.env` local, absent de la CI : le module
+// levait une erreur au chargement et l'APK construit par la CI n'aurait
+// enregistré aucun push (30/09).
+export const NTFY_BASE_URL: string = import.meta.env.VITE_NTFY_BASE_URL || "https://push.sionchat.fr";
 const PUSH_APP_ID = "fr.sionchat.client";
 
 /**
