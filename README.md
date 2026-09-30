@@ -1,185 +1,128 @@
 # Sion Client
 
-A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/) protocol with [LiveKit](https://livekit.io/) for real-time audio/video.
+A TeamSpeak-like voice and text client built on the [Matrix](https://matrix.org/) protocol with [LiveKit](https://livekit.io/) for real-time audio/video — on Linux, Windows and Android.
+
+> **Status:** 2.0 is in beta (download it from [Releases](https://github.com/flamme-demon/Sion-Client/releases): AppImage, Windows installer, Android APK). The last stable release is 1.6.4; its maintenance branch is `release/1.6`. Upgrading from 1.x asks for the password once, then takes over the old session: the device stays verified and encrypted history stays readable.
 
 ## Features
 
-- **Voice channels** with low-latency audio via LiveKit (WebRTC)
-- **AI noise suppression** — RNNoise denoise on the mic, runs off the main thread (AudioWorklet)
-- **Text channels** with Markdown, file attachments, reactions, replies, message editing, polls
-- **Video/audio playback** in chat with automatic ffmpeg transcoding for H.264 compatibility
-- **URL media import** (yt-dlp) — bring audio/video from a link into chat or the soundboard
-- **Screen sharing** in voice channels with dedicated viewer, system-audio capture (Linux), and a native cursor overlay
-- **Soundboard** — shared server-wide sound library with per-sound category/emoji/hotkey/gain, in-app trimmer, LiveKit broadcast to voice participants
-- **Generated voices** — clone a voice from a short reference clip and make it say anything, entirely locally (audio.cpp / ggml, Vulkan-accelerated; Chatterbox, Higgs Audio v3 or Qwen3-TTS, engine and models downloaded on demand). Reference clips live in the soundboard, so they are shared server-wide; results play through the existing soundboard pipeline
-- **Meeting transcription** — consent-based (≥2 participants), each one transcribing their own mic locally (whisper.cpp / Parakeet v3 via transcribe.cpp); live panel, session history, and AI meeting minutes generated locally (llama.cpp + Qwen3.5-4B, Vulkan-accelerated)
-- **Voice & event sounds** — customizable join/leave/timeout cues plus poke / kicked / member-kicked notifications (custom file or URL per sound)
-- **Link previews** with OG metadata extraction (YouTube oEmbed, GitHub, etc.)
-- **End-to-end encryption** (E2EE) for both text and voice via Matrix Rust Crypto + LiveKit E2EE
-- **Cross-device verification** (emoji comparison, recovery key)
-- **Global keyboard shortcuts** for mute/deafen/soundboard (via rdev + tauri-plugin-global-shortcut)
-- **Member panel** per room with inline promote/demote (moderator ↔ user)
-- **User context menus** (profile, invite, kick, ban, power levels)
-- **Admin panel** for Continuwuity server management — pending users + registration tokens
-- **Cross-channel voice state** — mute/deafen visible in every channel's sidebar; AFK propagated via LiveKit data channel
-- **Internationalization** (French default, English available)
-- **Dark theme** with Material Design 3 inspired UI
-- **Cross-platform** — Linux (AppImage), Windows (NSIS installer), Android (APK)
+**Voice**
+- **Voice channels** — native LiveKit/WebRTC engine in Rust, outside the webview; push-to-talk or open mic, mute/deafen visible in every channel's sidebar
+- **Noise suppression** — RNNoise inside WebRTC's capture pipeline, alongside echo cancellation and automatic gain
+- **Screen sharing** with a dedicated viewer, system-audio capture, a native cursor overlay, and received video that can be hidden to save data and battery
+- **Soundboard & memeboard** — shared server-wide sounds and video memes, played to everyone in the call; per-sound category, emoji, hotkey and gain, in-app trimmer, URL import (yt-dlp)
+- **Generated voices** — clone a voice from a short reference clip and make it say anything, entirely locally (audio.cpp / ggml, Vulkan-accelerated; engine and models downloaded on demand)
+- **Meeting transcription** — consent-based, each participant transcribing their own mic locally (whisper.cpp / Parakeet v3); live panel, history, and meeting minutes generated locally (llama.cpp)
+- **Voice & event sounds** — join/leave/timeout cues, poke and kick notifications
+
+**Text**
+- Markdown, replies, reactions, edits, polls, pinned messages, file attachments, link previews
+- Video and audio playback in chat (ffmpeg bundled on desktop)
+- Unread tracking with a "new messages" marker; desktop notifications (with inline reply on KDE)
+
+**Security & accounts**
+- **End-to-end encryption** for text and voice: [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-sdk) crypto + LiveKit E2EE, keys distributed over MatrixRTC
+- **Device verification** by QR code, emoji comparison or recovery key
+- **Phone sign-in by QR code** — on the PC, *Account → Connect a phone*; the phone scans it and signs in without typing anything (single-use `m.login.token`, 2 minutes)
+
+**Android**
+- The same client on phones: native voice (Rust), push-to-talk, soundboard and memeboard, screen shares
+- **Push notifications without Google services** — Sion keeps its own connection to an [ntfy](https://ntfy.sh/) server (Matrix push gateway); notifications arrive with the app closed, and can be answered inline
+
+**Everything else**
+- Customizable layout: dockable/floating panels, themes and accent colour, exportable profiles (`.sionprofil`)
+- Global keyboard shortcuts (mute/deafen/soundboard), including AZERTY keys
+- Admin panel for [Continuwuity](https://github.com/continuwuation/continuwuity) (pending users, registration tokens, server stats and actions)
+- French (default) and English
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Runtime | [Bun](https://bun.sh/) 1.3+ |
-| Frontend | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind CSS v4 |
-| Desktop / Mobile | [Tauri v2](https://tauri.app/) with WRY (WebKitGTK/WebView2); Android via APK |
-| Matrix SDK | [matrix-js-sdk](https://github.com/element-hq/matrix-js-sdk) 41.6 |
-| Voice/Video | LiveKit natif via le SDK Rust (`livekit` + `webrtc-sys`), hors webview |
-| State | [Zustand](https://github.com/pmndrs/zustand) 5 |
+| Frontend | React 19.2, TypeScript 5.9, Vite 7.3, Tailwind CSS v4, Zustand 5 |
+| App shell | [Tauri 2](https://tauri.app/) with WRY — WebKitGTK (Linux), WebView2 (Windows), Android WebView |
+| Matrix | Rust core `sion-matrix` on [matrix-sdk](https://crates.io/crates/matrix-sdk) 0.19 (sync, crypto, verification, MatrixRTC). matrix-js-sdk remains only to migrate 1.x sessions |
+| Voice/Video | LiveKit Rust SDK (`livekit` + a patched `webrtc-sys`), native audio device and RNNoise |
 | i18n | react-i18next 16, i18next 25 |
 
 ## Project Structure
 
 ```
-src/
-├── main.tsx, App.tsx, i18n.ts
-├── types/              # TypeScript interfaces (matrix, livekit)
-├── stores/             # Zustand stores (app, matrix, livekit, settings, admin)
-├── services/           # Matrix, LiveKit, admin API services
-├── hooks/              # React hooks (useMatrix, useLiveKit, useVoiceChannel)
-├── utils/              # Emoji data, media decryption, message cache (IndexedDB)
-└── components/
-    ├── layout/         # Sidebar, MainArea, SettingsPanel, AdminPanel
-    ├── sidebar/        # ServerHeader, ChannelList, UserControls, UserAvatar
-    ├── chat/           # MessageList, Message, ChatInput, LinkPreview, MarkdownRenderer, ScreenShareView
-    ├── admin/          # AdminStats, AdminActions, FederationInfo
-    └── icons/          # SVG icon components
+src/                     # React UI
+├── services/            # matrixCore.ts (bridge to the Rust core), push, updates…
+├── stores/              # Zustand stores
+├── components/          # layout, sidebar, chat, admin, qr…
+└── pages/               # login
 src-tauri/
-├── src/lib.rs          # Tauri commands (shortcuts, link preview, open URL, video transcoding)
-├── Cargo.toml          # Rust dependencies (tauri, livekit, reqwest, scraper)
-└── icons/              # App icons
-build-scripts/
-├── run-native.sh       # Launch desktop app with WRY + native voice (Linux)
-├── build-appimage.sh   # Build Linux AppImage
-├── install-linux.sh    # Install on Linux
-├── build-windows.ps1   # Full Windows build (installs deps, compiles, bundles)
-├── build-android.sh    # Build Android release APK
-└── create-release.sh   # Create a GitHub Release + upload build artifacts
+├── src/                 # Tauri app: commands, native voice (voice_engine.rs),
+│                        #   media server, notifications, Android glue
+├── sion-matrix/         # Rust Matrix core (matrix-sdk): rooms, timelines,
+│                        #   verification, MatrixRTC voice membership and keys
+├── native-audio/        # RNNoise and audio processing for WebRTC capture
+├── vendor/webrtc-sys/   # patched LiveKit webrtc-sys (see its SION_PATCH.md)
+└── gen/android/         # Android project (Kotlin services, Gradle)
+build-scripts/           # run, build and release scripts (see below)
+docs/                    # plans and release notes
 ```
 
 ## Prerequisites
 
-- [Bun](https://bun.sh/) >= 1.3
-- [Rust](https://rustup.rs/) (stable)
-- CMake + Ninja (for native voice/transcribe compilation)
-- [ffmpeg](https://ffmpeg.org/) (for video transcoding in chat — can also be auto-downloaded in-app)
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) (optional — for URL audio/video import; auto-downloadable in-app)
-- [audio.cpp](https://github.com/0xShug0/audio.cpp) (optional — engine for generated voices; auto-downloadable in-app on Windows/Linux/macOS). Building it yourself on Linux additionally needs `spirv-headers` and `glslc` for the Vulkan backend
-- A Matrix homeserver (tested with [Continuwuity](https://github.com/continuwuation/continuwuity))
-- A LiveKit server for voice/video
+- [Bun](https://bun.sh/) ≥ 1.3 and [Rust](https://rustup.rs/) stable (≥ 1.96, required by matrix-sdk)
+- clang ≥ 21 on Linux (the prebuilt libwebrtc ships a hermetic libc++), CMake + Ninja
+- Android: SDK, NDK 27.2, JDK 17 and the `aarch64-linux-android` Rust target
+- A Matrix homeserver (tested with [Continuwuity](https://github.com/continuwuation/continuwuity)) and a LiveKit server with its MatrixRTC token service (`/sfu/get`)
+- Optional, downloaded in-app when needed: ffmpeg, yt-dlp, audio.cpp
 
 ## Development
 
 ```bash
-# Install dependencies
 bun install
-
-# Start frontend dev server
-bun run dev
-
-# Start desktop app (Linux, WRY + native voice)
-./build-scripts/run-native.sh
-
-# Start desktop app (Windows/macOS)
-bun run tauri dev
+./build-scripts/run-native.sh        # desktop app (Linux), Vite hot reload
+bun run tauri dev                    # desktop app (Windows)
+./build-scripts/build-android.sh debug   # "Sion Dev" APK, installed next to the released app
 ```
 
 ## Testing
 
-Unit tests cover the non-UI logic: transcript/session store, admin API error
-handling, key-combo parsing, message extraction (edits, replies, reactions,
-polls), mentions, the IndexedDB message cache, and cross-channel voice state
-(`call.member` parsing + the `membershipID` shape that keys MatrixRTC key
-distribution). The Rust side tests the bounded llama runner that guards the
-summariser against runaway output.
-
 ```bash
-bun run test              # JS/TS suite (vitest)
-bun run test:watch        # vitest, watch mode
-cd src-tauri && cargo test -j4   # Rust suite
+bunx tsc -b                          # typecheck (the root tsconfig is a solution file:
+                                     #   `tsc --noEmit` against it checks nothing)
+bun run lint
+bun run test                         # vitest
+cd src-tauri && cargo test -j4       # Rust suites (app + sion-matrix core)
 ```
 
-**Typecheck** with `bunx tsc -b` — the root `tsconfig.json` is a solution
-file (references only), so `tsc --noEmit` against it checks nothing.
+Integration tests of the Matrix core (`src-tauri/sion-matrix/tests/`) run against a disposable local Continuwuity server and are ignored by default; each file explains how to run it.
 
-CI (`.github/workflows/ci.yml`) runs the typecheck + both suites on every
-push and PR to `main`. To run the same gate locally before each push, enable
-the versioned hook once per clone:
+CI runs these checks on every push and PR to `main` (`.github/workflows/ci.yml`), and the Matrix core tests whenever the core changes (`matrix-rust.yml`). To run the same gate before each push, enable the versioned hook once per clone:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-The `pre-push` hook typechecks and runs the JS suite on every push, and the
-Rust suite only when something under `src-tauri/` changed. Bypass in a pinch
-with `git push --no-verify`.
-
 ## Build
 
-All build scripts are located in the `build-scripts/` directory.
-
-### Linux — Install
-
 ```bash
-./build-scripts/install-linux.sh
+./build-scripts/build-appimage.sh          # Linux AppImage → dist-appimage/
+./build-scripts/install-linux.sh           # install on Linux
+./build-scripts/build-android.sh build     # Android release APK → build-apps/
 ```
 
-### Linux — AppImage
+On Windows, `build-scripts\build-windows.ps1` (PowerShell as administrator) installs the missing tools and produces the NSIS installer.
 
-```bash
-./build-scripts/build-appimage.sh
-# Output: dist-appimage/Sion_Client-X.Y.Z-x86_64.AppImage
-```
-
-### Windows
-
-```powershell
-# Open PowerShell as Administrator
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\build-scripts\build-windows.ps1
-```
-
-The build script automatically installs missing dependencies (VS Build Tools, CMake, Ninja, Rust, Bun), compiles the application, and produces a **NSIS installer** (`.exe`) with the native DLLs (ggml/transcribe) bundled.
-
-### Android
-
-```bash
-./build-scripts/build-android.sh build   # signed release APK
-```
+The Android release APK must be signed with the key of the published versions, or Android refuses to install it over them: `build-scripts/verifier-cle-android.sh` checks a keystore (password, alias, certificate) without building anything.
 
 ### Releases (CI)
 
-Pushing a `v*.*.*` tag triggers the GitHub Actions **Release** workflow, which
-builds the Linux AppImage and Windows NSIS installer in parallel and publishes
-a GitHub Release with both attached.
-
-## Configuration
-
-The client connects to a Matrix homeserver at login. Voice channels use MatrixRTC (MSC3401) to discover the LiveKit server endpoint.
-
-**LiveKit token endpoint:** `POST /sfu/get` with `{room, openid_token, device_id}` returns `{url, jwt}`.
+Pushing a `v*.*.*` tag triggers the **Release** workflow: Linux AppImage, Windows installer and signed Android APK are built in parallel and published as a GitHub Release (a pre-release when the tag has a suffix such as `-beta.4`). Release notes come from `docs/release-notes-<version>.md`. The Android job needs the `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` secrets (plus `ANDROID_KEY_PASSWORD` if the key has its own); the manual **Vérifier la clé Android** workflow checks them in a minute.
 
 ## Architecture
 
-- Voice channel = Matrix room with custom `m.room.type`
-- Joining a voice channel = `matrixClient.joinRoom()` + LiveKit token generation + LiveKit room connect
-- Speaking indicator: client-side RMS detection via Web Audio API (sub-100ms latency, bypasses LiveKit SFU smoothing)
-- Per-participant connection quality bars from LiveKit's `ConnectionQualityChanged` event
-- User list = Matrix presence + LiveKit participants combined
-- Link previews fetched server-side via Tauri command (reqwest + scraper / oEmbed)
-- Video transcoding: MP4 (H.264) auto-transcoded to WebM (VP9) via system ffmpeg when native codec is unavailable
-- Message history loaded via filtered `/messages` API — skips signaling events server-side for fast loading
-- MatrixRTC encryption keys distributed via to-device messages (MSC4143) — no timeline pollution
+- A voice channel is a Matrix room; being in its call is a MatrixRTC membership (`org.matrix.msc3401.call.member`), published and renewed by the Rust core, which also distributes the per-call media keys as encrypted to-device messages
+- Joining = OpenID token → LiveKit token service (`/sfu/get`) → native LiveKit connection; audio never goes through the webview
+- The UI talks to the Rust core through Tauri commands and events (`src/services/matrixCore.ts`); media are served to the webview by the core (`sion-media://`), decrypted on the fly
+- Participant list = MatrixRTC memberships merged with LiveKit participants, per device (phone and PC can be in the same call)
 
 ## License
 
