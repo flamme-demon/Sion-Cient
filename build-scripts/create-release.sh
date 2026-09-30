@@ -84,6 +84,6 @@ gh release create "$TAG" \
 echo ""
 echo "========================================"
 echo "  Release $TAG creee !"
-echo "  https://github.com/flamme-demon/Sion-Cient/releases/tag/$TAG"
+echo "  https://github.com/flamme-demon/Sion-Client/releases/tag/$TAG"
 echo "========================================"
 echo ""

@@ -287,7 +287,7 @@ const ENGINE_RELEASE_TAG: &str = "audiocpp-0.4.2";
 /// modèles safetensors.
 fn engine_archive_url() -> Option<(String, bool)> {
     let sion = |asset: &str| {
-        format!("https://github.com/flamme-demon/Sion-Cient/releases/download/{ENGINE_RELEASE_TAG}/{asset}")
+        format!("https://github.com/flamme-demon/Sion-Client/releases/download/{ENGINE_RELEASE_TAG}/{asset}")
     };
     if cfg!(target_os = "windows") {
         Some((

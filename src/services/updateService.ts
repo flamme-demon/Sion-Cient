@@ -3,7 +3,7 @@
  * with the current app version. Shows a banner if an update is available.
  */
 
-const GITHUB_REPO = "flamme-demon/Sion-Cient";
+const GITHUB_REPO = "flamme-demon/Sion-Client";
 const CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
 export interface UpdateInfo {
@@ -35,9 +35,16 @@ function compareVersions(a: string, b: string): number {
 
 function getAssetUrl(assets: { name: string; browser_download_url: string }[]): string {
   // Detect platform
+  const isAndroid = navigator.userAgent.includes("Android");
   const isWindows = navigator.userAgent.includes("Windows");
-  const isLinux = navigator.userAgent.includes("Linux");
+  // Android annonce aussi « Linux » : sans ce test, un téléphone se voyait
+  // proposer l'AppImage.
+  const isLinux = !isAndroid && navigator.userAgent.includes("Linux");
 
+  if (isAndroid) {
+    const apk = assets.find((a) => a.name.endsWith(".apk"));
+    if (apk) return apk.browser_download_url;
+  }
   if (isWindows) {
     // Prefer NSIS exe, then MSI
     const nsis = assets.find((a) => a.name.endsWith(".exe") && !a.name.includes("uninstall"));
