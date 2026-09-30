@@ -487,6 +487,17 @@ jobs:
           path: build-apps/*.apk
           if-no-files-found: error
 
+      # L'APK embarque la bibliothèque native SANS ses symboles (41 Mo au
+      # lieu de 156) : sa version complète est gardée ici, non publiée, pour
+      # lire la trace d'un plantage natif (ndk-stack, llvm-symbolizer).
+      - name: Upload native symbols as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-symboles
+          path: src-tauri/target/aarch64-linux-android/release/libapp_lib.so
+          if-no-files-found: warn
+          retention-days: 90
+
   # -------------------------------------------------------------------------
   # Aggregate the per-OS artifacts into a single GitHub Release. Body is
   # generated from commits since the previous tag; users can edit the
