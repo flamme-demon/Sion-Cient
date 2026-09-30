@@ -151,11 +151,12 @@ export async function registerPusher(): Promise<void> {
 export async function unregisterPusher(): Promise<void> {
   if (moteurRust()) {
     if (!SUR_ANDROID) return;
+    // L'écoute s'arrête quoi qu'il arrive au retrait côté serveur.
+    const { stopPushListener } = await import("./androidVoiceService");
+    stopPushListener();
     const s = await sujetRust();
     if (!s) return;
     await core.retirerPusher(s.topicUrl, PUSH_APP_ID).catch(() => {});
-    const { stopPushListener } = await import("./androidVoiceService");
-    stopPushListener();
     return;
   }
   const client = getMatrixClient();

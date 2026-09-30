@@ -339,7 +339,7 @@ export function LoginPage() {
           </button>
         )}
 
-        <form onSubmit={handleSubmit} autoComplete="off">
+        <form onSubmit={handleSubmit} autoComplete={SUR_ANDROID ? "on" : "off"}>
           <div style={styles.fieldGroup}>
             <label style={styles.label}>{t("auth.homeserver")}</label>
             <input
@@ -361,8 +361,10 @@ export function LoginPage() {
               onChange={(e) => setUsername(e.target.value)}
               placeholder="neo"
               required
-              autoComplete="off"
-              name="sion-identity"
+              // Téléphone : le remplissage automatique d'Android (gestionnaire
+              // de mots de passe) reconnaît l'identifiant et le mot de passe.
+              autoComplete={SUR_ANDROID ? "username" : "off"}
+              name={SUR_ANDROID ? "username" : "sion-identity"}
             />
           </div>
 
@@ -372,14 +374,16 @@ export function LoginPage() {
               <input
                 style={{
                   ...styles.inputPassword,
-                  ...(!showPassword ? { WebkitTextSecurity: 'disc' as never } : {}),
+                  ...(!showPassword && !SUR_ANDROID ? { WebkitTextSecurity: 'disc' as never } : {}),
                 }}
-                type="text"
+                // Android : un vrai champ mot de passe, que le remplissage
+                // automatique reconnaît (un champ texte masqué ne l'est pas).
+                type={SUR_ANDROID && !showPassword ? "password" : "text"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                autoComplete="off"
-                name="sion-key"
+                autoComplete={SUR_ANDROID ? "current-password" : "off"}
+                name={SUR_ANDROID ? "password" : "sion-key"}
               />
               <button type="button" style={styles.eyeBtn} onClick={() => setShowPassword(!showPassword)}>
                 {showPassword ? <EyeOffIcon /> : <EyeIcon />}

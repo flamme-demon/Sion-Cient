@@ -20,6 +20,10 @@ let cachedLoginPassword: string | null = null;
 export function getCachedLoginPassword(): string | null { return cachedLoginPassword; }
 export function clearCachedLoginPassword(): void { cachedLoginPassword = null; }
 
+// Déconnexion en cours (appel quitté, push retiré, puis session fermée) : une
+// nouvelle connexion l'attend, sinon cette fermeture tomberait sur elle.
+let deconnexionEnCours: Promise<void> = Promise.resolve();
+
 // Connexion par le QR code d'un autre appareil : la vérification est lancée
 // d'elle-même dès que le cœur sait l'appareil non vérifié.
 let verificationApresConnexion = false;
@@ -125,6 +129,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (homeserver, username, password) => {
     set({ isLoading: true, error: null });
+    await deconnexionEnCours;
     if (moteurRust()) {
       try {
         cachedLoginPassword = password;
@@ -197,6 +202,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   loginJeton: async (homeserver, jeton) => {
     set({ isLoading: true, error: null });
+    await deconnexionEnCours;
     try {
       const core = await import("../services/matrixCore");
       await core.connecterJeton(homeserver, jeton);
@@ -215,6 +221,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   register: async (homeserver, username, password, displayName, token, captchaResponse) => {
     set({ isLoading: true, error: null, isRegistering: true });
+    await deconnexionEnCours;
     if (moteurRust()) {
       // Le cœur s'inscrit puis se connecte comme nouvel appareil.
       try {
@@ -352,13 +359,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       localStorage.setItem("sion_last_homeserver", creds.homeserverUrl);
       localStorage.setItem("sion_last_username", creds.userId);
     }
-    // Unregister push before logout
-    import("../services/pushService").then(({ unregisterPusher }) => unregisterPusher()).catch(() => {});
+    // Dans l'ordre, AVANT de fermer la session : quitter l'appel (le
+    // téléphone déconnecté restait dans l'appel, entendu et affiché — 30/09),
+    // puis retirer le push, qui a besoin de la session. Lancés en parallèle,
+    // la session partait d'abord et le push restait déclaré.
+    deconnexionEnCours = (async () => {
+      const [{ useAppStore }, voix, android, push] = await Promise.all([
+        import("./useAppStore"),
+        import("../hooks/useVoiceChannel"),
+        import("../services/androidVoiceService"),
+        import("../services/pushService"),
+      ]);
+      if (useAppStore.getState().connectedVoiceChannel) await voix.cleanupVoiceOnKick().catch(() => {});
+      android.stopVoiceService();
+      await push.unregisterPusher().catch(() => {});
+    })()
+      .catch(() => {})
+      .then(() => matrixService.logout());
     // Plus aucun média déchiffré sur le disque après la déconnexion.
     void import("@tauri-apps/api/core")
       .then(({ invoke }) => invoke("vider_medias_temporaires"))
       .catch(() => {});
-    matrixService.logout();
     clearCredentials();
     useAdminStore.getState().reset();
     set({ credentials: null, error: null, recoveryKey: null });
