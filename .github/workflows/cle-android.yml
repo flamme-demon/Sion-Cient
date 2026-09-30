@@ -1,0 +1,34 @@
+name: Vérifier la clé Android
+
+# Lancé à la main (onglet Actions, ou `gh workflow run cle-android.yml`) :
+# contrôle les secrets de signature ANDROID_* sans rien construire ni publier
+# — mot de passe, alias, déverrouillage de la clé, et certificat identique à
+# celui des APK publiés. Une minute environ.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verifier:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Vérifier la clé de signature
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SION_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SION_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SION_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/sion-release.keystore"
+          ./build-scripts/verifier-cle-android.sh "$RUNNER_TEMP/sion-release.keystore"
+          rm -f "$RUNNER_TEMP/sion-release.keystore"

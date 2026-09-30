@@ -396,22 +396,25 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/powershell
           df -h /
 
-      - name: Vérifier les secrets de signature
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: |
-          # Un APK non signé, ou signé d'une autre clé, ne s'installe pas
-          # par-dessus la version en place : autant échouer tout de suite.
-          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS; do
-            if [ -z "${!v}" ]; then echo "::error::secret ANDROID_${v} absent"; exit 1; fi
-          done
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
+      # Avant les 40 minutes de compilation : un secret faux (mot de passe,
+      # alias, base64 mal copié) ou une autre clé que celle des 1.x fait
+      # échouer ici, en une minute. L'alias est trouvé seul s'il n'y a
+      # qu'une clé dans le keystore.
+      - name: Clé de signature (celle des 1.x)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SION_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SION_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SION_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/sion-release.keystore"
+          echo "SION_KEYSTORE_FILE=$RUNNER_TEMP/sion-release.keystore" >> "$GITHUB_ENV"
+          ./build-scripts/verifier-cle-android.sh "$RUNNER_TEMP/sion-release.keystore"
 
       - name: NDK Android
         run: |
@@ -445,18 +448,16 @@ jobs:
       - name: Build APK
         env:
           VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           # Lus par build.gradle.kts (signingConfigs) : pas de fichier de
           # propriétés, où un « \ » ou un « : » d'un mot de passe serait mal lu.
+          # SION_KEYSTORE_FILE et SION_KEY_ALIAS : posés par l'étape de la clé.
           SION_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          SION_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           SION_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          export SION_KEYSTORE_FILE="$RUNNER_TEMP/sion-release.keystore"
-          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$SION_KEYSTORE_FILE"
-          unset KEYSTORE_BASE64
-          ./build-scripts/build-android.sh build
-          rm -f "$SION_KEYSTORE_FILE"
+        run: ./build-scripts/build-android.sh build
+
+      - name: Effacer la clé du runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sion-release.keystore"
 
       - name: Vérifier la signature (clé des 1.x)
         run: |
