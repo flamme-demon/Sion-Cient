@@ -11,6 +11,8 @@
 #   build : APK de publication (signé si gen/android/keystore.properties existe) ;
 #   dev   : `tauri android dev` (rechargement à chaud depuis Vite, même réseau).
 set -euo pipefail
+# Un arrêt sur erreur dit où : sans cela, `set -e` quittait en silence (CI).
+trap 'echo "[Sion] échec ligne $LINENO : $BASH_COMMAND" >&2' ERR
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
@@ -40,8 +42,10 @@ preparer_libwebrtc_jar() {
         | head -1 | sed -E 's/.*"(.*)".*/\1/')
     [ -n "$tag" ] || { echo "[Sion] tag libwebrtc introuvable (webrtc-sys-build $version)"; exit 1; }
 
+    # `target` n'existe pas encore sur une machine neuve (CI sans cache) :
+    # `find` y échoue, ce qui ne doit pas arrêter le script.
     jar=$(find src-tauri/target -path "*/livekit/android-arm64-release-$tag/android-arm64-release/libwebrtc.jar" \
-        2>/dev/null | head -1)
+        2>/dev/null | head -1 || true)
     if [ -z "$jar" ]; then
         cache="$HOME/.cache/sion/libwebrtc-android-$tag"
         jar="$cache/libwebrtc.jar"
