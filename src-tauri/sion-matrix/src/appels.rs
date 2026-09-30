@@ -134,6 +134,33 @@ pub(crate) fn partie_locale(id: &str) -> String {
         .unwrap_or_else(|| id.to_owned())
 }
 
+/// Journal : une appartenance non vide écartée (expirée…), une seule fois par
+/// événement — de quoi comprendre un participant entendu mais pas affiché.
+fn signaler_ecarte(ev: &EvenementAppel, maintenant: i64) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static VUS: OnceLock<Mutex<HashSet<(String, i64)>>> = OnceLock::new();
+    if !a_contenu_appel(ev) {
+        return; // parti proprement : contenu vide
+    }
+    let nouveau = VUS.get_or_init(Mutex::default).lock().unwrap().insert((ev.cle_etat.clone(), ev.ts));
+    if !nouveau {
+        return;
+    }
+    let c = &ev.contenu;
+    log::info!(
+        "[Sion][vocal] appartenance écartée {} ({}) : created_ts={:?} expires={:?} expires_ts={:?} origin_ts={} maintenant={} memberships={}",
+        ev.expediteur,
+        c.get("device_id").and_then(Value::as_str).unwrap_or("?"),
+        c.get("created_ts"),
+        c.get("expires"),
+        c.get("expires_ts"),
+        ev.ts,
+        maintenant,
+        c.get("memberships").is_some(),
+    );
+}
+
 /// Participants actifs, dédoublonnés par utilisateur (première occurrence).
 /// `profil(id)` donne le nom affiché et l'URL d'avatar, s'ils sont connus.
 pub(crate) fn participants(
@@ -145,6 +172,7 @@ pub(crate) fn participants(
     let mut liste: Vec<UtilisateurVocal> = Vec::new();
     for ev in evenements {
         if !est_actif(ev, maintenant) {
+            signaler_ecarte(ev, maintenant);
             continue;
         }
         let Some(id) = utilisateur(ev) else { continue };

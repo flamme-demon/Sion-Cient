@@ -379,6 +379,7 @@ fn transmettre_rtc(to_device: &[ProcessedToDeviceEvent], rtc: &broadcast::Sender
 
 pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publication) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let debut = std::time::Instant::now();
         let mut activites = Activites::charger(dossier.join(FICHIER_ACTIVITE));
         let base = client.homeserver().to_string();
         let mut taches = tokio::task::JoinSet::new();
@@ -391,6 +392,9 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
         log::info!("[Sion][matrix] démarrage : {} salon(s) publié(s)", publication.salons.borrow().len());
 
         borne("horloge", Duration::from_secs(10), publication.horloge.sonder(&base)).await;
+        // Heure du serveur au démarrage : une appartenance plus récente est
+        // celle d'un appel rejoint depuis, pas une orpheline.
+        let debut_serveur = publication.horloge.maintenant_serveur() - debut.elapsed().as_millis() as i64;
         let mut invitations_tentees = HashSet::new();
         borne("invitations", Duration::from_secs(90), accepter_invitations(&client, &mut invitations_tentees)).await;
         if let Some(f) = borne("salons fantômes", Duration::from_secs(20), chercher_fantomes(&client, HashSet::new())).await {
@@ -399,7 +403,7 @@ pub(crate) fn demarrer(client: Client, dossier: PathBuf, publication: Publicatio
         borne(
             "appartenances orphelines",
             Duration::from_secs(20),
-            crate::voix::liberer_appartenances_orphelines(&client, &rejoints(&client, &fantomes)),
+            crate::voix::liberer_appartenances_orphelines(&client, &rejoints(&client, &fantomes), debut_serveur),
         )
         .await;
         borne("dernières activités", Duration::from_secs(30), amorcer_activites(&client, &mut activites)).await;

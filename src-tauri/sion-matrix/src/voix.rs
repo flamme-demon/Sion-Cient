@@ -172,19 +172,24 @@ async fn jeton_media(client: &Client, foyer: &Foyer) -> Resultat<(String, String
     Err(Erreur::Autre("le service LiveKit n'a délivré aucun jeton".into()))
 }
 
-/// Au démarrage de la synchro, AVANT la première liste de salons (donc avant
-/// toute entrée automatique en vocal) : retire les appartenances que CET
-/// appareil a laissées en partant sans le dire (plantage, processus tué). Le
-/// serveur n'a pas les événements différés qui s'en chargent d'habitude :
-/// sans cela, on reste affiché dans l'appel jusqu'à l'expiration (1 h).
-pub(crate) async fn liberer_appartenances_orphelines(client: &Client, salons: &[Room]) {
+/// Au démarrage de la synchro : retire les appartenances que CET appareil a
+/// laissées en partant sans le dire (plantage, processus tué). Le serveur n'a
+/// pas les événements différés qui s'en chargent d'habitude : sans cela, on
+/// reste affiché dans l'appel jusqu'à l'expiration (1 h).
+///
+/// Seules celles publiées AVANT `avant` (heure du serveur, démarrage de ce
+/// processus) sont orphelines. La liste des salons est publiée dès le
+/// démarrage et ce ménage ne passe qu'après les invitations (jusqu'à 90 s) :
+/// il effaçait l'appartenance d'un appel rejoint entre-temps — entendu, mais
+/// absent de la liste pendant une heure (picsou, 30/09).
+pub(crate) async fn liberer_appartenances_orphelines(client: &Client, salons: &[Room], avant: i64) {
     let (Some(moi), Some(appareil)) = (client.user_id(), client.device_id()) else { return };
     let (moi, appareil) = (moi.as_str(), appareil.as_str());
     for salon in salons {
         let Ok(evenements) = evenements_appel(salon).await else { continue };
         for ev in evenements {
             let a_nous = ev.expediteur == moi && ev.contenu.get("device_id").and_then(Value::as_str) == Some(appareil);
-            if !a_nous || !crate::appels::a_contenu_appel(&ev) {
+            if !a_nous || !crate::appels::a_contenu_appel(&ev) || ev.ts >= avant {
                 continue;
             }
             match salon.send_state_event_raw("org.matrix.msc3401.call.member", &ev.cle_etat, json!({})).await {
@@ -220,10 +225,19 @@ struct Etat {
     gestion: Arc<MutexSync<GestionCles>>,
     cles: broadcast::Sender<CleMedia>,
     horloge: Arc<Horloge>,
+    /// Dernière publication de notre appartenance.
+    annonce_a: tokio::time::Instant,
 }
 
+/// Notre appartenance absente de l'état du salon plus longtemps que cela
+/// après l'avoir publiée : elle a été effacée (ou jamais reçue) — republiée,
+/// comme le fait MatrixRTC. En deçà, elle peut simplement ne pas être encore
+/// revenue par la synchro.
+const REPUBLIER_APRES: Duration = Duration::from_secs(20);
+
 impl Etat {
-    async fn annoncer(&self) {
+    async fn annoncer(&mut self) {
+        self.annonce_a = tokio::time::Instant::now();
         let contenu = rtc::contenu_appartenance(&Annonce {
             moi: &self.moi,
             appareil: &self.appareil,
@@ -304,6 +318,11 @@ impl Etat {
     /// Les participants ont (peut-être) changé.
     async fn suivre_membres(&mut self, force: bool) {
         let membres = self.lire_membres().await;
+        let present = membres.iter().any(|m| m.utilisateur == self.moi && m.appareil == self.appareil);
+        if !present && self.annonce_a.elapsed() >= REPUBLIER_APRES {
+            log::warn!("[Sion][voix] notre appartenance a disparu de l'état de {} : republiée", self.salon.room_id());
+            self.annoncer().await;
+        }
         if self.cree.is_none() {
             self.cree = membres.iter().find(|m| m.utilisateur == self.moi && m.appareil == self.appareil).map(|m| m.cree);
         }
@@ -457,6 +476,7 @@ impl CoeurMatrix {
             gestion: gestion.clone(),
             cles: self.voix.cles.clone(),
             horloge: self.horloge.clone(),
+            annonce_a: tokio::time::Instant::now(),
         };
         let (commandes, reception) = mpsc::unbounded_channel();
         let tache = tokio::spawn(session(etat, reception, self.voix.evenements.subscribe()));
