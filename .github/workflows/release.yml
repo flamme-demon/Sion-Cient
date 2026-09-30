@@ -1,8 +1,8 @@
 name: Release
 
-# Triggered when we push a `v*` tag (e.g. `v1.1.0`). Builds Linux AppImage
-# and Windows NSIS installer (.exe) in parallel, then publishes a GitHub Release with both
-# artifacts attached. The version string is derived from the tag itself
+# Triggered when we push a `v*` tag (e.g. `v1.1.0`). Builds Linux AppImage,
+# Windows NSIS installer (.exe) and Android APK in parallel, then publishes a
+# GitHub Release with the artifacts attached. The version string is derived from the tag itself
 # so we don't have to keep the workflow in sync with package.json.
 
 on:
@@ -372,12 +372,121 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
+  # Android (APK arm64). Même script qu'en local (build-scripts/build-android.sh
+  # build) : moteur Matrix Rust, voix Rust (libwebrtc Android précompilée,
+  # libwebrtc.jar). Signé avec la clé des 1.x — secrets ANDROID_* — sans quoi
+  # Android refuserait de l'installer par-dessus : le certificat est vérifié.
+  # -------------------------------------------------------------------------
+  build-android:
+    runs-on: ubuntu-24.04
+    env:
+      NDK_VERSION: '27.2.12479018'
+      # Empreinte du certificat des APK publiés (1.0.0 comprise).
+      CERTIFICAT_ATTENDU: '1b43b5f11f07ba1560ffc6929c325c8909ebe4ec25bd7859fb20cbec503fce1e'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # Rust (release, deux cibles) + libwebrtc + Gradle : le disque du runner
+      # (~14 Go libres) n'y suffit pas. Le SDK Android, lui, reste.
+      - name: Libérer de la place
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/powershell
+          df -h /
+
+      - name: Vérifier les secrets de signature
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          # Un APK non signé, ou signé d'une autre clé, ne s'installe pas
+          # par-dessus la version en place : autant échouer tout de suite.
+          for v in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS; do
+            if [ -z "${!v}" ]; then echo "::error::secret ANDROID_${v} absent"; exit 1; fi
+          done
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: NDK Android
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.9'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 'stable'
+          targets: aarch64-linux-android
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          # Clé à part : le cache Linux (x86_64) ne servirait à rien ici.
+          key: android-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: android-cargo-
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build APK
+        env:
+          VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          # Lus par build.gradle.kts (signingConfigs) : pas de fichier de
+          # propriétés, où un « \ » ou un « : » d'un mot de passe serait mal lu.
+          SION_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SION_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SION_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          export SION_KEYSTORE_FILE="$RUNNER_TEMP/sion-release.keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$SION_KEYSTORE_FILE"
+          unset KEYSTORE_BASE64
+          ./build-scripts/build-android.sh build
+          rm -f "$SION_KEYSTORE_FILE"
+
+      - name: Vérifier la signature (clé des 1.x)
+        run: |
+          APK=$(ls build-apps/*.apk | head -1)
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          CERT=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          echo "certificat : $CERT"
+          if [ "$CERT" != "$CERTIFICAT_ATTENDU" ]; then
+            echo "::error::APK signé d'une autre clé que les 1.x — il ne s'installerait pas par-dessus"
+            exit 1
+          fi
+          echo "✓ signé avec la clé des versions publiées ; $(du -h "$APK" | cut -f1)"
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-apk
+          path: build-apps/*.apk
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
   # Aggregate the per-OS artifacts into a single GitHub Release. Body is
   # generated from commits since the previous tag; users can edit the
   # release post-publish to add a curated changelog.
   # -------------------------------------------------------------------------
   release:
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-android]
+    # Un APK en échec ne retient pas le bureau : la release part sans lui
+    # (relancer le job Android l'y ajoute ensuite, `upload --clobber`).
+    if: ${{ !cancelled() && needs.build-linux.result == 'success' && needs.build-windows.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -395,6 +504,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: windows-nsis
+          path: ./artifacts
+
+      - name: Download Android artifact
+        if: ${{ needs.build-android.result == 'success' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: android-apk
           path: ./artifacts
 
       - name: Create GitHub Release
@@ -416,15 +532,17 @@ jobs:
           else
             NOTES_ARGS=(--generate-notes)
           fi
+          # APK présent seulement si le job Android a réussi.
+          shopt -s nullglob
+          FICHIERS=(./artifacts/*.AppImage ./artifacts/*.exe ./artifacts/*.apk)
           gh release create "$TAG" \
             --title "Sion Client $TAG" \
             "${NOTES_ARGS[@]}" \
             $PRERELEASE \
-            ./artifacts/*.AppImage \
-            ./artifacts/*.exe 2>/dev/null || {
+            "${FICHIERS[@]}" 2>/dev/null || {
             # Tag déjà publié (re-run après correctif CI) : on remplace les
             # artefacts au lieu d'échouer — la release garde son tag et ses
             # notes, les binaires sont mis à jour.
             echo "Release $TAG déjà existante — remplacement des artefacts."
-            gh release upload "$TAG" ./artifacts/*.AppImage ./artifacts/*.exe --clobber
+            gh release upload "$TAG" "${FICHIERS[@]}" --clobber
           }

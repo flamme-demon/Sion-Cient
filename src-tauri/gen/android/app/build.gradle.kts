@@ -21,19 +21,32 @@ val rustlsPlatformVerifierVersion: String = rootProject.file("../../Cargo.lock")
     lignes[i + 1].substringAfter('"').substringBefore('"')
 }
 
+// Clé de signature des APK publiés (celle des 1.x, sinon Android refuse la
+// mise à jour) : variables d'environnement en CI (secrets GitHub, voir
+// release.yml), sinon `keystore.properties` sur la machine de Grégory.
+val cleSignature: Map<String, String>? = System.getenv("SION_KEYSTORE_FILE")?.let { fichier ->
+    mapOf(
+        "storeFile" to fichier,
+        "storePassword" to System.getenv("SION_KEYSTORE_PASSWORD").orEmpty(),
+        "keyAlias" to System.getenv("SION_KEY_ALIAS").orEmpty(),
+        "keyPassword" to System.getenv("SION_KEY_PASSWORD").orEmpty(),
+    )
+} ?: rootProject.file("keystore.properties").takeIf { it.exists() }?.let { f ->
+    val p = Properties().apply { f.inputStream().use { load(it) } }
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword").associateWith { p.getProperty(it).orEmpty() }
+}
+
 android {
     compileSdk = 36
     namespace = "com.sion.client"
 
     signingConfigs {
         create("release") {
-            val keystorePropsFile = rootProject.file("keystore.properties")
-            if (keystorePropsFile.exists()) {
-                val keystoreProps = Properties().apply { keystorePropsFile.inputStream().use { load(it) } }
-                storeFile = file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+            cleSignature?.let { cle ->
+                storeFile = file(cle.getValue("storeFile"))
+                storePassword = cle.getValue("storePassword")
+                keyAlias = cle.getValue("keyAlias")
+                keyPassword = cle.getValue("keyPassword")
             }
         }
     }
@@ -67,8 +80,16 @@ android {
             }
         }
         getByName("release") {
-            val keystorePropsFile = rootProject.file("keystore.properties")
-            if (keystorePropsFile.exists()) {
+            if (System.getenv("SION_ESSAI_RELEASE") == "1") {
+                // Essai local de la version de publication (R8 compris),
+                // installable à côté de la version publiée et de Sion Dev :
+                // `SION_ESSAI_RELEASE=1 build-android.sh build`.
+                applicationIdSuffix = ".essai"
+                versionNameSuffix = "-essai"
+                resValue("string", "app_name", "Sion Essai")
+                resValue("string", "main_activity_title", "Sion Essai")
+                signingConfig = signingConfigs.getByName("debug")
+            } else if (cleSignature != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
             isMinifyEnabled = true

@@ -20,6 +20,15 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 # Appelées depuis le code natif (JNI) : invisibles pour ProGuard.
+# La libwebrtc de LiveKit renomme ses paquets sous `livekit.org` (webrtc,
+# webrtc.audio, jni_zero) : toute la libwebrtc.jar est appelée par JNI. Sans
+# cette règle, R8 les retirait de l'APK de publication et l'appli plantait au
+# démarrage (ClassNotFoundException livekit.org.jni_zero.JniZero, 30/09) ;
+# l'APK de dev, non minifié, les gardait.
+-keep class livekit.org.** { *; }
+# Référencée par JniZero.setJniClassLoader mais absente de libwebrtc.jar ;
+# jamais chargée (la version de dev, sans R8, a la même jar et la voix marche).
+-dontwarn livekit.org.jni_zero.JniZeroJni
 -keep class org.webrtc.** { *; }
 -keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }
 -keep class com.sion.client.SionNatif { *; }
