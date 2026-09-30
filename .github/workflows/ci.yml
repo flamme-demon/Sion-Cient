@@ -8,8 +8,16 @@ name: CI
 on:
   push:
     branches: [main]
+    # La documentation seule ne relance pas les tests.
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+
+# Un nouveau push annule les tests encore en cours du précédent.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-js:

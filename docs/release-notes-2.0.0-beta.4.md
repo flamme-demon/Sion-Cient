@@ -40,6 +40,9 @@ passe à redonner, pas de nouvel appareil.
   Rejoindre un salon vocal juste après avoir ouvert Sion pouvait vous faire
   disparaître de la liste des autres pendant une heure. La correction agit
   chez la personne concernée : passez tous à la beta 4.
+- **Windows : voix hachée avec un jeu lourd.** Pendant un appel, Sion ne
+  passe plus après le jeu (priorité relevée, pas de bridage en
+  arrière-plan) ; tout redevient normal en quittant l'appel.
 - **Même compte sur le PC et le téléphone dans un appel** : chaque appareil
   est un participant à part entière (micro et sourdine de chacun).
 - **Avatars vides** par endroits après un rechargement de l'affichage

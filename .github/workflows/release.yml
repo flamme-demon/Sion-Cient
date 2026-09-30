@@ -461,9 +461,18 @@ jobs:
 
       - name: Vérifier la signature (clé des 1.x)
         run: |
+          set -o pipefail
           APK=$(ls build-apps/*.apk | head -1)
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
-          CERT=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          echo "outil : $APKSIGNER"
+          # Sortie affichée en entier (certificat et empreintes : publics).
+          # L'empreinte est cherchée sans dépendre de la formulation, qui
+          # varie selon la version des outils (« certificat : » vide au
+          # premier essai, 30/09).
+          SORTIE=$("$APKSIGNER" verify --print-certs "$APK" 2>&1) || {
+            echo "$SORTIE"; echo "::error::apksigner refuse l'APK (non signé ?)"; exit 1; }
+          echo "$SORTIE" | grep -v "^WARNING"
+          CERT=$(echo "$SORTIE" | grep -m1 -oiE 'SHA-256 digest: [0-9a-f]{64}' | awk '{print tolower($NF)}' || true)
           echo "certificat : $CERT"
           if [ "$CERT" != "$CERTIFICAT_ATTENDU" ]; then
             echo "::error::APK signé d'une autre clé que les 1.x — il ne s'installerait pas par-dessus"
