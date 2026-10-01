@@ -48,22 +48,51 @@ export async function syncPushRules(_mode: NotificationMode): Promise<void> {
 // Note: server-side push rules for E2EE rooms are unreliable with Continuwuity.
 // Notification filtering is handled client-side in NtfyListenerService (Android).
 
-/** Sujet ntfy de cet appareil : court, stable, dérivé du compte et de
- *  l'appareil. */
-function sujet(userId: string, deviceId: string): string {
-  let hash = 0;
-  const str = `${userId}:${deviceId}`;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
-  }
-  return `sion_${Math.abs(hash).toString(36)}`;
+/**
+ * Sujet ntfy de cet appareil : 128 bits tirés au hasard à sa première
+ * déclaration, puis gardés tant que le compte et l'appareil restent les
+ * mêmes. Le nom du sujet est le seul secret qui protège l'écoute : dérivé du
+ * compte et de l'appareil (jusqu'à la 2.0 beta 5), il se devinait, et
+ * n'importe qui pouvait lire les avis de messages (salon, événement) ou en
+ * publier de faux. Perdu (données effacées), un nouveau est tiré : le cœur
+ * retire alors le pusher de l'ancien.
+ */
+const CLE_SUJET = "sion-push-sujet";
+const FORME_SUJET = /^sion_[0-9a-f]{32}$/;
+
+export function sujetAppareil(userId: string, deviceId: string): string {
+  const compte = `${userId}|${deviceId}`;
+  try {
+    const garde = JSON.parse(localStorage.getItem(CLE_SUJET) ?? "null") as { compte?: string; sujet?: string } | null;
+    if (garde?.compte === compte && garde.sujet && FORME_SUJET.test(garde.sujet)) return garde.sujet;
+  } catch { /* illisible : on en tire un autre */ }
+  const octets = crypto.getRandomValues(new Uint8Array(16));
+  const sujet = `sion_${Array.from(octets, (o) => o.toString(16).padStart(2, "0")).join("")}`;
+  try {
+    localStorage.setItem(CLE_SUJET, JSON.stringify({ compte, sujet }));
+  } catch { /* stockage indisponible : sujet de cette session seulement */ }
+  return sujet;
 }
 
-/** Generate a deterministic topic name for this device */
+/** Déconnexion : le prochain compte (ou appareil) aura son propre sujet. */
+function oublierSujet(): void {
+  try {
+    localStorage.removeItem(CLE_SUJET);
+  } catch { /* rien à oublier */ }
+}
+
+/** Pour les journaux : l'adresse sans le secret. */
+export function sujetMasque(topicUrl: string): string {
+  return topicUrl.replace(/(sion_[0-9a-z]{4})[0-9a-z]+/, "$1…");
+}
+
+/** Moteur JS : sujet de cet appareil, d'après le client. */
 function getTopicId(): string {
   const client = getMatrixClient();
-  if (!client) return "";
-  return sujet(client.getUserId() || "", client.getDeviceId() || "");
+  const userId = client?.getUserId();
+  const deviceId = client?.getDeviceId();
+  if (!userId || !deviceId) return "";
+  return sujetAppareil(userId, deviceId);
 }
 
 /** Passerelle Matrix de ntfy (spec « push gateway ») : le serveur y poste,
@@ -75,7 +104,7 @@ async function sujetRust(): Promise<{ topicUrl: string; appareil: string } | nul
   const { useAuthStore } = await import("../stores/useAuthStore");
   const c = useAuthStore.getState().credentials;
   if (!c?.userId || !c.deviceId) return null;
-  return { topicUrl: `${NTFY_BASE_URL}/${sujet(c.userId, c.deviceId)}`, appareil: c.deviceId };
+  return { topicUrl: `${NTFY_BASE_URL}/${sujetAppareil(c.userId, c.deviceId)}`, appareil: c.deviceId };
 }
 
 const SUR_ANDROID = /Android/i.test(navigator.userAgent);
@@ -92,7 +121,7 @@ export async function registerPusher(): Promise<void> {
     if (!s) return;
     try {
       await core.enregistrerPusher(PASSERELLE, s.topicUrl, PUSH_APP_ID, s.appareil);
-      console.info(`[Sion][push] pusher déclaré (${s.topicUrl})`);
+      console.info(`[Sion][push] pusher déclaré (${sujetMasque(s.topicUrl)})`);
       const { startPushListener } = await import("./androidVoiceService");
       startPushListener(s.topicUrl);
     } catch (err) {
@@ -109,28 +138,11 @@ export async function registerPusher(): Promise<void> {
   const topicUrl = `${NTFY_BASE_URL}/${topicId}`;
 
   try {
-    // Clean up any old pushers with different URLs
-    const oldUrls = ["https://sionchat.fr/push"];
-    for (const oldUrl of oldUrls) {
-      const oldPushkey = `${oldUrl}/${topicId}`;
-      if (oldPushkey !== topicUrl) {
-        await client.setPusher({
-          app_display_name: "Sion Client",
-          app_id: PUSH_APP_ID,
-          data: { url: oldUrl },
-          device_display_name: client.getDeviceId() || "Sion Device",
-          kind: null as unknown as string,
-          lang: "fr",
-          pushkey: oldPushkey,
-        }).catch(() => {});
-      }
-    }
-
     await client.setPusher({
       app_display_name: "Sion Client",
       app_id: PUSH_APP_ID,
       data: {
-        url: NTFY_BASE_URL,
+        url: PASSERELLE,
         format: "event_id_only",
       },
       device_display_name: client.getDeviceId() || "Sion Device",
@@ -159,6 +171,7 @@ export async function unregisterPusher(): Promise<void> {
     const s = await sujetRust();
     if (!s) return;
     await core.retirerPusher(s.topicUrl, PUSH_APP_ID).catch(() => {});
+    oublierSujet();
     return;
   }
   const client = getMatrixClient();
@@ -180,4 +193,5 @@ export async function unregisterPusher(): Promise<void> {
       pushkey: topicUrl,
     });
   } catch { /* ignore */ }
+  oublierSujet();
 }

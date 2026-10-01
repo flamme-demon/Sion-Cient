@@ -48,9 +48,11 @@ impl CoeurMatrix {
     /// Déclare où le serveur envoie les notifications push de cet appareil :
     /// un pusher HTTP vers la passerelle Matrix de ntfy (`passerelle`), le
     /// sujet ntfy servant de clé (`cle`). Format « event_id_only » : ni texte
-    /// ni expéditeur ne quittent le serveur. Remplace un pusher de même clé.
+    /// ni expéditeur ne quittent le serveur. Remplace un pusher de même clé,
+    /// et retire ceux que ce même appareil (`nom_appareil`) avait déclarés
+    /// sous une autre clé : un ancien sujet ne doit plus rien recevoir.
     pub async fn enregistrer_pusher(&self, passerelle: &str, cle: &str, app_id: &str, nom_appareil: &str) -> Resultat<()> {
-        use matrix_sdk::ruma::api::client::push::{Pusher, PusherIds, PusherInit, PusherKind};
+        use matrix_sdk::ruma::api::client::push::{get_pushers, Pusher, PusherIds, PusherInit, PusherKind};
         use matrix_sdk::ruma::push::{HttpPusherData, PushFormat};
         let client = self.client().await.ok_or(Erreur::PasDeSession)?;
         let mut donnees = HttpPusherData::new(passerelle.to_owned());
@@ -65,6 +67,25 @@ impl CoeurMatrix {
         }
         .into();
         Box::pin(client.pusher().set(pusher, false)).await?;
+
+        // Ménage après coup : le nouveau pusher est en place, un échec ici
+        // ne coûte qu'un sujet abandonné qui reçoit encore.
+        let anciens = match Box::pin(client.send(get_pushers::v3::Request::new()).into_future()).await {
+            Ok(r) => r.pushers,
+            Err(e) => {
+                log::warn!("[Sion][push] liste des pushers indisponible : {e}");
+                return Ok(());
+            }
+        };
+        for p in anciens {
+            if p.ids.app_id != app_id || p.device_display_name != nom_appareil || p.ids.pushkey == cle {
+                continue;
+            }
+            match Box::pin(client.pusher().delete(p.ids)).await {
+                Ok(()) => log::info!("[Sion][push] ancien pusher de cet appareil retiré"),
+                Err(e) => log::warn!("[Sion][push] ancien pusher non retiré : {e}"),
+            }
+        }
         Ok(())
     }
 
