@@ -419,6 +419,18 @@ export function noteConnectionLost(identity: string, lost: boolean) {
   else lostPeers.delete(identity);
 }
 
+/** Raison d'un départ donnée par le serveur (moteur natif), qui prime sur la
+ *  dernière qualité de connexion connue : le retrait de la piste d'un pair
+ *  qui raccroche fait passer sa qualité à « perdue » juste avant son départ,
+ *  et sonnait « connexion perdue » (téléphone de flamme, 01/10). `null` :
+ *  la raison ne tranche pas, la qualité reste le repli. Consommée par le
+ *  départ qui suit. */
+const raisonsDepart = new Map<string, boolean>();
+export function noteRaisonDepart(identity: string, perdu: boolean | null) {
+  if (perdu == null) raisonsDepart.delete(identity);
+  else raisonsDepart.set(identity, perdu);
+}
+
 // LiveKit can fire ParticipantDisconnected twice for the same peer (most often
 // after a watchdog-triggered `simulateScenario('full-reconnect')` re-emits the
 // disconnect for a peer that's already gone). The first call consumes the
@@ -457,6 +469,7 @@ function wasRecentlyKicked(identity: string): boolean {
 /** Clear tracked state — call when the local user leaves the room. */
 export function resetVoiceCues() {
   lostPeers.clear();
+  raisonsDepart.clear();
   recentLeaves.clear();
   recentlyKicked.clear();
   for (const timer of pendingLeaves.values()) clearTimeout(timer);
@@ -586,7 +599,10 @@ export function onParticipantLeft(identity: string) {
   }
   if (pendingLeaves.has(identity)) return;
   recentLeaves.set(identity, now);
-  const timedOut = lostPeers.delete(identity);
+  const parQualite = lostPeers.delete(identity);
+  const raison = raisonsDepart.get(identity);
+  raisonsDepart.delete(identity);
+  const timedOut = raison ?? parQualite;
   // A kicked peer's departure is already announced by the kick cue.
   if (wasRecentlyKicked(identity)) return;
   const timer = setTimeout(() => {

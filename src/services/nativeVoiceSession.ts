@@ -1,4 +1,5 @@
 import * as native from "./voiceNativeService";
+import { noteRaisonDepart } from "./voiceChannelSounds";
 import { useLiveKitStore } from "../stores/useLiveKitStore";
 import type { ParticipantInfo } from "../types/livekit";
 import type { AudioQualityPreset } from "../stores/useSettingsStore";
@@ -100,6 +101,11 @@ export async function connectNativeSession(options: SessionOptions): Promise<nat
       } else if (ready && status.state !== "connecting") {
         useLiveKitStore.getState().setConnectionState(status.state);
       }
+    }));
+    // Raison d'un départ (arrive juste avant la liste qui l'annonce) : le son
+    // de départ ou de connexion perdue en dépend.
+    await register(native.onVoiceNativeParticipantLeft((ev) => {
+      if (isCurrent()) noteRaisonDepart(ev.identity, ev.perdu);
     }));
     await register(native.onVoiceNativeParticipants((participants) => {
       if (isCurrent()) options.onParticipants(participants, isCurrent);

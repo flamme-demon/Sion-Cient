@@ -857,7 +857,7 @@ fn apply_engine_event(map: &mut HashMap<String, NativeParticipant>, ev: &VoiceEn
             }
             true
         }
-        VoiceEngineEvent::ParticipantLeft { identity } => map.remove(identity).is_some(),
+        VoiceEngineEvent::ParticipantLeft { identity, .. } => map.remove(identity).is_some(),
         VoiceEngineEvent::SpeakingChanged { identity, speaking } => {
             upsert_participant(map, identity).is_speaking = *speaking;
             true
@@ -1483,6 +1483,15 @@ fn spawn_forward_task(
                             emit_status(&app, &status);
                         }
                         other => {
+                            // Raison d'un départ, AVANT la liste qui l'annonce :
+                            // l'interface choisit son son (départ ou connexion
+                            // perdue) quand le pair disparaît de la liste.
+                            if let VoiceEngineEvent::ParticipantLeft { identity, perdu } = other {
+                                let _ = app.emit(
+                                    "voice-native-participant-left",
+                                    serde_json::json!({ "identity": identity, "perdu": perdu }),
+                                );
+                            }
                             let changed = {
                                 let mut map =
                                     participants_map().lock().unwrap_or_else(|e| e.into_inner());
@@ -3233,7 +3242,8 @@ mod tests {
             assert!(apply_engine_event(
                 &mut map,
                 &E::ParticipantLeft {
-                    identity: "@a:h".into()
+                    identity: "@a:h".into(),
+                    perdu: None
                 }
             ));
             assert_eq!(map.len(), 1);
@@ -3241,7 +3251,8 @@ mod tests {
             assert!(!apply_engine_event(
                 &mut map,
                 &E::ParticipantLeft {
-                    identity: "@z:h".into()
+                    identity: "@z:h".into(),
+                    perdu: None
                 }
             ));
         }

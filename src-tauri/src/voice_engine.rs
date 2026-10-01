@@ -83,6 +83,10 @@ pub enum VoiceEngineEvent {
     },
     ParticipantLeft {
         identity: String,
+        /// Connexion perdue (vrai) ou départ volontaire (faux), d'après la
+        /// raison donnée par le serveur ; `None` si elle ne tranche pas.
+        #[serde(default)]
+        perdu: Option<bool>,
     },
     SpeakingChanged {
         identity: String,
@@ -3015,7 +3019,10 @@ impl LiveKitEngine {
                             .lock()
                             .map(|mut volumes| volumes.remove(id.as_str()))
                             .unwrap_or(None);
-                        let _ = tx.send(VoiceEngineEvent::ParticipantLeft { identity: id });
+                        let _ = tx.send(VoiceEngineEvent::ParticipantLeft {
+                            identity: id,
+                            perdu: depart_perdu(p.disconnect_reason()),
+                        });
                     }
                     RoomEvent::TrackPublished { publication, participant } => {
                         log::info!(
@@ -3329,6 +3336,28 @@ impl LiveKitEngine {
     }
 }
 
+/// Départ d'un pair : connexion perdue (son « timeout ») ou volontaire (son
+/// « leave »), d'après la raison donnée par le serveur ; `None` quand elle ne
+/// tranche pas. L'interface le devinait à la dernière qualité de connexion
+/// du pair, que le retrait de sa piste fait passer à « perdue » juste avant
+/// un départ volontaire : un téléphone qui raccroche sonnait « connexion
+/// perdue » (01/10).
+pub(crate) fn depart_perdu(raison: livekit::prelude::DisconnectReason) -> Option<bool> {
+    use livekit::prelude::DisconnectReason as R;
+    match raison {
+        R::ClientInitiated
+        | R::DuplicateIdentity
+        | R::ParticipantRemoved
+        | R::RoomDeleted
+        | R::RoomClosed
+        | R::ServerShutdown
+        | R::Migration
+        | R::UserRejected => Some(false),
+        R::ConnectionTimeout | R::SignalClose | R::MediaFailure | R::StateMismatch | R::JoinFailure => Some(true),
+        _ => None,
+    }
+}
+
 impl VoiceEngine for LiveKitEngine {
     fn connect(&mut self, url: &str, token: &str, encrypted: bool) -> Result<String, String> {
         if url.trim().is_empty() {
@@ -3493,6 +3522,17 @@ mod tests {
         assert!(engine.connect("wss://x", "", false).is_err());
         assert!(engine.connect("  ", "jwt", false).is_err());
         assert!(!engine.is_connected());
+    }
+
+    #[test]
+    fn depart_volontaire_ou_perdu() {
+        use livekit::prelude::DisconnectReason as R;
+        // Le téléphone qui raccroche : départ, pas connexion perdue (01/10).
+        assert_eq!(depart_perdu(R::ClientInitiated), Some(false));
+        assert_eq!(depart_perdu(R::ConnectionTimeout), Some(true));
+        assert_eq!(depart_perdu(R::SignalClose), Some(true));
+        // Reconnexion ou raison inconnue : l'interface garde son repli.
+        assert_eq!(depart_perdu(R::UnknownReason), None);
     }
 
     #[test]

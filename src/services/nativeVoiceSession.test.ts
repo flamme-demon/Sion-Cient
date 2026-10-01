@@ -5,12 +5,15 @@ import type { VoiceNativeStatus } from "./voiceNativeService";
 
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(), disconnect: vi.fn(), status: vi.fn(), participants: vi.fn(), data: vi.fn(), e2ee: vi.fn(), shareFailed: vi.fn(),
+  participantLeft: vi.fn(),
 }));
+// La logique des sons (et le magasin qu'elle charge) n'est pas l'objet ici.
+vi.mock("./voiceChannelSounds", () => ({ noteRaisonDepart: vi.fn() }));
 vi.mock("./voiceNativeService", () => ({
   voiceNativeConnect: mocks.connect, voiceNativeDisconnect: mocks.disconnect,
   onVoiceNativeStatus: mocks.status, onVoiceNativeParticipants: mocks.participants,
   onVoiceNativeData: mocks.data, onVoiceNativeE2eeState: mocks.e2ee,
-  onVoiceNativeLocalShareFailed: mocks.shareFailed,
+  onVoiceNativeLocalShareFailed: mocks.shareFailed, onVoiceNativeParticipantLeft: mocks.participantLeft,
 }));
 
 function deferred<T>() {
@@ -38,7 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useLiveKitStore.getState().disconnect();
   unlisten = [];
-  for (const listener of [mocks.status, mocks.participants, mocks.data, mocks.e2ee, mocks.shareFailed]) {
+  for (const listener of [mocks.status, mocks.participants, mocks.data, mocks.e2ee, mocks.shareFailed, mocks.participantLeft]) {
     listener.mockImplementation(async () => {
       const stop = vi.fn(); unlisten.push(stop); return stop;
     });
@@ -53,7 +56,7 @@ describe("native session lifecycle", () => {
     const opts = options();
     const participants = [{ identity: "already-present" }];
     mocks.connect.mockImplementation(async () => {
-      expect(unlisten).toHaveLength(5);
+      expect(unlisten).toHaveLength(6);
       mocks.participants.mock.calls[0][0](participants);
       return status;
     });

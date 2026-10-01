@@ -334,6 +334,21 @@ export async function onVoiceNativeParticipants(
   return listen<ParticipantInfo[]>(VOICE_NATIVE_PARTICIPANTS_EVENT, (e) => cb(e.payload));
 }
 
+/** Raison d'un départ, émise juste avant la liste qui l'annonce :
+ *  connexion perdue (`perdu: true`), départ volontaire (`false`), ou raison
+ *  qui ne tranche pas (`null`). */
+export interface VoiceNativeParticipantLeft {
+  identity: string;
+  perdu: boolean | null;
+}
+
+export async function onVoiceNativeParticipantLeft(
+  cb: (ev: VoiceNativeParticipantLeft) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeParticipantLeft>("voice-native-participant-left", (e) => cb(e.payload));
+}
+
 export async function onVoiceNativeE2eeState(
   cb: (ev: VoiceNativeE2eeState) => void,
 ): Promise<() => void> {

@@ -53,6 +53,7 @@ vi.mock("../stores/useAppStore", () => ({ useAppStore: { getState: () => ({ isDe
 
 import {
   previewCue, resetVoiceCues, onParticipantJoined, onParticipantLeft, remplacerLecturePourTests,
+  noteConnectionLost, noteRaisonDepart,
 } from "./voiceChannelSounds";
 
 const fetchMock = vi.fn();
@@ -128,6 +129,24 @@ describe("sons d'arrivée et de départ d'un pair", () => {
     vi.advanceTimersByTime(18_000);
     onParticipantJoined(tel); // 13:25:51 : vrai retour
     expect(joues).toEqual(["join", "leave", "join"]);
+  });
+
+  it("la raison du serveur prime sur la qualité : raccrocher sonne « départ »", () => {
+    // Téléphone de flamme, 01/10 : qualité passée à « perdue » au retrait de
+    // sa piste, puis départ volontaire (ClientInitiated).
+    const tel = "@flamme:hs:TEL";
+    noteConnectionLost(tel, true);
+    noteRaisonDepart(tel, false);
+    onParticipantLeft(tel);
+    // Vraie perte (ConnectionTimeout), même sans qualité « perdue » vue avant.
+    noteRaisonDepart("@b:hs:X", true);
+    onParticipantLeft("@b:hs:X");
+    // Raison qui ne tranche pas : la qualité reste le repli.
+    noteConnectionLost("@c:hs:Y", true);
+    noteRaisonDepart("@c:hs:Y", null);
+    onParticipantLeft("@c:hs:Y");
+    vi.advanceTimersByTime(2_000);
+    expect(joues).toEqual(["leave", "timeout", "timeout"]);
   });
 
   it("filtre toujours un départ annoncé deux fois, et un retour annoncé deux fois", () => {
