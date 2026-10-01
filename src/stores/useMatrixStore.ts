@@ -1503,12 +1503,16 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
               }).catch(() => {});
             }
 
+            // Android : canal « Messages » en importance haute (bandeau).
+            const { canalMessagesAndroid } = await import("../services/notificationsMessages");
+            const channelId = await canalMessagesAndroid();
             sendNotification({
               title,
               body,
               icon: "icons/128x128.png",
               actionTypeId: "msg-reply",
               extra: { roomId: notifRoomId, eventId: notifEventId },
+              ...(channelId ? { channelId } : {}),
             });
           }).catch(() => {
             // Fallback web notification with click handler

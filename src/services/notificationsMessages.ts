@@ -7,6 +7,7 @@
  */
 import { useAppStore } from "../stores/useAppStore";
 import type { NotificationMode } from "../stores/useSettingsStore";
+import { SUR_ANDROID } from "../utils/plateforme";
 
 /** Quelqu'un devant Sion : inutile de notifier. */
 export { utilisateurPresent, etatPresence } from "./premierPlan";
@@ -91,6 +92,29 @@ async function ecouterNotificationsBureau(): Promise<void> {
   });
 }
 
+/** Android : le canal « Messages » du service push, en importance haute
+ *  (bandeau à l'écran). Sans lui, le module de Tauri publiait sur son canal
+ *  « default », en importance normale : un poke vibrait sans s'afficher,
+ *  écran déverrouillé (01/10). Créé ici s'il n'existe pas encore (service
+ *  push jamais lancé) ; existant, Android le laisse tel quel. */
+const CANAL_MESSAGES = "sion_push_messages";
+let canalPret: Promise<void> | null = null;
+export async function canalMessagesAndroid(): Promise<string | undefined> {
+  if (!SUR_ANDROID) return undefined;
+  canalPret ??= import("@tauri-apps/plugin-notification")
+    .then(({ createChannel, Importance }) =>
+      createChannel({
+        id: CANAL_MESSAGES,
+        name: "Messages",
+        description: "Notifications de nouveaux messages",
+        importance: Importance.High,
+        vibration: true,
+      }))
+    .catch(() => {});
+  await canalPret;
+  return CANAL_MESSAGES;
+}
+
 /** Notification système : « Répondre » (champ de saisie) et « Ouvrir ».
  *  Sous Linux, adressée directement au bureau (historique, boutons, réponse
  *  intégrée) ; ailleurs, par `tauri-plugin-notification`. */
@@ -147,12 +171,14 @@ export async function envoyerNotification(n: { titre: string; corps: string; sal
       }).catch(() => {});
     }
 
+    const channelId = await canalMessagesAndroid();
     sendNotification({
       title: n.titre,
       body: n.corps,
       icon: "icons/128x128.png",
       actionTypeId: "msg-reply",
       extra: { roomId: n.salon, eventId: n.evenement ?? "" },
+      ...(channelId ? { channelId } : {}),
     });
   } catch {
     // Hors Tauri : notification web, clic = ouvrir le salon.
