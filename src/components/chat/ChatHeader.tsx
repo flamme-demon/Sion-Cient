@@ -229,7 +229,7 @@ export function ChatHeader() {
               <ArrowLeftIcon />
             </button>
           )}
-          <ChannelIcon icon={channel?.icon} />
+          <ChannelIcon channel={channel} />
           <span style={{ fontWeight: 600, fontSize: isMobile ? 15 : 16, color: 'var(--color-on-surface)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{channelName}</span>
           {canEdit && !isMobile && !channel?.isDM && (
             <button

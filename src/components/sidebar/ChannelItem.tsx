@@ -359,7 +359,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
           // mini-avatars (3 max + « +N ») — on voit qui est là sans déployer.
           // Anneau vert sur les parleurs quand on est connecté au salon.
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-            <ChannelIcon icon={channel.icon} />
+            <ChannelIcon channel={channel} compact />
             <span style={{ display: 'flex', alignItems: 'center' }}>
               {voiceUsers.slice(0, 3).map((u, i) => {
                 // Mêmes états que le mode déployé, adaptés à 16px :
@@ -459,11 +459,11 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
             </span>
           </span>
         ) : (
-          <ChannelIcon icon={channel.icon} />
+          <ChannelIcon channel={channel} compact={compact} />
         )}
         {!compact && (
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-          {channel.isDM ? `💬 ${channel.name}` : channel.name}
+          {channel.name}
         </span>
         )}
         {unreadCount > 0 && !isActive && (
