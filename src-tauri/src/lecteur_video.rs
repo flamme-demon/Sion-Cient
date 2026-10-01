@@ -202,7 +202,8 @@ pub struct EtatLecteur {
     pub a_du_son: bool,
 }
 
-/// Largeur de la toile de rendu — celle de la vidéo, arrondie au pair.
+/// Toile de rendu — l'image, complétée au pair d'une colonne ou d'une ligne
+/// noire.
 ///
 /// **Une tentative d'élargissement a été retirée le 21/09.** L'idée était
 /// d'ajouter des bandes noires pour donner au bandeau la largeur qui manque
@@ -213,9 +214,11 @@ pub struct EtatLecteur {
 /// abandonne le compteur, puis la jauge de volume — et cela suffit.
 ///
 /// L'arrondi reste nécessaire : l'I420 sous-échantillonne la chrominance par
-/// deux et n'accepte pas de largeur impaire.
-fn largeur_toile(largeur: u32, _hauteur: u32) -> u32 {
-    largeur + (largeur % 2)
+/// deux, et n'accepte ni largeur ni hauteur impaire. Compléter plutôt que
+/// redimensionner : une capture d'écran de 843x226 (01/10) garde son texte
+/// net. Avant, une dimension impaire faisait refuser la vidéo entière.
+fn toile(largeur: u32, hauteur: u32) -> (u32, u32) {
+    (largeur + largeur % 2, hauteur + hauteur % 2)
 }
 
 /// Taille d'une image I420, en octets : un plan de luminance pleine
@@ -661,15 +664,14 @@ fn demarrer(
     // bouton d'installation intégré ne pose que `ffmpeg`.
     let (largeur, hauteur, duree) = crate::probe_video(&ffmpeg, std::path::Path::new(&chemin))
         .ok_or_else(|| format!("format illisible, ou ffmpeg absent : {chemin}"))?;
-    if largeur == 0 || hauteur == 0 || largeur % 2 != 0 || hauteur % 2 != 0 {
+    if largeur == 0 || hauteur == 0 {
         return Err(format!("dimensions inexploitables : {largeur}x{hauteur}"));
     }
     let duree_ms = (duree * 1000.0) as u64;
 
     let boite = *boite_visee().lock().unwrap_or_else(|e| e.into_inner());
     let (image_l, image_h) = dimensions_affichees(largeur, hauteur, boite);
-    let toile_l = largeur_toile(image_l, image_h);
-    let toile_h = image_h;
+    let (toile_l, toile_h) = toile(image_l, image_h);
 
     log::info!(
         "[Sion][lecteur] {chemin} — vidéo {largeur}x{hauteur}, toile {toile_l}x{toile_h}, {} s",
@@ -699,9 +701,9 @@ fn demarrer(
     // `setsar=1` interdit au passage qu'un pixel non carré vienne changer la
     // géométrie derrière notre dos.
     let mut filtres = vec![format!("scale={image_l}:{image_h}"), "setsar=1".to_string()];
-    if toile_l != image_l {
-        // La vidéo reste intacte, centrée : on ajoute seulement du noir de
-        // part et d'autre pour que le bandeau ait où s'écrire.
+    if (toile_l, toile_h) != (image_l, image_h) {
+        // La vidéo reste intacte : on ajoute seulement le pixel noir qui
+        // manque pour arriver au pair.
         filtres.push(format!(
             "pad={toile_l}:{toile_h}:({toile_l}-iw)/2:0:color=black"
         ));
@@ -1239,7 +1241,7 @@ pub fn lecteur_video_resolution(largeur: u32, hauteur: u32) -> Result<EtatLecteu
         let garde = lecture().lock().unwrap_or_else(|e| e.into_inner());
         let l = garde.as_ref().ok_or_else(|| "aucune lecture".to_string())?;
         let (image_l, image_h) = dimensions_affichees(l.video.0, l.video.1, Some((largeur, hauteur)));
-        if (largeur_toile(image_l, image_h), image_h) == (l.largeur, l.hauteur) {
+        if toile(image_l, image_h) == (l.largeur, l.hauteur) {
             return Ok(etat_depuis(l));
         }
         let e = etat_depuis(l);
@@ -1328,9 +1330,12 @@ mod tests {
     fn la_toile_epouse_la_video_par_defaut() {
         // Élargir rapetissait la vidéo dans une bulle étroite : on n'ajoute
         // plus de bandes, le bandeau s'adapte à la place disponible.
-        assert_eq!(largeur_toile(576, 1022), 576);
-        assert_eq!(largeur_toile(1920, 1080), 1920);
-        assert_eq!(largeur_toile(577, 1022) % 2, 0, "l'I420 exige une largeur paire");
+        assert_eq!(toile(576, 1022), (576, 1022));
+        assert_eq!(toile(1920, 1080), (1920, 1080));
+        // L'I420 exige des dimensions paires : une colonne ou une ligne de
+        // plus, plutôt que de refuser la vidéo (843x226, 01/10).
+        assert_eq!(toile(843, 226), (844, 226));
+        assert_eq!(toile(843, 225), (844, 226));
     }
 
 
