@@ -159,28 +159,42 @@ export default function App() {
         }, 300);
       }
     };
-    // Handle notification tap — open room (with retry until channels loaded)
-    (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string, eventId?: string) => {
-      let retries = 0;
-      const tryOpen = () => {
-        const channel = useMatrixStore.getState().channels.find(c => c.id === roomId);
-        if (channel) {
-          useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
-          useAppStore.getState().setMobileView("chat");
-          useMatrixStore.getState().loadRoomHistory(roomId);
-          // Notification ntfy (appli fermée) : jusqu'au message lui-même.
-          if (eventId) setTimeout(() => void import("./services/allerAuMessage").then((m) => m.allerAuMessage(eventId)), 300);
-        } else if (retries < 20) {
-          retries++;
-          setTimeout(tryOpen, 1000);
-        }
+    // Notifications Android (MainActivity) : toucher = ouvrir le salon,
+    // « Répondre » = répondre. Appli lancée par la notification, la session
+    // et les salons arrivent après la page : on attend le salon, 90 s au
+    // plus (20 s avant, court pour un démarrage à froid sur réseau lent).
+    const quandSalonConnu = (roomId: string, suite: (salon: { id: string; hasVoice: boolean }) => void) => {
+      let essais = 0;
+      const essayer = () => {
+        const salon = useMatrixStore.getState().channels.find(c => c.id === roomId);
+        if (salon) suite(salon);
+        else if (++essais < 90) setTimeout(essayer, 1000);
+        else console.warn("[Sion][notification] salon jamais chargé :", roomId);
       };
-      tryOpen();
+      essayer();
+    };
+    (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__ = (roomId: string, eventId?: string) => {
+      quandSalonConnu(roomId, (channel) => {
+        useAppStore.getState().setActiveChannel(channel.id, channel.hasVoice);
+        useAppStore.getState().setMobileView("chat");
+        useMatrixStore.getState().loadRoomHistory(roomId);
+        // Jusqu'au message lui-même.
+        if (eventId) setTimeout(() => void import("./services/allerAuMessage").then((m) => m.allerAuMessage(eventId)), 300);
+      });
+    };
+    (window as unknown as Record<string, unknown>).__SION_REPONDRE__ = (roomId: string, eventId: string, texte: string) => {
+      if (!texte.trim()) return;
+      quandSalonConnu(roomId, () => {
+        void import("./services/matrixService").then((ms) =>
+          (eventId ? ms.sendReply(roomId, eventId, texte) : ms.sendTextMessage(roomId, texte)).catch(console.error),
+        );
+      });
     };
 
     return () => {
       delete (window as unknown as Record<string, unknown>).__SION_VOICE_ACTION__;
       delete (window as unknown as Record<string, unknown>).__SION_OPEN_ROOM__;
+      delete (window as unknown as Record<string, unknown>).__SION_REPONDRE__;
     };
   }, []);
 

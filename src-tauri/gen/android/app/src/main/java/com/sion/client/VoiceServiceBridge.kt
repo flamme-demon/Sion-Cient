@@ -98,9 +98,11 @@ class VoiceServiceBridge(private val context: Context) {
 
     @JavascriptInterface
     fun startPushListener(topicUrl: String) {
-        // Save topic URL for polling
-        context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
-            .edit().putString("topic_url", topicUrl).apply()
+        val prefs = context.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+        // Nouveau sujet (premier lancement, ou passage au sujet secret) :
+        // les avis de l'ancien ne servent plus de repère.
+        if (prefs.getString("topic_url", null) != topicUrl) PushRecus.repartir(context)
+        prefs.edit().putString("topic_url", topicUrl).apply()
 
         // Start periodic polling via WorkManager (survives app kill)
         val workRequest = androidx.work.PeriodicWorkRequestBuilder<PushPollWorker>(
@@ -112,7 +114,7 @@ class VoiceServiceBridge(private val context: Context) {
             androidx.work.ExistingPeriodicWorkPolicy.KEEP,
             workRequest
         )
-        android.util.Log.i("SionPush", "Push poll worker scheduled for topic: $topicUrl")
+        android.util.Log.i("SionPush", "Push poll worker scheduled for topic: ${PushRecus.masque(topicUrl)}")
 
         // Request battery optimization exemption for persistent connection
         requestBatteryOptimizationExemption()
@@ -125,6 +127,11 @@ class VoiceServiceBridge(private val context: Context) {
     fun stopPushListener() {
         androidx.work.WorkManager.getInstance(context).cancelUniqueWork("sion_push_poll")
         NtfyListenerService.stop(context)
+        // Sans quoi le démarrage du téléphone (PushRestartReceiver) relançait
+        // l'écoute du sujet d'une session fermée.
+        context.getSharedPreferences("sion_push", Context.MODE_PRIVATE).edit().remove("topic_url").apply()
+        PushRecus.oublier(context)
+        PushRecus.effacer(context)
     }
 
     @JavascriptInterface

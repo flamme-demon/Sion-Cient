@@ -143,7 +143,10 @@ export async function envoyerNotification(n: { titre: string; corps: string; sal
           { id: "open", title: "Ouvrir", foreground: true },
         ],
       }]).catch(() => {});
-      onAction((retour) => {
+      // Android : MainActivity reprend le toucher et la réponse (même appli
+      // fermée) et les rejoue par `__SION_OPEN_ROOM__` / `__SION_REPONDRE__`
+      // (App.tsx) ; le module ne les transmet plus, rien à écouter ici.
+      if (!SUR_ANDROID) onAction((retour) => {
         // Android : { actionId, inputValue, notification: { extra } } ;
         // ailleurs, la notification elle-même porte `extra`. Lire `extra` à
         // la racine laissait le toucher et « Répondre » sans effet sur le

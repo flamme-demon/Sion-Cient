@@ -1,34 +1,32 @@
 package com.sion.client
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Background service that listens to an ntfy topic via SSE (Server-Sent Events)
- * and shows notifications when Matrix push events arrive.
+ * Écoute continue du sujet ntfy de l'appareil (SSE) : chaque avis de message
+ * passe à `PushRecus`, qui notifie si l'interface n'est pas là.
  */
 class NtfyListenerService : Service() {
 
     companion object {
-        const val CHANNEL_ID = "sion_push_messages"
         const val FOREGROUND_CHANNEL_ID = "sion_push_listener"
         const val NOTIFICATION_ID = 2001
         const val EXTRA_TOPIC_URL = "topic_url"
-        private var notificationCounter = 0
+        private const val ATTENTE_MIN = 5_000L
+        private const val ATTENTE_MAX = 120_000L
 
         var isRunning = false
             private set
@@ -53,8 +51,19 @@ class NtfyListenerService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var listenerThread: Thread? = null
+    @Volatile private var listenerThread: Thread? = null
     @Volatile private var shouldRun = true
+    /** Sujet de l'écoute en cours. */
+    private var sujetEcoute: String? = null
+    /** Une écoute par génération : remplacée (nouveau sujet), l'ancienne
+     *  s'arrête d'elle-même au lieu de lire en parallèle. */
+    @Volatile private var generation = 0
+    @Volatile private var connexion: HttpURLConnection? = null
+    /** Réveil de l'attente entre deux connexions (réseau revenu, arrêt).
+     *  Pas `Thread.interrupt()` : la pile HTTP d'Android consomme
+     *  l'interruption, et l'attente durait quand même. */
+    private val reveil = Object()
+    private var reveille = false
 
     override fun onCreate() {
         super.onCreate()
@@ -65,11 +74,10 @@ class NtfyListenerService : Service() {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sion:pushlistener").apply {
             acquire()
         }
+        getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(surveillanceReseau)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        android.util.Log.i("SionPush", "onStartCommand called")
-
         // MUST call startForeground within 5 seconds
         createNotificationChannels()
         val fgNotification = NotificationCompat.Builder(this, FOREGROUND_CHANNEL_ID)
@@ -86,7 +94,6 @@ class NtfyListenerService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, fgNotification)
         }
-        android.util.Log.i("SionPush", "Foreground started")
 
         val topicUrl = intent?.getStringExtra(EXTRA_TOPIC_URL)
             ?: getSharedPreferences("sion_push", Context.MODE_PRIVATE).getString("topic_url", null)
@@ -98,17 +105,18 @@ class NtfyListenerService : Service() {
         getSharedPreferences("sion_push", Context.MODE_PRIVATE)
             .edit().putString("topic_url", topicUrl).apply()
 
-        android.util.Log.i("SionPush", "Topic: $topicUrl")
-
-        // Écoute SSE sur l'adresse publique : l'IP locale en dur, seule
-        // utilisée jusqu'ici, rendait les push impossibles hors de la maison
-        // (4G) — et Android refuse de toute façon le HTTP en clair.
-        val adresses = listOf("$topicUrl/sse")
-        shouldRun = true
-        listenerThread?.interrupt()
-        listenerThread = Thread {
-            listenToSse(adresses)
-        }.apply {
+        // L'interface redemande l'écoute à chaque lancement : même sujet,
+        // la connexion en cours reste (avant : une seconde connexion
+        // s'ouvrait, et l'ancienne lisait toujours).
+        if (topicUrl == sujetEcoute && listenerThread?.isAlive == true) {
+            android.util.Log.i("SionPush", "SSE : déjà à l'écoute de ${PushRecus.masque(topicUrl)}")
+            return START_STICKY
+        }
+        sujetEcoute = topicUrl
+        val gen = ++generation
+        connexion?.disconnect()
+        reveiller()
+        listenerThread = Thread { ecouter(topicUrl, gen) }.apply {
             isDaemon = true
             start()
         }
@@ -137,8 +145,14 @@ class NtfyListenerService : Service() {
     override fun onDestroy() {
         isRunning = false
         shouldRun = false
-        listenerThread?.interrupt()
+        generation++
+        connexion?.disconnect()
+        reveiller()
         listenerThread = null
+        sujetEcoute = null
+        try {
+            getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(surveillanceReseau)
+        } catch (_: Exception) { }
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         super.onDestroy()
@@ -146,151 +160,98 @@ class NtfyListenerService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun listenToSse(adresses: List<String>) {
-        var essai = 0
-        while (shouldRun) {
-            // Une adresse qui échoue : on passe à la suivante.
-            val sseUrl = adresses[essai % adresses.size]
-            android.util.Log.i("SionPush", "SSE : connexion à $sseUrl")
+    /** Réseau par défaut changé (Wi-Fi ↔ 4G, retour du réseau) : l'ancienne
+     *  connexion est morte sans le savoir, on la remplace tout de suite au
+     *  lieu d'attendre le délai de lecture ou la fin de l'attente. */
+    private val surveillanceReseau = object : ConnectivityManager.NetworkCallback() {
+        private var reseau: Network? = null
+        private var premier = true
+
+        override fun onAvailable(network: Network) {
+            val change = reseau != network
+            reseau = network
+            if (premier) {
+                premier = false
+                return
+            }
+            if (change) {
+                android.util.Log.i("SionPush", "SSE : réseau changé, reconnexion")
+                connexion?.disconnect()
+                reveiller()
+            }
+        }
+
+        override fun onLost(network: Network) {
+            if (reseau == network) reseau = null
+        }
+    }
+
+    private fun ecouter(topicUrl: String, gen: Int) {
+        var attente = ATTENTE_MIN
+        while (shouldRun && gen == generation) {
+            // Reprise après une coupure : ntfy renvoie d'abord ce qui est
+            // arrivé depuis le dernier avis traité.
+            val depuis = PushRecus.dernier(this)
+            val adresse = if (depuis != null) "$topicUrl/sse?since=$depuis" else "$topicUrl/sse"
+            android.util.Log.i("SionPush", "SSE : connexion à ${PushRecus.masque(topicUrl)}")
+            var conn: HttpURLConnection? = null
             try {
-                val url = URL(sseUrl)
-                val conn = url.openConnection() as HttpURLConnection
+                conn = URL(adresse).openConnection() as HttpURLConnection
                 conn.setRequestProperty("Accept", "text/event-stream")
                 conn.connectTimeout = 30_000
-                conn.readTimeout = 0
-
-                android.util.Log.i("SionPush", "SSE connected, response: ${conn.responseCode}")
-                val reader = BufferedReader(InputStreamReader(conn.inputStream))
-
-                while (shouldRun) {
-                    val line = reader.readLine() ?: break
-                    if (line.startsWith("data: ")) {
-                        val data = line.removePrefix("data: ")
-                        android.util.Log.d("SionPush", "SSE message received")
-                        handleSseMessage(data)
+                // ntfy envoie un « keepalive » toutes les 45 s : rien pendant
+                // 100 s, la connexion est morte (réseau changé, NAT oublié).
+                // Sans délai (0), l'écoute pouvait rester bloquée sur une
+                // connexion morte, sans plus jamais rien recevoir.
+                conn.readTimeout = 100_000
+                connexion = conn
+                val code = conn.responseCode
+                if (code != 200) throw java.io.IOException("réponse $code")
+                android.util.Log.i("SionPush", "SSE : connecté")
+                attente = ATTENTE_MIN
+                conn.inputStream.bufferedReader().use { lecteur ->
+                    while (shouldRun && gen == generation) {
+                        val ligne = lecteur.readLine() ?: break
+                        if (ligne.startsWith("data: ")) PushRecus.traiter(this, ligne.removePrefix("data: "))
                     }
                 }
-
-                reader.close()
-                conn.disconnect()
-                android.util.Log.w("SionPush", "SSE connection closed, reconnecting...")
+                if (gen == generation) android.util.Log.w("SionPush", "SSE : fermé par le serveur")
             } catch (e: Exception) {
-                android.util.Log.e("SionPush", "SSE error: ${e.message}")
-                essai++
-                if (!shouldRun) return
-                try { Thread.sleep(5000) } catch (_: InterruptedException) { return }
+                if (!shouldRun || gen != generation) return
+                android.util.Log.w("SionPush", "SSE : coupé (${e.javaClass.simpleName}: ${e.message})")
+            } finally {
+                conn?.disconnect()
             }
+            if (!shouldRun || gen != generation) return
+            // Réseau revenu pendant la connexion ou l'attente : on retente
+            // tout de suite, et sans délai accumulé.
+            attente = if (attendre(attente)) ATTENTE_MIN else minOf(attente * 2, ATTENTE_MAX)
         }
     }
 
-    private fun handleSseMessage(data: String) {
-        try {
-            // Parse ntfy JSON wrapper
-            val ntfyMsg = org.json.JSONObject(data)
-            val event = ntfyMsg.optString("event", "")
-            if (event != "message") return
-
-            val message = ntfyMsg.optString("message", "")
-            if (message.isEmpty()) return
-
-            android.util.Log.i("SionPush", "Real push received: ${message.take(100)}")
-
-            // Parse Matrix push payload inside the message
-            val pushPayload = org.json.JSONObject(message)
-            val notification = pushPayload.optJSONObject("notification") ?: return
-            val roomId = notification.optString("room_id", "")
-            val eventId = notification.optString("event_id", "")
-            val unread = notification.optJSONObject("counts")?.optInt("unread", 0) ?: 0
-
-            // Interface vivante (premier ou arrière-plan) : elle notifie
-            // elle-même, avec le texte déchiffré — pas de doublon.
-            val foreground = isAppInForeground()
-            android.util.Log.i("SionPush", "roomId=$roomId unread=$unread foreground=$foreground vivante=${MainActivity.vivante}")
-
-            if (foreground || MainActivity.vivante) return
-
-            // Check notification mode
-            val mode = getSharedPreferences("sion_push", Context.MODE_PRIVATE)
-                .getString("notification_mode", "all") ?: "all"
-            val isDM = getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
-                .getString("${roomId}_dm", null) == "true"
-
-            android.util.Log.d("SionPush", "mode=$mode isDM=$isDM roomId=$roomId")
-
-            when (mode) {
-                "minimal" -> if (!isDM) return
-                "mentions" -> if (!isDM) return  // Can't detect mentions in E2EE — only DMs pass
-                // "all" — show everything
-            }
-
-            showMessageNotification(roomId, eventId, unread)
-        } catch (_: Exception) {
-            // Ignore parse errors
+    private fun reveiller() {
+        synchronized(reveil) {
+            reveille = true
+            reveil.notifyAll()
         }
     }
 
-    private fun isAppInForeground(): Boolean {
-        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-        val appProcesses = activityManager.runningAppProcesses ?: return false
-        for (process in appProcesses) {
-            if (process.processName == packageName &&
-                process.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
-                return true
+    /** Attend `ms` au plus ; vrai si réveillé avant. */
+    private fun attendre(ms: Long): Boolean {
+        synchronized(reveil) {
+            if (!reveille) {
+                try { reveil.wait(ms) } catch (_: InterruptedException) { }
             }
+            val r = reveille
+            reveille = false
+            return r
         }
-        return false
-    }
-
-    private fun showMessageNotification(roomId: String, eventId: String, unread: Int) {
-        val openIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra("open_room_id", roomId)
-                putExtra("open_event_id", eventId)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Load room name from shared preferences if available
-        val prefs = getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
-        val roomName = prefs.getString(roomId, null)
-
-        val title = roomName ?: "Sion"
-        val body = if (unread > 1) "$unread messages non lus" else "Nouveau message"
-
-        notificationCounter++
-        val notifId = 3000 + (roomId.hashCode() and 0xFFFF)
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setSmallIcon(R.drawable.ic_voice_notification)
-            .setContentIntent(openIntent)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setNumber(unread)
-            .build()
-
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(notifId, notification)
     }
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
-
-            // Channel for push messages
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Messages",
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "Notifications de nouveaux messages"
-                }
-            )
+            PushRecus.creerCanal(this)
 
             // Channel for the listener foreground notification (silent)
             manager.createNotificationChannel(

@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
 
@@ -21,8 +22,10 @@ class MainActivity : TauriActivity() {
 
   private var voiceActionReceiver: BroadcastReceiver? = null
   private var cachedWebView: WebView? = null
-  private var pendingRoomId: String? = null
-  private var pendingEventId: String? = null
+  /** Appels à rejouer dans la page dès qu'elle est prête (toucher d'une
+   *  notification, réponse tapée dedans). */
+  private val enAttente = ArrayList<String>()
+  private var rejeuEnCours = false
 
   // Le pont `__SION__` doit être posé AVANT le chargement de la page : un
   // objet ajouté ensuite n'apparaît qu'au chargement suivant. Posé par un
@@ -42,6 +45,9 @@ class MainActivity : TauriActivity() {
     // Avant Tauri : le moteur Matrix fait ses premières requêtes dès le
     // démarrage, et la voix a besoin de WebRTC côté Java.
     SionNatif.initialiser(applicationContext)
+    // Avant Tauri aussi : son module de notifications lit l'intention au
+    // chargement, quand la page n'écoute pas encore.
+    if (savedInstanceState == null) reprendreNotificationInterface(intent)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     vivante = true
@@ -60,7 +66,7 @@ class MainActivity : TauriActivity() {
         val webView = cachedWebView ?: findWebView()
         if (webView != null) {
           cachedWebView = webView
-          tryNavigateToRoom()
+          rejouer()
         } else {
           window.decorView.postDelayed(this, 200)
         }
@@ -125,54 +131,102 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onNewIntent(intent: Intent) {
+    reprendreNotificationInterface(intent)
     super.onNewIntent(intent)
     setIntent(intent)
     handleNotificationIntent(intent)
   }
 
+  /** Relancé depuis les applis récentes, Android redonne l'intention
+   *  d'origine, extras compris : une notification déjà traitée (une réponse
+   *  déjà envoyée !) ne doit pas l'être une seconde fois. */
+  private fun depuisRecentes(intent: Intent) =
+    intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
+
   private fun handleNotificationIntent(intent: Intent?) {
-    val roomId = intent?.getStringExtra("open_room_id") ?: return
+    if (intent == null || depuisRecentes(intent)) return
+    val roomId = intent.getStringExtra("open_room_id") ?: return
     android.util.Log.i("SionPush", "handleNotificationIntent: roomId=$roomId")
     intent.removeExtra("open_room_id")
     // Jusqu'au message lui-même, pas seulement le salon.
-    pendingEventId = intent.getStringExtra("open_event_id")
+    val eventId = intent.getStringExtra("open_event_id")
     intent.removeExtra("open_event_id")
 
     // Clear all message notifications
     val manager = getSystemService(NotificationManager::class.java)
     manager.cancelAll()
 
-    // Store pending room ID — will be processed when WebView is ready
-    pendingRoomId = roomId
-    tryNavigateToRoom()
+    appelerPage("window.__SION_OPEN_ROOM__(${JSONObject.quote(roomId)}, ${eventId?.let { JSONObject.quote(it) } ?: "undefined"})")
   }
 
-  private fun tryNavigateToRoom() {
-    val roomId = pendingRoomId ?: return
-    val webView = cachedWebView ?: return
+  /**
+   * Notification posée par l'interface (`tauri-plugin-notification`),
+   * touchée ou répondue. Le module la transmet à la page par un événement,
+   * sans le garder : appli fermée, la page n'écoutait pas encore, et le
+   * toucher n'ouvrait rien — une réponse tapée dans la notification se
+   * perdait. Lue ici, retirée de l'intention pour que le module ne la
+   * transmette pas en double, puis rejouée dans la page une fois prête.
+   */
+  private fun reprendreNotificationInterface(intent: Intent?) {
+    if (intent == null || depuisRecentes(intent)) return
+    val id = intent.getIntExtra("NotificationId", Int.MIN_VALUE)
+    if (id == Int.MIN_VALUE) return
+    val action = intent.getStringExtra("NotificationUserAction")
+    val texte = androidx.core.app.RemoteInput.getResultsFromIntent(intent)
+      ?.getCharSequence("NotificationRemoteInput")?.toString()?.trim()
+    val extra = try {
+      JSONObject(intent.getStringExtra("LocalNotficationObject") ?: "{}").optJSONObject("extra")
+    } catch (_: Exception) { null }
+    intent.removeExtra("NotificationId")
+    intent.removeExtra("NotificationUserAction")
+    intent.removeExtra("LocalNotficationObject")
+    androidx.core.app.NotificationManagerCompat.from(this).cancel(id)
 
+    val salon = extra?.optString("roomId").orEmpty()
+    if (salon.isEmpty()) return
+    val evenement = extra?.optString("eventId").orEmpty()
+    android.util.Log.i("SionPush", "notification de l'interface : action=$action salon=$salon")
+    val q = JSONObject::quote
+    if (action == "reply") {
+      if (!texte.isNullOrEmpty()) appelerPage("window.__SION_REPONDRE__(${q(salon)}, ${q(evenement)}, ${q(texte)})")
+    } else {
+      appelerPage("window.__SION_OPEN_ROOM__(${q(salon)}, ${q(evenement)})")
+    }
+  }
+
+  /** Rejoue `appel` dans la page dès que ses points d'entrée existent. */
+  private fun appelerPage(appel: String) {
+    enAttente.add(appel)
+    rejouer()
+  }
+
+  private fun rejouer() {
+    val webView = cachedWebView ?: return
+    if (rejeuEnCours || enAttente.isEmpty()) return
+    rejeuEnCours = true
     var attempts = 0
     val poller = object : Runnable {
       override fun run() {
-        if (pendingRoomId == null) return
         attempts++
-        android.util.Log.d("SionPush", "Polling for __SION_OPEN_ROOM__ attempt $attempts")
         webView.evaluateJavascript(
-          "typeof window.__SION_OPEN_ROOM__ === 'function' ? 'ready' : 'no'"
+          "typeof window.__SION_OPEN_ROOM__ === 'function' && typeof window.__SION_REPONDRE__ === 'function' ? 'ready' : 'no'"
         ) { result ->
           if (result.contains("ready")) {
-            android.util.Log.i("SionPush", "Navigating to room: $roomId")
-            val evenement = pendingEventId?.let { ", '$it'" } ?: ""
-            webView.evaluateJavascript("window.__SION_OPEN_ROOM__('$roomId'$evenement)", null)
-            pendingRoomId = null
-            pendingEventId = null
-          } else if (attempts < 30) {
+            android.util.Log.i("SionPush", "page prête : ${enAttente.size} appel(s) rejoué(s)")
+            for (appel in enAttente) webView.evaluateJavascript(appel, null)
+            enAttente.clear()
+            rejeuEnCours = false
+          } else if (attempts < 60) {
             webView.postDelayed(this, 1000)
+          } else {
+            android.util.Log.w("SionPush", "page jamais prête : ${enAttente.size} appel(s) abandonné(s)")
+            enAttente.clear()
+            rejeuEnCours = false
           }
         }
       }
     }
-    webView.postDelayed(poller, 1000)
+    webView.post(poller)
   }
 
   override fun onDestroy() {

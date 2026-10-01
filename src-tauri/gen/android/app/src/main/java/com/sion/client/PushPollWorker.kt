@@ -1,153 +1,52 @@
 package com.sion.client
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import android.os.Build
-import androidx.core.app.NotificationCompat
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Periodic worker that polls ntfy for new push notifications.
- * Uses WorkManager which survives app kill and battery optimization.
+ * Relève périodique du sujet ntfy (WorkManager, toutes les 15 minutes) : le
+ * filet de l'écoute continue, quand Android l'a arrêtée. Elle reprend depuis
+ * le dernier avis traité, par l'un ou par l'autre (`PushRecus`).
  */
 class PushPollWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
 
-    companion object {
-        const val CHANNEL_ID = "sion_push_messages"
-        private const val PREF_LAST_ID = "last_push_id"
-    }
-
     override fun doWork(): Result {
-        val prefs = applicationContext.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
-        val topicUrl = prefs.getString("topic_url", null) ?: return Result.success()
-        val lastId = prefs.getString(PREF_LAST_ID, null)
+        val topicUrl = applicationContext.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
+            .getString("topic_url", null) ?: return Result.success()
 
-        // Use local ntfy URL to avoid NAT hairpinning
-        // Adresse publique : l'IP locale en clair (HTTP) est refusée par Android
-        // et injoignable hors de la maison.
-        val localTopicUrl = topicUrl
-
-        try {
-            val pollUrl = if (lastId != null) {
-                "$localTopicUrl/json?poll=1&since=$lastId"
-            } else {
-                "$localTopicUrl/json?poll=1&since=30s"
+        // L'écoute continue a disparu (processus tué) : on la relance,
+        // quand Android permet de démarrer un service de premier plan
+        // depuis l'arrière-plan (appli exemptée d'optimisation de batterie).
+        if (!NtfyListenerService.isRunning) {
+            try {
+                NtfyListenerService.start(applicationContext, topicUrl)
+            } catch (e: Exception) {
+                android.util.Log.w("SionPush", "relève : écoute non relancée (${e.javaClass.simpleName})")
             }
+        }
 
-            val conn = URL(pollUrl).openConnection() as HttpURLConnection
+        val depuis = PushRecus.dernier(applicationContext) ?: "30s"
+        try {
+            val conn = URL("$topicUrl/json?poll=1&since=$depuis").openConnection() as HttpURLConnection
             conn.connectTimeout = 10_000
             conn.readTimeout = 10_000
-
-            if (conn.responseCode != 200) return Result.retry()
-
-            val body = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
-
-            if (body.isBlank()) return Result.success()
-
-            var newLastId: String? = null
-
-            for (line in body.lines()) {
-                if (line.isBlank()) continue
-                try {
-                    val ntfyMsg = org.json.JSONObject(line)
-                    val event = ntfyMsg.optString("event", "")
-                    val id = ntfyMsg.optString("id", "")
-                    if (event != "message") continue
-                    if (id.isNotEmpty()) newLastId = id
-
-                    val message = ntfyMsg.optString("message", "")
-                    if (message.isEmpty()) continue
-
-                    val pushPayload = org.json.JSONObject(message)
-                    val notification = pushPayload.optJSONObject("notification") ?: continue
-                    val roomId = notification.optString("room_id", "")
-                    val unread = notification.optJSONObject("counts")?.optInt("unread", 0) ?: 0
-
-                    // Check if app is in foreground
-                    val am = applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-                    val foreground = am.runningAppProcesses?.any {
-                        it.processName == applicationContext.packageName &&
-                        it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-                    } ?: false
-
-                    if (!foreground) {
-                        val mode = applicationContext.getSharedPreferences("sion_push", Context.MODE_PRIVATE)
-                            .getString("notification_mode", "all") ?: "all"
-                        val isDM = applicationContext.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
-                            .getString("${roomId}_dm", null) == "true"
-                        val shouldShow = when (mode) {
-                            "minimal" -> isDM
-                            "mentions" -> isDM
-                            else -> true
-                        }
-                        if (shouldShow) showNotification(roomId, unread)
+            try {
+                if (conn.responseCode != 200) return Result.retry()
+                conn.inputStream.bufferedReader().useLines { lignes ->
+                    for (ligne in lignes) {
+                        if (ligne.isNotBlank()) PushRecus.traiter(applicationContext, ligne)
                     }
-                } catch (_: Exception) { }
+                }
+            } finally {
+                conn.disconnect()
             }
-
-            if (newLastId != null) {
-                prefs.edit().putString(PREF_LAST_ID, newLastId).apply()
-            }
-
         } catch (e: Exception) {
-            android.util.Log.e("SionPush", "Poll error: ${e.message}")
+            android.util.Log.w("SionPush", "relève : ${e.javaClass.simpleName}: ${e.message}")
             return Result.retry()
         }
-
         return Result.success()
-    }
-
-    private fun showNotification(roomId: String, unread: Int) {
-        createChannel()
-
-        val roomPrefs = applicationContext.getSharedPreferences("sion_rooms", Context.MODE_PRIVATE)
-        val roomName = roomPrefs.getString(roomId, null)
-
-        val title = roomName ?: "Sion"
-        val body = if (unread > 1) "$unread messages non lus" else "Nouveau message"
-
-        val openIntent = PendingIntent.getActivity(
-            applicationContext, 0,
-            Intent(applicationContext, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                putExtra("open_room_id", roomId)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notifId = 3000 + (roomId.hashCode() and 0xFFFF)
-        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setSmallIcon(R.drawable.ic_voice_notification)
-            .setContentIntent(openIntent)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setNumber(unread)
-            .build()
-
-        val manager = applicationContext.getSystemService(NotificationManager::class.java)
-        manager.notify(notifId, notification)
-    }
-
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = applicationContext.getSystemService(NotificationManager::class.java)
-            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-                manager.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
-                        description = "Notifications de nouveaux messages"
-                    }
-                )
-            }
-        }
     }
 }
