@@ -232,6 +232,10 @@ class AdmProxy : public webrtc::AudioDeviceModule {
   // Must be called with mutex_ held.
   // Returns true if ADM is available after the call.
   bool EnsurePlatformAdmCreated();
+#else
+  // Re-initializes the Platform ADM if a previous Terminate() left it
+  // uninitialized (it then reports -1 devices forever). Mutex held. Sion.
+  void ReinitPlatformAdmIfTerminated();
 #endif
 
   const webrtc::Environment env_;

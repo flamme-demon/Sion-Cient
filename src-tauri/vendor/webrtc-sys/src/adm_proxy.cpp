@@ -143,6 +143,31 @@ bool AdmProxy::EnsurePlatformAdmCreated() {
 }
 #endif
 
+#if !defined(__ANDROID__)
+// Ordinateur : l'ADM de la plateforme, créé une fois à la construction, peut
+// avoir été TERMINÉ depuis — `Terminate()` du proxy le termine aussi, par
+// exemple quand une première connexion au serveur vocal expire et que LiveKit
+// recrée sa fabrique de pairs (Sion, 26/09 et 01/10). Rien ne le
+// réinitialisait : il répondait « -1 périphérique » et refusait tout choix de
+// périphérique pour toute la vie du processus — silence complet, que quitter
+// et rejoindre ne réparait pas. On le réinitialise ici, transport rebranché
+// (même logique que la création paresseuse d'Android). Mutex tenu.
+void AdmProxy::ReinitPlatformAdmIfTerminated() {
+  if (!platform_adm_ || platform_adm_->Initialized()) {
+    return;
+  }
+  RTC_LOG(LS_WARNING) << "AdmProxy: Platform ADM terminated, re-initializing";
+  int32_t init_result = platform_adm_->Init();
+  if (init_result != 0) {
+    RTC_LOG(LS_ERROR) << "AdmProxy: Platform ADM re-Init() failed with error=" << init_result;
+    return;
+  }
+  if (audio_transport_) {
+    platform_adm_->RegisterAudioCallback(audio_transport_);
+  }
+}
+#endif
+
 bool AdmProxy::AcquirePlatformAdm() {
   webrtc::MutexLock lock(&mutex_);
 
@@ -158,6 +183,7 @@ bool AdmProxy::AcquirePlatformAdm() {
     RTC_LOG(LS_ERROR) << "AdmProxy::AcquirePlatformAdm() - Platform ADM not available";
     return false;
   }
+  ReinitPlatformAdmIfTerminated();
 #endif
 
   int old_ref_count = platform_adm_ref_count_;
@@ -309,7 +335,14 @@ int32_t AdmProxy::RegisterAudioCallback(webrtc::AudioTransport* transport) {
 }
 
 int32_t AdmProxy::Init() {
-  // Init is a no-op - Platform ADM is created lazily via AcquirePlatformAdm()
+  // Platform ADM is created lazily via AcquirePlatformAdm() on Android. On
+  // desktop it exists from construction, but may have been terminated by a
+  // previous Terminate(): the voice engine calls Init() again before
+  // selecting devices (adm_helpers::Init), so re-initialize it here.
+#if !defined(__ANDROID__)
+  webrtc::MutexLock lock(&mutex_);
+  ReinitPlatformAdmIfTerminated();
+#endif
   return 0;
 }
 

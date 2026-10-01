@@ -38,6 +38,13 @@ The original sources and notices are retained. Sion modifications:
   (`EnsurePlatformAdmCreated`), reçoit le transport audio déjà enregistré
   sur le proxy. Sans ça, il tournait sans transport (« Invalid audio
   transport ») : aucun son dans aucun sens sur Android (29/09).
+- `src/adm_proxy.cpp`, `include/livekit/adm_proxy.h` (ordinateur) :
+  `ReinitPlatformAdmIfTerminated()`, appelé par `Init()` et
+  `AcquirePlatformAdm()`. Un `Terminate()` du proxy (fabrique de pairs
+  recréée quand une première connexion au serveur vocal expire) laissait
+  l'ADM de la plateforme terminé : « -1 recording devices, -1 playout
+  devices », « Unable to set playout device », silence jusqu'au redémarrage
+  de l'appli (26/09, 01/10).
 - `audio_track.{h,cpp,rs}`: expose the existing WebRTC
   `AudioSourceInterface::SetVolume` operation for per-share local playback
   gain. The small safe Rust forwarding method lives in `vendor/libwebrtc`.
