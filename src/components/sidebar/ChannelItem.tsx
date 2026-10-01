@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SpeakerIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon, PhoneIcon } from "../icons";
+import { SpeakerIcon, SpeakerOffIcon, MicIcon, HeadphoneIcon, CrownIcon, ShieldIcon, MessageBubbleIcon, SignalBarsIcon, PhoneIcon } from "../icons";
 import { ChannelIcon } from "./ChannelIcon";
 import { UserAvatar } from "./UserAvatar";
 import { useAppStore, APP_SESSION_START_TS } from "../../stores/useAppStore";
@@ -35,6 +35,19 @@ function roleColor(role: UserRole): string {
  *  du moteur Rust déjà chargée ailleurs dans la page doit pouvoir être
  *  rechargée (voir repriseImages.ts) ; un fond CSS qui échoue reste vide,
  *  sans événement d'erreur. */
+/** Personne dont on a coupé le son pour soi (menu du participant) : on le
+ *  voit dans la liste, sans quoi on l'oublie et on croit qu'elle se tait. */
+function CoupeePourMoi({ identite }: { identite: string }) {
+  const utilisateur = identite.match(/^(@[^:]+:[^:]+)/)?.[1] || identite;
+  const coupee = useSettingsStore((s) => s.volumesParticipants[utilisateur]?.coupe ?? false);
+  if (!coupee) return null;
+  return (
+    <span title="Son coupé pour moi" style={{ display: 'flex', color: 'var(--color-error)', flexShrink: 0 }}>
+      <SpeakerOffIcon />
+    </span>
+  );
+}
+
 function ContenuMiniAvatar({ url, nom }: { url?: string; nom: string }) {
   if (!url) return <>{(Array.from(nom)[0] || '?').toUpperCase()}</>;
   return <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />;
@@ -611,6 +624,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
                     AFK
                   </span>
                 )}
+                <CoupeePourMoi identite={u.id} />
                 {u.muted && !u.deafened && <MicIcon muted />}
                 {u.deafened && <HeadphoneIcon muted />}
                 {u.connectionQuality && u.connectionQuality !== "excellent" && u.connectionQuality !== "unknown" && (
@@ -686,6 +700,7 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
                 <span style={{ display: 'flex', gap: 4, alignItems: 'center', opacity: 0.5 }}>
                   {roleIcon(u.role)}
                   {/* Hide redundant mic/headphone icons when AFK badge already conveys the state */}
+                  <CoupeePourMoi identite={u.id} />
                   {u.muted && !u.deafened && <MicIcon muted />}
                   {u.deafened && <HeadphoneIcon muted />}
                   {u.connectionQuality && u.connectionQuality !== "excellent" && u.connectionQuality !== "unknown" && (

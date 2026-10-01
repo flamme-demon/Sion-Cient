@@ -439,7 +439,12 @@
     "roleModerator": "Moderator",
     "roleUser": "Member",
     "suspend": "Suspend account",
-    "unsuspend": "Unsuspend account"
+    "unsuspend": "Unsuspend account",
+    "volume": "Volume",
+    "muteForMe": "Mute for me",
+    "unmuteForMe": "Unmute for me",
+    "mutedForMe": "Muted for me",
+    "volumeReset": "Double-click: 100%"
   },
   "auth": {
     "login": "Log in",

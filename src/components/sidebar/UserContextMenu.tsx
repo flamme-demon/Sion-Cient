@@ -10,6 +10,7 @@ import { moteurRust } from "../../services/moteur";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useEntreMembresStore, rafraichirIgnores } from "../../stores/useEntreMembresStore";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 
 interface UserContextMenuProps {
   userId: string;
@@ -183,6 +184,12 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
   };
 
   const connectedVoiceChannel = useAppStore((s) => s.connectedVoiceChannel);
+
+  // Écoute de cette personne, réglée pour soi (tous ses appareils).
+  const reglageEcoute = useSettingsStore((s) => s.volumesParticipants[matrixUserId]);
+  const setVolumeParticipant = useSettingsStore((s) => s.setVolumeParticipant);
+  const volumeEcoute = reglageEcoute?.volume ?? 1;
+  const coupeePourMoi = reglageEcoute?.coupe ?? false;
 
   // Open the Sion-styled kick modal (replaces the native window.prompt).
   const handleKickVoice = () => {
@@ -430,6 +437,39 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
         {t("contextMenu.latency")}
       </button>
       {showLatency && <LatencySparkline participantIdentity={rawUserId} />}
+
+      {/* Écoute de cette personne, pour soi seul : volume et coupure. Proposée
+          quand elle est en vocal, ou qu'un réglage existe déjà. */}
+      {!isMyself && (targetInVoice || reglageEcoute) && (
+        <>
+          <div style={{ padding: "6px 14px 8px" }} title={t("contextMenu.volumeReset")}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4, color: "var(--color-on-surface-variant)" }}>
+              <span>{t("contextMenu.volume")}</span>
+              <span style={{ fontVariantNumeric: "tabular-nums", color: coupeePourMoi ? "var(--color-error)" : undefined }}>
+                {coupeePourMoi ? t("contextMenu.mutedForMe") : `${Math.round(volumeEcoute * 100)} %`}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={200}
+              step={5}
+              value={Math.round(volumeEcoute * 100)}
+              disabled={coupeePourMoi}
+              aria-label={t("contextMenu.volume")}
+              onChange={(e) => setVolumeParticipant(matrixUserId, { volume: Number(e.target.value) / 100, coupe: false })}
+              onDoubleClick={() => setVolumeParticipant(matrixUserId, { volume: 1, coupe: false })}
+              style={{ width: "100%", accentColor: "var(--color-primary)", opacity: coupeePourMoi ? 0.4 : 1 }}
+            />
+          </div>
+          <button
+            onClick={() => setVolumeParticipant(matrixUserId, { volume: volumeEcoute, coupe: !coupeePourMoi })}
+            style={itemStyle}
+          >
+            {coupeePourMoi ? t("contextMenu.unmuteForMe") : t("contextMenu.muteForMe")}
+          </button>
+        </>
+      )}
 
       {/* Poke — always sent in the DM with the target user, never in the active channel */}
       {!isMyself && (

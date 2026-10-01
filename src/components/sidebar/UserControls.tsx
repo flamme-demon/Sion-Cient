@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, RefreshIcon } from "../icons";
+import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, RefreshIcon, SignalBarsIcon } from "../icons";
+import { useLiveKitStore } from "../../stores/useLiveKitStore";
+import { estCetAppareil } from "../../utils/identiteVocale";
+import { useLatence } from "../../hooks/useLatence";
 import { UserAvatar } from "./UserAvatar";
 import { AccountPopover } from "./AccountPopover";
 import { useAppStore } from "../../stores/useAppStore";
@@ -36,6 +39,11 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
   const channels = useMatrixStore((s) => s.channels);
   const credentials = useAuthStore((s) => s.credentials);
   const e2eeUnhealthy = useAppStore((s) => s.e2eeUnhealthy);
+  const latence = useLatence(!!connectedVoice);
+  // Qualité de NOTRE connexion, telle que la juge le serveur vocal.
+  const qualiteLocale = useLiveKitStore(
+    (s) => s.participants.find((p) => estCetAppareil(p.identity, credentials?.userId, credentials?.deviceId))?.connectionQuality,
+  );
   const clockSkewMin = useAppStore((s) => s.clockSkewMin);
   const setE2EEUnhealthy = useAppStore((s) => s.setE2EEUnhealthy);
   const { leaveVoiceChannel } = useVoiceChannel();
@@ -260,6 +268,10 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
               {/* Fixe : un clignotement infini force WebKit à redessiner en continu. */}
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--color-green)', flexShrink: 0 }} />
               <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--color-green)', whiteSpace: 'nowrap' }}>{t("voice.connected")}</span>
+              {qualiteLocale && qualiteLocale !== "unknown" && <SignalBarsIcon quality={qualiteLocale} size={13} />}
+              {latence != null && (
+                <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{latence} ms</span>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
               {/* Recovery: re-publish our voice presence + E2EE keys without

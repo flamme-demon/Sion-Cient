@@ -61,7 +61,18 @@ export function migrateSettingsState(persistedState: unknown): Partial<SettingsS
   };
 }
 
+/** Écoute d'une personne en vocal, réglée pour soi seul. */
+export interface ReglageEcoute {
+  /** 0 à 2 (200 %). */
+  volume: number;
+  /** Son coupé, volume gardé pour le rétablissement. */
+  coupe: boolean;
+}
+
 interface SettingsState {
+  /** Écoute réglée par personne (identifiant Matrix), absente = 100 %. */
+  volumesParticipants: Record<string, ReglageEcoute>;
+  setVolumeParticipant: (utilisateur: string, reglage: ReglageEcoute) => void;
   mutedSpeakAlert: boolean;
   joinMuted: boolean;
   micThreshold: number;
@@ -287,6 +298,7 @@ export const useSettingsStore = create<SettingsState>()(
       transcribeModel: "parakeet-v3",
       transcribeLang: "auto",
       notificationMode: "mentions" as NotificationMode,
+      volumesParticipants: {},
 
       setMutedSpeakAlert: (v) => set({ mutedSpeakAlert: v }),
       setJoinMuted: (v) => set({ joinMuted: v }),
@@ -376,6 +388,16 @@ export const useSettingsStore = create<SettingsState>()(
         // l'app reste le français si la locale n'est pas reconnue).
         const target = v || navigator.language?.slice(0, 2) || "fr";
         import("i18next").then((i18n) => i18n.default.changeLanguage(target));
+      },
+      setVolumeParticipant: (utilisateur, reglage) => {
+        set((st) => {
+          const volumes = { ...st.volumesParticipants };
+          // Revenu à la normale : rien à garder.
+          if (!reglage.coupe && reglage.volume === 1) delete volumes[utilisateur];
+          else volumes[utilisateur] = reglage;
+          return { volumesParticipants: volumes };
+        });
+        void import("../services/volumesParticipants").then((m) => m.appliquerVolume(utilisateur, reglage));
       },
       setNotificationMode: (v) => {
         set({ notificationMode: v });

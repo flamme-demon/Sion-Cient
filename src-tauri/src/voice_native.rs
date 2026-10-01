@@ -2585,6 +2585,60 @@ pub fn voice_native_set_screenshare_video_visible(
     }
 }
 
+/// Règle localement le volume d'écoute d'une personne (son micro, tous ses
+/// appareils) : 0 la coupe, 1 est normal, 2 le double. Gardé hors du moteur
+/// et réappliqué aux pistes suivantes, appel suivant compris.
+///
+/// Sans `with_engine_shared` : faute de moteur (hors appel, connexion en
+/// cours), celui-ci déclare la session morte et la réinitialise.
+#[tauri::command]
+pub fn voice_native_set_participant_volume(
+    utilisateur: String,
+    volume: f32,
+) -> Result<usize, String> {
+    #[cfg(feature = "native-voice")]
+    {
+        crate::voice_engine::regler_volume_participant(&utilisateur, volume)?;
+        let guard = engine_holder().lock().unwrap_or_else(|e| e.into_inner());
+        let reglees = match guard.as_ref() {
+            Some(engine) => engine.appliquer_volume_participant(&utilisateur, volume)?,
+            None => 0,
+        };
+        log::info!(
+            "[Sion][voix-native] volume de {} : {:.0}% ({} piste(s))",
+            utilisateur,
+            volume * 100.0,
+            reglees
+        );
+        return Ok(reglees);
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (&utilisateur, &volume);
+        Err("voix native indisponible".to_string())
+    }
+}
+
+/// Latence jusqu'au serveur vocal, en millisecondes ; `None` hors appel ou
+/// tant que WebRTC n'a rien mesuré. Même prudence que ci-dessus : jamais
+/// `with_engine_shared`.
+#[tauri::command]
+pub async fn voice_native_latence() -> Result<Option<u32>, String> {
+    #[cfg(feature = "native-voice")]
+    {
+        let piste = {
+            let guard = engine_holder().lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().and_then(|engine| engine.piste_pour_latence())
+        };
+        return Ok(match piste {
+            Some(p) => p.latence_ms().await,
+            None => None,
+        });
+    }
+    #[allow(unreachable_code)]
+    Ok(None)
+}
+
 /// Règle localement le gain du son d'un partage reçu. WebRTC accepte un gain
 /// par source distante ; la valeur est mémorisée pour les republications.
 #[tauri::command]

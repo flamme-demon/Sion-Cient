@@ -439,7 +439,12 @@
     "roleModerator": "Modérateur",
     "roleUser": "Membre",
     "suspend": "Suspendre le compte",
-    "unsuspend": "Réactiver le compte"
+    "unsuspend": "Réactiver le compte",
+    "volume": "Volume",
+    "muteForMe": "Couper son son (pour moi)",
+    "unmuteForMe": "Rétablir son son",
+    "mutedForMe": "Coupé pour moi",
+    "volumeReset": "Double-clic : 100 %"
   },
   "auth": {
     "login": "Se connecter",

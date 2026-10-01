@@ -3,6 +3,7 @@ import { MicIcon, HeadphoneIcon, DisconnectIcon } from "../icons";
 import { useAppStore } from "../../stores/useAppStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useVoiceChannel } from "../../hooks/useVoiceChannel";
+import { useLatence } from "../../hooks/useLatence";
 import { setVoiceNativeCaptureMaintenue } from "../../services/voiceNativeService";
 
 async function requestMicPermission(): Promise<boolean> {
@@ -25,6 +26,7 @@ export function MobileVoiceBar() {
   const toggleDeafen = useAppStore((s) => s.toggleDeafen);
   const channels = useMatrixStore((s) => s.channels);
   const { leaveVoiceChannel } = useVoiceChannel();
+  const latence = useLatence(!!connectedVoice);
 
   const [pttActive, setPttActive] = useState(false);
   const pttTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -113,6 +115,11 @@ export function MobileVoiceBar() {
         }}>
           {activeVoice.name}
         </span>
+        {latence != null && (
+          <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+            · {latence} ms
+          </span>
+        )}
       </div>
 
       {/* Bottom row: controls + PTT + disconnect */}

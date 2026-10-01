@@ -140,6 +140,9 @@ async function bootstrap() {
   }
   // Keep the settings snapshot in app-data fresh as the user changes them.
   startSettingsMirror();
+  // Volumes réglés par personne : le moteur vocal ne les garde que le temps
+  // du processus.
+  void import("./services/volumesParticipants").then((m) => m.appliquerTousLesVolumes()).catch(() => {});
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <App />

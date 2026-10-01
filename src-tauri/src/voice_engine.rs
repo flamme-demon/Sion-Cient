@@ -584,6 +584,103 @@ fn set_remote_audio_volume(
     track.set_volume(volume as f64)
 }
 
+/// Volume d'écoute du micro de chaque personne (identifiant Matrix), réglé
+/// pour soi : 0 = coupée, jusqu'à 2 ; absente = 100 %. Hors du moteur, qui
+/// est recréé à chaque appel : le réglage doit survivre d'un appel à l'autre.
+fn volumes_participants() -> &'static Mutex<std::collections::HashMap<String, f32>> {
+    static VOLUMES: std::sync::OnceLock<Mutex<std::collections::HashMap<String, f32>>> =
+        std::sync::OnceLock::new();
+    VOLUMES.get_or_init(Default::default)
+}
+
+/// Règle le volume d'écoute d'une personne, pour tous ses appareils et pour
+/// les pistes à venir (réappliqué à chaque souscription : sourdine,
+/// reconnexion, republication, appel suivant).
+pub fn regler_volume_participant(utilisateur: &str, volume: f32) -> Result<(), String> {
+    if !volume.is_finite() || !(0.0..=2.0).contains(&volume) {
+        return Err("volume invalide (0 à 2 attendu)".into());
+    }
+    let mut volumes = volumes_participants().lock().unwrap_or_else(|e| e.into_inner());
+    if volume == 1.0 {
+        volumes.remove(utilisateur);
+    } else {
+        volumes.insert(utilisateur.to_string(), volume);
+    }
+    Ok(())
+}
+
+/// Volume réglé pour l'identité LiveKit `identite`, s'il y en a un.
+fn volume_participant(identite: &str) -> Option<f32> {
+    let volumes = volumes_participants().lock().unwrap_or_else(|e| e.into_inner());
+    volumes
+        .iter()
+        .find(|(utilisateur, _)| identite_de(identite, utilisateur))
+        .map(|(_, v)| *v)
+}
+
+/// Piste audio dont on lit les statistiques (voir `piste_pour_latence`).
+pub enum PisteLatence {
+    Locale(LocalAudioTrack),
+    Distante(RemoteAudioTrack),
+}
+
+impl PisteLatence {
+    /// Aller-retour réseau jusqu'au serveur vocal, en millisecondes.
+    pub async fn latence_ms(&self) -> Option<u32> {
+        let stats = match self {
+            PisteLatence::Locale(t) => t.get_stats().await,
+            PisteLatence::Distante(t) => t.get_stats().await,
+        };
+        // Une seule ligne par lancement : relue toutes les 2 s, une erreur
+        // durable noierait le journal.
+        static SIGNALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let latence = match stats {
+            Ok(stats) => latence_des_stats(&stats),
+            Err(e) => {
+                if !SIGNALE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    log::warn!("[Sion][voix-native] statistiques de latence illisibles : {e}");
+                }
+                return None;
+            }
+        };
+        if latence.is_some() && !SIGNALE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::info!("[Sion][voix-native] latence mesurée : {} ms", latence.unwrap_or(0));
+        }
+        latence
+    }
+}
+
+/// Latence de la paire de candidats ICE en service (celle que WebRTC a
+/// retenue), telle que la mesurent ses vérifications STUN : l'aller-retour
+/// réel des paquets audio jusqu'au serveur vocal. La 1.x affichait celle du
+/// canal de signalisation, que le SDK Rust ne donne pas.
+fn latence_des_stats(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<u32> {
+    use livekit::webrtc::stats::{IceCandidatePairState, RtcStats};
+    let paires = stats.iter().filter_map(|s| match s {
+        RtcStats::CandidatePair(p) if p.candidate_pair.current_round_trip_time > 0.0 => {
+            Some(&p.candidate_pair)
+        }
+        _ => None,
+    });
+    let mut repli = None;
+    for p in paires {
+        if p.nominated && p.state == Some(IceCandidatePairState::Succeeded) {
+            return Some((p.current_round_trip_time * 1000.0).round() as u32);
+        }
+        repli.get_or_insert((p.current_round_trip_time * 1000.0).round() as u32);
+    }
+    repli
+}
+
+/// L'identité LiveKit `@user:hs:APPAREIL` est-elle un appareil de
+/// `utilisateur` (`@user:hs`) ?
+fn identite_de(identite: &str, utilisateur: &str) -> bool {
+    identite == utilisateur
+        || identite
+            .strip_prefix(utilisateur)
+            .is_some_and(|reste| reste.starts_with(':'))
+}
+
 /// Calcule les transitions du rond vert à partir de la liste d'orateurs
 /// fournie par LiveKit. La comparaison par identité évite de lier le niveau
 /// d'une piste décodée au mauvais participant quand plusieurs pistes audio
@@ -2854,6 +2951,62 @@ impl LiveKitEngine {
         Ok(found)
     }
 
+    /// Applique aux pistes micro déjà reçues de `utilisateur` le volume
+    /// réglé par `regler_volume_participant`. Rend le nombre de pistes.
+    pub fn appliquer_volume_participant(&self, utilisateur: &str, volume: f32) -> Result<usize, String> {
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(room) = room_guard.as_ref() else {
+            return Ok(0);
+        };
+        let mut reglees = 0;
+        for participant in room.remote_participants().values() {
+            if !identite_de(participant.identity().as_str(), utilisateur) {
+                continue;
+            }
+            for publication in participant.track_publications().values() {
+                if publication.source() != TrackSource::Microphone {
+                    continue;
+                }
+                if let Some(RemoteTrack::Audio(track)) = publication.track() {
+                    if !set_remote_audio_volume(&track.rtc_track(), volume) {
+                        return Err("gain refusé par WebRTC".into());
+                    }
+                    reglees += 1;
+                }
+            }
+        }
+        Ok(reglees)
+    }
+
+    /// Piste dont les statistiques donnent la latence : notre micro publié,
+    /// à défaut un micro reçu. Clonée, pour attendre les statistiques sans
+    /// garder le verrou de la salle.
+    pub fn piste_pour_latence(&self) -> Option<PisteLatence> {
+        let room_guard = self.room.lock().unwrap_or_else(|e| e.into_inner());
+        let room = room_guard.as_ref()?;
+        let locale = room
+            .local_participant()
+            .track_publications()
+            .into_values()
+            .find(|p| p.source() == TrackSource::Microphone)
+            .and_then(|p| match p.track() {
+                Some(LocalTrack::Audio(t)) => Some(PisteLatence::Locale(t)),
+                _ => None,
+            });
+        locale.or_else(|| {
+            room.remote_participants().values().find_map(|participant| {
+                participant.track_publications().values().find_map(|p| {
+                    match (p.source(), p.track()) {
+                        (TrackSource::Microphone, Some(RemoteTrack::Audio(t))) => {
+                            Some(PisteLatence::Distante(t))
+                        }
+                        _ => None,
+                    }
+                })
+            })
+        })
+    }
+
     /// État local (mute + volume) du son de partage d'un expéditeur — relu
     /// par le front au chargement de la webview : un reload JS ne doit pas
     /// perdre les coupures réglées au niveau moteur (sinon l'UI affiche
@@ -3105,6 +3258,14 @@ impl LiveKitEngine {
                                 continue;
                             }
                             log::info!("[Sion][voix-native] piste audio souscrite {} ({}) chiffrement={:?}", sid, sender, publication.encryption_type());
+                            // Volume réglé pour cette personne (coupée
+                            // comprise) : une nouvelle piste repart à 100 %.
+                            let reglage = volume_participant(&sender);
+                            if let Some(volume) = reglage {
+                                if !set_remote_audio_volume(&audio_track.rtc_track(), volume) {
+                                    log::warn!("[Sion][voix-native] volume de {} refusé", sender);
+                                }
+                            }
                             // Resync : une republication (fin de sourdine
                             // distante) démarre non-mutée sans TrackUnmuted.
                             let _ = tx.send(VoiceEngineEvent::TrackMutedChanged {
@@ -3501,6 +3662,49 @@ mod tests {
     /// Patch du libwebrtc embarqué : des statistiques que serde refuse — le
     /// « key must be a string » du 23/09 — deviennent une erreur au lieu
     /// d'abattre Sion depuis un rappel C++.
+    #[test]
+    fn un_volume_vaut_pour_tous_les_appareils_de_la_personne_et_elle_seule() {
+        assert!(identite_de("@picsou:sionchat.fr:ABCDEF", "@picsou:sionchat.fr"));
+        assert!(identite_de("@picsou:sionchat.fr", "@picsou:sionchat.fr"));
+        // Un préfixe commun n'est pas la même personne.
+        assert!(!identite_de("@picsou2:sionchat.fr:ABCDEF", "@picsou:sionchat.fr"));
+        assert!(!identite_de("@picsou:sionchat.fr.evil:X", "@picsou:sionchat.fr"));
+    }
+
+    #[test]
+    fn la_latence_est_celle_de_la_paire_ice_retenue() {
+        use livekit::webrtc::stats::{CandidatePairStats, IceCandidatePairState, RtcStats};
+        let paire = |rtt: f64, retenue: bool| {
+            let mut p = CandidatePairStats::default();
+            p.candidate_pair.current_round_trip_time = rtt;
+            p.candidate_pair.nominated = retenue;
+            p.candidate_pair.state = Some(if retenue {
+                IceCandidatePairState::Succeeded
+            } else {
+                IceCandidatePairState::Waiting
+            });
+            RtcStats::CandidatePair(p)
+        };
+        assert_eq!(latence_des_stats(&[paire(0.120, false), paire(0.0234, true)]), Some(23));
+        // Pas encore de paire retenue : la première mesurée.
+        assert_eq!(latence_des_stats(&[paire(0.0, false), paire(0.041, false)]), Some(41));
+        assert_eq!(latence_des_stats(&[]), None);
+    }
+
+    #[test]
+    fn le_volume_d_une_personne_est_borne_et_garde_hors_appel() {
+        assert_eq!(regler_volume_participant("@volume-essai:hs", 0.0), Ok(()));
+        assert_eq!(volume_participant("@volume-essai:hs:TELEPHONE"), Some(0.0));
+        let engine = LiveKitEngine::new().expect("runtime tokio");
+        assert_eq!(engine.appliquer_volume_participant("@volume-essai:hs", 0.0), Ok(0));
+        // Revenir à 100 % oublie le réglage.
+        assert_eq!(regler_volume_participant("@volume-essai:hs", 1.0), Ok(()));
+        assert_eq!(volume_participant("@volume-essai:hs:TELEPHONE"), None);
+        for invalide in [-0.1, 2.5, f32::NAN] {
+            assert!(regler_volume_participant("@volume-essai:hs", invalide).is_err());
+        }
+    }
+
     #[test]
     fn des_statistiques_illisibles_ne_font_plus_planter() {
         use livekit::webrtc::native::parse_stats;
