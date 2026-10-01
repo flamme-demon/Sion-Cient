@@ -95,12 +95,20 @@ export const useTranscriptStore = create<TranscriptStore>((set) => ({
       const list = s.entries[entry.roomId] || [];
       // Dedup: the same utterance can reach us twice (local echo with a "~"
       // id then the server event, or a decrypt replay). The content
-      // signature is stable across both deliveries, unlike the event id.
-      const sig = `${entry.senderId}|${entry.t0}|${entry.text}`;
-      if (list.some((e) => e.id === entry.id || `${e.senderId}|${e.t0}|${e.text}` === sig)) {
+      // (sender, t0, text) is stable across both deliveries, unlike the event
+      // id — compared field by field: building a signature string for every
+      // stored entry on every add was quadratic (01/10).
+      if (list.some((e) => e.id === entry.id
+        || (e.senderId === entry.senderId && e.t0 === entry.t0 && e.text === entry.text))) {
         return s;
       }
-      let next = [...list, entry].sort((a, b) => a.t0 - b.t0);
+      // Inserted in place (segments nearly always arrive in order) rather
+      // than re-sorting the whole list on every add; after any equal t0, as
+      // the stable sort did.
+      let i = list.length;
+      while (i > 0 && list[i - 1].t0 > entry.t0) i--;
+      let next = list.slice();
+      next.splice(i, 0, entry);
       if (next.length > MAX_ENTRIES_PER_ROOM) {
         next = next.slice(next.length - MAX_ENTRIES_PER_ROOM);
       }

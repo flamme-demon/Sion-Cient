@@ -46,6 +46,17 @@ describe("addEntry", () => {
     expect(list.map((e) => e.id)).toEqual(["$a", "$b"]);
   });
 
+  it("inserts late segments in place; equal t0 keeps arrival order", () => {
+    const s = useTranscriptStore.getState();
+    s.addEntry(entry({ id: "$1", t0: 10, text: "un" }));
+    s.addEntry(entry({ id: "$3", t0: 30, text: "trois" }));
+    s.addEntry(entry({ id: "$2", t0: 20, text: "deux" })); // arrivé en retard
+    s.addEntry(entry({ id: "$0", t0: 5, text: "zéro" })); // plus ancien que tout
+    s.addEntry(entry({ id: "$2b", t0: 20, text: "deux bis" })); // même t0 : après
+    const list = useTranscriptStore.getState().entries[ROOM];
+    expect(list.map((e) => e.id)).toEqual(["$0", "$1", "$2", "$2b", "$3"]);
+  });
+
   it("caps entries per room at 5000, dropping the oldest", () => {
     const s = useTranscriptStore.getState();
     for (let i = 0; i < 5010; i++) {
