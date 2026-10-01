@@ -262,20 +262,31 @@ export function useVoiceChannel() {
         // lui-même au moteur vocal natif.
         // Android : sans le micro, WebRTC ne démarre pas sa capture — et le
         // service d'appel (type « micro ») serait refusé par le système.
+        // Durée de chaque étape, au journal : entre la présence publiée (les
+        // autres nous voient dans le salon) et LiveKit connecté (ils nous
+        // entendent), un retard se voit — 20 s chez Narkow le 01/10.
+        const t0 = performance.now();
+        const etape = (quoi: string) => {
+          const ms = Math.round(performance.now() - t0);
+          void import("@tauri-apps/plugin-log").then(({ info }) => info(`[Sion][voix] entrée : ${quoi} +${ms} ms`)).catch(() => {});
+        };
         if (!(await autoriserMicro())) {
           throw new Error("autorisation du micro refusée");
         }
         const core = await import("../services/matrixCore");
         const connexion = await core.rejoindreVoix(matrixRoomId);
+        etape("jeton LiveKit obtenu, présence publiée");
         activeRustRoomId = matrixRoomId;
         // Cible des réécritures mute / sourdine (`publishLocalVoiceState`).
         sendCallMemberEvent(matrixRoomId, "", "");
         await joinRoom(matrixRoomId);
+        etape("salon rejoint");
         if (!(await isVoiceNativeAvailable())) {
           throw new Error("moteur vocal natif indisponible (build sans --features native-voice)");
         }
         const displayName = credentials?.displayName || credentials?.userId || useMatrixStore.getState().currentUserId || "";
         await connectNative(connexion.url, connexion.jeton, matrixRoomId, displayName, connexion.chiffre, onNativeSessionDisconnected);
+        etape("LiveKit connecté, micro publié");
         if (connexion.chiffre) {
           // Clés arrivées avant la connexion : refusées par un moteur absent.
           const n = await core.rejouerClesVoix();

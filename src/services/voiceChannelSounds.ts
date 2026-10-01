@@ -540,22 +540,40 @@ export function previewCue(cue: Cue) {
 // sont annulés — il n'a jamais semblé absent.
 const LEAVE_GRACE_MS = 1800;
 const pendingLeaves = new Map<string, ReturnType<typeof setTimeout>>();
-/** Pairs revenus pendant leur fenêtre de grâce : leur « join » ne sonne pas. */
-const bouncedBack = new Set<string>();
+/** Pairs revenus pendant leur fenêtre de grâce, et quand. Une annonce de
+ *  retour en double, juste après, ne sonne pas ; passé `BOUNCE_DUP_MS`, la
+ *  marque est périmée. Sans limite, elle taisait la VRAIE arrivée suivante,
+ *  même des minutes plus tard (téléphone de flamme, 01/10). */
+const bouncedBack = new Map<string, number>();
+const BOUNCE_DUP_MS = 3000;
+
+/** Lecture d'un son ; remplaçable par les tests (décisions sans audio). */
+let jouer: (cue: Cue) => void = (cue) => play(cue);
+export function remplacerLecturePourTests(f: ((cue: Cue) => void) | null): void {
+  jouer = f ?? ((cue) => play(cue));
+}
 
 /** Un pair vient d'apparaître dans la liste des participants. */
 export function onParticipantJoined(identity: string) {
+  const now = Date.now();
+  // Revenu : son prochain départ est un nouveau départ, pas le doublon du
+  // précédent. Sans cela, un vrai départ moins de 2,5 s après une
+  // reconnexion était avalé.
+  recentLeaves.delete(identity);
   const pending = pendingLeaves.get(identity);
   if (pending != null) {
     // Clignotement : on annule le départ en attente ET on tait le retour.
     clearTimeout(pending);
     pendingLeaves.delete(identity);
-    bouncedBack.add(identity);
+    bouncedBack.set(identity, now);
     return;
   }
-  // Le retour consomme la marque ; les apparitions suivantes sonnent normalement.
-  if (bouncedBack.delete(identity)) return;
-  playJoinCue();
+  // Une annonce de retour en double, juste après un clignotement, ne sonne
+  // pas ; une marque plus ancienne ne compte plus.
+  const rebond = bouncedBack.get(identity);
+  bouncedBack.delete(identity);
+  if (rebond != null && now - rebond < BOUNCE_DUP_MS) return;
+  jouer("join");
 }
 
 export function onParticipantLeft(identity: string) {
@@ -573,7 +591,7 @@ export function onParticipantLeft(identity: string) {
   if (wasRecentlyKicked(identity)) return;
   const timer = setTimeout(() => {
     pendingLeaves.delete(identity);
-    play(timedOut ? "timeout" : "leave");
+    jouer(timedOut ? "timeout" : "leave");
   }, LEAVE_GRACE_MS);
   pendingLeaves.set(identity, timer);
 }

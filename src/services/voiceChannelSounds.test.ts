@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Régression (16/09) : WebKitGTK ne lit pas directement le schéma custom
 // `tauri://`, et decodeAudioData ne décodait plus que le premier cue après
@@ -51,7 +51,9 @@ vi.mock("../stores/useSettingsStore", () => ({
 }));
 vi.mock("../stores/useAppStore", () => ({ useAppStore: { getState: () => ({ isDeafened: false }) } }));
 
-import { previewCue, resetVoiceCues } from "./voiceChannelSounds";
+import {
+  previewCue, resetVoiceCues, onParticipantJoined, onParticipantLeft, remplacerLecturePourTests,
+} from "./voiceChannelSounds";
 
 const fetchMock = vi.fn();
 
@@ -97,5 +99,48 @@ describe("cues embarqués (schéma custom de la webview)", () => {
 
     await vi.waitFor(() => expect(oscStart).toHaveBeenCalled());
     expect(srcStart).not.toHaveBeenCalled();
+  });
+});
+
+describe("sons d'arrivée et de départ d'un pair", () => {
+  const joues: string[] = [];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    joues.length = 0;
+    remplacerLecturePourTests((cue) => joues.push(cue));
+  });
+  afterEach(() => {
+    remplacerLecturePourTests(null);
+    vi.useRealTimers();
+  });
+
+  it("téléphone de flamme, 01/10 : reconnexion, vrai départ 2 s après, retour 20 s plus tard", () => {
+    const tel = "@flamme:hs:TEL";
+    onParticipantJoined(tel); // 13:25:17
+    expect(joues).toEqual(["join"]);
+    vi.advanceTimersByTime(12_000);
+    onParticipantLeft(tel); // 13:25:29 reconnexion : parti…
+    onParticipantJoined(tel); // …et revenu dans la seconde : rien
+    vi.advanceTimersByTime(2_000);
+    onParticipantLeft(tel); // 13:25:31 : vrai départ
+    vi.advanceTimersByTime(2_000);
+    expect(joues).toEqual(["join", "leave"]);
+    vi.advanceTimersByTime(18_000);
+    onParticipantJoined(tel); // 13:25:51 : vrai retour
+    expect(joues).toEqual(["join", "leave", "join"]);
+  });
+
+  it("filtre toujours un départ annoncé deux fois, et un retour annoncé deux fois", () => {
+    const pair = "@narkow:hs:PC";
+    onParticipantLeft(pair);
+    onParticipantLeft(pair); // même départ, annoncé en double
+    vi.advanceTimersByTime(2_000);
+    expect(joues).toEqual(["leave"]);
+    onParticipantLeft("@b:hs:X");
+    vi.advanceTimersByTime(500);
+    onParticipantJoined("@b:hs:X"); // clignotement : silence
+    onParticipantJoined("@b:hs:X"); // même retour, annoncé en double : silence
+    vi.advanceTimersByTime(2_000);
+    expect(joues).toEqual(["leave"]);
   });
 });
