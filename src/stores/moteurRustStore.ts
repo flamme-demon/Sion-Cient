@@ -113,6 +113,17 @@ export async function demarrerMoteurRust(set: Set, get: Get): Promise<void> {
   await core.surSalons((l) => appliquerSalons(l, false));
   await core.surMessages((f) => appliquerFil(f, false));
   await core.surVerification(appliquerVerification);
+  // Événements propres à Sion (éjection du vocal, transcription de réunion) :
+  // le cœur les relaie, mais personne ne les écoutait — en 2.0 une éjection
+  // du vocal restait sans effet (01/10). Même traitement que le moteur JS.
+  await core.surEvenementsSion((ev) => {
+    void import("../services/evenementsSion").then(({ traiterEvenementSion }) =>
+      traiterEvenementSion(
+        { salon: ev.salon, type: ev.type, sender: ev.sender, ts: ev.ts, content: ev.content, id: ev.eventId },
+        contexteSionRust(get, core, cache),
+      ),
+    ).catch(() => {});
+  });
   await core.surFrappes(entreMembres.definirFrappe);
   await core.surLectures(entreMembres.definirLectures);
 
@@ -237,6 +248,29 @@ function sonnerNouveaux(fil: FilSalon, avant: { id: number | string }[], get: Ge
       else playMessageReceived();
     },
   );
+}
+
+/** Ce que le moteur Rust sait de la session et des membres, pour
+ *  `evenementsSion.ts`. Le niveau d'un expéditeur vient des détails du salon,
+ *  rechargés s'ils ne sont pas en cache : une éjection n'est acceptée que
+ *  d'un modérateur, il faut une réponse sûre. */
+export function contexteSionRust(
+  get: Get,
+  core: typeof import("../services/matrixCore"),
+  cache: typeof import("../services/cacheRust"),
+): import("../services/evenementsSion").ContexteSion {
+  const membre = (salon: string, utilisateur: string) =>
+    cache.detailsSalon(salon)?.membres.find((m) => m.userId === utilisateur);
+  return {
+    moi: () => get().currentUserId,
+    niveau: async (salon, utilisateur) => {
+      const enCache = membre(salon, utilisateur);
+      if (enCache) return enCache.powerLevel;
+      const details = await core.detailsSalon(salon).catch(() => null);
+      return details?.membres.find((m) => m.userId === utilisateur)?.powerLevel ?? 0;
+    },
+    nom: (salon, utilisateur) => membre(salon, utilisateur)?.displayName || undefined,
+  };
 }
 
 /** Tâches de début de session (le « PREPARED » du moteur JS). */

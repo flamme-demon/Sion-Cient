@@ -1,7 +1,17 @@
 # Sion Client 2.0.0-beta.5
 
-Correctifs de la première beta Android. Rien ne change sur PC par rapport à
-la beta 4 : sous Linux et Windows, inutile de la réinstaller.
+Correctifs de la première beta Android, et deux fonctions de Sion qui ne
+marchaient plus depuis le nouveau moteur Matrix (beta 2) : à installer
+partout, PC compris.
+
+## Tous les appareils
+
+- **Éjecter quelqu'un du vocal** n'avait plus aucun effet : la personne
+  visée restait dans l'appel, et les autres n'entendaient pas le son
+  d'éjection. La correction agit chez la personne éjectée : passez tous à la
+  beta 5.
+- **Transcription de réunion en direct** : les phrases des autres
+  participants, et le début ou la fin d'une session, n'arrivaient plus.
 
 ## Android
 

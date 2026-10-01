@@ -12,7 +12,8 @@ import { useAppStore } from "./useAppStore";
 import { useSettingsStore } from "./useSettingsStore";
 import { setCachedRoom, appendCachedEventIds, clearCache } from "../utils/messageCache";
 import { playMessageReceived } from "../services/soundService";
-import { playPokeCue, playKickCue, playMemberKickedCue, noteKicked } from "../services/voiceChannelSounds";
+import { playPokeCue } from "../services/voiceChannelSounds";
+import { traiterEvenementSion, type ContexteSion } from "../services/evenementsSion";
 import { findAdminRoom } from "../services/adminCommandService";
 import { noteServerTimestamp, serverNow, publishClockSkew } from "../services/serverClock";
 import { plateformeMobile } from "../utils/plateforme";
@@ -452,12 +453,6 @@ const POLL_START_TYPES = ["m.poll.start", "org.matrix.msc3381.poll.start"];
 const POLL_RESPONSE_TYPES = ["m.poll.response", "org.matrix.msc3381.poll.response"];
 const POLL_END_TYPES = ["m.poll.end", "org.matrix.msc3381.poll.end"];
 
-// Dedup voice-kick handling by target user within this window. A single kick
-// can reach us twice (local echo + decrypted server event, with different ids)
-// — see handleVoiceKickEvent. Module-level so it also survives any duplicate
-// listener registration (e.g. HMR in dev).
-const KICK_HANDLE_DEDUP_MS = 8000;
-const recentlyHandledKicks = new Map<string, number>();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function readMText(node: any): string {
   return node?.["m.text"] ?? node?.["org.matrix.msc1767.text"] ?? "";
@@ -1063,143 +1058,49 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
     // Track processed event IDs to prevent duplicates from SDK re-emissions
     const processedEventIds = new Set<string>();
 
-    // Voice kick (Sion-specific `com.sion.voice_kick`) reaches us via TWO paths
-    // depending on room encryption: cleartext rooms deliver it on
-    // RoomEvent.Timeline; encrypted rooms deliver it as m.room.encrypted (the
-    // Timeline listener sees the wrong type and skips it) and it only surfaces
-    // once decrypted (MatrixEventEvent.Decrypted handler below). Both call this
-    // shared handler so the victim sound, witness cue and banner fire
-    // identically regardless of delivery path. Previously the decrypted path
-    // only showed the victim banner — so in encrypted rooms the victim heard no
-    // kick sound and witnesses heard no memberKicked cue (only the LiveKit leave).
-    const handleVoiceKickEvent = (event: MatrixEvent) => {
-      if (event.getType?.() !== "com.sion.voice_kick") return;
-      // Ignore stale kick events (initial sync replay, reload, etc.) —
-      // a legitimate kick is delivered within seconds. Without this check,
-      // reloading the app re-triggers the kick banner from replay.
-      const eventTs = event.getTs?.() ?? 0;
-      if (Date.now() - eventTs > 60_000) return;
-      const content = event.getContent?.();
-      if (!content?.kicked_user) return;
-
-      // Dedup the SAME kick reaching us twice. We can't key on event id: when
-      // WE are the kicker in an ENCRYPTED room, the event surfaces once via the
-      // local echo (Timeline, "~!…" id) and again once decrypted (Decrypted,
-      // "$…" server id) — two different ids, so an id-based dedup misses it and
-      // the cue plays twice (cleartext rooms have no decrypt step → single).
-      // Dedup by target within a short window instead: stable across both
-      // deliveries and both ids. Trade-off: a re-kick of the same user within
-      // the window is silenced — negligible.
-      const now = Date.now();
-      const last = recentlyHandledKicks.get(content.kicked_user);
-      if (last != null && now - last < KICK_HANDLE_DEDUP_MS) return;
-      recentlyHandledKicks.set(content.kicked_user, now);
-
-      const roomId = event.getRoomId?.();
-      const room = roomId ? client.getRoom(roomId) : null;
-      if (!room) return;
-
-      // Verify the sender has power level >= 50 (moderator+) before reacting —
-      // applies to BOTH the victim and witness paths so a spoofed kick event
-      // can't trigger a disconnect or a sound.
-      const senderId = event.getSender?.() || "";
-      const senderPL = room.getMember?.(senderId)?.powerLevel ?? 0;
-      if (senderPL < 50) {
-        console.warn("[Sion] Ignoring voice kick from non-moderator:", senderId, "PL:", senderPL);
-        return;
-      }
-
-      const myUserId = client.getUserId();
-      if (content.kicked_user !== myUserId) {
-        // Someone ELSE was kicked. Let the rest of that voice channel hear it
-        // so they know a member was removed — but only if we're connected to
-        // the same channel (don't beep for kicks in rooms we're not in).
-        if (useAppStore.getState().connectedVoiceChannel === room.roomId) {
-          // Suppress the kicked peer's imminent LiveKit leave cue so witnesses
-          // hear only the memberKicked cue, not memberKicked + leave.
-          noteKicked(content.kicked_user);
-          playMemberKickedCue();
-        }
-        return;
-      }
-
-      // We are the one kicked.
-      playKickCue();
-      const kickerName = content.kicked_by_name || senderId;
-      console.warn("[Sion] Voice kicked by:", kickerName);
-
-      // Full clean disconnect: LiveKit + MatrixRTC session
-      const kickedRoom = useAppStore.getState().connectedVoiceChannel;
-      if (kickedRoom) {
-        import("../hooks/useVoiceChannel").then(({ cleanupVoiceOnKick }) => {
-          cleanupVoiceOnKick();
-        });
-      }
-
-      // Show persistent kick message with room reference for reconnect
-      const reason = content.reason ? ` — ${content.reason}` : "";
-      useAppStore.setState({ kickMessage: `Kick par ${kickerName}${reason}`, kickedFromRoom: kickedRoom || room.roomId });
+    // Événements propres à Sion (éjection du vocal, transcription de réunion) :
+    // traitement commun aux deux moteurs (services/evenementsSion.ts). Ils
+    // arrivent par le fil en clair, ou, dans un salon chiffré, une fois
+    // déchiffrés (gestionnaire Decrypted plus bas) : les deux chemins y mènent.
+    const contexteSion: ContexteSion = {
+      moi: () => client.getUserId(),
+      niveau: (salon, utilisateur) => client.getRoom(salon)?.getMember?.(utilisateur)?.powerLevel ?? 0,
+      nom: (salon, utilisateur) => client.getRoom(salon)?.getMember?.(utilisateur)?.name,
+    };
+    const handleSionEvent = (event: MatrixEvent) => {
+      const type = event.getType?.() ?? "";
+      if (!type.startsWith("com.sion.")) return;
+      const salon = event.getRoomId?.();
+      if (!salon) return;
+      void traiterEvenementSion({
+        salon,
+        type,
+        sender: event.getSender?.() || "",
+        ts: event.getTs?.() ?? 0,
+        content: event.getContent?.(),
+        id: event.getId?.(),
+      }, contexteSion);
     };
 
-    // Live transcript (`com.sion.transcript`): same dual-path delivery as the
-    // voice kick — cleartext rooms surface it on Timeline, encrypted rooms
-    // only after decryption. The store dedups by content signature, so an
-    // event reaching us through both paths (local echo + server ack) or via
-    // a decrypt replay renders once.
-    const handleTranscriptEvent = (event: MatrixEvent) => {
-      const type = event.getType?.();
-      if (type === "com.sion.transcript.session") {
-        // Session lifecycle (start with uuid+date / collective end) — the
-        // service owns the adoption + engine reaction logic.
-        const roomId = event.getRoomId?.();
-        const content = event.getContent?.();
-        if (!roomId || (content?.action !== "start" && content?.action !== "end") || typeof content?.id !== "string") return;
-        const senderId = event.getSender?.() || "";
-        import("../services/transcriptionService").then(({ handleSessionEvent }) => {
-          handleSessionEvent(roomId, content.action, content.id, typeof content.ts === "number" ? content.ts : (event.getTs?.() ?? Date.now()), senderId);
-        }).catch(() => {});
-        return;
-      }
-      if (type === "m.room.message") {
-        // Meeting summary posted in the chat, tagged with its session id —
-        // recorded so the transcript history can surface it.
-        const roomId = event.getRoomId?.();
-        const content = event.getContent?.();
-        const sid = content?.["com.sion.transcript.summary_of"];
-        if (roomId && typeof sid === "string" && typeof content?.body === "string") {
-          import("./useTranscriptStore").then(({ useTranscriptStore }) => {
-            useTranscriptStore.getState().setSummary(roomId, sid, content.body, event.getTs?.() ?? Date.now());
-          }).catch(() => {});
-        }
-        return;
-      }
-      if (type !== "com.sion.transcript") return;
+    // Compte rendu de réunion publié dans le fil, marqué de sa session :
+    // retenu pour l'historique des transcriptions.
+    const handleTranscriptSummary = (event: MatrixEvent) => {
+      if (event.getType?.() !== "m.room.message") return;
       const roomId = event.getRoomId?.();
       const content = event.getContent?.();
-      const text = content?.text;
-      if (!roomId || typeof text !== "string" || !text) return;
-      const senderId = event.getSender?.() || "";
-      const room = client.getRoom(roomId);
-      const senderName = room?.getMember?.(senderId)?.name || senderId.replace(/^@/, "").split(":")[0];
-      import("./useTranscriptStore").then(({ useTranscriptStore }) => {
-        useTranscriptStore.getState().addEntry({
-          id: event.getId?.() || `${roomId}:${event.getTs?.() ?? Date.now()}`,
-          roomId,
-          senderId,
-          senderName,
-          text,
-          t0: typeof content?.t0 === "number" ? content.t0 : (event.getTs?.() ?? Date.now()),
-          t1: typeof content?.t1 === "number" ? content.t1 : 0,
-          ...(typeof content?.session === "string" ? { sessionId: content.session } : {}),
-        });
-      }).catch(() => {});
+      const sid = content?.["com.sion.transcript.summary_of"];
+      if (roomId && typeof sid === "string" && typeof content?.body === "string") {
+        import("./useTranscriptStore").then(({ useTranscriptStore }) => {
+          useTranscriptStore.getState().setSummary(roomId, sid, content.body, event.getTs?.() ?? Date.now());
+        }).catch(() => {});
+      }
     };
 
     // Listen for voice kick events (Sion-specific) — cleartext path.
     client.on(RoomEvent.Timeline, (event, _room, toStartOfTimeline) => {
       if (toStartOfTimeline) return; // skip backfill/pagination
-      handleVoiceKickEvent(event);
-      handleTranscriptEvent(event);
+      handleSionEvent(event);
+      handleTranscriptSummary(event);
     });
 
     // Reconcile a sent message's local-echo id ("~…") to its real server id
@@ -1911,13 +1812,11 @@ export const useMatrixStore = create<MatrixState>((set, get) => ({
         }
       }
 
-      // Voice kick in decrypted events: custom events arrive as
-      // m.room.encrypted first, so the Timeline listener misses them — the
-      // shared handler does the full victim sound + witness cue + banner
-      // (the same as the cleartext path), deduped by event id.
-      handleVoiceKickEvent(event);
-      // Same story for the live transcript in encrypted rooms.
-      handleTranscriptEvent(event);
+      // Salon chiffré : les événements propres à Sion arrivent d'abord en
+      // m.room.encrypted, que le gestionnaire du fil laisse passer — ils sont
+      // traités ici, une fois déchiffrés (même traitement, dédoublonné).
+      handleSionEvent(event);
+      handleTranscriptSummary(event);
 
       const evtId = event.getId?.();
       if (evtId) pendingDecryptedEvents.add(evtId);
