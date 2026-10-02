@@ -261,7 +261,8 @@
     "phaseDownload": "Downloading",
     "phaseConvert": "Converting to AV1",
     "asIs": "as-is",
-    "recodeHint": "Re-encoded to AV1 only if the downloaded file exceeds this limit."
+    "recodeHint": "Re-encoded to AV1 only if the downloaded file exceeds this limit.",
+    "recodeIfTooBig": "re-encoded if too large"
   },
   "members": {
     "title": "Members",

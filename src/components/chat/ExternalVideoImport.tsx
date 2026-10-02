@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { probeUrlFormats, importUrlVideo, type UrlFormatsInfo } from "../../services/ytdlpService";
+import { probeUrlFormats, importUrlVideo, annulerImportVideo, type UrlFormatsInfo } from "../../services/ytdlpService";
 import { detectYtdlp, installYtdlp } from "../../services/ytdlpInstall";
 import { getMaxUploadSize } from "../../services/matrixService";
 
@@ -119,8 +119,15 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
     }
   };
 
+  // Fermer pendant l'import l'arrête vraiment : la fenêtre se fermait, et
+  // la conversion continuait des minutes en arrière-plan (02/10).
+  const fermer = () => {
+    if (phase === "importing") void annulerImportVideo();
+    onClose();
+  };
+
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+    <div onClick={fermer} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: 'var(--color-surface-container-high)', borderRadius: 16, padding: 20, width: 460, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-on-surface)' }}>{t("extVideo.title")}</div>
 
@@ -185,7 +192,11 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
                           kilo-octets qui ne sont pas réencodées du tout. */}
                       <span style={{ fontSize: 11, color: 'var(--color-on-surface-variant)' }}>
                         {o.codec !== "?" ? o.codec : ""}
-                        {!over ? `${o.codec !== "?" ? " · " : ""}${t("extVideo.asIs", { defaultValue: "tel quel" })}` : ""}
+                        {/* « Tel quel » seulement quand on SAIT que ça tient :
+                            taille inconnue (Instagram), le fichier peut
+                            dépasser et partir en conversion (02/10). */}
+                        {!over && o.size > 0 ? `${o.codec !== "?" ? " · " : ""}${t("extVideo.asIs", { defaultValue: "tel quel" })}` : ""}
+                        {!over && o.size <= 0 && limit != null ? `${o.codec !== "?" ? " · " : ""}${t("extVideo.recodeIfTooBig", { defaultValue: "réencodée si trop lourde" })}` : ""}
                       </span>
                       <span style={{ flex: 1 }} />
                       <span style={{ fontSize: 12, color: over ? 'var(--color-error)' : 'var(--color-on-surface-variant)' }}>
@@ -228,7 +239,7 @@ export function ExternalVideoImport({ onImported, onClose }: Props) {
             )}
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" onClick={onClose}
+              <button type="button" onClick={fermer}
                 style={{ padding: '8px 14px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit', background: 'var(--color-surface-container-highest)', color: 'var(--color-on-surface)' }}>
                 {t("poll.cancel")}
               </button>

@@ -261,7 +261,8 @@
     "phaseDownload": "Téléchargement",
     "phaseConvert": "Conversion en AV1",
     "asIs": "tel quel",
-    "recodeHint": "Réencodée en AV1 seulement si le fichier téléchargé dépasse cette limite."
+    "recodeHint": "Réencodée en AV1 seulement si le fichier téléchargé dépasse cette limite.",
+    "recodeIfTooBig": "réencodée si trop lourde"
   },
   "members": {
     "title": "Membres",

@@ -6,6 +6,7 @@ use tauri::Manager;
 
 #[cfg(not(target_os = "android"))]
 mod cursor_overlay;
+mod encodage_av1;
 mod native_video_surface;
 #[cfg(target_os = "android")]
 mod android_natif;
@@ -1976,8 +1977,39 @@ async fn prepare_video_for_send(
     ];
     let mut derniere = String::new();
     let mut encode = false;
+    // La carte graphique d'abord, à un débit selon la résolution : sous
+    // Linux, le ffmpeg livré n'a pas SVT-AV1, et libaom prenait des minutes
+    // (voir `encodage_av1`).
+    let petit_cote = probe_video(&ffmpeg_bin, &input).map(|(l, h, _)| l.min(h)).unwrap_or(1080);
+    let fin_materiel: Vec<String> = ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-progress", "pipe:1"]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(output_arg.clone()))
+        .collect();
+    for t in encodage_av1::tentatives_materielles(
+        &ffmpeg_bin,
+        &input_arg,
+        encodage_av1::debit_selon_resolution(petit_cote),
+        &fin_materiel,
+    ) {
+        let refs: Vec<&str> = t.arguments.iter().map(|s| s.as_str()).collect();
+        match run_ffmpeg_encode(&app, &t.ffmpeg, &refs, duration_secs, false) {
+            Ok(()) => {
+                log::info!("[Sion][vidéo] envoi converti par {}", t.nom);
+                encode = true;
+                break;
+            }
+            Err(err) => {
+                log::warn!("[Sion][vidéo] {} indisponible, essai suivant", t.nom);
+                derniere = err;
+            }
+        }
+    }
     for args in &candidats {
-        match run_ffmpeg_encode(&app, &ffmpeg_bin, args, duration_secs) {
+        if encode {
+            break;
+        }
+        match run_ffmpeg_encode(&app, &ffmpeg_bin, args, duration_secs, false) {
             Ok(()) => {
                 encode = true;
                 break;
@@ -2821,11 +2853,15 @@ fn run_ffmpeg_encode(
     ffmpeg_bin: &str,
     args: &[&str],
     eff: f64,
+    annulable: bool,
 ) -> Result<(), String> {
     use std::io::{BufRead, BufReader, Read};
     use std::process::Stdio;
     use tauri::Emitter;
 
+    if annulable && IMPORT_ANNULE.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(IMPORT_ANNULE_MESSAGE.into());
+    }
     let mut child = hidden_command(ffmpeg_bin)
         .args(args)
         .stdout(Stdio::piped())
@@ -2838,7 +2874,12 @@ fn run_ffmpeg_encode(
         let _ = errp.read_to_string(&mut s);
         s
     });
-    if let Some(out) = child.stdout.take() {
+    let sortie = child.stdout.take();
+    let mut child = Some(child);
+    if annulable {
+        confier_a_l_annulation(child.take());
+    }
+    if let Some(out) = sortie {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             if eff > 0.0 {
                 if let Some(t) = parse_ffmpeg_time_secs(&line) {
@@ -2851,12 +2892,47 @@ fn run_ffmpeg_encode(
             }
         }
     }
+    let Some(mut child) = child.or_else(reprendre_de_l_annulation) else {
+        // Tué par « Annuler ».
+        let _ = errh.join();
+        return Err(IMPORT_ANNULE_MESSAGE.into());
+    };
     let status = child.wait().map_err(|e| e.to_string())?;
     let err = errh.join().unwrap_or_default();
     if !status.success() {
         return Err(err);
     }
     Ok(())
+}
+
+/// Processus de l'import par lien en cours — yt-dlp, puis chaque ffmpeg :
+/// « Annuler » l'arrête. Fermer la fenêtre ne faisait rien côté Rust : la
+/// conversion continuait des minutes, puis enchaînait sur l'encodeur
+/// suivant (02/10).
+static IMPORT_EN_COURS: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+static IMPORT_ANNULE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const IMPORT_ANNULE_MESSAGE: &str = "Import annulé";
+
+fn confier_a_l_annulation(enfant: Option<std::process::Child>) {
+    *IMPORT_EN_COURS.lock().unwrap_or_else(|e| e.into_inner()) = enfant;
+}
+
+/// Reprend le processus confié ; `None` s'il a été tué par « Annuler ».
+fn reprendre_de_l_annulation() -> Option<std::process::Child> {
+    IMPORT_EN_COURS.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// « Annuler » de la fenêtre d'import : arrête le téléchargement ou la
+/// conversion en cours, et aucune autre tentative ne démarre.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+fn import_url_video_annuler() {
+    IMPORT_ANNULE.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(mut enfant) = reprendre_de_l_annulation() {
+        let _ = enfant.kill();
+        let _ = enfant.wait();
+        log::info!("[Sion][vidéo] import annulé : processus {} arrêté", enfant.id());
+    }
 }
 
 /// Probe a video URL for duration, title and the available resolutions (with a
@@ -3045,6 +3121,7 @@ async fn import_url_video(
     let ytdlp_bin = resolve_ytdlp(ytdlp_path.as_deref(), managed_yt.as_deref());
     let managed_ff = managed_ffmpeg_path(&app).map(|p| p.to_string_lossy().into_owned());
     let ffmpeg_bin = resolve_ffmpeg(ffmpeg_path.as_deref(), managed_ff.as_deref());
+    IMPORT_ANNULE.store(false, std::sync::atomic::Ordering::SeqCst);
 
     let h = height.unwrap_or(720);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -3103,7 +3180,9 @@ async fn import_url_video(
         let _ = errp.read_to_string(&mut s);
         s
     });
-    if let Some(out) = child.stdout.take() {
+    let sortie = child.stdout.take();
+    confier_a_l_annulation(Some(child));
+    if let Some(out) = sortie {
         for line in BufReader::new(out).lines().map_while(Result::ok) {
             if let Some(p) = parse_download_pct(&line) {
                 let _ = app.emit(
@@ -3113,6 +3192,11 @@ async fn import_url_video(
             }
         }
     }
+    let Some(mut child) = reprendre_de_l_annulation() else {
+        let _ = errh.join();
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(IMPORT_ANNULE_MESSAGE.into());
+    };
     let status = child.wait().map_err(|e| e.to_string())?;
     let dl_err = errh.join().unwrap_or_default();
     if !status.success() {
@@ -3156,10 +3240,24 @@ async fn import_url_video(
             "video-import-progress",
             serde_json::json!({ "phase": "convert", "pct": 0.0 }),
         );
+        // Durée et taille réelles du fichier téléchargé : certains sites ne
+        // donnent pas la durée (Instagram, 02/10). Sans elle, le pourcentage
+        // restait à 0 tout le long — Sion semblait planté — et le débit visé
+        // retombait sur le plafond de la résolution, trop haut pour tenir.
+        let sonde = probe_video(&ffmpeg_bin, &src);
         let eff = match (start_sec, end_sec) {
             (Some(s), Some(e)) if e > s => e - s,
-            _ => duration_sec.unwrap_or(0.0),
+            _ => duration_sec
+                .filter(|d| *d > 0.0)
+                .or(sonde.map(|(_, _, d)| d).filter(|d| *d > 0.0))
+                .unwrap_or(0.0),
         };
+        // Classe de résolution : le petit côté (un reel en 1080x1920 est du
+        // « 1080p », pas du « 1920p »).
+        let h = sonde
+            .map(|(l, ht, _)| l.min(ht))
+            .filter(|c| *c > 0)
+            .unwrap_or(h);
         let out = work.join("out.mp4");
         let src_s = src.to_string_lossy().into_owned();
         let out_s = out.to_string_lossy().into_owned();
@@ -3219,6 +3317,19 @@ async fn import_url_video(
         // plus largement lisible — et le repli final est du H.264 plutôt que du
         // VP9 : si aucun encodeur AV1 n'est compilé dans le ffmpeg de la
         // machine, autant produire le format que tout lit.
+        // Une limite à tenir (le cas de l'import, qui ne réencode que les
+        // fichiers trop lourds) : chaque tentative vise directement le débit
+        // qui tient, la carte graphique d'abord. Viser une QUALITÉ faisait
+        // jeter l'encodage entier dès qu'il dépassait, pour en relancer un
+        // autre.
+        let fin: Vec<String> = tail
+            .iter()
+            .map(|s| s.to_string())
+            .chain(std::iter::once(out_s.clone()))
+            .collect();
+        let au_debit = (limit > 0 && eff > 0.0)
+            .then(|| encodage_av1::tentatives_au_debit(&ffmpeg_bin, &src_s, fit_kbps, &fin));
+
         let mut candidates: Vec<Vec<String>> = Vec::new();
         candidates.push(mk(&[
             // `crf 42` et non 32. Mesuré sur une source H.264 de 20 Mo
@@ -3252,22 +3363,47 @@ async fn import_url_video(
         // muette : l'utilisateur, à qui l'on promet de l'AV1, obtenait du H.264
         // sans explication, et son fichier repartait pour une seconde
         // conversion à l'envoi (18/09).
-        let mut encodeur_retenu = "aucun";
-        for args in &candidates {
-            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            let nom = refs
-                .iter()
-                .position(|a| *a == "-c:v")
-                .and_then(|i| refs.get(i + 1))
-                .copied()
-                .unwrap_or("?");
-            if run_ffmpeg_encode(&app, &ffmpeg_bin, &refs, eff).is_ok() {
-                let sz = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(u64::MAX);
-                if limit == 0 || sz <= limit {
-                    encoded = true;
-                    encodeur_retenu = nom;
-                    break;
+        let mut encodeur_retenu = "aucun".to_string();
+        let tentatives: Vec<encodage_av1::Tentative> = au_debit.unwrap_or_else(|| {
+            candidates
+                .into_iter()
+                .map(|arguments| {
+                    let nom = arguments
+                        .iter()
+                        .position(|a| a == "-c:v")
+                        .and_then(|i| arguments.get(i + 1))
+                        .cloned()
+                        .unwrap_or_else(|| "?".to_string());
+                    encodage_av1::Tentative { ffmpeg: ffmpeg_bin.clone(), nom, arguments }
+                })
+                .collect()
+        });
+        for t in &tentatives {
+            if IMPORT_ANNULE.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = std::fs::remove_dir_all(&work);
+                return Err(IMPORT_ANNULE_MESSAGE.into());
+            }
+            let refs: Vec<&str> = t.arguments.iter().map(|s| s.as_str()).collect();
+            let debut = std::time::Instant::now();
+            match run_ffmpeg_encode(&app, &t.ffmpeg, &refs, eff, true) {
+                Ok(()) => {
+                    let sz = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(u64::MAX);
+                    if limit == 0 || sz <= limit {
+                        encoded = true;
+                        encodeur_retenu = format!("{} en {:.0} s", t.nom, debut.elapsed().as_secs_f64());
+                        break;
+                    }
+                    log::warn!(
+                        "[Sion][vidéo] {} : {} Mo, au-dessus de la limite — essai suivant",
+                        t.nom,
+                        sz / 1_048_576
+                    );
                 }
+                Err(e) => log::warn!(
+                    "[Sion][vidéo] {} indisponible ({}) — essai suivant",
+                    t.nom,
+                    e.lines().last().unwrap_or("").trim()
+                ),
             }
             let _ = std::fs::remove_file(&out);
         }
@@ -3859,6 +3995,7 @@ pub fn run() {
         import_url_audio,
         probe_url_formats,
         import_url_video,
+        import_url_video_annuler,
         save_imported_audio,
         meme_pop::memeboard_jouer,
         meme_pop::memeboard_arreter,
