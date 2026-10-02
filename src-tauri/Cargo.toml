@@ -53,11 +53,11 @@ tauri-plugin-notification = "2.3.3"
 # défaut (libwebrtc est volumineux). TLS en rustls/webpki-roots comme
 # reqwest ci-dessus (pas d'OpenSSL système requis).
 sion-native-audio = { path = "native-audio", optional = true }
-webrtc-sys = { version = "=0.3.43", features = ["sion-audio"], optional = true }
+webrtc-sys = { version = "=0.3.47", features = ["sion-audio"], optional = true }
 # `glib-main-loop` : indispensable au capturer PipeWire/Wayland — sans la
 # boucle GLib, le portail XDG affiche le sélecteur d'écran mais aucune frame
 # n'est jamais délivrée (erreurs temporaires en boucle au partage).
-livekit = { version = "0.8", default-features = false, features = ["tokio", "rustls-tls-webpki-roots", "glib-main-loop"], optional = true }
+livekit = { version = "0.9", default-features = false, features = ["tokio", "rustls-tls-webpki-roots", "glib-main-loop"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # JPEG seul (rendu partage d'écran natif) : pas de décodeurs/format lourds.
