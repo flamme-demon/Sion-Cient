@@ -6,10 +6,10 @@
 //! pourcentage bloqué à 0 — Sion semblait planté (02/10). La carte graphique
 //! fait le même travail en 1,3 s (RX 7900 XTX, VAAPI), à taille égale.
 //!
-//! Les encodeurs matériels sont donc essayés d'abord, dans le ffmpeg livré
-//! puis dans celui du système (sous Linux, le livré n'a pas VAAPI) ; un essai
-//! réel d'une image, une fois par lancement, écarte ceux qui sont compilés
-//! sans matériel derrière.
+//! Les encodeurs matériels du ffmpeg livré (BtbN, depuis le 02/10 sous Linux
+//! comme sous Windows) sont donc essayés d'abord ; un essai réel d'une image,
+//! une fois par lancement, écarte ceux qui sont compilés sans matériel
+//! derrière. Jamais celui du système : Sion ne dépend que de ce qu'il livre.
 
 use std::sync::OnceLock;
 
@@ -24,10 +24,11 @@ pub struct EncodeurMateriel {
     peripherique: Option<String>,
 }
 
+/// Vulkan en dernier : toutes marques confondues, mais plus récent.
 const MATERIELS: &[&str] = if cfg!(target_os = "linux") {
-    &["av1_vaapi", "av1_nvenc", "av1_qsv"]
+    &["av1_vaapi", "av1_nvenc", "av1_qsv", "av1_vulkan"]
 } else {
-    &["av1_nvenc", "av1_amf", "av1_qsv"]
+    &["av1_nvenc", "av1_amf", "av1_qsv", "av1_vulkan"]
 };
 
 /// Premier nœud de rendu DRM, pour VAAPI.
@@ -46,6 +47,9 @@ impl EncodeurMateriel {
         if let Some(p) = &self.peripherique {
             avant.extend([s("-vaapi_device"), p.clone()]);
         }
+        if self.nom == "av1_vulkan" {
+            avant.extend([s("-init_hw_device"), s("vulkan=vk"), s("-filter_hw_device"), s("vk")]);
+        }
         avant.extend([s("-i"), s(entree)]);
         // Plafond et tampon : pas de pics qui feraient dépasser la limite.
         let debit = [
@@ -57,7 +61,7 @@ impl EncodeurMateriel {
             format!("{}k", kbps * 2),
         ];
         match self.nom {
-            "av1_vaapi" => apres.extend([s("-vf"), s("format=nv12,hwupload"), s("-c:v"), s("av1_vaapi")]),
+            "av1_vaapi" | "av1_vulkan" => apres.extend([s("-vf"), s("format=nv12,hwupload"), s("-c:v"), s(self.nom)]),
             "av1_nvenc" => apres.extend([s("-pix_fmt"), s("yuv420p"), s("-c:v"), s("av1_nvenc"), s("-preset"), s("p5")]),
             "av1_amf" => apres.extend([s("-pix_fmt"), s("yuv420p"), s("-c:v"), s("av1_amf"), s("-quality"), s("balanced")]),
             _ => apres.extend([s("-pix_fmt"), s("nv12"), s("-c:v"), s(self.nom)]),
@@ -98,27 +102,16 @@ fn porte(liste: &str, nom: &str) -> bool {
 pub fn materiels(ffmpeg_livre: &str) -> &'static [EncodeurMateriel] {
     static TROUVES: OnceLock<Vec<EncodeurMateriel>> = OnceLock::new();
     TROUVES.get_or_init(|| {
-        let mut candidats = vec![ffmpeg_livre.to_string()];
-        let systeme = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-        if ffmpeg_livre != systeme {
-            candidats.push(systeme.to_string());
-        }
-        let mut trouves = Vec::new();
-        for ffmpeg in candidats {
-            let liste = crate::hidden_command(&ffmpeg)
-                .args(["-hide_banner", "-encoders"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap_or_default();
-            for &nom in MATERIELS {
-                if trouves.iter().any(|e: &EncodeurMateriel| e.nom == nom) || !porte(&liste, nom) {
-                    continue;
-                }
-                if let Some(enc) = essayer(&ffmpeg, nom) {
-                    trouves.push(enc);
-                }
-            }
-        }
+        let liste = crate::hidden_command(ffmpeg_livre)
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let trouves: Vec<EncodeurMateriel> = MATERIELS
+            .iter()
+            .filter(|nom| porte(&liste, nom))
+            .filter_map(|&nom| essayer(ffmpeg_livre, nom))
+            .collect();
         log::info!(
             "[Sion][vidéo] encodeurs AV1 matériels : {}",
             if trouves.is_empty() {
@@ -154,11 +147,15 @@ pub fn tentatives_au_debit(ffmpeg_livre: &str, entree: &str, kbps: u64, fin: &[S
         a.extend(fin.iter().cloned());
         Tentative { ffmpeg: s(ffmpeg_livre), nom: s(nom), arguments: a }
     };
+    // 60 s pour le reel de trois minutes en 1080x1920, sans carte graphique.
     liste.push(logiciel("libsvtav1", &["-preset", "8", "-g", "240"]));
     // `realtime` + `cpu-used 8` : 7 s par tranche de 10 s en 720p, contre
     // 45 s en 1080p au réglage de qualité d'avant.
     liste.push(logiciel("libaom-av1", &["-usage", "realtime", "-cpu-used", "8", "-row-mt", "1"]));
+    // H.264 en dernier : x264 dans un ffmpeg GPL (choisi par l'utilisateur),
+    // OpenH264 dans le ffmpeg livré (LGPL).
     liste.push(logiciel("libx264", &["-preset", "veryfast"]));
+    liste.push(logiciel("libopenh264", &[]));
     liste
 }
 

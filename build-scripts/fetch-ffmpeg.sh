@@ -7,7 +7,7 @@
 # sans rien un utilisateur hors ligne, et suppose qu'il comprenne pourquoi une
 # vidéo ne s'ouvre pas.
 #
-# Le binaire n'est PAS versionné : il pèse 76 Mo et n'a rien à faire dans
+# Le binaire n'est PAS versionné : il pèse 143 Mo et n'a rien à faire dans
 # l'historique. Ce script le télécharge au moment de la construction, et le
 # cache d'un build à l'autre.
 #
@@ -26,11 +26,15 @@ if [ -x "$DEST/ffmpeg" ]; then
     exit 0
 fi
 
-# Build statique : aucune bibliothèque à traîner, il tourne sur n'importe
-# quelle distribution. Le paquet grossit de 22 Mo une fois compressé par
-# squashfs, mesuré le 21/09.
-ARCHIVE="$CACHE/ffmpeg-release-amd64-static.tar.xz"
-URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+# Build BtbN, LGPL, la même famille que sous Windows. Il remplace celui de
+# johnvansickle (02/10), qui n'encodait l'AV1 qu'avec libaom, sur le
+# processeur : 13 minutes pour un reel de trois minutes en 1080x1920. Celui-ci
+# porte SVT-AV1 (60 s) et les encodeurs des cartes graphiques — VAAPI,
+# Vulkan, NVENC, QSV, AMF (12 s) — et décode toujours l'AV1 par dav1d. Il ne
+# dépend que de la glibc. Le paquet grossit de 23 Mo une fois compressé.
+# LGPL : ni x264 ni x265 (GPL) ; OpenH264 sert de repli H.264.
+ARCHIVE="$CACHE/ffmpeg-n9.0-latest-linux64-lgpl-9.0.tar.xz"
+URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-lgpl-9.0.tar.xz"
 
 if [ ! -f "$ARCHIVE" ]; then
     echo "Téléchargement de ffmpeg…"
@@ -39,7 +43,7 @@ if [ ! -f "$ARCHIVE" ]; then
 fi
 
 # Seul `ffmpeg` nous sert : ni ffprobe, ni les pages de manuel.
-tar -xJf "$ARCHIVE" --wildcards --strip-components=1 -C "$DEST" "*/ffmpeg"
+tar -xJf "$ARCHIVE" --wildcards --strip-components=2 -C "$DEST" "*/bin/ffmpeg"
 chmod +x "$DEST/ffmpeg"
 
 TAILLE=$(du -h "$DEST/ffmpeg" | cut -f1)
