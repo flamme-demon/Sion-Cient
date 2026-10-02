@@ -11,6 +11,7 @@ import { useAuthStore } from "../../stores/useAuthStore";
 import { useMatrixStore } from "../../stores/useMatrixStore";
 import { useEntreMembresStore, rafraichirIgnores } from "../../stores/useEntreMembresStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
+import { ouvertALInstant } from "../../utils/menuContextuel";
 
 interface UserContextMenuProps {
   userId: string;
@@ -267,6 +268,9 @@ export function UserContextMenu({ userId: rawUserId, userName, x, y, onClose }: 
   // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
+      // Ouvert par un appui long : le doigt relevé peut produire un
+      // `mousedown` hors du menu, qui le refermait aussitôt.
+      if (ouvertALInstant()) return;
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
     };
     window.addEventListener("mousedown", handler);

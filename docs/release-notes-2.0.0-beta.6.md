@@ -6,7 +6,8 @@ fiables et protégées, et plusieurs corrections.
 ## Vocal
 
 - **Régler le volume d'une personne** (0 à 200 %) ou **couper son son pour
-  soi** : clic droit sur elle dans la liste de l'appel. Le réglage vaut
+  soi** : clic droit sur elle dans la liste de l'appel (appui long sur
+  téléphone). Le réglage vaut
   pour tous ses appareils et reste d'un appel à l'autre. Une personne coupée
   porte un haut-parleur barré dans la liste.
 - **Latence affichée** à côté de « Connecté », avec la qualité de la
@@ -26,6 +27,12 @@ fiables et protégées, et plusieurs corrections.
   liste comme dans la barre réduite. Le salon d'administration a son
   bouclier, et en barre réduite les salons sans image montrent l'initiale de
   leur nom.
+
+## Android
+
+- **Appui long** sur une personne (appel, membres) ou sur un message privé :
+  il ouvre enfin son menu. Avant, il sélectionnait le texte, et le menu ne
+  répondait pas.
 
 ## Android : notifications
 
@@ -61,6 +68,10 @@ Sion 1.x.
   ouvert sait les lire. En mode « Mentions », seuls les messages privés
   notifient alors.
 - **AV1 affiché en vert** sur certaines cartes AMD sous Linux.
+- **Partage d'une zone sous KDE** (choix « Zone » de la fenêtre de KDE) : les
+  curseurs des spectateurs ne tombent pas au bon endroit chez celui qui
+  partage, KDE ne donnant pas la position de la zone. Le partage d'un écran
+  entier n'est pas touché.
 - **Android** : pas de mise à jour depuis l'application, téléchargez chaque
   beta ici. Téléphones 64 bits seulement.
 

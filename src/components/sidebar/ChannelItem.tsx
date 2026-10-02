@@ -18,6 +18,7 @@ import { leaveRoom as matrixServiceLeave } from "../../services/matrixService";
 import * as cacheRust from "../../services/cacheRust";
 import { plateformeLocale, plateformeMobile } from "../../utils/plateforme";
 import { appareilDeIdentite, estCetAppareil } from "../../utils/identiteVocale";
+import { gestesMenuContextuel, STYLE_SANS_SELECTION } from "../../utils/menuContextuel";
 
 function roleIcon(role: UserRole) {
   if (role === "admin") return <CrownIcon />;
@@ -339,12 +340,9 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
               ? `${channel.name} — ${voiceUsers.map((u) => u.name).join(", ")}`
               : channel.name)
           : undefined}
-        onContextMenu={(e) => {
-          if (!channel.isDM) return;
-          e.preventDefault();
-          setCtxMenu({ x: e.clientX, y: e.clientY });
-        }}
+        {...(channel.isDM ? gestesMenuContextuel((x, y) => setCtxMenu({ x, y })) : {})}
         style={{
+          ...(channel.isDM ? STYLE_SANS_SELECTION : {}),
           width: '100%',
           display: 'flex',
           alignItems: 'center',
@@ -586,12 +584,8 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
           {voiceUsers.map((u) => (
             <div
               key={u.id}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                openUserContextMenu({ userId: u.id, userName: u.name, x: e.clientX, y: e.clientY });
-              }}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 6px', borderRadius: 10, cursor: 'default' }}
+              {...gestesMenuContextuel((x, y) => openUserContextMenu({ userId: u.id, userName: u.name, x, y }))}
+              style={{ ...STYLE_SANS_SELECTION, display: 'flex', alignItems: 'center', gap: 10, padding: '5px 6px', borderRadius: 10, cursor: 'default' }}
             >
               <UserAvatar
                 name={u.name}
@@ -654,14 +648,11 @@ export function ChannelItem({ channel, compact = false }: { channel: Channel; co
             return (
               <div
                 key={u.id}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  openUserContextMenu({ userId: u.id, userName: u.name, x: e.clientX, y: e.clientY });
-                }}
+                {...gestesMenuContextuel((x, y) => openUserContextMenu({ userId: u.id, userName: u.name, x, y }))}
                 onMouseEnter={() => setHoveredUserId(u.id)}
                 onMouseLeave={() => setHoveredUserId(null)}
                 style={{
+                  ...STYLE_SANS_SELECTION,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,

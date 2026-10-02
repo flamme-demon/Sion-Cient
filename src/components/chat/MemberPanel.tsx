@@ -8,6 +8,7 @@ import { UserAvatar } from "../sidebar/UserAvatar";
 import * as cacheRust from "../../services/cacheRust";
 import { moteurRust } from "../../services/moteur";
 import { getRoomMembers } from "../../services/matrixService";
+import { gestesMenuContextuel, STYLE_SANS_SELECTION } from "../../utils/menuContextuel";
 
 type Role = "admin" | "moderator" | "user";
 
@@ -170,12 +171,9 @@ export function MemberPanel() {
             {sec.entries.map((e) => (
               <div
                 key={e.userId}
-                onContextMenu={(ev) => {
-                  ev.preventDefault();
-                  ev.stopPropagation();
-                  openUserContextMenu({ userId: e.userId, userName: e.displayName, x: ev.clientX, y: ev.clientY });
-                }}
+                {...gestesMenuContextuel((x, y) => openUserContextMenu({ userId: e.userId, userName: e.displayName, x, y }))}
                 style={{
+                  ...STYLE_SANS_SELECTION,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
