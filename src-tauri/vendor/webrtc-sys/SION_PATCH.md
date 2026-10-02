@@ -1,6 +1,8 @@
 # Sion capture-processing extension
 
-Based on the published `webrtc-sys` **0.3.43** crate, used by LiveKit 0.8.4.
+Based on the published `webrtc-sys` **0.3.47** crate, used by LiveKit 0.9.3
+(rebased from 0.3.43 on 02/10: LiveKit #1212 made `AdmProxy` worker-thread
+affine — candidate fix for the capture-thread crash on voice reconnection).
 The original sources and notices are retained. Sion modifications:
 
 - `Cargo.toml`: optional `sion-audio` feature and local processor dependency.
@@ -34,13 +36,13 @@ The original sources and notices are retained. Sion modifications:
 - `src/audio_device_controller.cpp`: expose an opaque index-based device ID
   when the Linux ADM enumerates named endpoints with empty GUIDs, and resolve
   that ID back to the same ADM index when selecting a device.
-- `src/adm_proxy.cpp` (Android) : l'ADM de la plateforme, créé à la demande
-  (`EnsurePlatformAdmCreated`), reçoit le transport audio déjà enregistré
-  sur le proxy. Sans ça, il tournait sans transport (« Invalid audio
-  transport ») : aucun son dans aucun sens sur Android (29/09).
-- `src/adm_proxy.cpp`, `include/livekit/adm_proxy.h` (ordinateur) :
+- ~~`src/adm_proxy.cpp` (Android) : transport audio remis à l'ADM créé à la
+  demande~~ — repris par LiveKit dans 0.3.44 (#1212), patch retiré.
+- `src/adm_proxy.cpp`, `include/livekit/adm_proxy.h` (toutes plateformes,
+  sur le fil de travail de WebRTC depuis #1212) :
   `ReinitPlatformAdmIfTerminated()`, appelé par `Init()` et
-  `AcquirePlatformAdm()`. Un `Terminate()` du proxy (fabrique de pairs
+  `AcquirePlatformAdm()`. Toujours nécessaire en 0.3.47 : `Init()` y reste
+  sans effet et la création paresseuse s'arrête si l'ADM existe déjà. Un `Terminate()` du proxy (fabrique de pairs
   recréée quand une première connexion au serveur vocal expire) laissait
   l'ADM de la plateforme terminé : « -1 recording devices, -1 playout
   devices », « Unable to set playout device », silence jusqu'au redémarrage

@@ -1,6 +1,7 @@
 # Sion `libwebrtc` extension
 
-Based on the published `libwebrtc` **0.3.46** crate used by LiveKit 0.8.4.
+Based on the published `libwebrtc` **0.3.50** crate used by LiveKit 0.9.3
+(rebased from 0.3.46 on 02/10, patches unchanged).
 The original sources and notices are retained.
 
 Sion adds `RtcAudioTrack::set_volume`, a safe forwarding method to the local
