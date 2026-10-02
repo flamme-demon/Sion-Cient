@@ -75,7 +75,7 @@ pub mod native {
     };
 
     // Patch Sion : exposé pour être testé depuis Sion.
-    pub use crate::imp::parse_stats;
+    pub use crate::imp::{parse_stats, virgules_decimales_en_points};
 }
 
 #[cfg(target_os = "android")]

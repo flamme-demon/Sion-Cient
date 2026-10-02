@@ -3705,6 +3705,23 @@ mod tests {
         assert!(!identite_de("@picsou:sionchat.fr.evil:X", "@picsou:sionchat.fr"));
     }
 
+    /// Statistiques écrites sous une locale française (02/10) : virgule
+    /// décimale, JSON invalide. Elles se lisent quand même.
+    #[test]
+    fn des_statistiques_a_virgule_decimale_se_lisent() {
+        use livekit::webrtc::native::parse_stats;
+        let json = r#"[{"type":"candidate-pair","id":"CP1","timestamp":1727853596123456,"transportId":"T1","state":"succeeded","priority":9,114756780671369e+18,"nominated":true,"writable":true,"currentRoundTripTime":0,0234,"totalRoundTripTime":12,5,"localCandidateId":"L,1"}]"#;
+        let stats = parse_stats(json).expect("statistiques réparées");
+        assert_eq!(latence_des_stats(&stats), Some(23));
+        // Une virgule dans une chaîne n'est pas touchée, ni un tableau.
+        let repare = livekit::webrtc::native::virgules_decimales_en_points(
+            r#"{"a":"1,5","b":[1,2],"c":-0,5}"#,
+        );
+        assert_eq!(repare.as_deref(), Some(r#"{"a":"1,5","b":[1,2],"c":-0.5}"#));
+        // JSON déjà correct : rien à réparer.
+        assert_eq!(livekit::webrtc::native::virgules_decimales_en_points(r#"{"a":1.5,"b":2}"#), None);
+    }
+
     #[test]
     fn la_latence_est_celle_de_la_paire_ice_retenue() {
         use livekit::webrtc::stats::{CandidatePairStats, IceCandidatePairState, RtcStats};

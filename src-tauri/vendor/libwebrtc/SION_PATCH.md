@@ -57,8 +57,16 @@ Le patch passe par `native::parse_stats` (exposé dans `lib.rs` pour être test�
 depuis Sion — ce crate, hors de l'espace de travail, ne lance pas ses propres
 tests) : un JSON illisible devient une `RtcError` dont le message et le
 journal portent l'erreur et une centaine d'octets autour de l'endroit fautif.
-La cause elle-même — le JSON produit par libwebrtc — n'est pas encore
-identifiée ; ce journal servira à la trouver. Test :
-`voice_engine::tests::des_statistiques_illisibles_ne_font_plus_planter`.
+Test : `voice_engine::tests::des_statistiques_illisibles_ne_font_plus_planter`.
+
+**Cause trouvée le 02/10** : libwebrtc écrit ses nombres décimaux avec
+printf, dans la locale du processus. Sous fr_FR :
+`"priority":9,114756780671369e+18` — virgule décimale, JSON invalide.
+Remettre `LC_NUMERIC` en « C » ne tient pas (rdev refait
+`setlocale(LC_ALL, "")` en démarrant). `parse_stats` répare donc le JSON
+quand il ne se lit pas (`virgules_decimales_en_points` : dans un objet,
+une virgule suivie d'un chiffre juste après une valeur numérique est
+décimale ; tableaux et chaînes intacts), puis le relit. Test :
+`voice_engine::tests::des_statistiques_a_virgule_decimale_se_lisent`.
 
 À une mise à jour du SDK : retirer si l'amont ne fait plus `unwrap()`.

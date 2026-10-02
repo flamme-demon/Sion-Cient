@@ -147,8 +147,6 @@ ab_glyph = "0.2"
 # Linux-only dependencies (rdev for evdev keyboard capture)
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
-# `setlocale(LC_NUMERIC, "C")` : voir `nombres_au_format_c` (lib.rs).
-libc = "0.2"
 # Surface vidéo réellement séparée du toplevel WebKit sous Wayland. On réutilise
 # la connexion libwayland détenue par GDK (un objet parent wl_surface ne peut
 # pas être référencé depuis une seconde connexion).
