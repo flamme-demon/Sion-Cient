@@ -59,6 +59,30 @@ function setLocalArmed(armed: boolean) {
   })().catch(() => { /* hors session vocale */ });
 }
 
+/** Pairs armés → invitation visible (bandeau, pastille), avec leurs noms.
+ *  Plus rien ne la remplissait depuis le passage au moteur vocal natif :
+ *  le paquet arrivait, l'invitation ne s'affichait jamais (02/10). */
+function publierPairsArmes(): void {
+  void import("../stores/useLiveKitStore").then(({ useLiveKitStore }) => {
+    const participants = useLiveKitStore.getState().participants;
+    const pairs = Array.from(armedTranscribers).map((identity) => ({
+      identity,
+      name: participants.find((p) => p.identity === identity)?.name
+        || identity.replace(/^@/, "").split(":")[0],
+    }));
+    useTranscriptStore.getState().setArmedPeers(pairs);
+  }).catch(() => {});
+}
+
+// Hors du vocal, plus d'invitation : un pair désarmé pendant notre absence
+// ne doit pas réapparaître à l'appel suivant.
+useAppStore.subscribe((state, prev) => {
+  if (prev.connectedVoiceChannel && !state.connectedVoiceChannel && armedTranscribers.size > 0) {
+    armedTranscribers.clear();
+    publierPairsArmes();
+  }
+});
+
 /** Paquet `sion-transcribe-arm` d'un pair (relayé par `useLiveKit`). */
 export function handleArmData(sender: string, payload: Uint8Array): void {
   if (!sender) return;
@@ -71,6 +95,7 @@ export function handleArmData(sender: string, payload: Uint8Array): void {
       console.log(
         `[Sion][transcribe] ${sender} ${parsed.armed ? "armé" : "désarmé"} (${armedTranscribers.size} pair(s) armé(s))`,
       );
+      publierPairsArmes();
       armedCallback?.(Array.from(armedTranscribers));
     }
   } catch { /* paquet étranger */ }
@@ -93,6 +118,7 @@ export function syncArmedTranscribers(identities: string[]): void {
   }
   if (changed) {
     console.log(`[Sion][transcribe] pairs armés après départ: ${armedTranscribers.size}`);
+    publierPairsArmes();
     armedCallback?.(Array.from(armedTranscribers));
   }
 }

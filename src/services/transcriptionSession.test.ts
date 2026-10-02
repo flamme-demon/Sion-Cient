@@ -17,8 +17,9 @@ vi.mock("./matrixService", () => ({
   sendSummaryMessage: vi.fn(),
 }));
 
-import { handleSessionEvent } from "./transcriptionService";
+import { handleSessionEvent, handleArmData, syncArmedTranscribers } from "./transcriptionService";
 import { useTranscriptStore } from "../stores/useTranscriptStore";
+import { useLiveKitStore } from "../stores/useLiveKitStore";
 
 const ROOM = "!voice:hs";
 const NOW = Date.now();
@@ -115,5 +116,25 @@ describe("handleSessionEvent — fin de session", () => {
     handleSessionEvent(ROOM, "end", "aaa", NOW - 1000, "@bob:hs");
     expect(liveSession()).toBeUndefined();
     expect(historyOf()[0]).toMatchObject({ id: "aaa", endedAt: NOW - 1000 });
+  });
+});
+
+describe("invitation : un pair armé s'affiche chez les autres", () => {
+  const paquet = (armed: boolean) => new TextEncoder().encode(JSON.stringify({ armed }));
+  const pairs = () => useTranscriptStore.getState().armedPeers;
+
+  it("le paquet « armé » d'un pair alimente l'invitation, avec son nom", async () => {
+    useLiveKitStore.setState({
+      participants: [{ identity: "@flamme:hs:PC", name: "Flamme" }] as never,
+    });
+    handleArmData("@flamme:hs:PC", paquet(true));
+    await vi.waitFor(() => expect(pairs()).toEqual([{ identity: "@flamme:hs:PC", name: "Flamme" }]));
+    // Désarmé, ou parti de l'appel : l'invitation disparaît.
+    handleArmData("@flamme:hs:PC", paquet(false));
+    await vi.waitFor(() => expect(pairs()).toEqual([]));
+    handleArmData("@flamme:hs:PC", paquet(true));
+    await vi.waitFor(() => expect(pairs()).toHaveLength(1));
+    syncArmedTranscribers([]);
+    await vi.waitFor(() => expect(pairs()).toEqual([]));
   });
 });
