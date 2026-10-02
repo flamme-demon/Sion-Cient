@@ -1462,8 +1462,18 @@ fn spawn_forward_task(
                             // (AFK, curseurs, transcribe-arm).
                             let _ = app.emit("voice-native-data", &ev);
                         }
-                        VoiceEngineEvent::RoomDisconnected { reason } => {
-                            log::warn!("[Sion][voix-native] session SFU perdue ({})", reason);
+                        VoiceEngineEvent::RoomDisconnected { reason, reprendre } => {
+                            log::warn!(
+                                "[Sion][voix-native] session SFU perdue ({}){}",
+                                reason,
+                                if *reprendre { " — à reprendre" } else { "" }
+                            );
+                            // Avant l'état « déconnecté » : l'interface décide
+                            // en le recevant s'il faut rejoindre le salon.
+                            let _ = app.emit(
+                                "voice-native-session-perdue",
+                                &serde_json::json!({ "raison": reason, "reprendre": reprendre }),
+                            );
                             let mut inner = manager().lock().unwrap_or_else(|e| e.into_inner());
                             inner.state = VoiceConnectionState::Disconnected;
                             inner.identity = None;
@@ -3428,7 +3438,7 @@ mod tests {
             assert!(!apply_engine_event(&mut map, &E::RoomReconnected));
             assert!(!apply_engine_event(
                 &mut map,
-                &E::RoomDisconnected { reason: "x".into() }
+                &E::RoomDisconnected { reason: "x".into(), reprendre: false }
             ));
             assert!(map.is_empty());
         }

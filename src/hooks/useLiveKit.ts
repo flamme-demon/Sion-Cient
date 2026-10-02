@@ -57,7 +57,7 @@ export function useLiveKit() {
 
   /** Le moteur vit en Rust : le store reçoit la même forme `ParticipantInfo`
    *  via `voice-native-participants`. */
-  const connectNative = useCallback(async (url: string, token: string, room: string, displayName: string, encrypted = false, onDisconnected: () => Promise<void> = async () => {}) => {
+  const connectNative = useCallback(async (url: string, token: string, room: string, displayName: string, encrypted = false, onDisconnected: (reprendre: boolean) => Promise<void> = async () => {}) => {
     console.info(`[Sion][voix-native] join natif ${room} (moteur Rust)`);
     const native = await import("../services/voiceNativeService");
     await disconnectNativeSession();

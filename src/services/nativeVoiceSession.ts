@@ -18,7 +18,9 @@ interface SessionOptions {
   onE2ee: (state: native.VoiceNativeE2eeState) => void;
   onLocalScreenShareFailed: (reason: string) => void | Promise<void>;
   onClosed: () => void | Promise<void>;
-  onDisconnected: () => Promise<void>;
+  /** Session perdue sans qu'on l'ait quittée ; `reprendre` : perte subie,
+   *  à rejoindre de soi-même. */
+  onDisconnected: (reprendre: boolean) => Promise<void>;
 }
 
 interface Session {
@@ -28,6 +30,8 @@ interface Session {
   setup: Promise<native.VoiceNativeStatus>;
   closing?: Promise<void>;
   options: SessionOptions;
+  /** Dernière perte annoncée par le moteur : à reprendre ? */
+  reprendre?: boolean;
 }
 
 // One owner for the application, even when several components use useLiveKit.
@@ -60,7 +64,7 @@ export async function disconnectNativeSession(unexpected = false): Promise<void>
       if (session.attempted) await native.voiceNativeDisconnect();
     } finally {
       try {
-        if (unexpected) await session.options.onDisconnected();
+        if (unexpected) await session.options.onDisconnected(session.reprendre ?? false);
       } finally {
         if (current === session) current = null;
       }
@@ -101,6 +105,9 @@ export async function connectNativeSession(options: SessionOptions): Promise<nat
       } else if (ready && status.state !== "connecting") {
         useLiveKitStore.getState().setConnectionState(status.state);
       }
+    }));
+    await register(native.onVoiceNativeSessionPerdue((ev) => {
+      if (isCurrent()) session.reprendre = ev.reprendre;
     }));
     // Raison d'un départ (arrive juste avant la liste qui l'annonce) : le son
     // de départ ou de connexion perdue en dépend.

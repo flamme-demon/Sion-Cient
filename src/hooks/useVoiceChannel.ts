@@ -15,6 +15,7 @@ import { disconnectNativeSession, waitForNativeSessionCleanup } from "../service
 import { MatrixRTCSessionEvent } from "matrix-js-sdk/lib/matrixrtc";
 import type { MatrixRTCSession } from "matrix-js-sdk/lib/matrixrtc";
 import { moteurRust } from "../services/moteur";
+import { arreterReconnexion, demarrerReconnexion, salonRejointALaMain } from "../services/reconnexionVocale";
 
 // Module-level tracking — survives component unmount/remount
 let activeRTCSession: MatrixRTCSession | null = null;
@@ -171,12 +172,15 @@ export async function republishVoicePresence(): Promise<boolean> {
   return rooms > 0 || activeRTCSession !== null;
 }
 
-async function onNativeSessionDisconnected() {
+async function onNativeSessionDisconnected(reprendre: boolean) {
+  // Lus AVANT `disconnectVoice`, qui remet micro et sourdine à zéro.
+  const { connectedVoiceChannel: salon, isMuted, isDeafened } = useAppStore.getState();
   try {
     await cleanupActiveSession();
   } finally {
     stopVoiceService();
     useAppStore.getState().disconnectVoice();
+    if (reprendre && salon) demarrerReconnexion(salon, isMuted, isDeafened);
   }
 }
 
@@ -524,6 +528,7 @@ export function useVoiceChannel() {
   );
 
   const joinVoiceChannel = useCallback((matrixRoomId: string) => {
+    salonRejointALaMain(matrixRoomId);
     const run = joinChain.catch(() => {}).then(() => joinVoiceChannelInner(matrixRoomId));
     joinChain = run.catch(() => {});
     return run;
@@ -531,6 +536,7 @@ export function useVoiceChannel() {
 
   const leaveVoiceChannel = useCallback(
     async (_matrixRoomId: string) => {
+      arreterReconnexion();
       stopVoiceService();
       await cleanupActiveSession();
       await disconnectNative();

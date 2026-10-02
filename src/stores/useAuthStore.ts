@@ -364,12 +364,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // puis retirer le push, qui a besoin de la session. Lancés en parallèle,
     // la session partait d'abord et le push restait déclaré.
     deconnexionEnCours = (async () => {
-      const [{ useAppStore }, voix, android, push] = await Promise.all([
+      const [{ useAppStore }, voix, android, push, reprise] = await Promise.all([
         import("./useAppStore"),
         import("../hooks/useVoiceChannel"),
         import("../services/androidVoiceService"),
         import("../services/pushService"),
+        import("../services/reconnexionVocale"),
       ]);
+      // Une reprise en cours rejoindrait l'appel avec la session suivante.
+      reprise.arreterReconnexion();
       if (useAppStore.getState().connectedVoiceChannel) await voix.cleanupVoiceOnKick().catch(() => {});
       android.stopVoiceService();
       await push.unregisterPusher().catch(() => {});

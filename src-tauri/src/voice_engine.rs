@@ -120,6 +120,9 @@ pub enum VoiceEngineEvent {
     },
     RoomDisconnected {
         reason: String,
+        /// Perte subie (réseau, serveur redémarré, SDK à bout d'essais) :
+        /// l'interface rejoint le salon d'elle-même.
+        reprendre: bool,
     },
     RoomReconnecting,
     RoomReconnected,
@@ -3469,6 +3472,7 @@ impl LiveKitEngine {
                     RoomEvent::Disconnected { reason } => {
                         let _ = tx.send(VoiceEngineEvent::RoomDisconnected {
                             reason: format!("{:?}", reason),
+                            reprendre: session_a_reprendre(reason),
                         });
                     }
                     RoomEvent::Reconnecting => {
@@ -3517,6 +3521,25 @@ pub(crate) fn depart_perdu(raison: livekit::prelude::DisconnectReason) -> Option
         R::ConnectionTimeout | R::SignalClose | R::MediaFailure | R::StateMismatch | R::JoinFailure => Some(true),
         _ => None,
     }
+}
+
+/// La session perdue doit-elle être reprise par l'interface ? Oui quand on
+/// l'a subie : serveur redémarré, réseau coupé, ou SDK à bout de ses dix
+/// essais (`UnknownReason`, ~1 min 40 : la mise à jour du serveur du 01/10
+/// a duré plus longtemps, et tout le monde était resté dehors). Non quand
+/// quelqu'un l'a voulue : soi, un modérateur, la même identité connectée
+/// ailleurs, un salon supprimé.
+pub(crate) fn session_a_reprendre(raison: livekit::DisconnectReason) -> bool {
+    use livekit::DisconnectReason as R;
+    !matches!(
+        raison,
+        R::ClientInitiated
+            | R::DuplicateIdentity
+            | R::ParticipantRemoved
+            | R::RoomDeleted
+            | R::RoomClosed
+            | R::UserRejected
+    )
 }
 
 impl VoiceEngine for LiveKitEngine {
@@ -3662,6 +3685,17 @@ mod tests {
     /// Patch du libwebrtc embarqué : des statistiques que serde refuse — le
     /// « key must be a string » du 23/09 — deviennent une erreur au lieu
     /// d'abattre Sion depuis un rappel C++.
+    #[test]
+    fn une_session_subie_est_reprise_une_session_voulue_non() {
+        use livekit::DisconnectReason as R;
+        for subie in [R::UnknownReason, R::ServerShutdown, R::SignalClose, R::ConnectionTimeout, R::MediaFailure] {
+            assert!(session_a_reprendre(subie), "{subie:?}");
+        }
+        for voulue in [R::ClientInitiated, R::DuplicateIdentity, R::ParticipantRemoved, R::RoomDeleted] {
+            assert!(!session_a_reprendre(voulue), "{voulue:?}");
+        }
+    }
+
     #[test]
     fn un_volume_vaut_pour_tous_les_appareils_de_la_personne_et_elle_seule() {
         assert!(identite_de("@picsou:sionchat.fr:ABCDEF", "@picsou:sionchat.fr"));

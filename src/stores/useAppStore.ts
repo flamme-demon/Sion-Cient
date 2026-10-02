@@ -60,6 +60,10 @@ interface AppState {
   isSpeaking: boolean;
   pendingAutoJoinVoice: string | null;
   connectingVoiceChannel: string | null;
+  /** Session vocale perdue (serveur redémarré, réseau) : Sion rejoint le
+   *  salon de lui-même (`reconnexionVocale.ts`). */
+  reconnexionVocale: { salon: string; essai: number } | null;
+  setReconnexionVocale: (r: { salon: string; essai: number } | null) => void;
   /** True while voice E2EE is struggling locally (recent MissingKey errors —
    *  i.e. we can't decrypt a peer). Best available proxy for "voice E2EE is
    *  unhealthy right now"; surfaces the manual republish-presence recovery. */
@@ -322,6 +326,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMobileView: (view) => set({ mobileView: view }),
   setIsSpeaking: (v) => set({ isSpeaking: v }),
   setPendingAutoJoinVoice: (roomId) => set({ pendingAutoJoinVoice: roomId }),
+  reconnexionVocale: null,
+  setReconnexionVocale: (r) => set({ reconnexionVocale: r }),
   openUserContextMenu: (s) => set({ userContextMenu: s }),
   closeUserContextMenu: () => set({ userContextMenu: null }),
   setConnectingVoice: (id) => set({ connectingVoiceChannel: id }),

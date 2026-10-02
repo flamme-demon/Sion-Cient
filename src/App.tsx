@@ -73,6 +73,8 @@ import { useTranslation } from "react-i18next";
 import * as matrixService from "./services/matrixService";
 import { moteurRust } from "./services/moteur";
 import { fermerFeuilleMobile } from "./components/layout/dockPanels";
+import { enregistrerRejoindre } from "./services/reconnexionVocale";
+import { CarteReconnexion } from "./components/sidebar/CarteReconnexion";
 
 export default function App() {
   const { t } = useTranslation();
@@ -126,6 +128,10 @@ export default function App() {
   const { joinVoiceChannel, leaveVoiceChannel } = useVoiceChannel();
   const joinVoiceRef = useRef(joinVoiceChannel);
   joinVoiceRef.current = joinVoiceChannel;
+  // Reconnexion après une session perdue : même chemin qu'un clic.
+  useEffect(() => {
+    enregistrerRejoindre((salon) => joinVoiceRef.current(salon));
+  }, []);
   const leaveVoiceRef = useRef(leaveVoiceChannel);
   leaveVoiceRef.current = leaveVoiceChannel;
   /** État micro / sourdine avant un appel téléphonique (Android). */
@@ -520,6 +526,7 @@ export default function App() {
 
         {/* Mobile voice bar with PTT */}
         {isMobile && connectedVoice && <MobileVoiceBar />}
+        {isMobile && !connectedVoice && <CarteReconnexion mobile />}
         {SUR_ANDROID && <MemePopWeb />}
 
         {mutedSpeakWarning && (

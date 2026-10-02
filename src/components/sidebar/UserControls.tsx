@@ -4,6 +4,7 @@ import { MicIcon, HeadphoneIcon, DisconnectIcon, SettingsIcon, SpeakerIcon, Refr
 import { useLiveKitStore } from "../../stores/useLiveKitStore";
 import { estCetAppareil } from "../../utils/identiteVocale";
 import { useLatence } from "../../hooks/useLatence";
+import { CarteReconnexion } from "./CarteReconnexion";
 import { UserAvatar } from "./UserAvatar";
 import { AccountPopover } from "./AccountPopover";
 import { useAppStore } from "../../stores/useAppStore";
@@ -202,6 +203,8 @@ export function UserControls({ compact = false }: { compact?: boolean }) {
         </div>
         )
       )}
+
+      {!inVoice && voiceInMenu && <CarteReconnexion compact={compact} />}
 
       {inVoice && voiceInMenu && (
         compact ? (

@@ -5,7 +5,7 @@ import type { VoiceNativeStatus } from "./voiceNativeService";
 
 const mocks = vi.hoisted(() => ({
   connect: vi.fn(), disconnect: vi.fn(), status: vi.fn(), participants: vi.fn(), data: vi.fn(), e2ee: vi.fn(), shareFailed: vi.fn(),
-  participantLeft: vi.fn(),
+  participantLeft: vi.fn(), sessionPerdue: vi.fn(),
 }));
 // La logique des sons (et le magasin qu'elle charge) n'est pas l'objet ici.
 vi.mock("./voiceChannelSounds", () => ({ noteRaisonDepart: vi.fn() }));
@@ -14,6 +14,7 @@ vi.mock("./voiceNativeService", () => ({
   onVoiceNativeStatus: mocks.status, onVoiceNativeParticipants: mocks.participants,
   onVoiceNativeData: mocks.data, onVoiceNativeE2eeState: mocks.e2ee,
   onVoiceNativeLocalShareFailed: mocks.shareFailed, onVoiceNativeParticipantLeft: mocks.participantLeft,
+  onVoiceNativeSessionPerdue: mocks.sessionPerdue,
 }));
 
 function deferred<T>() {
@@ -41,7 +42,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useLiveKitStore.getState().disconnect();
   unlisten = [];
-  for (const listener of [mocks.status, mocks.participants, mocks.data, mocks.e2ee, mocks.shareFailed, mocks.participantLeft]) {
+  for (const listener of [mocks.status, mocks.participants, mocks.data, mocks.e2ee, mocks.shareFailed, mocks.participantLeft, mocks.sessionPerdue]) {
     listener.mockImplementation(async () => {
       const stop = vi.fn(); unlisten.push(stop); return stop;
     });
@@ -56,7 +57,7 @@ describe("native session lifecycle", () => {
     const opts = options();
     const participants = [{ identity: "already-present" }];
     mocks.connect.mockImplementation(async () => {
-      expect(unlisten).toHaveLength(6);
+      expect(unlisten).toHaveLength(7);
       mocks.participants.mock.calls[0][0](participants);
       return status;
     });
@@ -78,11 +79,21 @@ describe("native session lifecycle", () => {
     expect(useLiveKitStore.getState().connectionState).toBe("connected");
     event({ ...status, state: "disconnected" });
     await disconnectNativeSession();
-    expect(opts.onDisconnected).toHaveBeenCalledOnce();
+    expect(opts.onDisconnected).toHaveBeenCalledExactlyOnceWith(false);
     expect(opts.onClosed).toHaveBeenCalledOnce();
     expect(mocks.disconnect).toHaveBeenCalledOnce();
     expect(useLiveKitStore.getState().connected).toBe(false);
     unlisten.forEach((stop) => expect(stop).toHaveBeenCalledOnce());
+  });
+
+  it("asks to resume a session lost to the network or a server restart", async () => {
+    const opts = options();
+    await connectNativeSession(opts);
+    // Le moteur annonce la perte (à reprendre) juste avant l'état final.
+    mocks.sessionPerdue.mock.calls[0][0]({ raison: "UnknownReason", reprendre: true });
+    mocks.status.mock.calls[0][0]({ ...status, state: "disconnected" });
+    await disconnectNativeSession();
+    expect(opts.onDisconnected).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it("relays a local screen capture failure only to the active session", async () => {

@@ -94,7 +94,10 @@
     "connecting": "Connexion...",
     "reconnect": "Reconnecter",
     "republishPresence": "Republier ma présence (si on ne m'entend pas)",
-    "clockSkew": "Horloge de votre machine décalée d'environ {{minutes}} min par rapport au serveur — la voix ne fonctionnera pas correctement. Vérifiez le FUSEAU HORAIRE puis activez la synchronisation automatique : l'heure affichée peut être juste alors que le réglage est faux."
+    "clockSkew": "Horloge de votre machine décalée d'environ {{minutes}} min par rapport au serveur — la voix ne fonctionnera pas correctement. Vérifiez le FUSEAU HORAIRE puis activez la synchronisation automatique : l'heure affichée peut être juste alors que le réglage est faux.",
+    "reconnectingTo": "Reconnexion à {{salon}}…",
+    "reconnectAttempt": "essai {{essai}}",
+    "reconnectCancel": "Ne plus réessayer"
   },
   "controls": {
     "mute": "Mute",

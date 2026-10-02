@@ -349,6 +349,17 @@ export async function onVoiceNativeParticipantLeft(
   return listen<VoiceNativeParticipantLeft>("voice-native-participant-left", (e) => cb(e.payload));
 }
 
+/** Session perdue par le moteur ; `reprendre` : perte subie (réseau,
+ *  serveur redémarré), l'interface rejoint le salon d'elle-même. Émis juste
+ *  avant l'état « déconnecté ». */
+export interface VoiceNativeSessionPerdue { raison: string; reprendre: boolean }
+export async function onVoiceNativeSessionPerdue(
+  cb: (ev: VoiceNativeSessionPerdue) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<VoiceNativeSessionPerdue>("voice-native-session-perdue", (e) => cb(e.payload));
+}
+
 export async function onVoiceNativeE2eeState(
   cb: (ev: VoiceNativeE2eeState) => void,
 ): Promise<() => void> {

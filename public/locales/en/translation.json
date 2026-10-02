@@ -94,7 +94,10 @@
     "connecting": "Connecting...",
     "reconnect": "Reconnect",
     "republishPresence": "Re-publish my presence (if others can't hear me)",
-    "clockSkew": "Your system clock is about {{minutes}} min off from the server — voice will not work properly. Check your TIME ZONE, then turn on automatic time sync: the displayed time can look right while the setting is wrong."
+    "clockSkew": "Your system clock is about {{minutes}} min off from the server — voice will not work properly. Check your TIME ZONE, then turn on automatic time sync: the displayed time can look right while the setting is wrong.",
+    "reconnectingTo": "Reconnecting to {{salon}}…",
+    "reconnectAttempt": "attempt {{essai}}",
+    "reconnectCancel": "Stop retrying"
   },
   "controls": {
     "mute": "Mute",
