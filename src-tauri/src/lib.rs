@@ -1840,6 +1840,24 @@ fn av1_playable_natively() -> bool {
 /// `ffprobe` serait plus propre, mais le téléchargement intégré n'installe que
 /// `ffmpeg` : dépendre de `ffprobe` ferait échouer la préparation exactement
 /// chez les utilisateurs pour qui le bouton d'installation a été écrit.
+/// Remet l'écriture des nombres décimaux au format « C » (point décimal).
+///
+/// GTK règle la locale du processus sur celle du système. Sous une locale
+/// française, libwebrtc écrit alors ses statistiques JSON avec une virgule
+/// (`"priority":9,11e+18`) : JSON invalide, latence illisible (02/10), et
+/// la panique de `get_stats` du 23/09 venait de là. Seul `LC_NUMERIC`
+/// change : textes, dates et tri restent dans la langue du système.
+/// Windows (CRT en « C ») et Android (bionic) ne sont pas concernés.
+#[cfg(target_os = "linux")]
+fn nombres_au_format_c() {
+    // SAFETY: appelé sur le fil principal, au démarrage, avant que WebRTC ne
+    // crée ses fils ; la chaîne est une constante terminée par un nul.
+    let precedente = unsafe { libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr()) };
+    if precedente.is_null() {
+        log::warn!("[Sion] locale numérique « C » refusée");
+    }
+}
+
 pub(crate) fn probe_video(ffmpeg_bin: &str, path: &std::path::Path) -> Option<(u32, u32, f64)> {
     let out = hidden_command(ffmpeg_bin).arg("-i").arg(path).output().ok()?;
     let text = String::from_utf8_lossy(&out.stderr);
@@ -4118,6 +4136,8 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            #[cfg(target_os = "linux")]
+            nombres_au_format_c();
             // Logging enabled in debug AND release: the shipped Windows build
             // (windows_subsystem="windows") has no console, so without an
             // installed logger Rust `log::*` output is silently dropped and

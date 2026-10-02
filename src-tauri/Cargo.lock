@@ -7503,6 +7503,7 @@ dependencies = [
  "jpeg-rusturbo",
  "keyring",
  "khronos-egl",
+ "libc",
  "livekit",
  "log",
  "open",
